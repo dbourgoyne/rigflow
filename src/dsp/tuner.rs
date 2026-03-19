@@ -5,8 +5,8 @@ pub struct VirtualTuner {
     center_freq_hz: f32,
     target_freq_hz: f32,
     sample_rate_hz: f32,
-    phase: f32,
-    phase_increment: f32,
+    osc: Complex32,
+    step: Complex32,
 }
 
 impl VirtualTuner {
@@ -15,48 +15,96 @@ impl VirtualTuner {
             center_freq_hz,
             target_freq_hz,
             sample_rate_hz,
-            phase: 0.0,
-            phase_increment: 0.0,
+            osc: Complex32::new(1.0, 0.0),
+            step: Complex32::new(1.0, 0.0),
         };
-        tuner.update_phase_increment();
+        tuner.update_step();
         tuner
     }
 
-    pub fn set_target_frequency(&mut self, target_freq_hz: f32) {
-        self.target_freq_hz = target_freq_hz;
-        self.update_phase_increment();
+    pub fn center_frequency(&self) -> f32 {
+        self.center_freq_hz
+    }
+
+    pub fn target_frequency(&self) -> f32 {
+        self.target_freq_hz
+    }
+
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate_hz
     }
 
     pub fn set_center_frequency(&mut self, center_freq_hz: f32) {
         self.center_freq_hz = center_freq_hz;
-        self.update_phase_increment();
+        self.update_step();
     }
 
-    fn update_phase_increment(&mut self) {
-        let shift_hz = self.center_freq_hz - self.target_freq_hz;
-        self.phase_increment = 2.0 * PI * shift_hz / self.sample_rate_hz;
+    pub fn set_target_frequency(&mut self, target_freq_hz: f32) {
+        self.target_freq_hz = target_freq_hz;
+        self.update_step();
+    }
+
+    pub fn set_sample_rate(&mut self, sample_rate_hz: f32) {
+        self.sample_rate_hz = sample_rate_hz;
+        self.update_step();
+    }
+
+    pub fn reset_phase(&mut self) {
+        self.osc = Complex32::new(1.0, 0.0);
     }
 
     pub fn process(&mut self, input: &[Complex32]) -> Vec<Complex32> {
         let mut output = Vec::with_capacity(input.len());
+        let mut osc = self.osc;
+        let step = self.step;
 
         for &sample in input {
-            let mixer = Complex32::new(self.phase.cos(), self.phase.sin());
-            output.push(sample * mixer);
-
-            self.phase += self.phase_increment;
-
-            if self.phase > PI {
-                self.phase -= 2.0 * PI;
-            } else if self.phase < -PI {
-                self.phase += 2.0 * PI;
-            }
+            output.push(sample * osc);
+            osc *= step;
         }
 
+        self.osc = normalize_if_needed(osc);
         output
+    }
+
+    pub fn process_in_place(&mut self, samples: &mut [Complex32]) {
+        let mut osc = self.osc;
+        let step = self.step;
+
+        for sample in samples.iter_mut() {
+            *sample *= osc;
+            osc *= step;
+        }
+
+        self.osc = normalize_if_needed(osc);
+    }
+
+    fn update_step(&mut self) {
+        let shift_hz = self.center_freq_hz - self.target_freq_hz;
+        let phase_inc = 2.0 * PI * shift_hz / self.sample_rate_hz;
+
+        self.step = Complex32::new(phase_inc.cos(), phase_inc.sin());
     }
 }
 
+/// Renormalize occasionally to control floating-point drift.
+///
+/// In exact math, |osc| stays 1 forever.
+/// In floating-point, repeated multiplication slowly drifts.
+fn normalize_if_needed(z: Complex32) -> Complex32 {
+    let norm_sqr = z.norm_sqr();
+
+    if (norm_sqr - 1.0).abs() > 1e-3 {
+        let norm = norm_sqr.sqrt();
+        if norm > 0.0 {
+            z / norm
+        } else {
+            Complex32::new(1.0, 0.0)
+        }
+    } else {
+        z
+    }
+}
 
 #[cfg(test)]
 mod tests {
