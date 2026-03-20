@@ -105,3 +105,13 @@ impl IqWavReader {
         Ok(out)
     }
 }
+
+impl crate::source::IqSource for IqWavReader {
+    fn sample_rate(&self) -> f32 {
+        self.sample_rate as f32
+    }
+
+    fn read_block(&mut self, max_samples: usize) -> Result<Vec<Complex32>, String> {
+        IqWavReader::read_block(self, max_samples)
+    }
+}

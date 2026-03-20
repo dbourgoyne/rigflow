@@ -1,19 +1,20 @@
 use std::{net::SocketAddr, time::Duration};
 
 use axum::{routing::get, Router};
-use num_complex::Complex32;
 
 use radio_server::{
     api::{protocol::ServerMessage, websocket::ws_handler},
     dsp::{demod::Sideband, pipeline::DspPipeline},
     server::app_state::AppState,
+    source::factory::{create_source, SourceConfig},
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let center_freq_hz = 14_100_000.0;
-    let target_freq_hz = 14_074_000.0;
+    let center_freq_hz = 0.0;
+    let target_freq_hz = 0.0;
     let sideband = Sideband::Lsb;
+    let block_size = 8192;
 
     let state = AppState::new(center_freq_hz, target_freq_hz, sideband);
 
@@ -28,42 +29,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let radio_state = state.radio.clone();
 
     tokio::spawn(async move {
-        let input_sample_rate_hz = 48_000.0;
+        let source_config = SourceConfig::WavFile {
+            path: "input_iq.wav".to_string(),
+        };
+
+        // For quick testing, use this instead:
+        // let source_config = SourceConfig::Fake {
+        //     sample_rate_hz: 48_000.0,
+        //     tone_hz: 1_500.0,
+        // };
+
+        let mut source = match create_source(source_config) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(ServerMessage::Error {
+                    message: format!("failed to create source: {e}"),
+                });
+                return;
+            }
+        };
+
+        let input_sample_rate_hz = source.sample_rate();
+
         let mut pipeline = DspPipeline::new(
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
             2_800.0,
             129,
-            4,
+            16,
             2_700.0,
             101,
         );
 
         pipeline.set_sideband(sideband);
 
+        let _ = tx.send(ServerMessage::Info {
+            message: format!("source initialized at {} Hz", input_sample_rate_hz),
+        });
+
         loop {
-            // Apply any state changes from clients.
             {
                 let radio = radio_state.read().await;
-		pipeline.set_center_frequency(radio.center_freq_hz);
-		pipeline.set_target_frequency(radio.target_freq_hz);
+                pipeline.set_center_frequency(radio.center_freq_hz);
+                pipeline.set_target_frequency(radio.target_freq_hz);
                 pipeline.set_sideband(radio.sideband);
-                // Next improvement: add set_target_frequency() to DspPipeline / tuner and apply here.
             }
 
-            // Fake IQ source for now.
-            let iq_block: Vec<Complex32> = (0..1024)
-                .map(|i| {
-                    let x = i as f32 * 0.01;
-                    Complex32::new(x.sin(), x.cos())
-                })
-                .collect();
+            let iq_block = match source.read_block(block_size) {
+                Ok(block) => block,
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::Error {
+                        message: format!("source read failed: {e}"),
+                    });
+                    break;
+                }
+            };
+
+            if iq_block.is_empty() {
+                let _ = tx.send(ServerMessage::Info {
+                    message: "source reached end of stream".to_string(),
+                });
+                break;
+            }
 
             let audio = pipeline.process_audio(&iq_block);
+
             let _ = tx.send(ServerMessage::AudioFrame { samples: audio });
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     });
 
