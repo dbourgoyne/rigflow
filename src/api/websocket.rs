@@ -22,7 +22,9 @@ pub async fn ws_handler(
 
 async fn client_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
-    let mut broadcast_rx = state.tx.subscribe();
+
+    let mut msg_rx = state.tx.subscribe();
+    let mut audio_rx = state.audio_tx.subscribe();
 
     let _ = sender
         .send(Message::Text(
@@ -31,14 +33,34 @@ async fn client_socket(socket: WebSocket, state: AppState) {
         .await;
 
     let send_task = tokio::spawn(async move {
-        while let Ok(msg) = broadcast_rx.recv().await {
-            let text = match serde_json::to_string(&msg) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+        loop {
+            tokio::select! {
+                msg = msg_rx.recv() => {
+                    match msg {
+                        Ok(msg) => {
+                            let text = match serde_json::to_string(&msg) {
+                                Ok(t) => t,
+                                Err(_) => continue,
+                            };
 
-            if sender.send(Message::Text(text.into())).await.is_err() {
-                break;
+                            if sender.send(Message::Text(text.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                audio = audio_rx.recv() => {
+                    match audio {
+                        Ok(bytes) => {
+                            if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
             }
         }
     });

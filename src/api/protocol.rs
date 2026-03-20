@@ -15,7 +15,6 @@ pub enum ServerMessage {
     Pong,
     FrequencyChanged { target_freq_hz: f32 },
     SidebandChanged { sideband: String },
-    AudioFrame { samples: Vec<f32> },
     Info { message: String },
     Error { message: String },
 }
