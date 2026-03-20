@@ -104,6 +104,17 @@ async fn handle_client_text(text: &str, state: &AppState) -> Result<(), String> 
             let _ = state.tx.send(ServerMessage::FrequencyChanged { target_freq_hz });
         }
 
+	ClientMessage::SetCenterFrequency { center_freq_hz } => {
+	    {
+		let mut radio = state.radio.write().await;
+		radio.center_freq_hz = center_freq_hz;
+	    }
+
+	    let _ = state.tx.send(ServerMessage::CenterFrequencyChanged {
+		center_freq_hz,
+	    });
+	}
+
         ClientMessage::SetSideband { sideband } => {
             let parsed = match sideband.to_ascii_lowercase().as_str() {
                 "usb" => Sideband::Usb,

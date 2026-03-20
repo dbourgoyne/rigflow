@@ -14,10 +14,10 @@ use radio_server::streaming::audio_binary::f32_samples_to_i16_bytes;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let center_freq_hz = 0.0;
-    let target_freq_hz = 0.0;
+    let center_freq_hz = 3750000.0;
+    let target_freq_hz = 3690000.0;
     let sideband = Sideband::Lsb;
-    let block_size = 8192;
+    let block_size = 4 * 9600; //8192;
 
     let state = AppState::new(center_freq_hz, target_freq_hz, sideband);
 
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 
-    let addr: SocketAddr = "127.0.0.1:9000".parse()?;
+    let addr: SocketAddr = "192.168.0.225:9000".parse()?;
     println!("radio_server listening on ws://{addr}/ws");
 
 let tx = state.tx.clone();
@@ -58,12 +58,14 @@ tokio::spawn(async move {
         16,
         2_700.0,
         101,
+	48_000.0,
     );
 
     pipeline.set_sideband(sideband);
 
     let _ = tx.send(ServerMessage::Info {
-        message: format!("source initialized at {} Hz", input_sample_rate_hz),
+	//        message: format!("source initialized at {} Hz", input_sample_rate_hz),
+	message: format!("source initialized at {} Hz", 48000),
     });
 
     loop {

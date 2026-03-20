@@ -3,6 +3,7 @@ use num_complex::Complex32;
 use crate::dsp::audio::agc::Agc;
 use crate::dsp::audio::audio_fir::AudioFir;
 use crate::dsp::audio::dc_blocker::DcBlocker;
+use crate::dsp::audio::resampler::AudioResampler;
 use crate::dsp::decimator::PolyphaseDecimator;
 use crate::dsp::demod::ssb::SsbDemodulator;
 use crate::dsp::demod::Sideband;
@@ -15,7 +16,9 @@ pub struct DspPipeline {
     dc_blocker: DcBlocker,
     agc: Agc,
     audio_fir: Option<AudioFir>,
+    resampler: Option<AudioResampler>,
     output_sample_rate_hz: f32,
+    client_output_sample_rate_hz: f32,
 }
 
 impl DspPipeline {
@@ -28,8 +31,20 @@ impl DspPipeline {
         decimation_factor: usize,
         audio_cutoff_hz: f32,
         audio_fir_taps: usize,
+        client_output_sample_rate_hz: f32,
     ) -> Self {
         let output_sample_rate_hz = input_sample_rate_hz / decimation_factor as f32;
+
+	println!("output SR = {}", output_sample_rate_hz);
+	println!("client output SR = {}", client_output_sample_rate_hz);
+        let resampler = if (output_sample_rate_hz - client_output_sample_rate_hz).abs() > 1.0 {
+            Some(AudioResampler::new(
+                output_sample_rate_hz,
+                client_output_sample_rate_hz,
+            ))
+        } else {
+            None
+        };
 
         Self {
             tuner: VirtualTuner::new(
@@ -55,7 +70,9 @@ impl DspPipeline {
             } else {
                 None
             },
+            resampler,
             output_sample_rate_hz,
+            client_output_sample_rate_hz,
         }
     }
 
@@ -88,19 +105,32 @@ impl DspPipeline {
             fir.process_in_place(&mut audio);
         }
 
-        audio
+        if let Some(resampler) = &mut self.resampler {
+            resampler.process(&audio)
+        } else {
+            audio
+        }
     }
 
     pub fn reset_audio_state(&mut self) {
         self.dc_blocker.reset();
         self.agc.reset();
+
         if let Some(fir) = &mut self.audio_fir {
             fir.reset();
+        }
+
+        if let Some(resampler) = &mut self.resampler {
+            resampler.reset();
         }
     }
 
     pub fn output_sample_rate(&self) -> f32 {
         self.output_sample_rate_hz
+    }
+
+    pub fn client_output_sample_rate(&self) -> f32 {
+        self.client_output_sample_rate_hz
     }
 }
 
@@ -112,7 +142,7 @@ mod tests {
     #[test]
     fn process_audio_preserves_length_after_decimation() {
         let mut pipeline =
-            DspPipeline::new(10_000.0, 12_000.0, 48_000.0, 3_000.0, 101, 4, 2_800.0, 101);
+            DspPipeline::new(10_000.0, 12_000.0, 48_000.0, 3_000.0, 101, 4, 2_800.0, 101, 48000.0);
 
         let input: Vec<Complex32> = (0..4096)
             .map(|n| {

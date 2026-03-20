@@ -18,6 +18,7 @@ struct Config {
     audio_fir_taps: usize,
     sideband: Sideband,
     block_size: usize,
+    client_output_sample_rate_hz: f32,
 }
 
 impl Config {
@@ -26,7 +27,7 @@ impl Config {
 
         if args.len() < 5 {
             return Err(format!(
-                "Usage:\n  {} <input.wav> <output.wav> <center_freq_hz> <target_freq_hz> [lsb|usb] [cutoff_hz] [fir_taps] [decimation_factor] [audio_cutoff_hz] [audio_fir_taps] [block_size]\n\nExample:\n  {} input.wav output.wav 7100000 7095000 lsb 2800 129 16 2800 101 8192",
+                "Usage:\n  {} <input.wav> <output.wav> <center_freq_hz> <target_freq_hz> [lsb|usb] [cutoff_hz] [fir_taps] [decimation_factor] [audio_cutoff_hz] [audio_fir_taps] [block_size]\n\nExample:\n  {} input.wav output.wav 7100000 7095000 lsb 2800 129 16 2800 101 8192 48000.0",
                 args[0], args[0]
             ));
         }
@@ -90,6 +91,12 @@ impl Config {
             .transpose()?
             .unwrap_or(8192);
 
+	let client_output_sample_rate_hz: f32 = args
+            .get(12)
+            .map(|s| s.parse().map_err(|_| "invalid client output sample rate".to_string()))
+            .transpose()?
+            .unwrap_or(48000.0);
+
         Ok(Self {
             input_path,
             output_path,
@@ -102,6 +109,7 @@ impl Config {
             audio_fir_taps,
             sideband,
             block_size,
+	    client_output_sample_rate_hz,
         })
     }
 }
@@ -116,19 +124,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output_sample_rate_hz =
         (input_sample_rate_hz / config.decimation_factor as f32).round() as u32;
 
-    println!("Input file:       {}", config.input_path);
-    println!("Output file:      {}", config.output_path);
-    println!("Input sample rate: {} Hz", reader.sample_rate());
-    println!("Center freq:       {} Hz", config.center_freq_hz);
-    println!("Target freq:       {} Hz", config.target_freq_hz);
-    println!("Sideband:          {:?}", config.sideband);
-    println!("Cutoff:            {} Hz", config.cutoff_hz);
-    println!("FIR taps:          {}", config.fir_taps);
-    println!("Decimation:        {}", config.decimation_factor);
-    println!("Output sample rate: {} Hz", output_sample_rate_hz);
-    println!("Block size:        {}", config.block_size);
-    println!("Audio cutoff:       {} Hz", config.audio_cutoff_hz);
-    println!("Audio FIR taps:     {}", config.audio_fir_taps);
+    println!("Input file:                    {}", config.input_path);
+    println!("Output file:                   {}", config.output_path);
+    println!("Input sample rate:             {} Hz", reader.sample_rate());
+    println!("Center freq:                   {} Hz", config.center_freq_hz);
+    println!("Target freq:                   {} Hz", config.target_freq_hz);
+    println!("Sideband:                      {:?}", config.sideband);
+    println!("Cutoff:                        {} Hz", config.cutoff_hz);
+    println!("FIR taps:                      {}", config.fir_taps);
+    println!("Decimation:                    {}", config.decimation_factor);
+    println!("Output sample rate:            {} Hz", output_sample_rate_hz);
+    println!("Block size:                    {}", config.block_size);
+    println!("Audio cutoff:                  {} Hz", config.audio_cutoff_hz);
+    println!("Audio FIR taps:                {}", config.audio_fir_taps);
+    println!("Client output sample rate:     {} Hz", config.client_output_sample_rate_hz);
 
     let mut pipeline = DspPipeline::new(
         config.center_freq_hz,
@@ -139,11 +148,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.decimation_factor,
         config.audio_cutoff_hz,
         config.audio_fir_taps,
+	config.client_output_sample_rate_hz,
     );
 
     pipeline.set_sideband(config.sideband);
 
-    let mut writer = AudioWavWriter::create(&config.output_path, output_sample_rate_hz)
+    let mut writer =
+	AudioWavWriter::create(&config.output_path, config.client_output_sample_rate_hz as u32)
         .map_err(|e| format!("failed to create output WAV '{}': {e}", config.output_path))?;
 
     let mut total_iq_samples = 0usize;
