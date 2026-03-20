@@ -34,30 +34,22 @@ impl DspPipeline {
         let output_sample_rate_hz = input_sample_rate_hz / decimation_factor as f32;
 
         Self {
-            tuner: VirtualTuner::new(
-                center_freq_hz,
-                target_freq_hz,
-                input_sample_rate_hz,
-            ),
-            fir: LowPassFir::new(
-                input_sample_rate_hz,
-                channel_cutoff_hz,
-                fir_taps,
-            ),
+            tuner: VirtualTuner::new(center_freq_hz, target_freq_hz, input_sample_rate_hz),
+            fir: LowPassFir::new(input_sample_rate_hz, channel_cutoff_hz, fir_taps),
             decimator: Decimator::new(decimation_factor),
             ssb_demod: SsbDemodulator::new(Sideband::Usb),
             dc_blocker: DcBlocker::new(0.995),
             agc: Agc::new(0.3, 0.9, 0.999, 20.0),
             audio_fir: if audio_cutoff_hz > 0.0 {
-	    	       Some(AudioFir::new(
-			 output_sample_rate_hz,
-                	 audio_cutoff_hz,
-                	 audio_fir_taps,
-			))
-		} else {
-		 None
-		},
-	    output_sample_rate_hz,
+                Some(AudioFir::new(
+                    output_sample_rate_hz,
+                    audio_cutoff_hz,
+                    audio_fir_taps,
+                ))
+            } else {
+                None
+            },
+            output_sample_rate_hz,
         }
     }
 
@@ -80,9 +72,9 @@ impl DspPipeline {
 
         self.dc_blocker.process_in_place(&mut audio);
         self.agc.process_in_place(&mut audio);
-	if let Some(fir) = &mut self.audio_fir {
-           fir.process_in_place(&mut audio);
-	   }
+        if let Some(fir) = &mut self.audio_fir {
+            fir.process_in_place(&mut audio);
+        }
 
         audio
     }
@@ -90,9 +82,9 @@ impl DspPipeline {
     pub fn reset_audio_state(&mut self) {
         self.dc_blocker.reset();
         self.agc.reset();
-	if let Some(fir) = &mut self.audio_fir {
-	   fir.reset()
-	   }
+        if let Some(fir) = &mut self.audio_fir {
+            fir.reset()
+        }
     }
 
     pub fn output_sample_rate(&self) -> f32 {
@@ -107,16 +99,8 @@ mod tests {
 
     #[test]
     fn process_audio_preserves_length_after_decimation() {
-        let mut pipeline = DspPipeline::new(
-            10_000.0,
-            12_000.0,
-            48_000.0,
-            3_000.0,
-            101,
-            4,
-	    2_800.0,
-	    101,
-        );
+        let mut pipeline =
+            DspPipeline::new(10_000.0, 12_000.0, 48_000.0, 3_000.0, 101, 4, 2_800.0, 101);
 
         let input: Vec<Complex32> = (0..4096)
             .map(|n| {

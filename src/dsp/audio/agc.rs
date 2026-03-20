@@ -9,7 +9,10 @@ pub struct Agc {
 impl Agc {
     pub fn new(target_level: f32, attack: f32, decay: f32, max_gain: f32) -> Self {
         assert!(target_level > 0.0, "target_level must be > 0");
-        assert!(attack > 0.0 && attack < 1.0, "attack must be between 0 and 1");
+        assert!(
+            attack > 0.0 && attack < 1.0,
+            "attack must be between 0 and 1"
+        );
         assert!(decay > 0.0 && decay < 1.0, "decay must be between 0 and 1");
         assert!(max_gain > 0.0, "max_gain must be > 0");
 

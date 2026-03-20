@@ -145,11 +145,7 @@ mod tests {
             .collect();
 
         // Create tuner that shifts target → DC
-        let mut tuner = VirtualTuner::new(
-            center_freq_hz,
-            target_freq_hz,
-            sample_rate_hz,
-        );
+        let mut tuner = VirtualTuner::new(center_freq_hz, target_freq_hz, sample_rate_hz);
 
         let output = tuner.process(&input);
 
@@ -205,11 +201,7 @@ mod tests {
             })
             .collect();
 
-        let mut tuner = VirtualTuner::new(
-            center_freq_hz,
-            target_freq_hz,
-            sample_rate_hz,
-        );
+        let mut tuner = VirtualTuner::new(center_freq_hz, target_freq_hz, sample_rate_hz);
 
         let output = tuner.process(&input);
 

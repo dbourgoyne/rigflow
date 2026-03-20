@@ -116,10 +116,7 @@ mod tests {
     fn preserves_phase_across_multiple_blocks() {
         let mut dec = Decimator::new(3);
 
-        let block1 = vec![
-            Complex32::new(0.0, 0.0),
-            Complex32::new(1.0, 0.0),
-        ];
+        let block1 = vec![Complex32::new(0.0, 0.0), Complex32::new(1.0, 0.0)];
         let block2 = vec![
             Complex32::new(2.0, 0.0),
             Complex32::new(3.0, 0.0),
@@ -131,12 +128,7 @@ mod tests {
         let out2 = dec.process(&block2);
 
         assert_eq!(out1, vec![Complex32::new(0.0, 0.0)]);
-        assert_eq!(
-            out2,
-            vec![
-                Complex32::new(3.0, 0.0),
-            ]
-        );
+        assert_eq!(out2, vec![Complex32::new(3.0, 0.0),]);
     }
 
     #[test]
@@ -144,9 +136,7 @@ mod tests {
         let mut dec_a = Decimator::new(4);
         let mut dec_b = Decimator::new(4);
 
-        let input: Vec<Complex32> = (0..20)
-            .map(|x| Complex32::new(x as f32, 0.0))
-            .collect();
+        let input: Vec<Complex32> = (0..20).map(|x| Complex32::new(x as f32, 0.0)).collect();
 
         let out_a = dec_a.process(&input);
 

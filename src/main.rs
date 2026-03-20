@@ -16,8 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_fir_taps = 101;
     let block_size = 8192;
 
-    let mut reader = IqWavReader::open(input_path)
-        .map_err(|e| format!("failed to open IQ WAV: {e}"))?;
+    let mut reader =
+        IqWavReader::open(input_path).map_err(|e| format!("failed to open IQ WAV: {e}"))?;
 
     let input_sample_rate_hz = reader.sample_rate() as f32;
     let output_sample_rate_hz = (input_sample_rate_hz / decimation_factor as f32) as u32;
@@ -36,8 +36,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         channel_cutoff_hz,
         fir_taps,
         decimation_factor,
-	audio_cutoff_hz,
-	audio_fir_taps,
+        audio_cutoff_hz,
+        audio_fir_taps,
     );
 
     pipeline.set_sideband(Sideband::Lsb);

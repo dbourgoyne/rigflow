@@ -1,5 +1,5 @@
-pub mod event;
 pub mod bus;
+pub mod event;
 
-pub use event::ServerEvent;
 pub use bus::EventBus;
+pub use event::ServerEvent;

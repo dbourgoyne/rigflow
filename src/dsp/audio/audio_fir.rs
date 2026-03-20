@@ -140,8 +140,7 @@ mod tests {
 
         let output = fir.process(&input);
 
-        let input_power =
-            input.iter().map(|x| x * x).sum::<f32>() / input.len() as f32;
+        let input_power = input.iter().map(|x| x * x).sum::<f32>() / input.len() as f32;
         let output_power =
             output[512..].iter().map(|x| x * x).sum::<f32>() / (output.len() - 512) as f32;
 
@@ -169,10 +168,7 @@ mod tests {
         b.process_in_place(&mut in_place);
 
         for (i, (x, y)) in out_a.iter().zip(in_place.iter()).enumerate() {
-            assert!(
-                approx_eq(*x, *y, 1e-6),
-                "mismatch at {i}: x={x}, y={y}"
-            );
+            assert!(approx_eq(*x, *y, 1e-6), "mismatch at {i}: x={x}, y={y}");
         }
     }
 }

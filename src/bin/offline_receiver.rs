@@ -65,7 +65,10 @@ impl Config {
 
         let decimation_factor: usize = args
             .get(8)
-            .map(|s| s.parse().map_err(|_| "invalid decimation_factor".to_string()))
+            .map(|s| {
+                s.parse()
+                    .map_err(|_| "invalid decimation_factor".to_string())
+            })
             .transpose()?
             .unwrap_or(16);
 
@@ -128,15 +131,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Audio FIR taps:     {}", config.audio_fir_taps);
 
     let mut pipeline = DspPipeline::new(
-    config.center_freq_hz,
-    config.target_freq_hz,
-    input_sample_rate_hz,
-    config.cutoff_hz,
-    config.fir_taps,
-    config.decimation_factor,
-    config.audio_cutoff_hz,
-    config.audio_fir_taps,
-    );  
+        config.center_freq_hz,
+        config.target_freq_hz,
+        input_sample_rate_hz,
+        config.cutoff_hz,
+        config.fir_taps,
+        config.decimation_factor,
+        config.audio_cutoff_hz,
+        config.audio_fir_taps,
+    );
 
     pipeline.set_sideband(config.sideband);
 

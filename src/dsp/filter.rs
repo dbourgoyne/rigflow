@@ -171,8 +171,7 @@ mod tests {
 
         let output = fir.process(&input);
 
-        let input_power =
-            input.iter().map(|x| x.norm_sqr()).sum::<f32>() / input.len() as f32;
+        let input_power = input.iter().map(|x| x.norm_sqr()).sum::<f32>() / input.len() as f32;
         let output_power =
             output[512..].iter().map(|x| x.norm_sqr()).sum::<f32>() / (output.len() - 512) as f32;
 
@@ -206,7 +205,10 @@ mod tests {
             assert!(
                 approx_eq(a.re, b.re, 1e-6) && approx_eq(a.im, b.im, 1e-6),
                 "mismatch at {i}: a=({:.6}, {:.6}), b=({:.6}, {:.6})",
-                a.re, a.im, b.re, b.im
+                a.re,
+                a.im,
+                b.re,
+                b.im
             );
         }
     }

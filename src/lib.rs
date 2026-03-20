@@ -1,10 +1,10 @@
-pub mod hardware;
+pub mod audio_output;
 pub mod dsp;
-pub mod waterfall;
-pub mod streaming;
 pub mod events;
+pub mod hardware;
+pub mod input;
 pub mod plugin_api;
 pub mod plugins;
 pub mod server;
-pub mod audio_output;
-pub mod input;
+pub mod streaming;
+pub mod waterfall;
