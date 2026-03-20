@@ -1,6 +1,7 @@
 use num_complex::Complex32;
 
 use crate::dsp::audio::agc::Agc;
+use crate::dsp::audio::audio_fir::AudioFir;
 use crate::dsp::audio::dc_blocker::DcBlocker;
 use crate::dsp::decimator::Decimator;
 use crate::dsp::demod::ssb::SsbDemodulator;
@@ -15,6 +16,8 @@ pub struct DspPipeline {
     ssb_demod: SsbDemodulator,
     dc_blocker: DcBlocker,
     agc: Agc,
+    audio_fir: Option<AudioFir>,
+    output_sample_rate_hz: f32,
 }
 
 impl DspPipeline {
@@ -25,7 +28,11 @@ impl DspPipeline {
         channel_cutoff_hz: f32,
         fir_taps: usize,
         decimation_factor: usize,
+        audio_cutoff_hz: f32,
+        audio_fir_taps: usize,
     ) -> Self {
+        let output_sample_rate_hz = input_sample_rate_hz / decimation_factor as f32;
+
         Self {
             tuner: VirtualTuner::new(
                 center_freq_hz,
@@ -40,12 +47,17 @@ impl DspPipeline {
             decimator: Decimator::new(decimation_factor),
             ssb_demod: SsbDemodulator::new(Sideband::Usb),
             dc_blocker: DcBlocker::new(0.995),
-            agc: Agc::new(
-                0.3,   // target level
-                0.9,   // attack
-                0.999, // decay
-                20.0,  // max gain
-            ),
+            agc: Agc::new(0.3, 0.9, 0.999, 20.0),
+            audio_fir: if audio_cutoff_hz > 0.0 {
+	    	       Some(AudioFir::new(
+			 output_sample_rate_hz,
+                	 audio_cutoff_hz,
+                	 audio_fir_taps,
+			))
+		} else {
+		 None
+		},
+	    output_sample_rate_hz,
         }
     }
 
@@ -68,6 +80,9 @@ impl DspPipeline {
 
         self.dc_blocker.process_in_place(&mut audio);
         self.agc.process_in_place(&mut audio);
+	if let Some(fir) = &mut self.audio_fir {
+           fir.process_in_place(&mut audio);
+	   }
 
         audio
     }
@@ -75,10 +90,13 @@ impl DspPipeline {
     pub fn reset_audio_state(&mut self) {
         self.dc_blocker.reset();
         self.agc.reset();
+	if let Some(fir) = &mut self.audio_fir {
+	   fir.reset()
+	   }
     }
 
-    pub fn output_sample_rate(&self, input_sample_rate_hz: f32) -> f32 {
-        input_sample_rate_hz / self.decimator.factor() as f32
+    pub fn output_sample_rate(&self) -> f32 {
+        self.output_sample_rate_hz
     }
 }
 
@@ -96,6 +114,8 @@ mod tests {
             3_000.0,
             101,
             4,
+	    2_800.0,
+	    101,
         );
 
         let input: Vec<Complex32> = (0..4096)

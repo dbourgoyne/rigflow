@@ -14,6 +14,8 @@ struct Config {
     cutoff_hz: f32,
     fir_taps: usize,
     decimation_factor: usize,
+    audio_cutoff_hz: f32,
+    audio_fir_taps: usize,
     sideband: Sideband,
     block_size: usize,
 }
@@ -24,7 +26,7 @@ impl Config {
 
         if args.len() < 5 {
             return Err(format!(
-                "Usage:\n  {} <input.wav> <output.wav> <center_freq_hz> <target_freq_hz> [lsb|usb] [cutoff_hz] [fir_taps] [decimation_factor] [block_size]\n\nExample:\n  {} input.wav output.wav 7100000 7095000 lsb 2800 129 16 8192",
+                "Usage:\n  {} <input.wav> <output.wav> <center_freq_hz> <target_freq_hz> [lsb|usb] [cutoff_hz] [fir_taps] [decimation_factor] [audio_cutoff_hz] [audio_fir_taps] [block_size]\n\nExample:\n  {} input.wav output.wav 7100000 7095000 lsb 2800 129 16 2800 101 8192",
                 args[0], args[0]
             ));
         }
@@ -67,8 +69,20 @@ impl Config {
             .transpose()?
             .unwrap_or(16);
 
-        let block_size: usize = args
+        let audio_cutoff_hz: f32 = args
             .get(9)
+            .map(|s| s.parse().map_err(|_| "invalid audio_cutoff_hz".to_string()))
+            .transpose()?
+            .unwrap_or(2_800.0);
+
+        let audio_fir_taps: usize = args
+            .get(10)
+            .map(|s| s.parse().map_err(|_| "invalid audio_fir_taps".to_string()))
+            .transpose()?
+            .unwrap_or(101);
+
+        let block_size: usize = args
+            .get(11)
             .map(|s| s.parse().map_err(|_| "invalid block_size".to_string()))
             .transpose()?
             .unwrap_or(8192);
@@ -81,6 +95,8 @@ impl Config {
             cutoff_hz,
             fir_taps,
             decimation_factor,
+            audio_cutoff_hz,
+            audio_fir_taps,
             sideband,
             block_size,
         })
@@ -108,15 +124,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Decimation:        {}", config.decimation_factor);
     println!("Output sample rate: {} Hz", output_sample_rate_hz);
     println!("Block size:        {}", config.block_size);
+    println!("Audio cutoff:       {} Hz", config.audio_cutoff_hz);
+    println!("Audio FIR taps:     {}", config.audio_fir_taps);
 
     let mut pipeline = DspPipeline::new(
-        config.center_freq_hz,
-        config.target_freq_hz,
-        input_sample_rate_hz,
-        config.cutoff_hz,
-        config.fir_taps,
-        config.decimation_factor,
-    );
+    config.center_freq_hz,
+    config.target_freq_hz,
+    input_sample_rate_hz,
+    config.cutoff_hz,
+    config.fir_taps,
+    config.decimation_factor,
+    config.audio_cutoff_hz,
+    config.audio_fir_taps,
+    );  
 
     pipeline.set_sideband(config.sideband);
 
