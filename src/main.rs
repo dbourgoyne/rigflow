@@ -7,8 +7,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_path = "input_iq.wav";
     let output_path = "output.wav";
 
-    let center_freq_hz = 7_150_000.0;
-    let target_freq_hz = 7_149_000.0;
+    let center_freq_hz = 3_750_000.0;
+    let target_freq_hz = 3_690_000.0;
     let channel_cutoff_hz = 2_800.0;
     let fir_taps = 129;
     let decimation_factor = 16;
