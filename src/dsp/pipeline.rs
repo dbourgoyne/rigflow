@@ -53,6 +53,14 @@ impl DspPipeline {
         }
     }
 
+    pub fn set_target_frequency(&mut self, target_freq_hz: f32) {
+	self.tuner.set_target_frequency(target_freq_hz);
+    }
+
+    pub fn set_center_frequency(&mut self, center_freq_hz: f32) {
+	self.tuner.set_center_frequency(center_freq_hz);
+    }
+
     pub fn set_sideband(&mut self, sideband: Sideband) {
         self.ssb_demod.set_sideband(sideband);
     }
