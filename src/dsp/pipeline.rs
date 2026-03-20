@@ -35,8 +35,6 @@ impl DspPipeline {
     ) -> Self {
         let output_sample_rate_hz = input_sample_rate_hz / decimation_factor as f32;
 
-	println!("output SR = {}", output_sample_rate_hz);
-	println!("client output SR = {}", client_output_sample_rate_hz);
         let resampler = if (output_sample_rate_hz - client_output_sample_rate_hz).abs() > 1.0 {
             Some(AudioResampler::new(
                 output_sample_rate_hz,
