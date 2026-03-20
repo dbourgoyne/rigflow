@@ -6,3 +6,5 @@ pub mod events;
 pub mod plugin_api;
 pub mod plugins;
 pub mod server;
+pub mod audio_output;
+pub mod input;

@@ -5,3 +5,4 @@ pub mod decimator;
 pub mod filter;
 pub mod demod;
 pub mod pipeline;
+pub mod audio;

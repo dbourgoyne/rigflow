@@ -1,55 +1,60 @@
-use tokio::time::{sleep, Duration};
-
-use num_complex::Complex32;
-
+use radio_server::audio_output::wav_writer::AudioWavWriter;
 use radio_server::dsp::demod::Sideband;
 use radio_server::dsp::pipeline::DspPipeline;
-use radio_server::events::{EventBus, ServerEvent};
+use radio_server::input::iq_wav_reader::IqWavReader;
 
-#[tokio::main]
-async fn main() {
-    println!("Radio server starting...");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let input_path = "input_iq.wav";
+    let output_path = "output.wav";
 
-    let bus = EventBus::new(100);
+    let center_freq_hz = 7_150_000.0;
+    let target_freq_hz = 7_149_000.0;
+    let channel_cutoff_hz = 2_800.0;
+    let fir_taps = 129;
+    let decimation_factor = 16;
+    let block_size = 8192;
 
-    let mut pipeline = DspPipeline::new(
-        14_100_000.0,
-        14_074_000.0,
-        48_000.0,
-        3_000.0,
-        101,
-        4,
+    let mut reader = IqWavReader::open(input_path)
+        .map_err(|e| format!("failed to open IQ WAV: {e}"))?;
+
+    let input_sample_rate_hz = reader.sample_rate() as f32;
+    let output_sample_rate_hz = (input_sample_rate_hz / decimation_factor as f32) as u32;
+
+    println!(
+        "Opened IQ WAV: sample_rate={} Hz, channels={}, bits={}",
+        reader.sample_rate(),
+        reader.channels(),
+        reader.bits_per_sample()
     );
 
-    pipeline.set_sideband(Sideband::Usb);
+    let mut pipeline = DspPipeline::new(
+        center_freq_hz,
+        target_freq_hz,
+        input_sample_rate_hz,
+        channel_cutoff_hz,
+        fir_taps,
+        decimation_factor,
+    );
 
-    let mut sub = bus.subscribe();
+    pipeline.set_sideband(Sideband::Lsb);
 
-    tokio::spawn(async move {
-        while let Ok(event) = sub.recv().await {
-            match event {
-                ServerEvent::WaterfallFrame(_) => println!("Waterfall frame received"),
-                ServerEvent::AudioFrame(audio) => {
-                    println!("Audio frame received: {} samples", audio.len())
-                }
-                ServerEvent::Tick => {}
-            }
-        }
-    });
+    let mut wav = AudioWavWriter::create(output_path, output_sample_rate_hz)?;
 
     loop {
-        let iq_block: Vec<Complex32> = (0..1024)
-            .map(|i| {
-                let x = i as f32 * 0.01;
-                Complex32::new(x.sin(), x.cos())
-            })
-            .collect();
+        let iq_block = reader
+            .read_block(block_size)
+            .map_err(|e| format!("failed reading IQ block: {e}"))?;
+
+        if iq_block.is_empty() {
+            break;
+        }
 
         let audio = pipeline.process_audio(&iq_block);
-
-        bus.publish(ServerEvent::AudioFrame(audio));
-
-        sleep(Duration::from_millis(500)).await;
-
+        wav.write_samples(&audio)?;
     }
+
+    wav.finalize()?;
+    println!("Wrote demodulated audio to {output_path}");
+
+    Ok(())
 }
