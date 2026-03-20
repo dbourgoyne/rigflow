@@ -4,3 +4,4 @@ pub mod fft;
 pub mod decimator;
 pub mod filter;
 pub mod demod;
+pub mod pipeline;
