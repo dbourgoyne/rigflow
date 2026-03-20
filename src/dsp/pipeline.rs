@@ -3,16 +3,14 @@ use num_complex::Complex32;
 use crate::dsp::audio::agc::Agc;
 use crate::dsp::audio::audio_fir::AudioFir;
 use crate::dsp::audio::dc_blocker::DcBlocker;
-use crate::dsp::decimator::Decimator;
+use crate::dsp::decimator::PolyphaseDecimator;
 use crate::dsp::demod::ssb::SsbDemodulator;
 use crate::dsp::demod::Sideband;
-use crate::dsp::filter::LowPassFir;
 use crate::dsp::tuner::VirtualTuner;
 
 pub struct DspPipeline {
     tuner: VirtualTuner,
-    fir: LowPassFir,
-    decimator: Decimator,
+    channelizer: PolyphaseDecimator,
     ssb_demod: SsbDemodulator,
     dc_blocker: DcBlocker,
     agc: Agc,
@@ -34,9 +32,17 @@ impl DspPipeline {
         let output_sample_rate_hz = input_sample_rate_hz / decimation_factor as f32;
 
         Self {
-            tuner: VirtualTuner::new(center_freq_hz, target_freq_hz, input_sample_rate_hz),
-            fir: LowPassFir::new(input_sample_rate_hz, channel_cutoff_hz, fir_taps),
-            decimator: Decimator::new(decimation_factor),
+            tuner: VirtualTuner::new(
+                center_freq_hz,
+                target_freq_hz,
+                input_sample_rate_hz,
+            ),
+            channelizer: PolyphaseDecimator::new(
+                input_sample_rate_hz,
+                channel_cutoff_hz,
+                fir_taps,
+                decimation_factor,
+            ),
             ssb_demod: SsbDemodulator::new(Sideband::Usb),
             dc_blocker: DcBlocker::new(0.995),
             agc: Agc::new(0.3, 0.9, 0.999, 20.0),
@@ -53,25 +59,22 @@ impl DspPipeline {
         }
     }
 
-    pub fn set_target_frequency(&mut self, target_freq_hz: f32) {
-	self.tuner.set_target_frequency(target_freq_hz);
-    }
-
-    pub fn set_center_frequency(&mut self, center_freq_hz: f32) {
-	self.tuner.set_center_frequency(center_freq_hz);
-    }
-
     pub fn set_sideband(&mut self, sideband: Sideband) {
         self.ssb_demod.set_sideband(sideband);
     }
 
+    pub fn set_target_frequency(&mut self, target_freq_hz: f32) {
+        self.tuner.set_target_frequency(target_freq_hz);
+    }
+
+    pub fn set_center_frequency(&mut self, center_freq_hz: f32) {
+        self.tuner.set_center_frequency(center_freq_hz);
+    }
+
     pub fn process_iq(&mut self, input: &[Complex32]) -> Vec<Complex32> {
         let mut shifted = input.to_vec();
-
         self.tuner.process_in_place(&mut shifted);
-        self.fir.process_in_place(&mut shifted);
-
-        self.decimator.process(&shifted)
+        self.channelizer.process(&shifted)
     }
 
     pub fn process_audio(&mut self, input: &[Complex32]) -> Vec<f32> {
@@ -80,6 +83,7 @@ impl DspPipeline {
 
         self.dc_blocker.process_in_place(&mut audio);
         self.agc.process_in_place(&mut audio);
+
         if let Some(fir) = &mut self.audio_fir {
             fir.process_in_place(&mut audio);
         }
@@ -91,7 +95,7 @@ impl DspPipeline {
         self.dc_blocker.reset();
         self.agc.reset();
         if let Some(fir) = &mut self.audio_fir {
-            fir.reset()
+            fir.reset();
         }
     }
 
