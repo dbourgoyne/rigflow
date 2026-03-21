@@ -27,11 +27,12 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     let mut audio_rx = state.audio_tx.subscribe();
     let mut waterfall_rx = state.waterfall_tx.subscribe();
 
-    let _ = sender
-        .send(Message::Text(
-            serde_json::to_string(&ServerMessage::Ready).unwrap().into(),
-        ))
-        .await;
+    let ready = serde_json::to_string(&ServerMessage::Ready)
+        .unwrap_or_else(|_| r#"{"type":"ready"}"#.to_string());
+
+    if sender.send(Message::Text(ready.into())).await.is_err() {
+        return;
+    }
 
     let send_task = tokio::spawn(async move {
         loop {
@@ -95,7 +96,12 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                     }
                 }
                 Message::Close(_) => break,
-                Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
+                Message::Ping(payload) => {
+                    let _ = state_for_recv.tx.send(ServerMessage::Info {
+                        message: format!("received ping ({} bytes)", payload.len()),
+                    });
+                }
+                Message::Pong(_) | Message::Binary(_) => {}
             }
         }
     });
@@ -120,6 +126,7 @@ async fn handle_client_text(text: &str, state: &AppState) -> Result<(), String> 
                 let mut radio = state.radio.write().await;
                 radio.target_freq_hz = target_freq_hz;
             }
+
             let _ = state.tx.send(ServerMessage::FrequencyChanged { target_freq_hz });
         }
 
@@ -128,6 +135,7 @@ async fn handle_client_text(text: &str, state: &AppState) -> Result<(), String> 
                 let mut radio = state.radio.write().await;
                 radio.center_freq_hz = center_freq_hz;
             }
+
             let _ = state.tx.send(ServerMessage::CenterFrequencyChanged { center_freq_hz });
         }
 

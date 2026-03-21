@@ -8,7 +8,7 @@ use radio_server::{
     server::app_state::AppState,
     source::factory::{create_source, SourceConfig},
     streaming::audio_binary::f32_samples_to_i16_bytes,
-    waterfall::simple::generate_waterfall_row,
+    waterfall::simple::WaterfallGenerator,
 };
 
 #[tokio::main]
@@ -16,6 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let center_freq_hz = 0.0;
     let target_freq_hz = 0.0;
     let sideband = Sideband::Lsb;
+
     let block_size = 8*8192;
     let waterfall_bins = 512;
     let waterfall_frame_rate_hz = 10.0;
@@ -39,6 +40,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             path: "input_iq.wav".to_string(),
         };
 
+        // For quick testing, you can swap to:
+        //
+        // let source_config = SourceConfig::Fake {
+        //     sample_rate_hz: 48_000.0,
+        //     tone_hz: 1_500.0,
+        // };
+
         let mut source = match create_source(source_config) {
             Ok(s) => s,
             Err(e) => {
@@ -55,29 +63,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
-            2_800.0,
-            129,
-            16,
-            2_700.0,
-            101,
-            48_000.0,
+            2_800.0, // channel cutoff
+            129,     // channel filter taps
+            16,      // decimation factor
+            2_700.0, // audio cutoff
+            101,     // audio FIR taps
+            48_000.0, // client/browser output sample rate
         );
 
         pipeline.set_sideband(sideband);
 
-	let _ = tx.send(ServerMessage::StreamConfig {
-	    audio_sample_rate_hz: pipeline.client_output_sample_rate(),
-	    audio_format: "i16".to_string(),
-	    waterfall_bins,
-	    waterfall_frame_rate_hz,
-	    center_freq_hz,
-	    input_sample_rate_hz,
-	});
+        let _ = tx.send(ServerMessage::StreamConfig {
+            audio_sample_rate_hz: pipeline.client_output_sample_rate(),
+            audio_format: "i16".to_string(),
+            waterfall_bins,
+            waterfall_frame_rate_hz,
+            center_freq_hz,
+            input_sample_rate_hz,
+        });
 
         let _ = tx.send(ServerMessage::Info {
             message: format!("source initialized at {} Hz", input_sample_rate_hz),
         });
 
+        let mut waterfall = WaterfallGenerator::new(waterfall_bins);
+
+        // Rough frame pacing. If your loop runs every ~20 ms, this gives ~10 FPS.
         let mut wf_counter = 0usize;
         let wf_every_n_blocks = 5usize;
 
@@ -109,11 +120,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let audio = pipeline.process_audio(&iq_block);
             let audio_bytes = f32_samples_to_i16_bytes(&audio);
             let _ = audio_tx.send(audio_bytes);
+	    println!("sent audio bytes");
 
             wf_counter += 1;
             if wf_counter >= wf_every_n_blocks {
                 wf_counter = 0;
-                let row = generate_waterfall_row(&iq_block, waterfall_bins);
+                let row = waterfall.generate_row(&iq_block);
                 let _ = waterfall_tx.send(row);
             }
 
