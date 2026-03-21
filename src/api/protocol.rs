@@ -17,6 +17,12 @@ pub enum ServerMessage {
     FrequencyChanged { target_freq_hz: f32 },
     CenterFrequencyChanged { center_freq_hz: f32 },
     SidebandChanged { sideband: String },
+    StreamConfig {
+        audio_sample_rate_hz: f32,
+        audio_format: String,
+        waterfall_bins: usize,
+        waterfall_frame_rate_hz: f32,
+    },
     Info { message: String },
     Error { message: String },
 }

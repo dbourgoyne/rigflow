@@ -26,12 +26,14 @@ pub struct AppState {
     pub radio: Arc<RwLock<RadioState>>,
     pub tx: broadcast::Sender<ServerMessage>,
     pub audio_tx: broadcast::Sender<Vec<u8>>,
+    pub waterfall_tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl AppState {
     pub fn new(center_freq_hz: f32, target_freq_hz: f32, sideband: Sideband) -> Self {
         let (tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
+        let (waterfall_tx, _) = broadcast::channel(256);
 
         Self {
             radio: Arc::new(RwLock::new(RadioState::new(
@@ -41,6 +43,7 @@ impl AppState {
             ))),
             tx,
             audio_tx,
+            waterfall_tx,
         }
     }
 }

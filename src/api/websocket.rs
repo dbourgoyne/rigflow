@@ -25,6 +25,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
 
     let mut msg_rx = state.tx.subscribe();
     let mut audio_rx = state.audio_tx.subscribe();
+    let mut waterfall_rx = state.waterfall_tx.subscribe();
 
     let _ = sender
         .send(Message::Text(
@@ -53,8 +54,27 @@ async fn client_socket(socket: WebSocket, state: AppState) {
 
                 audio = audio_rx.recv() => {
                     match audio {
-                        Ok(bytes) => {
-                            if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                        Ok(mut bytes) => {
+                            let mut framed = Vec::with_capacity(bytes.len() + 1);
+                            framed.push(b'A');
+                            framed.append(&mut bytes);
+
+                            if sender.send(Message::Binary(framed.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                wf = waterfall_rx.recv() => {
+                    match wf {
+                        Ok(mut bytes) => {
+                            let mut framed = Vec::with_capacity(bytes.len() + 1);
+                            framed.push(b'W');
+                            framed.append(&mut bytes);
+
+                            if sender.send(Message::Binary(framed.into())).await.is_err() {
                                 break;
                             }
                         }
@@ -100,20 +120,16 @@ async fn handle_client_text(text: &str, state: &AppState) -> Result<(), String> 
                 let mut radio = state.radio.write().await;
                 radio.target_freq_hz = target_freq_hz;
             }
-
             let _ = state.tx.send(ServerMessage::FrequencyChanged { target_freq_hz });
         }
 
-	ClientMessage::SetCenterFrequency { center_freq_hz } => {
-	    {
-		let mut radio = state.radio.write().await;
-		radio.center_freq_hz = center_freq_hz;
-	    }
-
-	    let _ = state.tx.send(ServerMessage::CenterFrequencyChanged {
-		center_freq_hz,
-	    });
-	}
+        ClientMessage::SetCenterFrequency { center_freq_hz } => {
+            {
+                let mut radio = state.radio.write().await;
+                radio.center_freq_hz = center_freq_hz;
+            }
+            let _ = state.tx.send(ServerMessage::CenterFrequencyChanged { center_freq_hz });
+        }
 
         ClientMessage::SetSideband { sideband } => {
             let parsed = match sideband.to_ascii_lowercase().as_str() {
