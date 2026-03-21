@@ -65,12 +65,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         pipeline.set_sideband(sideband);
 
-        let _ = tx.send(ServerMessage::StreamConfig {
-            audio_sample_rate_hz: pipeline.client_output_sample_rate(),
-            audio_format: "i16".to_string(),
-            waterfall_bins,
-            waterfall_frame_rate_hz,
-        });
+	let _ = tx.send(ServerMessage::StreamConfig {
+	    audio_sample_rate_hz: pipeline.client_output_sample_rate(),
+	    audio_format: "i16".to_string(),
+	    waterfall_bins,
+	    waterfall_frame_rate_hz,
+	    center_freq_hz,
+	    input_sample_rate_hz,
+	});
 
         let _ = tx.send(ServerMessage::Info {
             message: format!("source initialized at {} Hz", input_sample_rate_hz),
