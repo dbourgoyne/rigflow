@@ -38,6 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 
+    let stream_state = state.stream.clone();
+
     println!("radio_server listening on ws://{ws_addr}/ws");
 
     {
@@ -87,6 +89,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         pipeline.set_sideband(sideband);
+
+	{
+	    let mut s = stream_state.write().await;
+	    s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
+	    s.audio_format = "i16".to_string();
+	    s.waterfall_bins = waterfall_bins;
+	    s.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
+	    s.center_freq_hz = center_freq_hz;
+	    s.input_sample_rate_hz = input_sample_rate_hz;
+	    s.udp_audio_port = udp_registration_port;
+	}
 
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),

@@ -352,11 +352,14 @@ fn handle_mouse_click_tune(
     let mouse_down = window.get_mouse_down(MouseButton::Left);
 
     if mouse_down && !*mouse_was_down {
+	println!("mouse click!");
         if let Some((mx, _my)) = window.get_mouse_pos(MouseMode::Discard) {
             let state_snapshot = { ui_state.lock().unwrap().clone() };
+	    println!("state_snapshot = {:?}", state_snapshot);
 
             if let Some(target_freq_hz) = x_to_frequency(mx, WIDTH, &state_snapshot) {
                 let rounded = target_freq_hz.round();
+		println!("rounded = {}", rounded);
 
                 let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
                     target_freq_hz: rounded,

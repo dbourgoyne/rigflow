@@ -30,9 +30,36 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     let ready = serde_json::to_string(&ServerMessage::Ready)
         .unwrap_or_else(|_| r#"{"type":"ready"}"#.to_string());
 
-    if sender.send(Message::Text(ready.into())).await.is_err() {
-        return;
+        {
+        let stream = state.stream.read().await;
+
+        let stream_config = ServerMessage::StreamConfig {
+            audio_sample_rate_hz: stream.audio_sample_rate_hz,
+            audio_format: stream.audio_format.clone(),
+            waterfall_bins: stream.waterfall_bins,
+            waterfall_frame_rate_hz: stream.waterfall_frame_rate_hz,
+            center_freq_hz: stream.center_freq_hz,
+            input_sample_rate_hz: stream.input_sample_rate_hz,
+        };
+
+        let udp_offer = ServerMessage::UdpAudioOffer {
+            server_udp_port: stream.udp_audio_port,
+        };
+
+        let text = serde_json::to_string(&stream_config).unwrap();
+        if sender.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+
+        let text = serde_json::to_string(&udp_offer).unwrap();
+        if sender.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
     }
+
+    //if sender.send(Message::Text(ready.into())).await.is_err() {
+    //    return;
+    //}
 
     let send_task = tokio::spawn(async move {
         loop {
