@@ -279,6 +279,8 @@ fn spawn_realtime_capture_worker(
     cfg: ServerConfig,
     block_size: usize,
     iq_tx: SyncSender<Vec<Complex32>>,
+    radio_state: std::sync::Arc<tokio::sync::RwLock<RadioState>>,
+    stream_state: std::sync::Arc<tokio::sync::RwLock<StreamState>>,
     tx: tokio::sync::broadcast::Sender<ServerMessage>,
 ) {
     thread::spawn(move || {
@@ -299,10 +301,31 @@ fn spawn_realtime_capture_worker(
             message: format!("capture source initialized at {} Hz", input_sample_rate_hz),
         });
 
+        let mut last_center_freq_hz = cfg.center_freq_hz;
         let mut stats_start = Instant::now();
         let mut iq_samples_per_sec = 0usize;
 
         loop {
+            if let Ok(radio) = radio_state.try_read() {
+                if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
+                    if let Err(e) = source.set_center_frequency(radio.center_freq_hz) {
+                        let _ = tx.send(ServerMessage::Error {
+                            message: format!("failed to retune source: {e}"),
+                        });
+                    } else {
+                        last_center_freq_hz = radio.center_freq_hz;
+
+                        if let Ok(mut s) = stream_state.try_write() {
+                            s.center_freq_hz = radio.center_freq_hz;
+                        }
+
+                        let _ = tx.send(ServerMessage::CenterFrequencyChanged {
+                            center_freq_hz: radio.center_freq_hz,
+                        });
+                    }
+                }
+            }
+
             let iq_block = match source.read_block(block_size) {
                 Ok(block) => block,
                 Err(e) => {
@@ -429,18 +452,8 @@ fn spawn_dsp_worker(
         while let Ok(iq_block) = iq_rx.recv() {
             if let Ok(radio) = radio_state.try_read() {
                 if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
-                    // Hardware retune is handled in capture thread design later.
-                    // For now this still updates DSP state and UI state.
                     pipeline.set_center_frequency(radio.center_freq_hz);
                     last_center_freq_hz = radio.center_freq_hz;
-
-                    if let Ok(mut s) = stream_state.try_write() {
-                        s.center_freq_hz = radio.center_freq_hz;
-                    }
-
-                    let _ = tx.send(ServerMessage::CenterFrequencyChanged {
-                        center_freq_hz: radio.center_freq_hz,
-                    });
                 }
 
                 if (radio.target_freq_hz - last_target_freq_hz).abs() > 0.5 {
@@ -766,6 +779,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cfg.clone(),
                 block_size,
                 iq_tx,
+                state.radio.clone(),
+                state.stream.clone(),
                 state.tx.clone(),
             );
 
