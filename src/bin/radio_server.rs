@@ -1,18 +1,18 @@
 use std::env;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use axum::{routing::get, Router};
-use tokio::task::LocalSet;
-use tokio::time::Instant;
+use num_complex::Complex32;
 
 use radio_server::{
     api::{protocol::ServerMessage, websocket::ws_handler},
     dsp::{demod::Sideband, pipeline::DspPipeline},
-    server::app_state::AppState,
+    server::app_state::{AppState, RadioState, StreamState},
     source::factory::{create_source, SourceConfig},
     streaming::{
-        audio_binary::f32_samples_to_i16_bytes,
         udp_audio::UdpAudioSender,
         udp_registration::run_udp_registration_listener,
         udp_waterfall::UdpWaterfallSender,
@@ -199,90 +199,90 @@ RTL-SDR source:
   --rtl-auto-gain
   --rtl-ppm PPM
   --rtl-direct-sampling
-
-Examples:
-  radio_server --source fake --center 1000000 --target 1001500
-  radio_server --source wav --wav-file input_iq.wav --center 7100000 --target 7101500
-  radio_server --source rtlsdr --center 7100000 --target 7101500 --rtl-sample-rate 2048000
 "#
         .to_string()
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = match ServerConfig::from_args() {
-        Ok(c) => c,
-        Err(msg) => {
-            eprintln!("{msg}");
-            std::process::exit(2);
-        }
-    };
-
-    println!("radio_server config: {:?}", cfg);
-
-    let center_freq_hz = cfg.center_freq_hz;
-    let target_freq_hz = cfg.target_freq_hz;
-    let sideband = Sideband::Lsb;
-
-    let block_size = 8192;
-    let waterfall_bins = 512;
-    let waterfall_frame_rate_hz = 10.0;
-
-    let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
-    let udp_registration_addr = "0.0.0.0:9001";
-    let udp_registration_port = 9001;
-
-    let state = AppState::new(center_freq_hz, target_freq_hz, sideband);
-
-    let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .with_state(state.clone());
-
-    println!("radio_server listening on ws://{ws_addr}/ws");
-
-    {
-        let udp_audio_target = state.udp_audio_target.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                run_udp_registration_listener(udp_registration_addr, udp_audio_target).await
-            {
-                eprintln!("UDP registration listener failed: {e}");
-            }
-        });
+fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig {
+    match cfg.source {
+        SourceKind::Fake => SourceConfig::Fake {
+            sample_rate_hz: cfg.fake_sample_rate_hz,
+            tone_hz: cfg.fake_tone_hz,
+        },
+        SourceKind::Wav => SourceConfig::WavFile {
+            path: cfg.wav_file.clone(),
+        },
+        SourceKind::RtlSdr => SourceConfig::RtlSdr {
+            device_index: cfg.rtlsdr_device_index,
+            sample_rate_hz: cfg.rtlsdr_sample_rate_hz,
+            center_freq_hz: cfg.center_freq_hz as u32,
+            gain_tenths_db: cfg.rtlsdr_gain_tenths_db,
+            ppm_correction: cfg.rtlsdr_ppm_correction,
+            direct_sampling: cfg.rtlsdr_direct_sampling,
+            block_complex_samples: block_size,
+        },
     }
+}
 
-    let tx = state.tx.clone();
-    let audio_tx = state.audio_tx.clone();
-    let waterfall_tx = state.waterfall_tx.clone();
-    let radio_state = state.radio.clone();
-    let stream_state = state.stream.clone();
-    let udp_audio_target = state.udp_audio_target.clone();
+fn choose_block_size(source: &SourceKind) -> usize {
+    match source {
+        SourceKind::Fake => 8192,
+        SourceKind::Wav => 8192,
+        SourceKind::RtlSdr => 65536,
+    }
+}
 
-    let cfg_for_task = cfg.clone();
-    let local = LocalSet::new();
+fn choose_decimation(source: &SourceKind) -> usize {
+    match source {
+        SourceKind::Fake => 4,
+        SourceKind::Wav => 16,
+        SourceKind::RtlSdr => 8,
+    }
+}
 
-    local.spawn_local(async move {
-        let source_config = match cfg_for_task.source {
-            SourceKind::Fake => SourceConfig::Fake {
-                sample_rate_hz: cfg_for_task.fake_sample_rate_hz,
-                tone_hz: cfg_for_task.fake_tone_hz,
-            },
-
-            SourceKind::Wav => SourceConfig::WavFile {
-                path: cfg_for_task.wav_file.clone(),
-            },
-
-            SourceKind::RtlSdr => SourceConfig::RtlSdr {
-                device_index: cfg_for_task.rtlsdr_device_index,
-                sample_rate_hz: cfg_for_task.rtlsdr_sample_rate_hz,
-                center_freq_hz: cfg_for_task.center_freq_hz as u32,
-                gain_tenths_db: cfg_for_task.rtlsdr_gain_tenths_db,
-                ppm_correction: cfg_for_task.rtlsdr_ppm_correction,
-                direct_sampling: cfg_for_task.rtlsdr_direct_sampling,
-                block_complex_samples: block_size,
-            },
+fn spawn_waterfall_worker(
+    rx: Receiver<Vec<Complex32>>,
+    udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
+    tx: tokio::sync::broadcast::Sender<ServerMessage>,
+    _waterfall_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    waterfall_bins: usize,
+) {
+    thread::spawn(move || {
+        let mut waterfall = WaterfallGenerator::new(waterfall_bins);
+        let mut udp_waterfall = match UdpWaterfallSender::new() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(ServerMessage::Error {
+                    message: format!("UDP waterfall init failed: {e}"),
+                });
+                return;
+            }
         };
+
+        while let Ok(iq_block) = rx.recv() {
+            let row = waterfall.generate_row(&iq_block);
+
+            // Browser path currently kept off for live-path tuning.
+            // let _ = waterfall_tx.send(row.clone());
+
+            if let Ok(target_guard) = udp_audio_target.try_read() {
+                if let Some(target) = *target_guard {
+                    udp_waterfall.send_row_to(target, &row);
+                }
+            }
+        }
+    });
+}
+
+fn spawn_realtime_capture_worker(
+    cfg: ServerConfig,
+    block_size: usize,
+    iq_tx: SyncSender<Vec<Complex32>>,
+    tx: tokio::sync::broadcast::Sender<ServerMessage>,
+) {
+    thread::spawn(move || {
+        let source_config = make_source_config(&cfg, block_size);
 
         let mut source = match create_source(source_config) {
             Ok(s) => s,
@@ -294,58 +294,116 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let is_realtime_source = source.is_realtime();
         let input_sample_rate_hz = source.sample_rate();
+        let _ = tx.send(ServerMessage::Info {
+            message: format!("capture source initialized at {} Hz", input_sample_rate_hz),
+        });
 
-	let (channel_cutoff_hz, decimation_factor, audio_cutoff_hz) = match cfg_for_task.source {
-	    SourceKind::Fake => (2_800.0, 4, 2_700.0),
-	    SourceKind::Wav => (2_800.0, 16, 2_700.0),
-	    SourceKind::RtlSdr => (2_800.0, 16, 2_700.0),
-	};
+        let mut stats_start = Instant::now();
+        let mut iq_samples_per_sec = 0usize;
 
-	let mut pipeline = DspPipeline::new(
-	    center_freq_hz,
-	    target_freq_hz,
-	    input_sample_rate_hz,
-	    channel_cutoff_hz,
-	    129,
-	    decimation_factor,
-	    audio_cutoff_hz,
-	    101,
-	    48_000.0,
-	);
+        loop {
+            let iq_block = match source.read_block(block_size) {
+                Ok(block) => block,
+                Err(e) => {
+                    let _ = tx.send(ServerMessage::Error {
+                        message: format!("source read failed: {e}"),
+                    });
+                    break;
+                }
+            };
 
-        pipeline.set_sideband(sideband);
+            if iq_block.is_empty() {
+                let _ = tx.send(ServerMessage::Info {
+                    message: "source reached end of stream".to_string(),
+                });
+                break;
+            }
 
-        {
-            let mut s = stream_state.write().await;
+            iq_samples_per_sec += iq_block.len();
+
+            match iq_tx.send(iq_block) {
+                Ok(_) => {}
+                Err(_) => break,
+            }
+
+            if stats_start.elapsed() >= Duration::from_secs(1) {
+                println!("capture stats: iq_samples/sec={}", iq_samples_per_sec);
+                stats_start = Instant::now();
+                iq_samples_per_sec = 0;
+            }
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_dsp_worker(
+    cfg: ServerConfig,
+    block_size: usize,
+    waterfall_every_n_blocks: usize,
+    radio_state: std::sync::Arc<tokio::sync::RwLock<RadioState>>,
+    stream_state: std::sync::Arc<tokio::sync::RwLock<StreamState>>,
+    udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
+    tx: tokio::sync::broadcast::Sender<ServerMessage>,
+    audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    iq_rx: Receiver<Vec<Complex32>>,
+    waterfall_iq_tx: SyncSender<Vec<Complex32>>,
+) {
+    thread::spawn(move || {
+        let decimation_factor = choose_decimation(&cfg.source);
+        let input_sample_rate_hz = match cfg.source {
+            SourceKind::RtlSdr => cfg.rtlsdr_sample_rate_hz as f32,
+            SourceKind::Fake => cfg.fake_sample_rate_hz,
+            SourceKind::Wav => {
+                // For WAV path, this worker is not used, but keep a sane value.
+                0.0
+            }
+        };
+
+        let mut pipeline = DspPipeline::new(
+            cfg.center_freq_hz,
+            cfg.target_freq_hz,
+            input_sample_rate_hz,
+            2_800.0,
+            129,
+            decimation_factor,
+            2_700.0,
+            101,
+            48_000.0,
+        );
+
+        pipeline.set_sideband(Sideband::Lsb);
+
+        if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
-            s.waterfall_bins = waterfall_bins;
-            s.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-            s.center_freq_hz = center_freq_hz;
+            s.waterfall_bins = 512;
+            s.waterfall_frame_rate_hz = 10.0;
+            s.center_freq_hz = cfg.center_freq_hz;
             s.input_sample_rate_hz = input_sample_rate_hz;
-            s.udp_audio_port = udp_registration_port;
+            s.udp_audio_port = 9001;
         }
 
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),
             audio_format: "i16".to_string(),
-            waterfall_bins,
-            waterfall_frame_rate_hz,
-            center_freq_hz,
+            waterfall_bins: 512,
+            waterfall_frame_rate_hz: 10.0,
+            center_freq_hz: cfg.center_freq_hz,
             input_sample_rate_hz,
         });
 
         let _ = tx.send(ServerMessage::UdpAudioOffer {
-            server_udp_port: udp_registration_port,
+            server_udp_port: 9001,
         });
 
-        let _ = tx.send(ServerMessage::Info {
-            message: format!("source initialized at {} Hz", input_sample_rate_hz),
-        });
-
-        let mut waterfall = WaterfallGenerator::new(waterfall_bins);
+        println!(
+            "pipeline config: input_sample_rate_hz={} decimation_factor={} output_sample_rate_hz={} client_output_sample_rate_hz={}",
+            input_sample_rate_hz,
+            decimation_factor,
+            pipeline.output_sample_rate(),
+            pipeline.client_output_sample_rate(),
+        );
 
         let mut udp_audio = match UdpAudioSender::new(480) {
             Ok(s) => s,
@@ -357,23 +415,205 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let mut udp_waterfall = match UdpWaterfallSender::new() {
+        let mut last_center_freq_hz = cfg.center_freq_hz;
+        let mut last_target_freq_hz = cfg.target_freq_hz;
+        let mut last_sideband = Sideband::Lsb;
+        let mut wf_counter = 0usize;
+
+        let mut stats_start = Instant::now();
+        let mut iq_samples_per_sec = 0usize;
+        let mut audio_samples_per_sec = 0usize;
+        let mut audio_packets_per_sec = 0usize;
+        let mut blocks_per_sec = 0usize;
+
+        while let Ok(iq_block) = iq_rx.recv() {
+            if let Ok(radio) = radio_state.try_read() {
+                if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
+                    // Hardware retune is handled in capture thread design later.
+                    // For now this still updates DSP state and UI state.
+                    pipeline.set_center_frequency(radio.center_freq_hz);
+                    last_center_freq_hz = radio.center_freq_hz;
+
+                    if let Ok(mut s) = stream_state.try_write() {
+                        s.center_freq_hz = radio.center_freq_hz;
+                    }
+
+                    let _ = tx.send(ServerMessage::CenterFrequencyChanged {
+                        center_freq_hz: radio.center_freq_hz,
+                    });
+                }
+
+                if (radio.target_freq_hz - last_target_freq_hz).abs() > 0.5 {
+                    pipeline.set_target_frequency(radio.target_freq_hz);
+                    last_target_freq_hz = radio.target_freq_hz;
+
+                    let _ = tx.send(ServerMessage::FrequencyChanged {
+                        target_freq_hz: radio.target_freq_hz,
+                    });
+                }
+
+                if radio.sideband != last_sideband {
+                    pipeline.set_sideband(radio.sideband);
+                    last_sideband = radio.sideband;
+
+                    let _ = tx.send(ServerMessage::SidebandChanged {
+                        sideband: match radio.sideband {
+                            Sideband::Usb => "usb".to_string(),
+                            Sideband::Lsb => "lsb".to_string(),
+                        },
+                    });
+                }
+            }
+
+            iq_samples_per_sec += iq_block.len();
+            blocks_per_sec += 1;
+
+            let audio = pipeline.process_audio(&iq_block);
+
+            // Browser path currently kept off for live-path tuning.
+            // let audio_bytes = f32_samples_to_i16_bytes(&audio);
+            // let _ = audio_tx.send(audio_bytes);
+            let _ = &audio_tx;
+
+            let audio_i16: Vec<i16> = audio
+                .iter()
+                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .collect();
+
+            audio_samples_per_sec += audio_i16.len();
+            audio_packets_per_sec += audio_i16.len() / 480;
+
+            if let Ok(target_guard) = udp_audio_target.try_read() {
+                if let Some(target) = *target_guard {
+                    udp_audio.send_audio_to(target, &audio_i16);
+                }
+            }
+
+            wf_counter += 1;
+            if wf_counter >= waterfall_every_n_blocks {
+                wf_counter = 0;
+                match waterfall_iq_tx.try_send(iq_block.clone()) {
+                    Ok(_) => {}
+                    Err(TrySendError::Full(_)) => {}
+                    Err(TrySendError::Disconnected(_)) => break,
+                }
+            }
+
+            if stats_start.elapsed() >= Duration::from_secs(1) {
+                let per_block = if blocks_per_sec > 0 {
+                    audio_samples_per_sec as f32 / blocks_per_sec as f32
+                } else {
+                    0.0
+                };
+
+                println!("per-block avg audio samples = {}", per_block);
+                println!(
+                    "stats: iq_samples/sec={} audio_samples/sec={} audio_packets/sec={} blocks/sec={} block_size={} realtime=true",
+                    iq_samples_per_sec,
+                    audio_samples_per_sec,
+                    audio_packets_per_sec,
+                    blocks_per_sec,
+                    block_size
+                );
+
+                stats_start = Instant::now();
+                iq_samples_per_sec = 0;
+                audio_samples_per_sec = 0;
+                audio_packets_per_sec = 0;
+                blocks_per_sec = 0;
+            }
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_nonrealtime_worker(
+    cfg: ServerConfig,
+    block_size: usize,
+    waterfall_every_n_blocks: usize,
+    radio_state: std::sync::Arc<tokio::sync::RwLock<RadioState>>,
+    stream_state: std::sync::Arc<tokio::sync::RwLock<StreamState>>,
+    udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
+    tx: tokio::sync::broadcast::Sender<ServerMessage>,
+    audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    waterfall_iq_tx: SyncSender<Vec<Complex32>>,
+) {
+    thread::spawn(move || {
+        let source_config = make_source_config(&cfg, block_size);
+
+        let mut source = match create_source(source_config) {
             Ok(s) => s,
             Err(e) => {
                 let _ = tx.send(ServerMessage::Error {
-                    message: format!("UDP waterfall init failed: {e}"),
+                    message: format!("failed to create source: {e}"),
                 });
                 return;
             }
         };
 
-        let mut wf_counter = 0usize;
-        let wf_every_n_blocks = 5usize;
-        let mut next_tick = Instant::now();
+        let input_sample_rate_hz = source.sample_rate();
+        let decimation_factor = choose_decimation(&cfg.source);
 
-        let mut last_center_freq_hz = center_freq_hz;
-        let mut last_target_freq_hz = target_freq_hz;
-        let mut last_sideband = sideband;
+        let mut pipeline = DspPipeline::new(
+            cfg.center_freq_hz,
+            cfg.target_freq_hz,
+            input_sample_rate_hz,
+            2_800.0,
+            129,
+            decimation_factor,
+            2_700.0,
+            101,
+            48_000.0,
+        );
+
+        pipeline.set_sideband(Sideband::Lsb);
+
+        if let Ok(mut s) = stream_state.try_write() {
+            s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
+            s.audio_format = "i16".to_string();
+            s.waterfall_bins = 512;
+            s.waterfall_frame_rate_hz = 10.0;
+            s.center_freq_hz = cfg.center_freq_hz;
+            s.input_sample_rate_hz = input_sample_rate_hz;
+            s.udp_audio_port = 9001;
+        }
+
+        let _ = tx.send(ServerMessage::StreamConfig {
+            audio_sample_rate_hz: pipeline.client_output_sample_rate(),
+            audio_format: "i16".to_string(),
+            waterfall_bins: 512,
+            waterfall_frame_rate_hz: 10.0,
+            center_freq_hz: cfg.center_freq_hz,
+            input_sample_rate_hz,
+        });
+
+        let _ = tx.send(ServerMessage::UdpAudioOffer {
+            server_udp_port: 9001,
+        });
+
+        println!(
+            "pipeline config: input_sample_rate_hz={} decimation_factor={} output_sample_rate_hz={} client_output_sample_rate_hz={}",
+            input_sample_rate_hz,
+            decimation_factor,
+            pipeline.output_sample_rate(),
+            pipeline.client_output_sample_rate(),
+        );
+
+        let mut udp_audio = match UdpAudioSender::new(480) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(ServerMessage::Error {
+                    message: format!("UDP audio init failed: {e}"),
+                });
+                return;
+            }
+        };
+
+        let mut next_tick = Instant::now();
+        let mut last_center_freq_hz = cfg.center_freq_hz;
+        let mut last_target_freq_hz = cfg.target_freq_hz;
+        let mut last_sideband = Sideband::Lsb;
+        let mut wf_counter = 0usize;
 
         loop {
             if let Ok(radio) = radio_state.try_read() {
@@ -385,17 +625,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         pipeline.set_center_frequency(radio.center_freq_hz);
                         last_center_freq_hz = radio.center_freq_hz;
+
+                        if let Ok(mut s) = stream_state.try_write() {
+                            s.center_freq_hz = radio.center_freq_hz;
+                        }
+
+                        let _ = tx.send(ServerMessage::CenterFrequencyChanged {
+                            center_freq_hz: radio.center_freq_hz,
+                        });
                     }
                 }
 
                 if (radio.target_freq_hz - last_target_freq_hz).abs() > 0.5 {
                     pipeline.set_target_frequency(radio.target_freq_hz);
                     last_target_freq_hz = radio.target_freq_hz;
+
+                    let _ = tx.send(ServerMessage::FrequencyChanged {
+                        target_freq_hz: radio.target_freq_hz,
+                    });
                 }
 
                 if radio.sideband != last_sideband {
                     pipeline.set_sideband(radio.sideband);
                     last_sideband = radio.sideband;
+
+                    let _ = tx.send(ServerMessage::SidebandChanged {
+                        sideband: match radio.sideband {
+                            Sideband::Usb => "usb".to_string(),
+                            Sideband::Lsb => "lsb".to_string(),
+                        },
+                    });
                 }
             }
 
@@ -421,11 +680,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let audio = pipeline.process_audio(&iq_block);
 
-            // Browser path
-            let audio_bytes = f32_samples_to_i16_bytes(&audio);
-            let _ = audio_tx.send(audio_bytes);
-
-            // UDP desktop path
             let audio_i16: Vec<i16> = audio
                 .iter()
                 .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
@@ -438,33 +692,114 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             wf_counter += 1;
-            if wf_counter >= wf_every_n_blocks {
+            if wf_counter >= waterfall_every_n_blocks {
                 wf_counter = 0;
-                let row = waterfall.generate_row(&iq_block);
-
-                let _ = waterfall_tx.send(row.clone());
-
-                if let Ok(target_guard) = udp_audio_target.try_read() {
-                    if let Some(target) = *target_guard {
-                        udp_waterfall.send_row_to(target, &row);
-                    }
-                }
+                let _ = waterfall_iq_tx.try_send(iq_block);
             }
 
-            if !is_realtime_source {
-                next_tick += block_duration;
-                tokio::time::sleep_until(next_tick).await;
+            next_tick += block_duration;
+            let now = Instant::now();
+            if next_tick > now {
+                thread::sleep(next_tick - now);
             }
+
+            let _ = &audio_tx;
         }
     });
+}
 
-    local
-        .run_until(async move {
-            let listener = tokio::net::TcpListener::bind(ws_addr).await?;
-            axum::serve(listener, app).await?;
-            Ok::<(), Box<dyn std::error::Error>>(())
-        })
-        .await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = match ServerConfig::from_args() {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    };
+
+    println!("radio_server config: {:?}", cfg);
+
+    let center_freq_hz = cfg.center_freq_hz;
+    let target_freq_hz = cfg.target_freq_hz;
+    let sideband = Sideband::Lsb;
+
+    let block_size = choose_block_size(&cfg.source);
+    let waterfall_bins = 512;
+    let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
+    let udp_registration_addr = "0.0.0.0:9001";
+
+    let state = AppState::new(center_freq_hz, target_freq_hz, sideband);
+
+    let app = Router::new()
+        .route("/ws", get(ws_handler))
+        .with_state(state.clone());
+
+    println!("radio_server listening on ws://{ws_addr}/ws");
+
+    {
+        let udp_audio_target = state.udp_audio_target.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                run_udp_registration_listener(udp_registration_addr, udp_audio_target).await
+            {
+                eprintln!("UDP registration listener failed: {e}");
+            }
+        });
+    }
+
+    let (wf_tx, wf_rx) = sync_channel::<Vec<Complex32>>(2);
+
+    spawn_waterfall_worker(
+        wf_rx,
+        state.udp_audio_target.clone(),
+        state.tx.clone(),
+        state.waterfall_tx.clone(),
+        waterfall_bins,
+    );
+
+    match cfg.source {
+        SourceKind::RtlSdr => {
+            let (iq_tx, iq_rx) = sync_channel::<Vec<Complex32>>(4);
+
+            spawn_realtime_capture_worker(
+                cfg.clone(),
+                block_size,
+                iq_tx,
+                state.tx.clone(),
+            );
+
+            spawn_dsp_worker(
+                cfg.clone(),
+                block_size,
+                10,
+                state.radio.clone(),
+                state.stream.clone(),
+                state.udp_audio_target.clone(),
+                state.tx.clone(),
+                state.audio_tx.clone(),
+                iq_rx,
+                wf_tx,
+            );
+        }
+
+        SourceKind::Fake | SourceKind::Wav => {
+            spawn_nonrealtime_worker(
+                cfg.clone(),
+                block_size,
+                10,
+                state.radio.clone(),
+                state.stream.clone(),
+                state.udp_audio_target.clone(),
+                state.tx.clone(),
+                state.audio_tx.clone(),
+                wf_tx,
+            );
+        }
+    }
+
+    let listener = tokio::net::TcpListener::bind(ws_addr).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
