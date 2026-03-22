@@ -7,15 +7,12 @@ pub struct JitterBuffer {
     max_buffer_samples: usize,
 
     started: bool,
+    start_sequence: Option<u32>,
     next_sequence: Option<u32>,
 
-    // Packets waiting to be played, keyed by sequence number.
     pending: BTreeMap<u32, Vec<f32>>,
-
-    // Flattened playout FIFO consumed by audio callback.
     playout: VecDeque<f32>,
 
-    // Stats
     pub packets_received: u64,
     pub packets_inserted: u64,
     pub packets_missing_concealed: u64,
@@ -38,6 +35,7 @@ impl JitterBuffer {
             target_buffer_samples,
             max_buffer_samples,
             started: false,
+            start_sequence: None,
             next_sequence: None,
             pending: BTreeMap::new(),
             playout: VecDeque::new(),
@@ -51,6 +49,7 @@ impl JitterBuffer {
 
     pub fn reset(&mut self) {
         self.started = false;
+        self.start_sequence = None;
         self.next_sequence = None;
         self.pending.clear();
         self.playout.clear();
@@ -76,7 +75,6 @@ impl JitterBuffer {
             return;
         }
 
-        // If we have already advanced past this sequence, it's late.
         if let Some(next) = self.next_sequence {
             if sequence < next {
                 self.packets_dropped_late += 1;
@@ -84,7 +82,6 @@ impl JitterBuffer {
             }
         }
 
-        // Avoid unbounded growth.
         if self.buffered_samples() >= self.max_buffer_samples {
             self.packets_dropped_overflow += 1;
             return;
@@ -93,12 +90,14 @@ impl JitterBuffer {
         self.pending.entry(sequence).or_insert(samples);
         self.packets_inserted += 1;
 
-        if !self.started && self.buffered_samples() >= self.target_buffer_samples {
-            // Start playout at the earliest packet we have.
-            if let Some((&first_seq, _)) = self.pending.iter().next() {
-                self.next_sequence = Some(first_seq);
-                self.started = true;
-            }
+        if self.start_sequence.is_none() {
+            self.start_sequence = Some(sequence);
+        }
+
+        if !self.started && self.has_enough_contiguous_packets() {
+            let start = self.start_sequence.unwrap();
+            self.next_sequence = Some(start);
+            self.started = true;
         }
 
         self.fill_playout();
@@ -118,6 +117,24 @@ impl JitterBuffer {
         }
     }
 
+    fn has_enough_contiguous_packets(&self) -> bool {
+        let mut count = 0usize;
+        let mut seq = match self.start_sequence {
+            Some(s) => s,
+            None => return false,
+        };
+
+        while self.pending.contains_key(&seq) {
+            count += self.packet_samples;
+            if count >= self.target_buffer_samples {
+                return true;
+            }
+            seq = seq.wrapping_add(1);
+        }
+
+        false
+    }
+
     fn fill_playout(&mut self) {
         if !self.started {
             return;
@@ -129,19 +146,19 @@ impl JitterBuffer {
                 None => break,
             };
 
-            if let Some(packet) = self.pending.remove(&seq) {
-                for s in packet {
-                    self.playout.push_back(s);
+            match self.pending.remove(&seq) {
+                Some(packet) => {
+                    for s in packet {
+                        self.playout.push_back(s);
+                    }
+                    self.next_sequence = Some(seq.wrapping_add(1));
                 }
-            } else {
-                // Missing packet: conceal with silence.
-                for _ in 0..self.packet_samples {
-                    self.playout.push_back(0.0);
+                None => {
+                    // Do not advance sequence yet.
+                    // Wait for packet to arrive; output callback will emit silence if needed.
+                    break;
                 }
-                self.packets_missing_concealed += 1;
             }
-
-            self.next_sequence = Some(seq.wrapping_add(1));
 
             if self.playout.len() >= self.max_buffer_samples {
                 break;
@@ -150,25 +167,15 @@ impl JitterBuffer {
     }
 
     fn apply_drift_correction(&mut self) {
-        // Keep buffer near target. This is intentionally gentle.
         let len = self.playout.len();
 
-        // Too much buffered audio: drop a tiny amount to reduce latency growth.
         if len > self.target_buffer_samples + self.packet_samples {
             let drop_count = 16.min(self.playout.len());
             for _ in 0..drop_count {
                 self.playout.pop_front();
             }
-        }
-
-        // Too little buffered audio: duplicate a tiny amount to avoid underruns.
-        else if len < self.target_buffer_samples.saturating_sub(self.packet_samples / 2) {
-            if let Some(&last) = self.playout.back() {
-                let dup_count = 16;
-                for _ in 0..dup_count {
-                    self.playout.push_back(last);
-                }
-            }
+        } else if len < self.target_buffer_samples / 2 {
+            // No duplication here; let callback output silence instead.
         }
     }
 }
