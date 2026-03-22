@@ -55,14 +55,11 @@ enum ServerMessage {
         center_freq_hz: f32,
         input_sample_rate_hz: f32,
     },
-    UdpAudioOffer {
-        server_udp_port: u16,
-    },
+    UdpAudioOffer { server_udp_port: u16 },
     Info { message: String },
     Error { message: String },
 }
 
-#[derive(Debug, Clone)]
 #[derive(Debug, Clone)]
 struct UiState {
     center_freq_hz: f32,
@@ -71,11 +68,8 @@ struct UiState {
     input_sample_rate_hz: f32,
     waterfall_bins: usize,
     audio_sample_rate_hz: f32,
-
-    // ADD THESE:
     audio_format: String,
     waterfall_frame_rate_hz: f32,
-
     status: String,
 }
 
@@ -88,6 +82,8 @@ impl Default for UiState {
             input_sample_rate_hz: 0.0,
             waterfall_bins: WIDTH,
             audio_sample_rate_hz: OUTPUT_SAMPLE_RATE as f32,
+            audio_format: "unknown".to_string(),
+            waterfall_frame_rate_hz: 0.0,
             status: "starting".to_string(),
         }
     }
@@ -119,11 +115,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Listening on {}", LISTEN_ADDR);
 
     let rt = Runtime::new()?;
-
     let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ClientMessage>();
     let ui_state_for_ws = Arc::clone(&ui_state);
-
-    let mut mouse_was_down = false;
 
     rt.spawn(async move {
         if let Err(e) = websocket_control_task(SERVER_WS_URL, ws_cmd_rx, ui_state_for_ws).await {
@@ -141,6 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut udp_buf = [0u8; 65536];
     let mut last_stats = Instant::now();
     let mut last_title = Instant::now();
+    let mut mouse_was_down = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         match socket.recv_from(&mut udp_buf) {
@@ -150,7 +144,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let version = udp_buf[2];
                     let stream_type = udp_buf[3];
 
-                    if magic == MAGIC && version == VERSION && stream_type == STREAM_TYPE_REGISTER_AUDIO {
+                    if magic == MAGIC
+                        && version == VERSION
+                        && stream_type == STREAM_TYPE_REGISTER_AUDIO
+                    {
                         println!("Received UDP registration ACK from {}", src);
                     }
                 } else if len >= 16 {
@@ -163,8 +160,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         }
 
-	handle_keyboard(&window, &ws_cmd_tx, &ui_state);
-	handle_mouse_click_tune(&window, &ws_cmd_tx, &ui_state, &mut mouse_was_down);
+        handle_keyboard(&window, &ws_cmd_tx, &ui_state);
+        handle_mouse_click_tune(&window, &ws_cmd_tx, &ui_state, &mut mouse_was_down);
 
         {
             let mut buf = waterfall_buffer.lock().unwrap();
@@ -175,15 +172,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if last_title.elapsed() >= Duration::from_millis(200) {
             let state = ui_state.lock().unwrap().clone();
-	    window.set_title(&format!(
-		"Rust Radio | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {} | {} Hz | {} fps",
-		state.center_freq_hz,
-		state.target_freq_hz,
-		state.sideband.to_uppercase(),
-		state.audio_format,
-		state.audio_sample_rate_hz,
-		state.waterfall_frame_rate_hz,
-	    ));
+            window.set_title(&format!(
+                "Rust Radio | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {} | {} Hz | {:.1} fps | {}",
+                state.center_freq_hz,
+                state.target_freq_hz,
+                state.sideband.to_uppercase(),
+                state.audio_format,
+                state.audio_sample_rate_hz,
+                state.waterfall_frame_rate_hz,
+                state.status
+            ));
             last_title = Instant::now();
         }
 
@@ -225,7 +223,7 @@ async fn websocket_control_task(
                 match cmd {
                     Some(cmd) => {
                         let text = serde_json::to_string(&cmd)?;
-                        write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await?;
+                        write.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await?;
                     }
                     None => break,
                 }
@@ -268,23 +266,23 @@ fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
         ServerMessage::SidebandChanged { sideband } => {
             state.sideband = sideband;
         }
-	ServerMessage::StreamConfig {
-	    audio_sample_rate_hz,
-	    audio_format,
-	    waterfall_bins,
-	    waterfall_frame_rate_hz,
-	    center_freq_hz,
-	    input_sample_rate_hz,
-	} => {
-	    state.audio_sample_rate_hz = audio_sample_rate_hz;
-	    state.audio_format = audio_format;
-	    state.waterfall_bins = waterfall_bins;
-	    state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-	    state.center_freq_hz = center_freq_hz;
-	    state.input_sample_rate_hz = input_sample_rate_hz;
-	    state.status = "stream configured".to_string();
-	}
-         ServerMessage::UdpAudioOffer { server_udp_port } => {
+        ServerMessage::StreamConfig {
+            audio_sample_rate_hz,
+            audio_format,
+            waterfall_bins,
+            waterfall_frame_rate_hz,
+            center_freq_hz,
+            input_sample_rate_hz,
+        } => {
+            state.audio_sample_rate_hz = audio_sample_rate_hz;
+            state.audio_format = audio_format;
+            state.waterfall_bins = waterfall_bins;
+            state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
+            state.center_freq_hz = center_freq_hz;
+            state.input_sample_rate_hz = input_sample_rate_hz;
+            state.status = "stream configured".to_string();
+        }
+        ServerMessage::UdpAudioOffer { server_udp_port } => {
             state.status = format!("udp port {}", server_udp_port);
         }
         ServerMessage::Info { message } => {
@@ -302,10 +300,9 @@ fn handle_keyboard(
     ui_state: &Arc<Mutex<UiState>>,
 ) {
     let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
-    let control = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
 
-    let target_step = if control { 10_000.0 } else if shift { 1_000.0 } else { 10.0 };
-    let center_step = if control { 10_000.0 } else if shift { 1_000.0 } else { 10.0 };
+    let target_step = if shift { 1_000.0 } else { 100.0 };
+    let center_step = if shift { 10_000.0 } else { 1_000.0 };
 
     let state_snapshot = { ui_state.lock().unwrap().clone() };
 
@@ -367,8 +364,7 @@ fn handle_mouse_click_tune(
             let state_snapshot = { ui_state.lock().unwrap().clone() };
 
             if let Some(target_freq_hz) = x_to_frequency(mx, WIDTH, &state_snapshot) {
-		// Round so that we have 100Hz resolution
-                let rounded = (target_freq_hz/100.0).round() * 100.0;
+                let rounded = target_freq_hz.round();
 
                 let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
                     target_freq_hz: rounded,
@@ -383,6 +379,17 @@ fn handle_mouse_click_tune(
     }
 
     *mouse_was_down = mouse_down;
+}
+
+fn x_to_frequency(x: f32, width: usize, state: &UiState) -> Option<f32> {
+    if width == 0 || state.input_sample_rate_hz <= 0.0 {
+        return None;
+    }
+
+    let frac = (x / width as f32).clamp(0.0, 1.0);
+    let offset_hz = (frac - 0.5) * state.input_sample_rate_hz;
+
+    Some(state.center_freq_hz + offset_hz)
 }
 
 fn handle_media_packet(
@@ -545,15 +552,4 @@ fn color_map(v: u8) -> u32 {
     };
 
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
-}
-
-fn x_to_frequency(x: f32, width: usize, state: &UiState) -> Option<f32> {
-    if width == 0 || state.input_sample_rate_hz <= 0.0 {
-        return None;
-    }
-
-    let frac = (x / width as f32).clamp(0.0, 1.0);
-    let offset_hz = (frac - 0.5) * state.input_sample_rate_hz;
-
-    Some(state.center_freq_hz + offset_hz)
 }
