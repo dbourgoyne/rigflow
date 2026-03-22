@@ -7,8 +7,6 @@ pub struct RtlSdrSource {
     dev: RtlSdr,
     sample_rate_hz: f32,
     center_freq_hz: u32,
-    direct_sampling: bool,
-    ppm_correction: i32,
     raw_buf: Vec<u8>,
 }
 
@@ -55,14 +53,13 @@ impl RtlSdrSource {
 
         let raw_len = block_complex_samples * 2;
 
-        Ok(Self {
-            dev,
-            sample_rate_hz: sample_rate_hz as f32,
-            center_freq_hz,
-            direct_sampling,
-            ppm_correction,
-            raw_buf: vec![0u8; raw_len],
-        })
+	Ok(Self {
+	    dev,
+	    sample_rate_hz: sample_rate_hz as f32,
+	    center_freq_hz,
+	    raw_buf: vec![0u8; raw_len],
+	})
+
     }
 
     pub fn set_center_frequency(&mut self, center_freq_hz: u32) -> Result<(), String> {
