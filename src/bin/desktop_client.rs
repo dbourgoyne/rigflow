@@ -292,9 +292,10 @@ fn handle_keyboard(
     ui_state: &Arc<Mutex<UiState>>,
 ) {
     let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
+    let control = window.is_key_down(Key::LeftAlt) || window.is_key_down(Key::RightAlt);
 
-    let target_step = if shift { 100_000.0 } else { 10_000.0 };
-    let center_step = if shift { 100_000.0 } else { 10_000.0 };
+    let target_step = if control { 10_000.0 } else if shift { 1_000.0 } else { 10.0 };
+    let center_step = if control { 10_000.0 } else if shift { 1_000.0 } else { 10.0 };
 
     let state_snapshot = { ui_state.lock().unwrap().clone() };
 
@@ -352,14 +353,12 @@ fn handle_mouse_click_tune(
     let mouse_down = window.get_mouse_down(MouseButton::Left);
 
     if mouse_down && !*mouse_was_down {
-	println!("mouse click!");
         if let Some((mx, _my)) = window.get_mouse_pos(MouseMode::Discard) {
             let state_snapshot = { ui_state.lock().unwrap().clone() };
-	    println!("state_snapshot = {:?}", state_snapshot);
 
             if let Some(target_freq_hz) = x_to_frequency(mx, WIDTH, &state_snapshot) {
-                let rounded = target_freq_hz.round();
-		println!("rounded = {}", rounded);
+		// Round so that we have 100Hz resolution
+                let rounded = (target_freq_hz/100.0).round() * 100.0;
 
                 let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
                     target_freq_hz: rounded,
