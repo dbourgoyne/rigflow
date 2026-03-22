@@ -154,8 +154,6 @@ impl JitterBuffer {
                     self.next_sequence = Some(seq.wrapping_add(1));
                 }
                 None => {
-                    // Do not advance sequence yet.
-                    // Wait for packet to arrive; output callback will emit silence if needed.
                     break;
                 }
             }
@@ -174,8 +172,6 @@ impl JitterBuffer {
             for _ in 0..drop_count {
                 self.playout.pop_front();
             }
-        } else if len < self.target_buffer_samples / 2 {
-            // No duplication here; let callback output silence instead.
         }
     }
 }
