@@ -63,6 +63,7 @@ enum ServerMessage {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Debug, Clone)]
 struct UiState {
     center_freq_hz: f32,
     target_freq_hz: f32,
@@ -70,6 +71,11 @@ struct UiState {
     input_sample_rate_hz: f32,
     waterfall_bins: usize,
     audio_sample_rate_hz: f32,
+
+    // ADD THESE:
+    audio_format: String,
+    waterfall_frame_rate_hz: f32,
+
     status: String,
 }
 
@@ -169,13 +175,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if last_title.elapsed() >= Duration::from_millis(200) {
             let state = ui_state.lock().unwrap().clone();
-            window.set_title(&format!(
-                "Rust Radio Desktop Client | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {}",
-                state.center_freq_hz,
-                state.target_freq_hz,
-                state.sideband.to_uppercase(),
-                state.status
-            ));
+	    window.set_title(&format!(
+		"Rust Radio | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {} | {} Hz | {} fps",
+		state.center_freq_hz,
+		state.target_freq_hz,
+		state.sideband.to_uppercase(),
+		state.audio_format,
+		state.audio_sample_rate_hz,
+		state.waterfall_frame_rate_hz,
+	    ));
             last_title = Instant::now();
         }
 
@@ -260,21 +268,23 @@ fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
         ServerMessage::SidebandChanged { sideband } => {
             state.sideband = sideband;
         }
-        ServerMessage::StreamConfig {
-            audio_sample_rate_hz,
-            audio_format: _,
-            waterfall_bins,
-            waterfall_frame_rate_hz: _,
-            center_freq_hz,
-            input_sample_rate_hz,
-        } => {
-            state.audio_sample_rate_hz = audio_sample_rate_hz;
-            state.waterfall_bins = waterfall_bins;
-            state.center_freq_hz = center_freq_hz;
-            state.input_sample_rate_hz = input_sample_rate_hz;
-            state.status = "stream configured".to_string();
-        }
-        ServerMessage::UdpAudioOffer { server_udp_port } => {
+	ServerMessage::StreamConfig {
+	    audio_sample_rate_hz,
+	    audio_format,
+	    waterfall_bins,
+	    waterfall_frame_rate_hz,
+	    center_freq_hz,
+	    input_sample_rate_hz,
+	} => {
+	    state.audio_sample_rate_hz = audio_sample_rate_hz;
+	    state.audio_format = audio_format;
+	    state.waterfall_bins = waterfall_bins;
+	    state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
+	    state.center_freq_hz = center_freq_hz;
+	    state.input_sample_rate_hz = input_sample_rate_hz;
+	    state.status = "stream configured".to_string();
+	}
+         ServerMessage::UdpAudioOffer { server_udp_port } => {
             state.status = format!("udp port {}", server_udp_port);
         }
         ServerMessage::Info { message } => {

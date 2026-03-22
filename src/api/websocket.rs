@@ -27,9 +27,6 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     let mut audio_rx = state.audio_tx.subscribe();
     let mut waterfall_rx = state.waterfall_tx.subscribe();
 
-    let ready = serde_json::to_string(&ServerMessage::Ready)
-        .unwrap_or_else(|_| r#"{"type":"ready"}"#.to_string());
-
         {
         let stream = state.stream.read().await;
 
@@ -57,6 +54,8 @@ async fn client_socket(socket: WebSocket, state: AppState) {
         }
     }
 
+    //let ready = serde_json::to_string(&ServerMessage::Ready).unwrap();
+    //sender.send(Message::Text(ready.into())).await?;
     //if sender.send(Message::Text(ready.into())).await.is_err() {
     //    return;
     //}

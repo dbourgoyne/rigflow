@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::{routing::get, Router};
+use tokio::task::LocalSet;
 use tokio::time::Instant;
 
 use radio_server::{
@@ -13,15 +14,15 @@ use radio_server::{
         audio_binary::f32_samples_to_i16_bytes,
         udp_audio::UdpAudioSender,
         udp_registration::run_udp_registration_listener,
-	udp_waterfall::UdpWaterfallSender,
+        udp_waterfall::UdpWaterfallSender,
     },
     waterfall::simple::WaterfallGenerator,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let center_freq_hz = 3750000.0;
-    let target_freq_hz = 3690000.0;
+    let center_freq_hz = 0.0;
+    let target_freq_hz = 0.0;
     let sideband = Sideband::Lsb;
 
     let block_size = 8192;
@@ -37,8 +38,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
-
-    let stream_state = state.stream.clone();
 
     println!("radio_server listening on ws://{ws_addr}/ws");
 
@@ -57,12 +56,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let audio_tx = state.audio_tx.clone();
     let waterfall_tx = state.waterfall_tx.clone();
     let radio_state = state.radio.clone();
+    let stream_state = state.stream.clone();
     let udp_audio_target = state.udp_audio_target.clone();
 
-    tokio::spawn(async move {
-        let source_config = SourceConfig::WavFile {
-            path: "input_iq.wav".to_string(),
+    let local = LocalSet::new();
+
+    local.spawn_local(async move {
+        let source_config = SourceConfig::RtlSdr {
+            device_index: 0,
+            sample_rate_hz: 2_048_000,
+            center_freq_hz: 7_100_000,
+            gain_tenths_db: None,
+            ppm_correction: 0,
+            direct_sampling: false,
+            block_complex_samples: block_size,
         };
+
+        let is_realtime_source = matches!(source_config, SourceConfig::RtlSdr { .. });
 
         let mut source = match create_source(source_config) {
             Ok(s) => s,
@@ -90,16 +100,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         pipeline.set_sideband(sideband);
 
-	{
-	    let mut s = stream_state.write().await;
-	    s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
-	    s.audio_format = "i16".to_string();
-	    s.waterfall_bins = waterfall_bins;
-	    s.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-	    s.center_freq_hz = center_freq_hz;
-	    s.input_sample_rate_hz = input_sample_rate_hz;
-	    s.udp_audio_port = udp_registration_port;
-	}
+        {
+            let mut s = stream_state.write().await;
+            s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
+            s.audio_format = "i16".to_string();
+            s.waterfall_bins = waterfall_bins;
+            s.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
+            s.center_freq_hz = center_freq_hz;
+            s.input_sample_rate_hz = input_sample_rate_hz;
+            s.udp_audio_port = udp_registration_port;
+        }
 
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),
@@ -119,15 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let mut waterfall = WaterfallGenerator::new(waterfall_bins);
-	let mut udp_waterfall = match UdpWaterfallSender::new() {
-	    Ok(s) => s,
-	    Err(e) => {
-		let _ = tx.send(ServerMessage::Error {
-		    message: format!("UDP waterfall init failed: {e}"),
-		});
-		return;
-	    }
-	};
+
         let mut udp_audio = match UdpAudioSender::new(480) {
             Ok(s) => s,
             Err(e) => {
@@ -138,17 +140,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
+        let mut udp_waterfall = match UdpWaterfallSender::new() {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(ServerMessage::Error {
+                    message: format!("UDP waterfall init failed: {e}"),
+                });
+                return;
+            }
+        };
+
         let mut wf_counter = 0usize;
         let wf_every_n_blocks = 5usize;
-
         let mut next_tick = Instant::now();
 
         loop {
             {
-                let radio = radio_state.read().await;
-                pipeline.set_center_frequency(radio.center_freq_hz);
-                pipeline.set_target_frequency(radio.target_freq_hz);
-                pipeline.set_sideband(radio.sideband);
+                if let Ok(radio) = radio_state.try_read() {
+                    pipeline.set_center_frequency(radio.center_freq_hz);
+                    pipeline.set_target_frequency(radio.target_freq_hz);
+                    pipeline.set_sideband(radio.sideband);
+                }
             }
 
             let iq_block = match source.read_block(block_size) {
@@ -173,41 +185,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let audio = pipeline.process_audio(&iq_block);
 
-            // Browser path
             let audio_bytes = f32_samples_to_i16_bytes(&audio);
             let _ = audio_tx.send(audio_bytes);
 
-            // UDP desktop path
             let audio_i16: Vec<i16> = audio
                 .iter()
                 .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
                 .collect();
 
-            if let Some(target) = *udp_audio_target.read().await {
-                udp_audio.send_audio_to(target, &audio_i16);
+            if let Ok(target_guard) = udp_audio_target.try_read() {
+                if let Some(target) = *target_guard {
+                    udp_audio.send_audio_to(target, &audio_i16);
+                }
             }
 
-	    wf_counter += 1;
-	    if wf_counter >= wf_every_n_blocks {
-		wf_counter = 0;
-		let row = waterfall.generate_row(&iq_block);
+            wf_counter += 1;
+            if wf_counter >= wf_every_n_blocks {
+                wf_counter = 0;
+                let row = waterfall.generate_row(&iq_block);
 
-		// Browser path
-		let _ = waterfall_tx.send(row.clone());
+                let _ = waterfall_tx.send(row.clone());
 
-		// UDP desktop path
-		if let Some(target) = *udp_audio_target.read().await {
-		    udp_waterfall.send_row_to(target, &row);
-		}
-	    }
+                if let Ok(target_guard) = udp_audio_target.try_read() {
+                    if let Some(target) = *target_guard {
+                        udp_waterfall.send_row_to(target, &row);
+                    }
+                }
+            }
 
-            next_tick += block_duration;
-            tokio::time::sleep_until(next_tick).await;
+            if !is_realtime_source {
+                next_tick += block_duration;
+                tokio::time::sleep_until(next_tick).await;
+            }
         }
     });
 
-    let listener = tokio::net::TcpListener::bind(ws_addr).await?;
-    axum::serve(listener, app).await?;
+    local
+        .run_until(async move {
+            let listener = tokio::net::TcpListener::bind(ws_addr).await?;
+            axum::serve(listener, app).await?;
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await?;
 
     Ok(())
 }

@@ -1,10 +1,20 @@
 use crate::input::iq_wav_reader::IqWavReader;
 use crate::source::fake_iq::FakeIqSource;
+use crate::source::rtlsdr::RtlSdrSource;
 use crate::source::IqSource;
 
 pub enum SourceConfig {
     WavFile { path: String },
     Fake { sample_rate_hz: f32, tone_hz: f32 },
+    RtlSdr {
+        device_index: usize,
+        sample_rate_hz: u32,
+        center_freq_hz: u32,
+        gain_tenths_db: Option<i32>,
+        ppm_correction: i32,
+        direct_sampling: bool,
+        block_complex_samples: usize,
+    },
 }
 
 pub fn create_source(config: SourceConfig) -> Result<Box<dyn IqSource>, String> {
@@ -14,5 +24,22 @@ pub fn create_source(config: SourceConfig) -> Result<Box<dyn IqSource>, String> 
             sample_rate_hz,
             tone_hz,
         } => Ok(Box::new(FakeIqSource::new(sample_rate_hz, tone_hz))),
+        SourceConfig::RtlSdr {
+            device_index,
+            sample_rate_hz,
+            center_freq_hz,
+            gain_tenths_db,
+            ppm_correction,
+            direct_sampling,
+            block_complex_samples,
+        } => Ok(Box::new(RtlSdrSource::open(
+            device_index,
+            sample_rate_hz,
+            center_freq_hz,
+            gain_tenths_db,
+            ppm_correction,
+            direct_sampling,
+            block_complex_samples,
+        )?)),
     }
 }
