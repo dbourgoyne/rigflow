@@ -4,10 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-mod audio_client {
-    pub mod jitter_buffer;
-}
-use audio_client::jitter_buffer::JitterBuffer;
+use radio_server::audio_client::jitter_buffer::JitterBuffer;
 
 const MAGIC: u16 = 0x5253;
 const VERSION: u8 = 1;
