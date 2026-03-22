@@ -121,7 +121,6 @@ impl IqSource for RtlSdrSource {
 
         let mut out = Vec::with_capacity(bytes.len() / 2);
 
-        // RTL-SDR returns unsigned 8-bit interleaved IQ centered at 127.5
         for pair in bytes.chunks_exact(2) {
             let i = (pair[0] as f32 - 127.5) / 128.0;
             let q = (pair[1] as f32 - 127.5) / 128.0;
@@ -129,5 +128,13 @@ impl IqSource for RtlSdrSource {
         }
 
         Ok(out)
+    }
+
+    fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
+        self.set_center_frequency(center_freq_hz.round() as u32)
+    }
+
+    fn is_realtime(&self) -> bool {
+        true
     }
 }

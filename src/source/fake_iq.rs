@@ -1,5 +1,4 @@
 use num_complex::Complex32;
-use std::f32::consts::PI;
 
 use crate::source::IqSource;
 
@@ -25,18 +24,27 @@ impl IqSource for FakeIqSource {
     }
 
     fn read_block(&mut self, max_samples: usize) -> Result<Vec<Complex32>, String> {
-        let phase_inc = 2.0 * PI * self.tone_hz / self.sample_rate_hz;
+        let phase_inc = 2.0 * std::f32::consts::PI * self.tone_hz / self.sample_rate_hz;
         let mut out = Vec::with_capacity(max_samples);
 
         for _ in 0..max_samples {
             out.push(Complex32::new(self.phase.cos(), self.phase.sin()));
             self.phase += phase_inc;
 
-            if self.phase > PI {
-                self.phase -= 2.0 * PI;
+            if self.phase > std::f32::consts::PI {
+                self.phase -= 2.0 * std::f32::consts::PI;
             }
         }
 
         Ok(out)
     }
+
+    fn set_center_frequency(&mut self, _center_freq_hz: f32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn is_realtime(&self) -> bool {
+        false
+    }
 }
+

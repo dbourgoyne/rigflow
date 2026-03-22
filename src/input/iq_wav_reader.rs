@@ -114,4 +114,13 @@ impl crate::source::IqSource for IqWavReader {
     fn read_block(&mut self, max_samples: usize) -> Result<Vec<Complex32>, String> {
         IqWavReader::read_block(self, max_samples)
     }
+
+    fn set_center_frequency(&mut self, _center_freq_hz: f32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn is_realtime(&self) -> bool {
+        false
+    }
 }
+

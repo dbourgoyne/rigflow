@@ -72,8 +72,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             block_complex_samples: block_size,
         };
 
-        let is_realtime_source = matches!(source_config, SourceConfig::RtlSdr { .. });
-
         let mut source = match create_source(source_config) {
             Ok(s) => s,
             Err(e) => {
@@ -84,6 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
+	let is_realtime_source = source.is_realtime();
         let input_sample_rate_hz = source.sample_rate();
 
         let mut pipeline = DspPipeline::new(
@@ -154,14 +153,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let wf_every_n_blocks = 5usize;
         let mut next_tick = Instant::now();
 
+	let mut last_center_freq_hz = center_freq_hz;
+	let mut last_target_freq_hz = target_freq_hz;
+	let mut last_sideband = sideband;
+
         loop {
-            {
-                if let Ok(radio) = radio_state.try_read() {
-                    pipeline.set_center_frequency(radio.center_freq_hz);
-                    pipeline.set_target_frequency(radio.target_freq_hz);
-                    pipeline.set_sideband(radio.sideband);
-                }
-            }
+	    {
+		if let Ok(radio) = radio_state.try_read() {
+		    if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
+			if let Err(e) = source.set_center_frequency(radio.center_freq_hz) {
+			    let _ = tx.send(ServerMessage::Error {
+				message: format!("failed to retune source: {e}"),
+			    });
+			} else {
+			    pipeline.set_center_frequency(radio.center_freq_hz);
+			    last_center_freq_hz = radio.center_freq_hz;
+			}
+		    }
+
+		    if (radio.target_freq_hz - last_target_freq_hz).abs() > 0.5 {
+			pipeline.set_target_frequency(radio.target_freq_hz);
+			last_target_freq_hz = radio.target_freq_hz;
+		    }
+
+		    if radio.sideband != last_sideband {
+			pipeline.set_sideband(radio.sideband);
+			last_sideband = radio.sideband;
+		    }
+		}
+	    }
 
             let iq_block = match source.read_block(block_size) {
                 Ok(block) => block,
