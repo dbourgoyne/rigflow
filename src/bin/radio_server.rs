@@ -13,6 +13,7 @@ use radio_server::{
         audio_binary::f32_samples_to_i16_bytes,
         udp_audio::UdpAudioSender,
         udp_registration::run_udp_registration_listener,
+	udp_waterfall::UdpWaterfallSender,
     },
     waterfall::simple::WaterfallGenerator,
 };
@@ -105,6 +106,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         let mut waterfall = WaterfallGenerator::new(waterfall_bins);
+	let mut udp_waterfall = match UdpWaterfallSender::new() {
+	    Ok(s) => s,
+	    Err(e) => {
+		let _ = tx.send(ServerMessage::Error {
+		    message: format!("UDP waterfall init failed: {e}"),
+		});
+		return;
+	    }
+	};
         let mut udp_audio = match UdpAudioSender::new(480) {
             Ok(s) => s,
             Err(e) => {
@@ -164,12 +174,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 udp_audio.send_audio_to(target, &audio_i16);
             }
 
-            wf_counter += 1;
-            if wf_counter >= wf_every_n_blocks {
-                wf_counter = 0;
-                let row = waterfall.generate_row(&iq_block);
-                let _ = waterfall_tx.send(row);
-            }
+	    wf_counter += 1;
+	    if wf_counter >= wf_every_n_blocks {
+		wf_counter = 0;
+		let row = waterfall.generate_row(&iq_block);
+
+		// Browser path
+		let _ = waterfall_tx.send(row.clone());
+
+		// UDP desktop path
+		if let Some(target) = *udp_audio_target.read().await {
+		    udp_waterfall.send_row_to(target, &row);
+		}
+	    }
 
             next_tick += block_duration;
             tokio::time::sleep_until(next_tick).await;
