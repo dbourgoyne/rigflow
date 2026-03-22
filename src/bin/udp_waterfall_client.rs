@@ -88,12 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, height: usize) {
-    // Scroll down by one row
-    for y in (1..height).rev() {
-        let dst = y * width;
-        let src = (y - 1) * width;
-        buffer[dst..dst + width].copy_from_slice(&buffer[src..src + width]);
-    }
+    // Scroll existing rows down by one row
+    buffer.copy_within(0..width * (height - 1), width);
 
     // Draw new row at top
     let top = &mut buffer[0..width];
