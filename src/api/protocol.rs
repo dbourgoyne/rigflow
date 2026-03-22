@@ -25,6 +25,9 @@ pub enum ServerMessage {
         center_freq_hz: f32,
         input_sample_rate_hz: f32,
     },
+    UdpAudioOffer {
+        server_udp_port: u16,
+    },
     Info { message: String },
     Error { message: String },
 }

@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
@@ -27,6 +28,7 @@ pub struct AppState {
     pub tx: broadcast::Sender<ServerMessage>,
     pub audio_tx: broadcast::Sender<Vec<u8>>,
     pub waterfall_tx: broadcast::Sender<Vec<u8>>,
+    pub udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
 }
 
 impl AppState {
@@ -44,6 +46,7 @@ impl AppState {
             tx,
             audio_tx,
             waterfall_tx,
+            udp_audio_target: Arc::new(RwLock::new(None)),
         }
     }
 }

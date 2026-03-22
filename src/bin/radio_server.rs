@@ -7,19 +7,27 @@ use radio_server::{
     dsp::{demod::Sideband, pipeline::DspPipeline},
     server::app_state::AppState,
     source::factory::{create_source, SourceConfig},
-    streaming::audio_binary::f32_samples_to_i16_bytes,
+    streaming::{
+        audio_binary::f32_samples_to_i16_bytes,
+        udp_audio::UdpAudioSender,
+        udp_registration::run_udp_registration_listener,
+    },
     waterfall::simple::WaterfallGenerator,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let center_freq_hz = 0.0;
-    let target_freq_hz = 0.0;
+    let center_freq_hz = 3750000.0;
+    let target_freq_hz = 3690000.0;
     let sideband = Sideband::Lsb;
 
-    let block_size = 8*8192;
+    let block_size = 8192;
     let waterfall_bins = 512;
     let waterfall_frame_rate_hz = 10.0;
+
+    let ws_addr: SocketAddr = "192.168.0.225:9000".parse()?;
+    let udp_registration_addr = "0.0.0.0:9001";
+    let udp_registration_port = 9001;
 
     let state = AppState::new(center_freq_hz, target_freq_hz, sideband);
 
@@ -27,25 +35,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 
-    let addr: SocketAddr = "192.168.0.225:9000".parse()?;
-    println!("radio_server listening on ws://{addr}/ws");
+    println!("radio_server listening on ws://{ws_addr}/ws");
+
+    {
+        let udp_audio_target = state.udp_audio_target.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                run_udp_registration_listener(udp_registration_addr, udp_audio_target).await
+            {
+                eprintln!("UDP registration listener failed: {e}");
+            }
+        });
+    }
 
     let tx = state.tx.clone();
     let audio_tx = state.audio_tx.clone();
     let waterfall_tx = state.waterfall_tx.clone();
     let radio_state = state.radio.clone();
+    let udp_audio_target = state.udp_audio_target.clone();
 
     tokio::spawn(async move {
         let source_config = SourceConfig::WavFile {
             path: "input_iq.wav".to_string(),
         };
-
-        // For quick testing, you can swap to:
-        //
-        // let source_config = SourceConfig::Fake {
-        //     sample_rate_hz: 48_000.0,
-        //     tone_hz: 1_500.0,
-        // };
 
         let mut source = match create_source(source_config) {
             Ok(s) => s,
@@ -63,12 +75,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
-            2_800.0, // channel cutoff
-            129,     // channel filter taps
-            16,      // decimation factor
-            2_700.0, // audio cutoff
-            101,     // audio FIR taps
-            48_000.0, // client/browser output sample rate
+            2_800.0,
+            129,
+            16,
+            2_700.0,
+            101,
+            48_000.0,
         );
 
         pipeline.set_sideband(sideband);
@@ -82,13 +94,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             input_sample_rate_hz,
         });
 
+        let _ = tx.send(ServerMessage::UdpAudioOffer {
+            server_udp_port: udp_registration_port,
+        });
+
         let _ = tx.send(ServerMessage::Info {
             message: format!("source initialized at {} Hz", input_sample_rate_hz),
         });
 
         let mut waterfall = WaterfallGenerator::new(waterfall_bins);
+        let mut udp_audio = match UdpAudioSender::new(480) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.send(ServerMessage::Error {
+                    message: format!("UDP audio init failed: {e}"),
+                });
+                return;
+            }
+        };
 
-        // Rough frame pacing. If your loop runs every ~20 ms, this gives ~10 FPS.
         let mut wf_counter = 0usize;
         let wf_every_n_blocks = 5usize;
 
@@ -118,9 +142,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let audio = pipeline.process_audio(&iq_block);
+
+            // Browser path
             let audio_bytes = f32_samples_to_i16_bytes(&audio);
             let _ = audio_tx.send(audio_bytes);
-	    println!("sent audio bytes");
+
+            // UDP desktop path
+            let audio_i16: Vec<i16> = audio
+                .iter()
+                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                .collect();
+
+            if let Some(target) = *udp_audio_target.read().await {
+                udp_audio.send_audio_to(target, &audio_i16);
+            }
 
             wf_counter += 1;
             if wf_counter >= wf_every_n_blocks {
@@ -133,7 +168,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = tokio::net::TcpListener::bind(ws_addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
