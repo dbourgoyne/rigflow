@@ -1,6 +1,8 @@
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::{routing::get, Router};
+use tokio::time::Instant;
 
 use radio_server::{
     api::{protocol::ServerMessage, websocket::ws_handler},
@@ -25,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let waterfall_bins = 512;
     let waterfall_frame_rate_hz = 10.0;
 
-    let ws_addr: SocketAddr = "192.168.0.225:9000".parse()?;
+    let ws_addr: SocketAddr = "127.0.0.1:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
     let udp_registration_port = 9001;
 
@@ -116,6 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut wf_counter = 0usize;
         let wf_every_n_blocks = 5usize;
 
+        let mut next_tick = Instant::now();
+
         loop {
             {
                 let radio = radio_state.read().await;
@@ -141,6 +145,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             }
 
+            let block_duration =
+                Duration::from_secs_f64(iq_block.len() as f64 / input_sample_rate_hz as f64);
+
             let audio = pipeline.process_audio(&iq_block);
 
             // Browser path
@@ -164,7 +171,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = waterfall_tx.send(row);
             }
 
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            next_tick += block_duration;
+            tokio::time::sleep_until(next_tick).await;
         }
     });
 

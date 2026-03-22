@@ -5,6 +5,7 @@ pub struct UdpAudioSender {
     sequence: u32,
     timestamp: u64,
     samples_per_packet: usize,
+    pending: Vec<i16>,
 }
 
 impl UdpAudioSender {
@@ -17,15 +18,15 @@ impl UdpAudioSender {
             sequence: 0,
             timestamp: 0,
             samples_per_packet,
+            pending: Vec::new(),
         })
     }
 
     pub fn send_audio_to(&mut self, target: SocketAddr, samples: &[i16]) {
-        let mut offset = 0;
+        self.pending.extend_from_slice(samples);
 
-        while offset < samples.len() {
-            let end = (offset + self.samples_per_packet).min(samples.len());
-            let chunk = &samples[offset..end];
+        while self.pending.len() >= self.samples_per_packet {
+            let chunk: Vec<i16> = self.pending.drain(..self.samples_per_packet).collect();
 
             let mut buf = Vec::with_capacity(16 + chunk.len() * 2);
 
@@ -37,7 +38,7 @@ impl UdpAudioSender {
             buf.extend_from_slice(&self.timestamp.to_be_bytes());
 
             // Payload
-            for &s in chunk {
+            for &s in &chunk {
                 buf.extend_from_slice(&s.to_le_bytes());
             }
 
@@ -45,8 +46,6 @@ impl UdpAudioSender {
 
             self.sequence = self.sequence.wrapping_add(1);
             self.timestamp += chunk.len() as u64;
-
-            offset = end;
         }
     }
 }
