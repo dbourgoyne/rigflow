@@ -1,6 +1,6 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::{SinkExt, StreamExt};
-use minifb::{Key, KeyRepeat, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use radio_server::audio_client::jitter_buffer::JitterBuffer;
 use serde::{Deserialize, Serialize};
 use std::net::UdpSocket;
@@ -117,6 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ClientMessage>();
     let ui_state_for_ws = Arc::clone(&ui_state);
 
+    let mut mouse_was_down = false;
+
     rt.spawn(async move {
         if let Err(e) = websocket_control_task(SERVER_WS_URL, ws_cmd_rx, ui_state_for_ws).await {
             eprintln!("WebSocket control task failed: {e}");
@@ -155,7 +157,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         }
 
-        handle_keyboard(&window, &ws_cmd_tx, &ui_state);
+	handle_keyboard(&window, &ws_cmd_tx, &ui_state);
+	handle_mouse_click_tune(&window, &ws_cmd_tx, &ui_state, &mut mouse_was_down);
 
         {
             let mut buf = waterfall_buffer.lock().unwrap();
@@ -340,6 +343,36 @@ fn handle_keyboard(
     }
 }
 
+fn handle_mouse_click_tune(
+    window: &Window,
+    ws_cmd_tx: &mpsc::UnboundedSender<ClientMessage>,
+    ui_state: &Arc<Mutex<UiState>>,
+    mouse_was_down: &mut bool,
+) {
+    let mouse_down = window.get_mouse_down(MouseButton::Left);
+
+    if mouse_down && !*mouse_was_down {
+        if let Some((mx, _my)) = window.get_mouse_pos(MouseMode::Discard) {
+            let state_snapshot = { ui_state.lock().unwrap().clone() };
+
+            if let Some(target_freq_hz) = x_to_frequency(mx, WIDTH, &state_snapshot) {
+                let rounded = target_freq_hz.round();
+
+                let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
+                    target_freq_hz: rounded,
+                });
+
+                println!(
+                    "click tune: x={:.1} -> target_freq_hz={:.0}",
+                    mx, rounded
+                );
+            }
+        }
+    }
+
+    *mouse_was_down = mouse_down;
+}
+
 fn handle_media_packet(
     packet: &[u8],
     jitter: &Arc<Mutex<JitterBuffer>>,
@@ -500,4 +533,15 @@ fn color_map(v: u8) -> u32 {
     };
 
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
+fn x_to_frequency(x: f32, width: usize, state: &UiState) -> Option<f32> {
+    if width == 0 || state.input_sample_rate_hz <= 0.0 {
+        return None;
+    }
+
+    let frac = (x / width as f32).clamp(0.0, 1.0);
+    let offset_hz = (frac - 0.5) * state.input_sample_rate_hz;
+
+    Some(state.center_freq_hz + offset_hz)
 }
