@@ -290,8 +290,8 @@ fn handle_keyboard(
 ) {
     let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
 
-    let target_step = if shift { 1_000.0 } else { 100.0 };
-    let center_step = if shift { 10_000.0 } else { 1_000.0 };
+    let target_step = if shift { 100_000.0 } else { 10_000.0 };
+    let center_step = if shift { 100_000.0 } else { 10_000.0 };
 
     let state_snapshot = { ui_state.lock().unwrap().clone() };
 

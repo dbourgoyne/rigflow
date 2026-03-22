@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let waterfall_bins = 512;
     let waterfall_frame_rate_hz = 10.0;
 
-    let ws_addr: SocketAddr = "127.0.0.1:9000".parse()?;
+    let ws_addr: SocketAddr = "192.168.0.225:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
     let udp_registration_port = 9001;
 
