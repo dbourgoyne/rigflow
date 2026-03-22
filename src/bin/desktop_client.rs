@@ -97,6 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )));
 
     let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; WIDTH * HEIGHT]));
+    let mut display_buffer = vec![0u32, WIDTH * HEIGHT];
     let ui_state = Arc::new(Mutex::new(UiState::default()));
 
     let stream = build_output_stream(Arc::clone(&jitter))?;
@@ -166,8 +167,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             let mut buf = waterfall_buffer.lock().unwrap();
             let state = ui_state.lock().unwrap().clone();
-            draw_tuning_marker(&mut buf, WIDTH, HEIGHT, &state);
-            window.update_with_buffer(&buf, WIDTH, HEIGHT)?;
+
+	    {
+		let buf = waterfall_buffer.lock().unwrap();
+		display_buffer.copy_from_slice(&buf);
+	    }
+
+	    {
+		let state = ui_state.lock().unwrap().clone();
+		draw_tuning_marker(&mut display_buffer, WIDTH, HEIGHT, &state);
+	    }
+
+	    window.update_with_buffer(&display_buffer, WIDTH, HEIGHT)?;
+	    
         }
 
         if last_title.elapsed() >= Duration::from_millis(200) {
