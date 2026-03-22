@@ -1,9 +1,13 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::collections::VecDeque;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+
+mod audio_client {
+    pub mod jitter_buffer;
+}
+use audio_client::jitter_buffer::JitterBuffer;
 
 const MAGIC: u16 = 0x5253;
 const VERSION: u8 = 1;
@@ -12,26 +16,35 @@ const STREAM_TYPE_REGISTER_AUDIO: u8 = 10;
 
 const LISTEN_ADDR: &str = "0.0.0.0:50000";
 const SERVER_UDP_REGISTRATION_ADDR: &str = "192.168.0.225:9001";
+
 const OUTPUT_SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 1;
 
-const START_BUFFER_SAMPLES: usize = 4_800;
-const MAX_BUFFER_SAMPLES: usize = 48_000;
+// 10 ms packets at 48 kHz
+const PACKET_SAMPLES: usize = 480;
+
+// Start after ~100 ms
+const TARGET_BUFFER_SAMPLES: usize = 4_800;
+
+// Hard cap ~500 ms
+const MAX_BUFFER_SAMPLES: usize = 24_000;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let queue = Arc::new(Mutex::new(VecDeque::<f32>::new()));
-    let playback_started = Arc::new(Mutex::new(false));
+    let jitter = Arc::new(Mutex::new(JitterBuffer::new(
+        PACKET_SAMPLES,
+        TARGET_BUFFER_SAMPLES,
+        MAX_BUFFER_SAMPLES,
+    )));
 
-    let queue_for_net = Arc::clone(&queue);
-    let started_for_net = Arc::clone(&playback_started);
+    let jitter_for_net = Arc::clone(&jitter);
 
     thread::spawn(move || {
-        if let Err(e) = udp_receive_loop(queue_for_net, started_for_net) {
+        if let Err(e) = udp_receive_loop(jitter_for_net) {
             eprintln!("UDP receive loop error: {e}");
         }
     });
 
-    let stream = build_output_stream(Arc::clone(&queue), Arc::clone(&playback_started))?;
+    let stream = build_output_stream(Arc::clone(&jitter))?;
     stream.play()?;
 
     println!("UDP audio player listening on {LISTEN_ADDR}");
@@ -40,20 +53,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         thread::sleep(Duration::from_secs(1));
 
-        let queued = queue.lock().unwrap().len();
-        let started = *playback_started.lock().unwrap();
-
-        println!("queued_samples={queued} playback_started={started}");
+        let jb = jitter.lock().unwrap();
+        println!(
+            "started={} buffered_samples={} rx={} inserted={} concealed={} late_drop={} overflow_drop={}",
+            jb.started(),
+            jb.buffered_samples(),
+            jb.packets_received,
+            jb.packets_inserted,
+            jb.packets_missing_concealed,
+            jb.packets_dropped_late,
+            jb.packets_dropped_overflow,
+        );
     }
 }
 
 fn udp_receive_loop(
-    queue: Arc<Mutex<VecDeque<f32>>>,
-    playback_started: Arc<Mutex<bool>>,
+    jitter: Arc<Mutex<JitterBuffer>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let socket = UdpSocket::bind(LISTEN_ADDR)?;
 
-    // Send registration packet to the server
+    // Register with server
     let mut reg = Vec::with_capacity(4);
     reg.extend_from_slice(&MAGIC.to_be_bytes());
     reg.push(VERSION);
@@ -63,7 +82,6 @@ fn udp_receive_loop(
     println!("Sent UDP registration to {}", SERVER_UDP_REGISTRATION_ADDR);
 
     let mut buf = [0u8; 4096];
-    let mut expected_sequence: Option<u32> = None;
 
     loop {
         let (len, src) = socket.recv_from(&mut buf)?;
@@ -98,38 +116,21 @@ fn udp_receive_loop(
             continue;
         }
 
-        if let Some(expected) = expected_sequence {
-            if sequence != expected {
-                eprintln!("packet gap or reorder: expected={expected} got={sequence}");
-            }
-        }
-        expected_sequence = Some(sequence.wrapping_add(1));
-
         let payload = &packet[16..];
-
-        let mut q = queue.lock().unwrap();
+        let mut samples = Vec::with_capacity(payload.len() / 2);
 
         for chunk in payload.chunks_exact(2) {
             let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-            q.push_back(s as f32 / 32768.0);
+            samples.push(s as f32 / 32768.0);
         }
 
-        while q.len() > MAX_BUFFER_SAMPLES {
-            q.pop_front();
-        }
-
-        let mut started = playback_started.lock().unwrap();
-        if !*started && q.len() >= START_BUFFER_SAMPLES {
-            *started = true;
-            println!("Starting playback with {} buffered samples", q.len());
-        }
+        let mut jb = jitter.lock().unwrap();
+        jb.push_packet(sequence, samples);
     }
 }
 
-
 fn build_output_stream(
-    queue: Arc<Mutex<VecDeque<f32>>>,
-    playback_started: Arc<Mutex<bool>>,
+    jitter: Arc<Mutex<JitterBuffer>>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
     let host = cpal::default_host();
 
@@ -173,20 +174,8 @@ fn build_output_stream(
     let stream = device.build_output_stream(
         &config,
         move |data: &mut [f32], _| {
-            let started = *playback_started.lock().unwrap();
-
-            if !started {
-                for sample in data.iter_mut() {
-                    *sample = 0.0;
-                }
-                return;
-            }
-
-            let mut q = queue.lock().unwrap();
-
-            for sample in data.iter_mut() {
-                *sample = q.pop_front().unwrap_or(0.0);
-            }
+            let mut jb = jitter.lock().unwrap();
+            jb.pop_samples(data);
         },
         err_fn,
         None,

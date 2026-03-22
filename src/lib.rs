@@ -10,3 +10,4 @@ pub mod streaming;
 pub mod waterfall;
 pub mod hardware;
 pub mod source;
+pub mod audio_client;
