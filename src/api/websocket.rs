@@ -9,7 +9,7 @@ use futures::{sink::SinkExt, stream::StreamExt};
 
 use crate::{
     api::protocol::{ClientMessage, ServerMessage},
-    dsp::demod::Sideband,
+    dsp::demod::{DemodMode, Sideband},
     server::app_state::AppState,
 };
 
@@ -23,96 +23,13 @@ pub async fn ws_handler(
 async fn client_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
+    if send_initial_state(&mut sender, &state).await.is_err() {
+        return;
+    }
+
     let mut msg_rx = state.tx.subscribe();
     let mut audio_rx = state.audio_tx.subscribe();
     let mut waterfall_rx = state.waterfall_tx.subscribe();
-
-
-    let stream = state.stream.read().await;
-    let input_sample_rate_hz = stream.input_sample_rate_hz;
-
-    let stream_config = ServerMessage::StreamConfig {
-        audio_sample_rate_hz: stream.audio_sample_rate_hz,
-        audio_format: stream.audio_format.clone(),
-        waterfall_bins: stream.waterfall_bins,
-        waterfall_frame_rate_hz: stream.waterfall_frame_rate_hz,
-        center_freq_hz: stream.center_freq_hz,
-	target_freq_hz: stream.target_freq_hz,
-        input_sample_rate_hz: stream.input_sample_rate_hz,
-    };
-
-    let udp_offer = ServerMessage::UdpAudioOffer {
-        server_udp_port: stream.udp_audio_port,
-    };
-
-    let text = serde_json::to_string(&stream_config).unwrap();
-    if sender.send(Message::Text(text.into())).await.is_err() {
-        return;
-    }
-
-    let text = serde_json::to_string(&udp_offer).unwrap();
-    if sender.send(Message::Text(text.into())).await.is_err() {
-        return;
-    }
-
-    let (center_freq_hz, target_freq_hz, demod_mode, sideband) = {
-	let st = state.radio.read().await;
-	(
-            st.center_freq_hz,
-            st.target_freq_hz,
-            st.demod_mode.clone(),
-            st.sideband.clone(),
-	)
-    };
-
-    let _ = sender.send(Message::Text(
-	serde_json::to_string(&ServerMessage::StreamConfig {
-            audio_sample_rate_hz: 48_000.0,
-            audio_format: "i16".to_string(),
-            waterfall_bins: 1024,
-            waterfall_frame_rate_hz: 10.0,
-            center_freq_hz,
-            target_freq_hz,
-            input_sample_rate_hz,
-	})
-	    .unwrap()
-	    .into(),
-    )).await;
-    
-    let _ = sender.send(Message::Text(
-	serde_json::to_string(&ServerMessage::CenterFrequencyChanged {
-            center_freq_hz,
-	})
-	    .unwrap()
-	    .into(),
-    )).await;
-
-    let _ = sender.send(Message::Text(
-	serde_json::to_string(&ServerMessage::FrequencyChanged {
-            target_freq_hz,
-	})
-	    .unwrap()
-	    .into(),
-    )).await;
-
-    /*
-    let _ = sender.send(Message::Text(
-	serde_json::to_string(&ServerMessage::DemodModeChanged {
-            mode: demod_mode,
-	})
-	    .unwrap()
-	    .into(),
-    )).await;
-
-    let _ = sender.send(Message::Text(
-	serde_json::to_string(&ServerMessage::SidebandChanged {
-            sideband,
-	})
-	    .unwrap()
-	    .into(),
-    )).await;
-*/
-
 
     let send_task = tokio::spawn(async move {
         loop {
@@ -192,75 +109,191 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     }
 }
 
-async fn handle_client_text(text: &str, state: &AppState) -> Result<(), String> {
-    let msg: ClientMessage =
-        serde_json::from_str(text).map_err(|e| format!("invalid JSON message: {e}"))?;
+async fn send_initial_state(
+    sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    state: &AppState,
+) -> Result<(), ()> {
+    let (
+        audio_sample_rate_hz,
+        audio_format,
+        waterfall_bins,
+        waterfall_frame_rate_hz,
+        udp_audio_port,
+        input_sample_rate_hz,
+    ) = {
+        let stream = state.stream.read().await;
+        (
+            stream.audio_sample_rate_hz,
+            stream.audio_format.clone(),
+            stream.waterfall_bins,
+            stream.waterfall_frame_rate_hz,
+            stream.udp_audio_port,
+            stream.input_sample_rate_hz,
+        )
+    };
 
-    match msg {
-        ClientMessage::Ping => {
-            let _ = state.tx.send(ServerMessage::Pong);
-        }
+    let (center_freq_hz, target_freq_hz, demod_mode, sideband) = {
+        let radio = state.radio.read().await;
+        (
+            radio.center_freq_hz,
+            radio.target_freq_hz,
+            radio.demod_mode,
+            radio.sideband,
+        )
+    };
 
+    send_server_message(
+        sender,
+        &ServerMessage::StreamConfig {
+            audio_sample_rate_hz,
+            audio_format,
+            waterfall_bins,
+            waterfall_frame_rate_hz,
+            center_freq_hz,
+            target_freq_hz,
+            input_sample_rate_hz,
+        },
+    ).await?;
+
+    send_server_message(
+        sender,
+        &ServerMessage::UdpAudioOffer {
+            server_udp_port: udp_audio_port,
+        },
+    ).await?;
+
+    send_server_message(
+        sender,
+        &ServerMessage::CenterFrequencyChanged { center_freq_hz },
+    ).await?;
+
+    send_server_message(
+        sender,
+        &ServerMessage::FrequencyChanged { target_freq_hz },
+    ).await?;
+
+    send_server_message(
+        sender,
+        &ServerMessage::DemodModeChanged {
+            mode: demod_mode_to_string(demod_mode),
+        },
+    ).await?;
+
+    send_server_message(
+        sender,
+        &ServerMessage::SidebandChanged {
+            sideband: sideband_to_string(sideband),
+        },
+    ).await?;
+
+    Ok(())
+}
+
+async fn send_server_message(
+    sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    msg: &ServerMessage,
+) -> Result<(), ()> {
+    let text = serde_json::to_string(msg).map_err(|_| ())?;
+    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+}
+
+fn demod_mode_to_string(mode: DemodMode) -> String {
+    match mode {
+        DemodMode::Wfm => "wfm".to_string(),
+        DemodMode::Usb => "usb".to_string(),
+        DemodMode::Lsb => "lsb".to_string(),
+    }
+}
+
+fn sideband_to_string(sideband: Sideband) -> String {
+    match sideband {
+        Sideband::Usb => "usb".to_string(),
+        Sideband::Lsb => "lsb".to_string(),
+    }
+}
+
+//use crate::api::protocol::{ClientMessage, ServerMessage};
+//use crate::server::app_state::AppState;
+
+//pub
+async fn handle_client_text(
+    text: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let cmd: ClientMessage = serde_json::from_str(text)
+        .map_err(|e| format!("invalid json: {}", e))?;
+
+    match cmd {
         ClientMessage::SetFrequency { target_freq_hz } => {
-            {
+            let new_target = {
                 let mut radio = state.radio.write().await;
                 radio.target_freq_hz = target_freq_hz;
-            }
+                radio.target_freq_hz
+            };
 
-            let _ = state.tx.send(ServerMessage::FrequencyChanged { target_freq_hz });
+            let _ = state.tx.send(ServerMessage::FrequencyChanged {
+                target_freq_hz: new_target,
+            });
         }
 
         ClientMessage::SetCenterFrequency { center_freq_hz } => {
-            {
+            let new_center = {
                 let mut radio = state.radio.write().await;
                 radio.center_freq_hz = center_freq_hz;
-            }
-
-            let _ = state.tx.send(ServerMessage::CenterFrequencyChanged { center_freq_hz });
-        }
-
-	ClientMessage::SetDemodMode { mode } => {
-	    let parsed = match mode.as_str() {
-		"usb" => Some(crate::dsp::demod::DemodMode::Usb),
-		"lsb" => Some(crate::dsp::demod::DemodMode::Lsb),
-		"wfm" => Some(crate::dsp::demod::DemodMode::Wfm),
-		_ => None,
-	    };
-
-	    if let Some(parsed_mode) = parsed {
-		{
-		    let mut radio = state.radio.write().await;
-		    radio.demod_mode = parsed_mode;
-		}
-
-		let _ = state.tx.send(ServerMessage::DemodModeChanged { mode });
-	    } else {
-		let _ = state.tx.send(ServerMessage::Error {
-		    message: format!("unknown demod mode: {}", mode),
-		});
-	    }
-	}
-
-        ClientMessage::SetSideband { sideband } => {
-            let parsed = match sideband.to_ascii_lowercase().as_str() {
-                "usb" => Sideband::Usb,
-                "lsb" => Sideband::Lsb,
-                _ => return Err(format!("invalid sideband '{sideband}', expected usb or lsb")),
+                radio.center_freq_hz
             };
 
-            {
+            let _ = state.tx.send(ServerMessage::CenterFrequencyChanged {
+                center_freq_hz: new_center,
+            });
+        }
+
+        ClientMessage::SetDemodMode { mode } => {
+            let new_mode = {
                 let mut radio = state.radio.write().await;
-                radio.sideband = parsed;
-            }
+                radio.demod_mode = parse_demod_mode(&mode)?;
+                radio.demod_mode
+            };
+
+            let _ = state.tx.send(ServerMessage::DemodModeChanged {
+                mode: demod_mode_to_string(new_mode),
+            });
+        }
+
+        ClientMessage::SetSideband { sideband } => {
+            let new_sideband = {
+                let mut radio = state.radio.write().await;
+                radio.sideband = parse_sideband(&sideband)?;
+                radio.sideband
+            };
 
             let _ = state.tx.send(ServerMessage::SidebandChanged {
-                sideband: match parsed {
-                    Sideband::Usb => "usb".to_string(),
-                    Sideband::Lsb => "lsb".to_string(),
-                },
+                sideband: sideband_to_string(new_sideband),
             });
+    }
+
+        ClientMessage::Ping => {
+            let _ = state.tx.send(ServerMessage::Pong);
         }
     }
 
     Ok(())
+}
+
+fn parse_sideband(s: &str) -> Result<Sideband, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "usb" => Ok(Sideband::Usb),
+        "lsb" => Ok(Sideband::Lsb),
+        _ => Err(format!("invalid sideband: '{}'", s)),
+    }
+}
+
+
+fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "wfm" | "fm" => Ok(DemodMode::Wfm),
+        "usb" => Ok(DemodMode::Usb),
+        "lsb" => Ok(DemodMode::Lsb),
+        _ => Err(format!("invalid demod mode: '{}'", s)),
+    }
 }
