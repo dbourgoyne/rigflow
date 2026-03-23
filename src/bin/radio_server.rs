@@ -252,6 +252,62 @@ fn mode_to_string(mode: DemodMode) -> String {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PipelineSettings {
+    channel_cutoff_hz: f32,
+    fir_taps: usize,
+    audio_cutoff_hz: f32,
+    audio_fir_taps: usize,
+}
+
+fn pipeline_settings_for_mode(mode: DemodMode) -> PipelineSettings {
+    match mode {
+        DemodMode::Wfm => PipelineSettings {
+            channel_cutoff_hz: 100_000.0,
+            fir_taps: 129,
+            audio_cutoff_hz: 15_000.0,
+            audio_fir_taps: 101,
+        },
+        DemodMode::Usb | DemodMode::Lsb => PipelineSettings {
+            channel_cutoff_hz: 2_800.0,
+            fir_taps: 129,
+            audio_cutoff_hz: 2_700.0,
+            audio_fir_taps: 101,
+        },
+    }
+}
+
+fn build_pipeline(
+    center_freq_hz: f32,
+    target_freq_hz: f32,
+    input_sample_rate_hz: f32,
+    decimation_factor: usize,
+    mode: DemodMode,
+) -> DspPipeline {
+    let settings = pipeline_settings_for_mode(mode);
+
+    let mut pipeline = DspPipeline::new(
+        center_freq_hz,
+        target_freq_hz,
+        input_sample_rate_hz,
+        settings.channel_cutoff_hz,
+        settings.fir_taps,
+        decimation_factor,
+        settings.audio_cutoff_hz,
+        settings.audio_fir_taps,
+        48_000.0,
+        mode,
+    );
+
+    match mode {
+        DemodMode::Usb => pipeline.set_sideband(Sideband::Usb),
+        DemodMode::Lsb => pipeline.set_sideband(Sideband::Lsb),
+        DemodMode::Wfm => {}
+    }
+
+    pipeline
+}
+
 fn spawn_waterfall_worker(
     rx: Receiver<Vec<Complex32>>,
     udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
@@ -389,28 +445,20 @@ fn spawn_dsp_worker(
             SourceKind::Fake => cfg.fake_sample_rate_hz,
             SourceKind::Wav => 0.0,
         };
+	let initial_mode = if let Ok(radio) = radio_state.try_read() {
+	    radio.demod_mode
+	} else {
+	    DemodMode::Wfm
+	};
 
-        let initial_mode = if let Ok(radio) = radio_state.try_read() {
-            radio.demod_mode
-        } else {
-            DemodMode::Wfm
-        };
-
-        let mut pipeline = DspPipeline::new(
-            cfg.center_freq_hz,
-            cfg.target_freq_hz,
-            input_sample_rate_hz,
-            100_000.0,
-            129,
-            decimation_factor,
-            15_000.0,
-            101,
-            48_000.0,
-            initial_mode,
-        );
-
-        pipeline.set_sideband(Sideband::Lsb);
-
+	let mut pipeline = build_pipeline(
+	    cfg.center_freq_hz,
+	    cfg.target_freq_hz,
+	    input_sample_rate_hz,
+	    decimation_factor,
+	    initial_mode,
+	);
+	
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
@@ -496,14 +544,35 @@ fn spawn_dsp_worker(
                     });
                 }
 
-                if radio.demod_mode != last_demod_mode {
-                    pipeline.set_mode(radio.demod_mode);
-                    last_demod_mode = radio.demod_mode;
+		if radio.demod_mode != last_demod_mode {
+		    pipeline = build_pipeline(
+			last_center_freq_hz,
+			last_target_freq_hz,
+			input_sample_rate_hz,
+			decimation_factor,
+			radio.demod_mode,
+		    );
 
-                    let _ = tx.send(ServerMessage::DemodModeChanged {
-                        mode: mode_to_string(radio.demod_mode),
-                    });
-                }
+		    if matches!(radio.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
+			pipeline.set_sideband(radio.sideband);
+		    }
+
+		    last_demod_mode = radio.demod_mode;
+
+		    let _ = tx.send(ServerMessage::DemodModeChanged {
+			mode: mode_to_string(radio.demod_mode),
+		    });
+
+		    let settings = pipeline_settings_for_mode(radio.demod_mode);
+		    let _ = tx.send(ServerMessage::Info {
+			message: format!(
+			    "rebuilt pipeline for mode={} channel_cutoff={}Hz audio_cutoff={}Hz",
+			    mode_to_string(radio.demod_mode),
+			    settings.channel_cutoff_hz,
+			    settings.audio_cutoff_hz
+			),
+		    });
+		}
             }
 
             iq_samples_per_sec += iq_block.len();
@@ -594,27 +663,20 @@ fn spawn_nonrealtime_worker(
         let input_sample_rate_hz = source.sample_rate();
         let decimation_factor = choose_decimation(&cfg.source);
 
-        let initial_mode = if let Ok(radio) = radio_state.try_read() {
-            radio.demod_mode
-        } else {
-            DemodMode::Wfm
-        };
+	let initial_mode = if let Ok(radio) = radio_state.try_read() {
+	    radio.demod_mode
+	} else {
+	    DemodMode::Wfm
+	};
 
-        let mut pipeline = DspPipeline::new(
-            cfg.center_freq_hz,
-            cfg.target_freq_hz,
-            input_sample_rate_hz,
-            100_000.0,
-            129,
-            decimation_factor,
-            15_000.0,
-            101,
-            48_000.0,
-            initial_mode,
-        );
-
-        pipeline.set_sideband(Sideband::Lsb);
-
+	let mut pipeline = build_pipeline(
+	    cfg.center_freq_hz,
+	    cfg.target_freq_hz,
+	    input_sample_rate_hz,
+	    decimation_factor,
+	    initial_mode,
+	);
+	
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
@@ -709,14 +771,35 @@ fn spawn_nonrealtime_worker(
                     });
                 }
 
-                if radio.demod_mode != last_demod_mode {
-                    pipeline.set_mode(radio.demod_mode);
-                    last_demod_mode = radio.demod_mode;
+		if radio.demod_mode != last_demod_mode {
+		    pipeline = build_pipeline(
+			last_center_freq_hz,
+			last_target_freq_hz,
+			input_sample_rate_hz,
+			decimation_factor,
+			radio.demod_mode,
+		    );
 
-                    let _ = tx.send(ServerMessage::DemodModeChanged {
-                        mode: mode_to_string(radio.demod_mode),
-                    });
-                }
+		    if matches!(radio.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
+			pipeline.set_sideband(radio.sideband);
+		    }
+
+		    last_demod_mode = radio.demod_mode;
+		    
+		    let _ = tx.send(ServerMessage::DemodModeChanged {
+			mode: mode_to_string(radio.demod_mode),
+		    });
+
+		    let settings = pipeline_settings_for_mode(radio.demod_mode);
+		    let _ = tx.send(ServerMessage::Info {
+			message: format!(
+			    "rebuilt pipeline for mode={} channel_cutoff={}Hz audio_cutoff={}Hz",
+			    mode_to_string(radio.demod_mode),
+			    settings.channel_cutoff_hz,
+			    settings.audio_cutoff_hz
+			),
+		    });
+		}
             }
 
             let iq_block = match source.read_block(block_size) {
