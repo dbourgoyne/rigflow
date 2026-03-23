@@ -30,6 +30,21 @@ const MAX_BUFFER_SAMPLES: usize = 24_000;
 const WIDTH: usize = 1024;
 const HEIGHT: usize = 400;
 
+const SPECTRUM_HEIGHT: usize = 110;
+const SEPARATOR_HEIGHT: usize = 1;
+const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + SEPARATOR_HEIGHT;
+const WATERFALL_HEIGHT: usize = HEIGHT - WATERFALL_TOP;
+
+const SPECTRUM_DB_MIN: f32 = -120.0;
+const SPECTRUM_DB_MAX: f32 = 0.0;
+const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
+
+const COLOR_BLACK: u32 = 0x000000;
+const COLOR_GRID: u32 = 0x202020;
+const COLOR_SEPARATOR: u32 = 0x404040;
+const COLOR_SPECTRUM: u32 = 0x00FF00;
+const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessage {
@@ -101,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )));
 
     let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; WIDTH * HEIGHT]));
+    let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
     let mut display_buffer = vec![0u32; WIDTH * HEIGHT];
     let ui_state = Arc::new(Mutex::new(UiState::default()));
 
@@ -156,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Received UDP registration ACK from {}", src);
                     }
                 } else if len >= 16 {
-                    handle_media_packet(&udp_buf[..len], &jitter, &waterfall_buffer);
+                    handle_media_packet(&udp_buf[..len], &jitter, &waterfall_buffer, &spectrum_db);
                 }
             }
             Err(ref e)
@@ -174,8 +190,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         {
+            let spectrum = spectrum_db.lock().unwrap().clone();
+            draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
+            draw_spectrum_grid(
+                &mut display_buffer,
+                WIDTH,
+                SPECTRUM_HEIGHT,
+                SPECTRUM_DB_MIN,
+                SPECTRUM_DB_MAX,
+            );
+            draw_spectrum_trace(
+                &mut display_buffer,
+                WIDTH,
+                SPECTRUM_HEIGHT,
+                &spectrum,
+                SPECTRUM_DB_MIN,
+                SPECTRUM_DB_MAX,
+            );
+            draw_separator(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
+        }
+
+        {
             let state = ui_state.lock().unwrap().clone();
-            draw_tuning_marker(&mut display_buffer, WIDTH, HEIGHT, &state);
+            draw_tuning_marker(
+                &mut display_buffer,
+                WIDTH,
+                HEIGHT,
+                WATERFALL_TOP,
+                &state,
+            );
         }
 
         window.update_with_buffer(&display_buffer, WIDTH, HEIGHT)?;
@@ -425,6 +468,7 @@ fn handle_media_packet(
     packet: &[u8],
     jitter: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
+    spectrum_db: &Arc<Mutex<Vec<f32>>>,
 ) {
     if packet.len() < 16 {
         return;
@@ -470,8 +514,16 @@ fn handle_media_packet(
             }
 
             let row = &payload[..bin_count];
-            let mut buffer = waterfall_buffer.lock().unwrap();
-            draw_row(&mut buffer, row, WIDTH, HEIGHT);
+
+            {
+                let mut spectrum = spectrum_db.lock().unwrap();
+                update_spectrum_db(&mut spectrum, row);
+            }
+
+            {
+                let mut buffer = waterfall_buffer.lock().unwrap();
+                draw_row(&mut buffer, row, WIDTH, HEIGHT);
+            }
         }
 
         _ => {}
@@ -533,18 +585,55 @@ fn build_output_stream(
     Ok(stream)
 }
 
-fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, height: usize) {
-    buffer.copy_within(0..width * (height - 1), width);
+fn update_spectrum_db(spectrum: &mut Vec<f32>, row: &[u8]) {
+    if row.is_empty() {
+        return;
+    }
 
-    let top = &mut buffer[0..width];
+    if spectrum.len() != row.len() {
+        spectrum.clear();
+        spectrum.reserve(row.len());
+        for &v in row {
+            spectrum.push(byte_to_relative_db(v));
+        }
+        return;
+    }
+
+    for (dst, &src) in spectrum.iter_mut().zip(row.iter()) {
+        let new_db = byte_to_relative_db(src);
+        *dst = (1.0 - SPECTRUM_SMOOTHING_ALPHA) * *dst + SPECTRUM_SMOOTHING_ALPHA * new_db;
+    }
+}
+
+fn byte_to_relative_db(v: u8) -> f32 {
+    SPECTRUM_DB_MIN + (v as f32 / 255.0) * (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)
+}
+
+fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, height: usize) {
+    if WATERFALL_TOP >= height || WATERFALL_HEIGHT == 0 {
+        return;
+    }
+
+    let waterfall_pixels = width * WATERFALL_HEIGHT;
+
+    buffer.copy_within(0..waterfall_pixels, width);
+
+    let top = &mut buffer[WATERFALL_TOP * width..(WATERFALL_TOP + 1) * width];
 
     for x in 0..width {
-        let v = if x < row.len() { row[x] } else { 0 };
+        let src_x = x * row.len() / width;
+        let v = row[src_x.min(row.len() - 1)];
         top[x] = color_map(v);
     }
 }
 
-fn draw_tuning_marker(buffer: &mut [u32], width: usize, height: usize, state: &UiState) {
+fn draw_tuning_marker(
+    buffer: &mut [u32],
+    width: usize,
+    height: usize,
+    y_start: usize,
+    state: &UiState,
+) {
     if state.input_sample_rate_hz <= 0.0 {
         return;
     }
@@ -558,8 +647,139 @@ fn draw_tuning_marker(buffer: &mut [u32], width: usize, height: usize, state: &U
     }
 
     let x = x as usize;
+    for y in y_start..height {
+        buffer[y * width + x] = COLOR_TUNING_MARKER;
+    }
+}
+
+fn draw_spectrum_background(buffer: &mut [u32], width: usize, height: usize) {
     for y in 0..height {
-        buffer[y * width + x] = 0x00FF0000;
+        let row = &mut buffer[y * width..(y + 1) * width];
+        row.fill(COLOR_BLACK);
+    }
+}
+
+fn draw_separator(buffer: &mut [u32], width: usize, y: usize) {
+    if y >= HEIGHT {
+        return;
+    }
+
+    let row = &mut buffer[y * width..(y + 1) * width];
+    row.fill(COLOR_SEPARATOR);
+}
+
+fn draw_spectrum_grid(
+    buffer: &mut [u32],
+    width: usize,
+    plot_height: usize,
+    db_min: f32,
+    db_max: f32,
+) {
+    let marks = [-120.0, -100.0, -80.0, -60.0, -40.0, -20.0, 0.0];
+
+    for &db in &marks {
+        if db < db_min || db > db_max {
+            continue;
+        }
+
+        let y = db_to_y(db, db_min, db_max, plot_height);
+        if y >= plot_height {
+            continue;
+        }
+
+        for x in 0..width {
+            buffer[y * width + x] = COLOR_GRID;
+        }
+    }
+}
+
+fn draw_spectrum_trace(
+    buffer: &mut [u32],
+    width: usize,
+    plot_height: usize,
+    spectrum_db: &[f32],
+    db_min: f32,
+    db_max: f32,
+) {
+    if spectrum_db.len() < 2 || plot_height == 0 {
+        return;
+    }
+
+    let mut prev_x = 0i32;
+    let mut prev_y = db_to_y(spectrum_db[0], db_min, db_max, plot_height) as i32;
+
+    for x in 1..width {
+        let bin = x * spectrum_db.len() / width;
+        let bin = bin.min(spectrum_db.len() - 1);
+        let y = db_to_y(spectrum_db[bin], db_min, db_max, plot_height) as i32;
+
+        draw_line(
+            buffer,
+            width,
+            prev_x,
+            prev_y,
+            x as i32,
+            y,
+            COLOR_SPECTRUM,
+        );
+
+        prev_x = x as i32;
+        prev_y = y;
+    }
+}
+
+fn db_to_y(db: f32, db_min: f32, db_max: f32, height: usize) -> usize {
+    let t = ((db - db_min) / (db_max - db_min)).clamp(0.0, 1.0);
+    (height - 1).saturating_sub((t * (height as f32 - 1.0)) as usize)
+}
+
+fn draw_line(
+    buffer: &mut [u32],
+    fb_width: usize,
+    mut x0: i32,
+    mut y0: i32,
+    x1: i32,
+    y1: i32,
+    color: u32,
+) {
+    let dx = (x1 - x0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let dy = -(y1 - y0).abs();
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    loop {
+        put_pixel(buffer, fb_width, x0, y0, color);
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+fn put_pixel(buffer: &mut [u32], fb_width: usize, x: i32, y: i32, color: u32) {
+    if x < 0 || y < 0 {
+        return;
+    }
+
+    let x = x as usize;
+    let y = y as usize;
+
+    if x >= fb_width || y >= HEIGHT {
+        return;
+    }
+
+    let idx = y * fb_width + x;
+    if idx < buffer.len() {
+        buffer[idx] = color;
     }
 }
 
