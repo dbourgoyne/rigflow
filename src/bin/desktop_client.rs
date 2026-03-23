@@ -32,7 +32,7 @@ const HEIGHT: usize = 400;
 
 const SEPARATOR_HEIGHT: usize = 1;
 
-const SPECTRUM_HEIGHT: usize = 110;
+const SPECTRUM_HEIGHT: usize = 256;
 const SPECTRUM_LEFT_PAD: usize = 64;
 const SPECTRUM_RIGHT_PAD: usize = 8;
 const SPECTRUM_TOP_PAD: usize = 6;
