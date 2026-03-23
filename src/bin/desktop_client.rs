@@ -47,7 +47,7 @@ const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
 const SPECTRUM_PLOT_HEIGHT: usize = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
 
 const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + SEPARATOR_HEIGHT;
-const WATERFALL_HEIGHT: usize = HEIGHT - WATERFALL_TOP;
+//const WATERFALL_HEIGHT: usize = HEIGHT - WATERFALL_TOP;
 
 const SPECTRUM_DB_MIN: f32 = -120.0;
 const SPECTRUM_DB_MAX: f32 = 0.0;
@@ -59,7 +59,7 @@ const COLOR_BLACK: u32 = 0x000000;
 const COLOR_GRID: u32 = 0x202020;
 const COLOR_SEPARATOR: u32 = 0x404040;
 const COLOR_SPECTRUM: u32 = 0x00FF00;
-const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
+//const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -982,6 +982,7 @@ fn draw_text(buffer: &mut [u32], fb_width: usize, x: usize, y: usize, text: &str
     }
 }
 
+/*
 fn draw_char_2x(buffer: &mut [u32], fb_width: usize, x: usize, y: usize, c: char, color: u32) {
     let rows = glyph_rows(c);
 
@@ -1012,6 +1013,7 @@ fn draw_text_2x(buffer: &mut [u32], fb_width: usize, x: usize, y: usize, text: &
         cx += 12; // (5*2) + 2 spacing
     }
 }
+*/
 
 fn format_freq_label(freq_hz: f32) -> String {
     if freq_hz.abs() >= 1_000_000.0 {

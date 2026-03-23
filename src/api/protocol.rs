@@ -25,6 +25,7 @@ pub enum ServerMessage {
         waterfall_bins: usize,
         waterfall_frame_rate_hz: f32,
         center_freq_hz: f32,
+	target_freq_hz: f32,
         input_sample_rate_hz: f32,
     },
     UdpAudioOffer {

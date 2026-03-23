@@ -36,6 +36,7 @@ pub struct StreamState {
     pub waterfall_bins: usize,
     pub waterfall_frame_rate_hz: f32,
     pub center_freq_hz: f32,
+    pub target_freq_hz: f32,
     pub input_sample_rate_hz: f32,
     pub udp_audio_port: u16,
 }
@@ -48,6 +49,7 @@ impl Default for StreamState {
             waterfall_bins: 512,
             waterfall_frame_rate_hz: 10.0,
             center_freq_hz: 0.0,
+	    target_freq_hz: 0.0,
             input_sample_rate_hz: 0.0,
             udp_audio_port: 9001,
         }

@@ -36,6 +36,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
             waterfall_bins: stream.waterfall_bins,
             waterfall_frame_rate_hz: stream.waterfall_frame_rate_hz,
             center_freq_hz: stream.center_freq_hz,
+	    target_freq_hz: stream.target_freq_hz,
             input_sample_rate_hz: stream.input_sample_rate_hz,
         };
 

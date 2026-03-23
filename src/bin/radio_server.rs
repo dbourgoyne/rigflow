@@ -684,6 +684,7 @@ fn spawn_nonrealtime_worker(
             s.waterfall_bins = 1024;
             s.waterfall_frame_rate_hz = 10.0;
             s.center_freq_hz = cfg.center_freq_hz;
+	    s.target_freq_hz = cfg.target_freq_hz;
             s.input_sample_rate_hz = input_sample_rate_hz;
             s.udp_audio_port = 9001;
         }
@@ -694,6 +695,7 @@ fn spawn_nonrealtime_worker(
             waterfall_bins: 1024,
             waterfall_frame_rate_hz: 10.0,
             center_freq_hz: cfg.center_freq_hz,
+	    target_freq_hz: cfg.target_freq_hz,
             input_sample_rate_hz,
         });
 
