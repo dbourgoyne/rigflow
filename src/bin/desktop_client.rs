@@ -30,13 +30,13 @@ const MAX_BUFFER_SAMPLES: usize = 24_000;
 const WIDTH: usize = 1024;
 const HEIGHT: usize = 512;
 
-const SEPARATOR_HEIGHT: usize = 1;
+const SEPARATOR_HEIGHT: usize = 8; //1;
 
 const SPECTRUM_HEIGHT: usize = 196;
-const SPECTRUM_LEFT_PAD: usize = 64;
-const SPECTRUM_RIGHT_PAD: usize = 8;
+const SPECTRUM_LEFT_PAD: usize = 0; //64;
+const SPECTRUM_RIGHT_PAD: usize = 0; //8;
 const SPECTRUM_TOP_PAD: usize = 6;
-const SPECTRUM_BOTTOM_PAD: usize = 16;
+const SPECTRUM_BOTTOM_PAD: usize = 32; //16;
 
 const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
 const SPECTRUM_PLOT_Y0: usize = SPECTRUM_TOP_PAD;
@@ -937,7 +937,7 @@ fn draw_spectrum_axes_and_labels(
 
             let label_w = label.len() * 6;
             let label_x = x.saturating_sub(label_w / 2).min(width.saturating_sub(label_w));
-            let label_y = SPECTRUM_PLOT_Y1 + 4;
+            let label_y = SPECTRUM_PLOT_Y1 + 16;
             draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
         }
     }
