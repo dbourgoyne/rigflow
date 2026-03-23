@@ -220,14 +220,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
 		draw_spectrum_axes_and_labels(&mut display_buffer, WIDTH, &state);
 	    }
-            draw_spectrum_trace(
-                &mut display_buffer,
-                WIDTH,
-                SPECTRUM_HEIGHT,
-                &spectrum,
-                SPECTRUM_DB_MIN,
-                SPECTRUM_DB_MAX,
-            );
+	    draw_spectrum_trace(
+		&mut display_buffer,
+		WIDTH,
+		&spectrum,
+	    );
             draw_separator(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
         }
 
