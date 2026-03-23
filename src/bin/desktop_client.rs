@@ -992,7 +992,7 @@ fn draw_frequency_overlay(
     let tf = format!("TF: {}", format_freq_hz(target_freq_hz));
 
     // top-left inside the spectrum panel, but to the right of the dB axis labels
-    let x = SPECTRUM_PLOT_X0 + 16; //8;
+    let x = SPECTRUM_PLOT_X0 + 32; //8;
     let y0 = 8;
     let y1 = y0 + 10;
 
