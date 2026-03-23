@@ -81,12 +81,13 @@ enum ServerMessage {
     SidebandChanged { sideband: String },
     DemodModeChanged { mode: String },
     StreamConfig {
-        audio_sample_rate_hz: f32,
-        audio_format: String,
-        waterfall_bins: usize,
-        waterfall_frame_rate_hz: f32,
-        center_freq_hz: f32,
-        input_sample_rate_hz: f32,
+	audio_sample_rate_hz: f32,
+	audio_format: String,
+	waterfall_bins: usize,
+	waterfall_frame_rate_hz: f32,
+	center_freq_hz: f32,
+	target_freq_hz: f32,
+	input_sample_rate_hz: f32,
     },
     UdpAudioOffer { server_udp_port: u16 },
     Info { message: String },
@@ -358,22 +359,24 @@ fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
         ServerMessage::DemodModeChanged { mode } => {
             state.demod_mode = mode;
         }
-        ServerMessage::StreamConfig {
-            audio_sample_rate_hz,
-            audio_format,
-            waterfall_bins,
-            waterfall_frame_rate_hz,
-            center_freq_hz,
-            input_sample_rate_hz,
-        } => {
-            state.audio_sample_rate_hz = audio_sample_rate_hz;
-            state.audio_format = audio_format;
-            state.waterfall_bins = waterfall_bins;
-            state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-            state.center_freq_hz = center_freq_hz;
-            state.input_sample_rate_hz = input_sample_rate_hz;
-            state.status = "stream configured".to_string();
-        }
+	ServerMessage::StreamConfig {
+	    audio_sample_rate_hz,
+	    audio_format,
+	    waterfall_bins,
+	    waterfall_frame_rate_hz,
+	    center_freq_hz,
+	    target_freq_hz,
+	    input_sample_rate_hz,
+	} => {
+	    state.audio_sample_rate_hz = audio_sample_rate_hz;
+	    state.audio_format = audio_format;
+	    state.waterfall_bins = waterfall_bins;
+	    state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
+	    state.center_freq_hz = center_freq_hz;
+	    state.target_freq_hz = target_freq_hz;
+	    state.input_sample_rate_hz = input_sample_rate_hz;
+	    state.status = "stream configured".to_string();
+	}
         ServerMessage::UdpAudioOffer { server_udp_port } => {
             state.status = format!("udp port {}", server_udp_port);
         }

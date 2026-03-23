@@ -475,6 +475,7 @@ fn spawn_dsp_worker(
             waterfall_bins: 1024,
             waterfall_frame_rate_hz: 10.0,
             center_freq_hz: cfg.center_freq_hz,
+	    target_freq_hz: cfg.target_freq_hz,
             input_sample_rate_hz,
         });
 
