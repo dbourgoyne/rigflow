@@ -39,6 +39,32 @@ const SPECTRUM_DB_MIN: f32 = -120.0;
 const SPECTRUM_DB_MAX: f32 = 0.0;
 const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
 
+const SPECTRUM_HEIGHT: usize = 110;
+const SPECTRUM_LEFT_PAD: usize = 64;
+const SPECTRUM_RIGHT_PAD: usize = 8;
+const SPECTRUM_TOP_PAD: usize = 6;
+const SPECTRUM_BOTTOM_PAD: usize = 16;
+
+const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
+const SPECTRUM_PLOT_Y0: usize = SPECTRUM_TOP_PAD;
+const SPECTRUM_PLOT_X1: usize = WIDTH - SPECTRUM_RIGHT_PAD;
+const SPECTRUM_PLOT_Y1: usize = SPECTRUM_HEIGHT - SPECTRUM_BOTTOM_PAD;
+
+const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
+const SPECTRUM_PLOT_HEIGHT: usize = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
+
+const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + 1;
+const WATERFALL_HEIGHT: usize = HEIGHT - WATERFALL_TOP;
+
+const SPECTRUM_DB_MIN: f32 = -120.0;
+const SPECTRUM_DB_MAX: f32 = 0.0;
+const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
+
+const COLOR_AXIS: u32 = 0x808080;
+const COLOR_LABEL: u32 = 0xC0C0C0;
+const COLOR_GRID: u32 = 0x202020;
+const COLOR_SPECTRUM: u32 = 0x00FF00;
+
 const COLOR_BLACK: u32 = 0x000000;
 const COLOR_GRID: u32 = 0x202020;
 const COLOR_SEPARATOR: u32 = 0x404040;
@@ -199,6 +225,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 SPECTRUM_DB_MIN,
                 SPECTRUM_DB_MAX,
             );
+	    {
+		let state = ui_state.lock().unwrap().clone();
+		draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
+		draw_spectrum_axes_and_labels(&mut display_buffer, WIDTH, &state);
+	    }
             draw_spectrum_trace(
                 &mut display_buffer,
                 WIDTH,
@@ -438,7 +469,7 @@ fn handle_mouse_click_tune(
         if let Some((mx, _my)) = window.get_mouse_pos(MouseMode::Discard) {
             let state_snapshot = { ui_state.lock().unwrap().clone() };
 
-            if let Some(target_freq_hz) = x_to_frequency(mx, WIDTH, &state_snapshot) {
+	    if let Some(target_freq_hz) = x_to_frequency(mx, &state_snapshot) {
                 let rounded = target_freq_hz.round();
 
                 let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
@@ -453,12 +484,19 @@ fn handle_mouse_click_tune(
     *mouse_was_down = mouse_down;
 }
 
-fn x_to_frequency(x: f32, width: usize, state: &UiState) -> Option<f32> {
-    if width == 0 || state.input_sample_rate_hz <= 0.0 {
+fn x_to_frequency(x: f32, state: &UiState) -> Option<f32> {
+    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
         return None;
     }
 
-    let frac = (x / width as f32).clamp(0.0, 1.0);
+    let x0 = SPECTRUM_PLOT_X0 as f32;
+    let x1 = SPECTRUM_PLOT_X1 as f32;
+
+    if x < x0 || x > x1 {
+        return None;
+    }
+
+    let frac = ((x - x0) / (x1 - x0)).clamp(0.0, 1.0);
     let offset_hz = (frac - 0.5) * state.input_sample_rate_hz;
 
     Some(state.center_freq_hz + offset_hz)
@@ -609,23 +647,31 @@ fn byte_to_relative_db(v: u8) -> f32 {
     SPECTRUM_DB_MIN + (v as f32 / 255.0) * (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)
 }
 
-fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, height: usize) {
-    if WATERFALL_TOP >= height || WATERFALL_HEIGHT == 0 {
+fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, _height: usize) {
+    if row.is_empty() {
         return;
     }
 
-    let waterfall_pixels = width * WATERFALL_HEIGHT;
-
-    buffer.copy_within(0..waterfall_pixels, width);
+    for y in (WATERFALL_TOP + 1..HEIGHT).rev() {
+        let dst = y * width + SPECTRUM_PLOT_X0;
+        let src = (y - 1) * width + SPECTRUM_PLOT_X0;
+        let len = SPECTRUM_PLOT_WIDTH;
+        buffer.copy_within(src..src + len, dst);
+    }
 
     let top = &mut buffer[WATERFALL_TOP * width..(WATERFALL_TOP + 1) * width];
 
     for x in 0..width {
-        let src_x = x * row.len() / width;
-        let v = row[src_x.min(row.len() - 1)];
-        top[x] = color_map(v);
+        if x < SPECTRUM_PLOT_X0 || x >= SPECTRUM_PLOT_X1 {
+            top[x] = 0x000000;
+        } else {
+            let plot_x = x - SPECTRUM_PLOT_X0;
+            let src_x = plot_x * row.len() / SPECTRUM_PLOT_WIDTH;
+            top[x] = color_map(row[src_x.min(row.len() - 1)]);
+        }
     }
 }
+
 
 fn draw_tuning_marker(
     buffer: &mut [u32],
@@ -634,13 +680,14 @@ fn draw_tuning_marker(
     y_start: usize,
     state: &UiState,
 ) {
-    if state.input_sample_rate_hz <= 0.0 {
+    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
         return;
     }
 
     let offset_hz = state.target_freq_hz - state.center_freq_hz;
     let frac = offset_hz / state.input_sample_rate_hz + 0.5;
-    let x = (frac * width as f32).round() as isize;
+    let x = SPECTRUM_PLOT_X0 as f32 + frac * SPECTRUM_PLOT_WIDTH as f32;
+    let x = x.round() as isize;
 
     if x < 0 || x >= width as isize {
         return;
@@ -648,9 +695,10 @@ fn draw_tuning_marker(
 
     let x = x as usize;
     for y in y_start..height {
-        buffer[y * width + x] = COLOR_TUNING_MARKER;
+        buffer[y * width + x] = 0x00FF0000;
     }
 }
+
 
 fn draw_spectrum_background(buffer: &mut [u32], width: usize, height: usize) {
     for y in 0..height {
@@ -696,37 +744,29 @@ fn draw_spectrum_grid(
 fn draw_spectrum_trace(
     buffer: &mut [u32],
     width: usize,
-    plot_height: usize,
     spectrum_db: &[f32],
-    db_min: f32,
-    db_max: f32,
 ) {
-    if spectrum_db.len() < 2 || plot_height == 0 {
+    if spectrum_db.len() < 2 || SPECTRUM_PLOT_WIDTH < 2 {
         return;
     }
 
-    let mut prev_x = 0i32;
-    let mut prev_y = db_to_y(spectrum_db[0], db_min, db_max, plot_height) as i32;
+    let mut prev_x = SPECTRUM_PLOT_X0 as i32;
+    let mut prev_y = db_to_plot_y(spectrum_db[0]) as i32;
 
-    for x in 1..width {
-        let bin = x * spectrum_db.len() / width;
+    for plot_x in 1..SPECTRUM_PLOT_WIDTH {
+        let bin = plot_x * spectrum_db.len() / SPECTRUM_PLOT_WIDTH;
         let bin = bin.min(spectrum_db.len() - 1);
-        let y = db_to_y(spectrum_db[bin], db_min, db_max, plot_height) as i32;
 
-        draw_line(
-            buffer,
-            width,
-            prev_x,
-            prev_y,
-            x as i32,
-            y,
-            COLOR_SPECTRUM,
-        );
+        let x = (SPECTRUM_PLOT_X0 + plot_x) as i32;
+        let y = db_to_plot_y(spectrum_db[bin]) as i32;
 
-        prev_x = x as i32;
+        draw_line(buffer, width, prev_x, prev_y, x, y, COLOR_SPECTRUM);
+
+        prev_x = x;
         prev_y = y;
     }
 }
+
 
 fn db_to_y(db: f32, db_min: f32, db_max: f32, height: usize) -> usize {
     let t = ((db - db_min) / (db_max - db_min)).clamp(0.0, 1.0);
@@ -801,4 +841,125 @@ fn color_map(v: u8) -> u32 {
     };
 
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
+fn glyph_rows(c: char) -> Option<[u8; 7]> {
+    match c {
+        '0' => Some([0b01110,0b10001,0b10011,0b10101,0b11001,0b10001,0b01110]),
+        '1' => Some([0b00100,0b01100,0b00100,0b00100,0b00100,0b00100,0b01110]),
+        '2' => Some([0b01110,0b10001,0b00001,0b00010,0b00100,0b01000,0b11111]),
+        '3' => Some([0b11110,0b00001,0b00001,0b01110,0b00001,0b00001,0b11110]),
+        '4' => Some([0b00010,0b00110,0b01010,0b10010,0b11111,0b00010,0b00010]),
+        '5' => Some([0b11111,0b10000,0b10000,0b11110,0b00001,0b00001,0b11110]),
+        '6' => Some([0b00110,0b01000,0b10000,0b11110,0b10001,0b10001,0b01110]),
+        '7' => Some([0b11111,0b00001,0b00010,0b00100,0b01000,0b01000,0b01000]),
+        '8' => Some([0b01110,0b10001,0b10001,0b01110,0b10001,0b10001,0b01110]),
+        '9' => Some([0b01110,0b10001,0b10001,0b01111,0b00001,0b00010,0b11100]),
+        '-' => Some([0b00000,0b00000,0b00000,0b11111,0b00000,0b00000,0b00000]),
+        '.' => Some([0b00000,0b00000,0b00000,0b00000,0b00000,0b01100,0b01100]),
+        'k' => Some([0b10000,0b10010,0b10100,0b11000,0b10100,0b10010,0b10001]),
+        'M' => Some([0b10001,0b11011,0b10101,0b10101,0b10001,0b10001,0b10001]),
+        'H' => Some([0b10001,0b10001,0b10001,0b11111,0b10001,0b10001,0b10001]),
+        'z' => Some([0b00000,0b11111,0b00010,0b00100,0b01000,0b11111,0b00000]),
+        'd' => Some([0b00001,0b00001,0b01111,0b10001,0b10001,0b10011,0b01101]),
+        'B' => Some([0b11110,0b10001,0b10001,0b11110,0b10001,0b10001,0b11110]),
+        ' ' => Some([0b00000,0b00000,0b00000,0b00000,0b00000,0b00000,0b00000]),
+        _ => None,
+    }
+}
+
+fn draw_char(buffer: &mut [u32], fb_width: usize, x: usize, y: usize, c: char, color: u32) {
+    let Some(rows) = glyph_rows(c) else { return; };
+
+    for (dy, row) in rows.iter().enumerate() {
+        for dx in 0..5 {
+            if (row & (1 << (4 - dx))) != 0 {
+                let px = x + dx;
+                let py = y + dy;
+                if px < fb_width && py < HEIGHT {
+                    buffer[py * fb_width + px] = color;
+                }
+            }
+        }
+    }
+}
+
+fn draw_text(buffer: &mut [u32], fb_width: usize, x: usize, y: usize, text: &str, color: u32) {
+    let mut cx = x;
+    for ch in text.chars() {
+        draw_char(buffer, fb_width, cx, y, ch, color);
+        cx += 6;
+    }
+}
+
+fn format_freq_label(freq_hz: f32) -> String {
+    if freq_hz.abs() >= 1_000_000.0 {
+        format!("{:.3}M", freq_hz / 1_000_000.0)
+    } else if freq_hz.abs() >= 1_000.0 {
+        format!("{:.1}k", freq_hz / 1_000.0)
+    } else {
+        format!("{:.0}", freq_hz)
+    }
+}
+
+fn draw_spectrum_axes_and_labels(
+    buffer: &mut [u32],
+    width: usize,
+    state: &UiState,
+) {
+    for y in SPECTRUM_PLOT_Y0..=SPECTRUM_PLOT_Y1 {
+        buffer[y * width + SPECTRUM_PLOT_X0] = COLOR_AXIS;
+    }
+
+    for x in SPECTRUM_PLOT_X0..=SPECTRUM_PLOT_X1 {
+        buffer[SPECTRUM_PLOT_Y1 * width + x] = COLOR_AXIS;
+    }
+
+    let db_ticks = [-120.0, -100.0, -80.0, -60.0, -40.0, -20.0, 0.0];
+    for db in db_ticks {
+        let y = db_to_plot_y(db);
+        for x in SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1 {
+            buffer[y * width + x] = COLOR_GRID;
+        }
+
+        let label = format!("{:.0}", db);
+        let label_x = 4;
+        let label_y = y.saturating_sub(3);
+        draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
+    }
+
+    if state.input_sample_rate_hz > 0.0 {
+        let left = state.center_freq_hz - 0.5 * state.input_sample_rate_hz;
+        let center = state.center_freq_hz;
+        let right = state.center_freq_hz + 0.5 * state.input_sample_rate_hz;
+
+        let ticks = [
+            (SPECTRUM_PLOT_X0, format_freq_label(left)),
+            (SPECTRUM_PLOT_X0 + SPECTRUM_PLOT_WIDTH / 4, format_freq_label(left + 0.25 * state.input_sample_rate_hz)),
+            (SPECTRUM_PLOT_X0 + SPECTRUM_PLOT_WIDTH / 2, format_freq_label(center)),
+            (SPECTRUM_PLOT_X0 + 3 * SPECTRUM_PLOT_WIDTH / 4, format_freq_label(left + 0.75 * state.input_sample_rate_hz)),
+            (SPECTRUM_PLOT_X1, format_freq_label(right)),
+        ];
+
+        for (x, label) in ticks {
+            for y in SPECTRUM_PLOT_Y0..=SPECTRUM_PLOT_Y1 {
+                if y % 4 == 0 {
+                    buffer[y * width + x] = COLOR_GRID;
+                }
+            }
+
+            let label_w = label.len() * 6;
+            let label_x = x.saturating_sub(label_w / 2).min(width.saturating_sub(label_w));
+            let label_y = SPECTRUM_PLOT_Y1 + 4;
+            draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
+        }
+    }
+
+    draw_text(buffer, width, 4, 2, "dB", COLOR_LABEL);
+    draw_text(buffer, width, SPECTRUM_PLOT_X1.saturating_sub(14), 2, "Hz", COLOR_LABEL);
+}
+
+fn db_to_plot_y(db: f32) -> usize {
+    let t = ((db - SPECTRUM_DB_MIN) / (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)).clamp(0.0, 1.0);
+    SPECTRUM_PLOT_Y1 - (t * SPECTRUM_PLOT_HEIGHT as f32) as usize
 }
