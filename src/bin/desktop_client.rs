@@ -28,11 +28,11 @@ const TARGET_BUFFER_SAMPLES: usize = 4_800;
 const MAX_BUFFER_SAMPLES: usize = 24_000;
 
 const WIDTH: usize = 1024;
-const HEIGHT: usize = 800;
+const HEIGHT: usize = 512;
 
 const SEPARATOR_HEIGHT: usize = 1;
 
-const SPECTRUM_HEIGHT: usize = 256;
+const SPECTRUM_HEIGHT: usize = 196;
 const SPECTRUM_LEFT_PAD: usize = 64;
 const SPECTRUM_RIGHT_PAD: usize = 8;
 const SPECTRUM_TOP_PAD: usize = 6;
