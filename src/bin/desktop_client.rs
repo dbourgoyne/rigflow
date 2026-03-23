@@ -1120,7 +1120,8 @@ fn draw_frequency_overlay(
     let cf_text = format!("CF: {}", format_freq_hz(state.center_freq_hz));
     let cf_x = SPECTRUM_PLOT_X0 + 8;
     let cf_y = SPECTRUM_PLOT_Y0 + 6;
-    draw_text_2x(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
+    //draw_text_2x(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
+    draw_text(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
 
     // Target-frequency label above the target marker location
     if let Some(tf_x_center) = freq_to_plot_x(state.target_freq_hz, state) {
@@ -1141,7 +1142,7 @@ fn draw_frequency_overlay(
             tf_x = max_x;
         }
 
-        draw_text_2x(buffer, fb_width, tf_x, tf_y, &tf_text, TF_COLOR);
+        draw_text(buffer, fb_width, tf_x, tf_y, &tf_text, TF_COLOR);
 
         // Optional small tick mark above the target x position
         let tick_top = tf_y + TEXT_HEIGHT_2X + 2;
