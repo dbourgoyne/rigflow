@@ -251,9 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	    draw_frequency_overlay(
 		&mut display_buffer,
 		WIDTH,
-		state.center_freq_hz,
-		state.target_freq_hz,
+		&state,
 	    );
+
 	}
 
         window.update_with_buffer(&display_buffer, WIDTH, HEIGHT)?;
@@ -1090,6 +1090,17 @@ fn format_freq_hz(freq_hz: f32) -> String {
     } else {
         format!("{:.0} Hz", freq_hz)
     }
+}
+
+fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
+    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
+        return None;
+    }
+
+    let frac =
+        ((freq_hz - state.center_freq_hz) / state.input_sample_rate_hz + 0.5).clamp(0.0, 1.0);
+
+    Some(SPECTRUM_PLOT_X0 + (frac * SPECTRUM_PLOT_WIDTH as f32).round() as usize)
 }
 
 fn draw_frequency_overlay(
