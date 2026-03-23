@@ -165,6 +165,28 @@ async fn handle_client_text(text: &str, state: &AppState) -> Result<(), String> 
             let _ = state.tx.send(ServerMessage::CenterFrequencyChanged { center_freq_hz });
         }
 
+	ClientMessage::SetDemodMode { mode } => {
+	    let parsed = match mode.as_str() {
+		"usb" => Some(crate::dsp::demod::DemodMode::Usb),
+		"lsb" => Some(crate::dsp::demod::DemodMode::Lsb),
+		"wfm" => Some(crate::dsp::demod::DemodMode::Wfm),
+		_ => None,
+	    };
+
+	    if let Some(parsed_mode) = parsed {
+		{
+		    let mut radio = state.radio.write().await;
+		    radio.demod_mode = parsed_mode;
+		}
+
+		let _ = state.tx.send(ServerMessage::DemodModeChanged { mode });
+	    } else {
+		let _ = state.tx.send(ServerMessage::Error {
+		    message: format!("unknown demod mode: {}", mode),
+		});
+	    }
+	}
+
         ClientMessage::SetSideband { sideband } => {
             let parsed = match sideband.to_ascii_lowercase().as_str() {
                 "usb" => Sideband::Usb,

@@ -3,21 +3,28 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::api::protocol::ServerMessage;
-use crate::dsp::demod::Sideband;
+use crate::dsp::demod::{DemodMode, Sideband};
 
 #[derive(Debug)]
 pub struct RadioState {
     pub center_freq_hz: f32,
     pub target_freq_hz: f32,
     pub sideband: Sideband,
+    pub demod_mode: DemodMode,
 }
 
 impl RadioState {
-    pub fn new(center_freq_hz: f32, target_freq_hz: f32, sideband: Sideband) -> Self {
+    pub fn new(
+        center_freq_hz: f32,
+        target_freq_hz: f32,
+        sideband: Sideband,
+        demod_mode: DemodMode,
+    ) -> Self {
         Self {
             center_freq_hz,
             target_freq_hz,
             sideband,
+            demod_mode,
         }
     }
 }
@@ -58,7 +65,12 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(center_freq_hz: f32, target_freq_hz: f32, sideband: Sideband) -> Self {
+    pub fn new(
+        center_freq_hz: f32,
+        target_freq_hz: f32,
+        sideband: Sideband,
+        demod_mode: DemodMode,
+    ) -> Self {
         let (tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
         let (waterfall_tx, _) = broadcast::channel(256);
@@ -68,6 +80,7 @@ impl AppState {
                 center_freq_hz,
                 target_freq_hz,
                 sideband,
+                demod_mode,
             ))),
             stream: Arc::new(RwLock::new(StreamState::default())),
             tx,

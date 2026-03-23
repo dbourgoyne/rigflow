@@ -244,6 +244,14 @@ fn choose_decimation(source: &SourceKind) -> usize {
     }
 }
 
+fn mode_to_string(mode: DemodMode) -> String {
+    match mode {
+        DemodMode::Usb => "usb".to_string(),
+        DemodMode::Lsb => "lsb".to_string(),
+        DemodMode::Wfm => "wfm".to_string(),
+    }
+}
+
 fn spawn_waterfall_worker(
     rx: Receiver<Vec<Complex32>>,
     udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
@@ -382,6 +390,12 @@ fn spawn_dsp_worker(
             SourceKind::Wav => 0.0,
         };
 
+        let initial_mode = if let Ok(radio) = radio_state.try_read() {
+            radio.demod_mode
+        } else {
+            DemodMode::Wfm
+        };
+
         let mut pipeline = DspPipeline::new(
             cfg.center_freq_hz,
             cfg.target_freq_hz,
@@ -392,7 +406,7 @@ fn spawn_dsp_worker(
             15_000.0,
             101,
             48_000.0,
-            DemodMode::Wfm,
+            initial_mode,
         );
 
         pipeline.set_sideband(Sideband::Lsb);
@@ -420,6 +434,10 @@ fn spawn_dsp_worker(
             server_udp_port: 9001,
         });
 
+        let _ = tx.send(ServerMessage::DemodModeChanged {
+            mode: mode_to_string(initial_mode),
+        });
+
         println!(
             "pipeline config: input_sample_rate_hz={} decimation_factor={} output_sample_rate_hz={} client_output_sample_rate_hz={}",
             input_sample_rate_hz,
@@ -441,6 +459,7 @@ fn spawn_dsp_worker(
         let mut last_center_freq_hz = cfg.center_freq_hz;
         let mut last_target_freq_hz = cfg.target_freq_hz;
         let mut last_sideband = Sideband::Lsb;
+        let mut last_demod_mode = initial_mode;
         let mut wf_counter = 0usize;
 
         let mut stats_start = Instant::now();
@@ -474,6 +493,15 @@ fn spawn_dsp_worker(
                             Sideband::Usb => "usb".to_string(),
                             Sideband::Lsb => "lsb".to_string(),
                         },
+                    });
+                }
+
+                if radio.demod_mode != last_demod_mode {
+                    pipeline.set_mode(radio.demod_mode);
+                    last_demod_mode = radio.demod_mode;
+
+                    let _ = tx.send(ServerMessage::DemodModeChanged {
+                        mode: mode_to_string(radio.demod_mode),
                     });
                 }
             }
@@ -566,6 +594,12 @@ fn spawn_nonrealtime_worker(
         let input_sample_rate_hz = source.sample_rate();
         let decimation_factor = choose_decimation(&cfg.source);
 
+        let initial_mode = if let Ok(radio) = radio_state.try_read() {
+            radio.demod_mode
+        } else {
+            DemodMode::Wfm
+        };
+
         let mut pipeline = DspPipeline::new(
             cfg.center_freq_hz,
             cfg.target_freq_hz,
@@ -576,7 +610,7 @@ fn spawn_nonrealtime_worker(
             15_000.0,
             101,
             48_000.0,
-            DemodMode::Wfm,
+            initial_mode,
         );
 
         pipeline.set_sideband(Sideband::Lsb);
@@ -604,6 +638,10 @@ fn spawn_nonrealtime_worker(
             server_udp_port: 9001,
         });
 
+        let _ = tx.send(ServerMessage::DemodModeChanged {
+            mode: mode_to_string(initial_mode),
+        });
+
         println!(
             "pipeline config: input_sample_rate_hz={} decimation_factor={} output_sample_rate_hz={} client_output_sample_rate_hz={}",
             input_sample_rate_hz,
@@ -626,6 +664,7 @@ fn spawn_nonrealtime_worker(
         let mut last_center_freq_hz = cfg.center_freq_hz;
         let mut last_target_freq_hz = cfg.target_freq_hz;
         let mut last_sideband = Sideband::Lsb;
+        let mut last_demod_mode = initial_mode;
         let mut wf_counter = 0usize;
 
         loop {
@@ -667,6 +706,15 @@ fn spawn_nonrealtime_worker(
                             Sideband::Usb => "usb".to_string(),
                             Sideband::Lsb => "lsb".to_string(),
                         },
+                    });
+                }
+
+                if radio.demod_mode != last_demod_mode {
+                    pipeline.set_mode(radio.demod_mode);
+                    last_demod_mode = radio.demod_mode;
+
+                    let _ = tx.send(ServerMessage::DemodModeChanged {
+                        mode: mode_to_string(radio.demod_mode),
                     });
                 }
             }
@@ -734,13 +782,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let center_freq_hz = cfg.center_freq_hz;
     let target_freq_hz = cfg.target_freq_hz;
     let sideband = Sideband::Lsb;
+    let demod_mode = DemodMode::Wfm;
 
     let block_size = choose_block_size(&cfg.source);
     let waterfall_bins = 512;
     let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
 
-    let state = AppState::new(center_freq_hz, target_freq_hz, sideband);
+    let state = AppState::new(center_freq_hz, target_freq_hz, sideband, demod_mode);
 
     let app = Router::new()
         .route("/ws", get(ws_handler))

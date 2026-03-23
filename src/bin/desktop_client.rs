@@ -36,6 +36,7 @@ enum ClientMessage {
     SetFrequency { target_freq_hz: f32 },
     SetCenterFrequency { center_freq_hz: f32 },
     SetSideband { sideband: String },
+    SetDemodMode { mode: String },
     Ping,
 }
 
@@ -47,6 +48,7 @@ enum ServerMessage {
     FrequencyChanged { target_freq_hz: f32 },
     CenterFrequencyChanged { center_freq_hz: f32 },
     SidebandChanged { sideband: String },
+    DemodModeChanged { mode: String },
     StreamConfig {
         audio_sample_rate_hz: f32,
         audio_format: String,
@@ -65,6 +67,7 @@ struct UiState {
     center_freq_hz: f32,
     target_freq_hz: f32,
     sideband: String,
+    demod_mode: String,
     input_sample_rate_hz: f32,
     waterfall_bins: usize,
     audio_sample_rate_hz: f32,
@@ -79,6 +82,7 @@ impl Default for UiState {
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
             sideband: "lsb".to_string(),
+            demod_mode: "wfm".to_string(),
             input_sample_rate_hz: 0.0,
             waterfall_bins: WIDTH,
             audio_sample_rate_hz: OUTPUT_SAMPLE_RATE as f32,
@@ -178,16 +182,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if last_title.elapsed() >= Duration::from_millis(200) {
             let state = ui_state.lock().unwrap().clone();
-            window.set_title(&format!(
-                "Rust Radio | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {} | {} Hz | {:.1} fps | {}",
-                state.center_freq_hz,
-                state.target_freq_hz,
-                state.sideband.to_uppercase(),
-                state.audio_format,
-                state.audio_sample_rate_hz,
-                state.waterfall_frame_rate_hz,
-                state.status
-            ));
+	    window.set_title(&format!(
+		"Rust Radio | {} | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {} Hz | {:.1} fps | {}",
+		state.demod_mode.to_uppercase(),
+		state.center_freq_hz,
+		state.target_freq_hz,
+		state.audio_format,
+		state.audio_sample_rate_hz,
+		state.waterfall_frame_rate_hz,
+		state.status
+	    ));
             last_title = Instant::now();
         }
 
@@ -272,6 +276,9 @@ fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
         ServerMessage::SidebandChanged { sideband } => {
             state.sideband = sideband;
         }
+        ServerMessage::DemodModeChanged { mode } => {
+            state.demod_mode = mode;
+        }
         ServerMessage::StreamConfig {
             audio_sample_rate_hz,
             audio_format,
@@ -311,6 +318,24 @@ fn handle_keyboard(
     let center_step = if shift { 10_000.0 } else { 1_000.0 };
 
     let state_snapshot = { ui_state.lock().unwrap().clone() };
+
+    if window.is_key_pressed(Key::Key1, KeyRepeat::No) {
+	let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
+            mode: "wfm".to_string(),
+	});
+    }
+
+    if window.is_key_pressed(Key::Key2, KeyRepeat::No) {
+	let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
+            mode: "usb".to_string(),
+	});
+    }
+
+    if window.is_key_pressed(Key::Key3, KeyRepeat::No) {
+	let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
+            mode: "lsb".to_string(),
+	});
+    }
 
     if window.is_key_pressed(Key::Left, KeyRepeat::Yes) {
         let new_freq = state_snapshot.target_freq_hz - target_step;
