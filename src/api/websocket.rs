@@ -27,39 +27,92 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     let mut audio_rx = state.audio_tx.subscribe();
     let mut waterfall_rx = state.waterfall_tx.subscribe();
 
-        {
-        let stream = state.stream.read().await;
 
-        let stream_config = ServerMessage::StreamConfig {
-            audio_sample_rate_hz: stream.audio_sample_rate_hz,
-            audio_format: stream.audio_format.clone(),
-            waterfall_bins: stream.waterfall_bins,
-            waterfall_frame_rate_hz: stream.waterfall_frame_rate_hz,
-            center_freq_hz: stream.center_freq_hz,
-	    target_freq_hz: stream.target_freq_hz,
-            input_sample_rate_hz: stream.input_sample_rate_hz,
-        };
+    let stream = state.stream.read().await;
+    let input_sample_rate_hz = stream.input_sample_rate_hz;
 
-        let udp_offer = ServerMessage::UdpAudioOffer {
-            server_udp_port: stream.udp_audio_port,
-        };
+    let stream_config = ServerMessage::StreamConfig {
+        audio_sample_rate_hz: stream.audio_sample_rate_hz,
+        audio_format: stream.audio_format.clone(),
+        waterfall_bins: stream.waterfall_bins,
+        waterfall_frame_rate_hz: stream.waterfall_frame_rate_hz,
+        center_freq_hz: stream.center_freq_hz,
+	target_freq_hz: stream.target_freq_hz,
+        input_sample_rate_hz: stream.input_sample_rate_hz,
+    };
 
-        let text = serde_json::to_string(&stream_config).unwrap();
-        if sender.send(Message::Text(text.into())).await.is_err() {
-            return;
-        }
+    let udp_offer = ServerMessage::UdpAudioOffer {
+        server_udp_port: stream.udp_audio_port,
+    };
 
-        let text = serde_json::to_string(&udp_offer).unwrap();
-        if sender.send(Message::Text(text.into())).await.is_err() {
-            return;
-        }
+    let text = serde_json::to_string(&stream_config).unwrap();
+    if sender.send(Message::Text(text.into())).await.is_err() {
+        return;
     }
 
-    //let ready = serde_json::to_string(&ServerMessage::Ready).unwrap();
-    //sender.send(Message::Text(ready.into())).await?;
-    //if sender.send(Message::Text(ready.into())).await.is_err() {
-    //    return;
-    //}
+    let text = serde_json::to_string(&udp_offer).unwrap();
+    if sender.send(Message::Text(text.into())).await.is_err() {
+        return;
+    }
+
+    let (center_freq_hz, target_freq_hz, demod_mode, sideband) = {
+	let st = state.radio.read().await;
+	(
+            st.center_freq_hz,
+            st.target_freq_hz,
+            st.demod_mode.clone(),
+            st.sideband.clone(),
+	)
+    };
+
+    let _ = sender.send(Message::Text(
+	serde_json::to_string(&ServerMessage::StreamConfig {
+            audio_sample_rate_hz: 48_000.0,
+            audio_format: "i16".to_string(),
+            waterfall_bins: 1024,
+            waterfall_frame_rate_hz: 10.0,
+            center_freq_hz,
+            target_freq_hz,
+            input_sample_rate_hz,
+	})
+	    .unwrap()
+	    .into(),
+    )).await;
+    
+    let _ = sender.send(Message::Text(
+	serde_json::to_string(&ServerMessage::CenterFrequencyChanged {
+            center_freq_hz,
+	})
+	    .unwrap()
+	    .into(),
+    )).await;
+
+    let _ = sender.send(Message::Text(
+	serde_json::to_string(&ServerMessage::FrequencyChanged {
+            target_freq_hz,
+	})
+	    .unwrap()
+	    .into(),
+    )).await;
+
+    /*
+    let _ = sender.send(Message::Text(
+	serde_json::to_string(&ServerMessage::DemodModeChanged {
+            mode: demod_mode,
+	})
+	    .unwrap()
+	    .into(),
+    )).await;
+
+    let _ = sender.send(Message::Text(
+	serde_json::to_string(&ServerMessage::SidebandChanged {
+            sideband,
+	})
+	    .unwrap()
+	    .into(),
+    )).await;
+*/
+
 
     let send_task = tokio::spawn(async move {
         loop {
