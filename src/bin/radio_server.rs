@@ -9,7 +9,10 @@ use num_complex::Complex32;
 
 use radio_server::{
     api::{protocol::ServerMessage, websocket::ws_handler},
-    dsp::{demod::Sideband, pipeline::DspPipeline},
+    dsp::{
+        demod::{DemodMode, Sideband},
+        pipeline::DspPipeline,
+    },
     server::app_state::{AppState, RadioState, StreamState},
     source::factory::{create_source, SourceConfig},
     streaming::{
@@ -62,8 +65,8 @@ impl Default for ServerConfig {
             rtlsdr_ppm_correction: 0,
             rtlsdr_direct_sampling: false,
 
-            center_freq_hz: 7_100_000.0,
-            target_freq_hz: 7_101_500.0,
+            center_freq_hz: 101_100_000.0,
+            target_freq_hz: 101_100_000.0,
         }
     }
 }
@@ -263,7 +266,7 @@ fn spawn_waterfall_worker(
         while let Ok(iq_block) = rx.recv() {
             let row = waterfall.generate_row(&iq_block);
 
-            // Browser path currently kept off for live-path tuning.
+            // Browser path intentionally disabled while tuning desktop live path.
             // let _ = waterfall_tx.send(row.clone());
 
             if let Ok(target_guard) = udp_audio_target.try_read() {
@@ -345,9 +348,8 @@ fn spawn_realtime_capture_worker(
 
             iq_samples_per_sec += iq_block.len();
 
-            match iq_tx.send(iq_block) {
-                Ok(_) => {}
-                Err(_) => break,
+            if iq_tx.send(iq_block).is_err() {
+                break;
             }
 
             if stats_start.elapsed() >= Duration::from_secs(1) {
@@ -368,7 +370,7 @@ fn spawn_dsp_worker(
     stream_state: std::sync::Arc<tokio::sync::RwLock<StreamState>>,
     udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
     tx: tokio::sync::broadcast::Sender<ServerMessage>,
-    audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    _audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     iq_rx: Receiver<Vec<Complex32>>,
     waterfall_iq_tx: SyncSender<Vec<Complex32>>,
 ) {
@@ -377,22 +379,20 @@ fn spawn_dsp_worker(
         let input_sample_rate_hz = match cfg.source {
             SourceKind::RtlSdr => cfg.rtlsdr_sample_rate_hz as f32,
             SourceKind::Fake => cfg.fake_sample_rate_hz,
-            SourceKind::Wav => {
-                // For WAV path, this worker is not used, but keep a sane value.
-                0.0
-            }
+            SourceKind::Wav => 0.0,
         };
 
         let mut pipeline = DspPipeline::new(
             cfg.center_freq_hz,
             cfg.target_freq_hz,
             input_sample_rate_hz,
-            2_800.0,
+            100_000.0,
             129,
             decimation_factor,
-            2_700.0,
+            15_000.0,
             101,
             48_000.0,
+            DemodMode::Wfm,
         );
 
         pipeline.set_sideband(Sideband::Lsb);
@@ -483,10 +483,9 @@ fn spawn_dsp_worker(
 
             let audio = pipeline.process_audio(&iq_block);
 
-            // Browser path currently kept off for live-path tuning.
+            // Browser path intentionally disabled while tuning desktop live path.
             // let audio_bytes = f32_samples_to_i16_bytes(&audio);
             // let _ = audio_tx.send(audio_bytes);
-            let _ = &audio_tx;
 
             let audio_i16: Vec<i16> = audio
                 .iter()
@@ -548,7 +547,7 @@ fn spawn_nonrealtime_worker(
     stream_state: std::sync::Arc<tokio::sync::RwLock<StreamState>>,
     udp_audio_target: std::sync::Arc<tokio::sync::RwLock<Option<SocketAddr>>>,
     tx: tokio::sync::broadcast::Sender<ServerMessage>,
-    audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
+    _audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     waterfall_iq_tx: SyncSender<Vec<Complex32>>,
 ) {
     thread::spawn(move || {
@@ -571,12 +570,13 @@ fn spawn_nonrealtime_worker(
             cfg.center_freq_hz,
             cfg.target_freq_hz,
             input_sample_rate_hz,
-            2_800.0,
+            100_000.0,
             129,
             decimation_factor,
-            2_700.0,
+            15_000.0,
             101,
             48_000.0,
+            DemodMode::Wfm,
         );
 
         pipeline.set_sideband(Sideband::Lsb);
@@ -715,8 +715,6 @@ fn spawn_nonrealtime_worker(
             if next_tick > now {
                 thread::sleep(next_tick - now);
             }
-
-            let _ = &audio_tx;
         }
     });
 }
@@ -749,6 +747,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state.clone());
 
     println!("radio_server listening on ws://{ws_addr}/ws");
+    println!("UDP registration listener on {}", udp_registration_addr);
 
     {
         let udp_audio_target = state.udp_audio_target.clone();
