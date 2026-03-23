@@ -462,7 +462,7 @@ fn spawn_dsp_worker(
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
-            s.waterfall_bins = 512;
+            s.waterfall_bins = 1024;
             s.waterfall_frame_rate_hz = 10.0;
             s.center_freq_hz = cfg.center_freq_hz;
             s.input_sample_rate_hz = input_sample_rate_hz;
@@ -472,7 +472,7 @@ fn spawn_dsp_worker(
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),
             audio_format: "i16".to_string(),
-            waterfall_bins: 512,
+            waterfall_bins: 1024,
             waterfall_frame_rate_hz: 10.0,
             center_freq_hz: cfg.center_freq_hz,
             input_sample_rate_hz,
@@ -680,7 +680,7 @@ fn spawn_nonrealtime_worker(
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
-            s.waterfall_bins = 512;
+            s.waterfall_bins = 1024;
             s.waterfall_frame_rate_hz = 10.0;
             s.center_freq_hz = cfg.center_freq_hz;
             s.input_sample_rate_hz = input_sample_rate_hz;
@@ -690,7 +690,7 @@ fn spawn_nonrealtime_worker(
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),
             audio_format: "i16".to_string(),
-            waterfall_bins: 512,
+            waterfall_bins: 1024,
             waterfall_frame_rate_hz: 10.0,
             center_freq_hz: cfg.center_freq_hz,
             input_sample_rate_hz,
@@ -868,7 +868,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let demod_mode = DemodMode::Wfm;
 
     let block_size = choose_block_size(&cfg.source);
-    let waterfall_bins = 512;
+    let waterfall_bins = 1024;
     let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
 

@@ -27,7 +27,7 @@ const PACKET_SAMPLES: usize = 480;
 const TARGET_BUFFER_SAMPLES: usize = 4_800;
 const MAX_BUFFER_SAMPLES: usize = 24_000;
 
-const WIDTH: usize = 512;
+const WIDTH: usize = 1024;
 const HEIGHT: usize = 400;
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,16 +182,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if last_title.elapsed() >= Duration::from_millis(200) {
             let state = ui_state.lock().unwrap().clone();
-	    window.set_title(&format!(
-		"Rust Radio | {} | Ctr: {:.0} Hz | Tgt: {:.0} Hz | {} | {} Hz | {:.1} fps | {}",
-		state.demod_mode.to_uppercase(),
-		state.center_freq_hz,
-		state.target_freq_hz,
-		state.audio_format,
-		state.audio_sample_rate_hz,
-		state.waterfall_frame_rate_hz,
-		state.status
-	    ));
+            window.set_title(&format!(
+                "Rust Radio | Mode: {} | Ctr: {:.0} Hz | Tgt: {:.0} Hz | SB: {} | {} | {} Hz | {:.1} fps | {}",
+                state.demod_mode.to_uppercase(),
+                state.center_freq_hz,
+                state.target_freq_hz,
+                state.sideband.to_uppercase(),
+                state.audio_format,
+                state.audio_sample_rate_hz,
+                state.waterfall_frame_rate_hz,
+                state.status
+            ));
             last_title = Instant::now();
         }
 
@@ -319,24 +320,6 @@ fn handle_keyboard(
 
     let state_snapshot = { ui_state.lock().unwrap().clone() };
 
-    if window.is_key_pressed(Key::Key1, KeyRepeat::No) {
-	let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
-            mode: "wfm".to_string(),
-	});
-    }
-
-    if window.is_key_pressed(Key::Key2, KeyRepeat::No) {
-	let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
-            mode: "usb".to_string(),
-	});
-    }
-
-    if window.is_key_pressed(Key::Key3, KeyRepeat::No) {
-	let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
-            mode: "lsb".to_string(),
-	});
-    }
-
     if window.is_key_pressed(Key::Left, KeyRepeat::Yes) {
         let new_freq = state_snapshot.target_freq_hz - target_step;
         let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
@@ -377,6 +360,24 @@ fn handle_keyboard(
         });
     }
 
+    if window.is_key_pressed(Key::Key1, KeyRepeat::No) {
+        let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
+            mode: "wfm".to_string(),
+        });
+    }
+
+    if window.is_key_pressed(Key::Key2, KeyRepeat::No) {
+        let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
+            mode: "usb".to_string(),
+        });
+    }
+
+    if window.is_key_pressed(Key::Key3, KeyRepeat::No) {
+        let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
+            mode: "lsb".to_string(),
+        });
+    }
+
     if window.is_key_pressed(Key::P, KeyRepeat::No) {
         let _ = ws_cmd_tx.send(ClientMessage::Ping);
     }
@@ -401,10 +402,7 @@ fn handle_mouse_click_tune(
                     target_freq_hz: rounded,
                 });
 
-                println!(
-                    "click tune: x={:.1} -> target_freq_hz={:.0}",
-                    mx, rounded
-                );
+                println!("click tune: x={:.1} -> target_freq_hz={:.0}", mx, rounded);
             }
         }
     }
