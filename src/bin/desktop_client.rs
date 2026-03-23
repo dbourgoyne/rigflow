@@ -322,6 +322,7 @@ async fn websocket_control_task(
             msg = read.next() => {
                 match msg {
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+			println!("ws rx: {}", text);
                         if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
                             apply_server_message(server_msg, &ui_state);
                         }
