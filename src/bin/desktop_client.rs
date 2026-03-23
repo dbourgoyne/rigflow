@@ -239,6 +239,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
 
+	{
+	    let state = ui_state.lock().unwrap().clone();
+
+	    draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
+	    draw_spectrum_axes_and_labels(&mut display_buffer, WIDTH, &state);
+
+	    let spectrum = spectrum_db.lock().unwrap().clone();
+	    draw_spectrum_trace(&mut display_buffer, WIDTH, &spectrum);
+
+	    draw_frequency_overlay(
+		&mut display_buffer,
+		WIDTH,
+		state.center_freq_hz,
+		state.target_freq_hz,
+	    );
+	}
+
         window.update_with_buffer(&display_buffer, WIDTH, HEIGHT)?;
 
         if last_title.elapsed() >= Duration::from_millis(200) {
@@ -949,4 +966,32 @@ fn draw_spectrum_axes_and_labels(
 fn db_to_plot_y(db: f32) -> usize {
     let t = ((db - SPECTRUM_DB_MIN) / (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)).clamp(0.0, 1.0);
     SPECTRUM_PLOT_Y1 - (t * SPECTRUM_PLOT_HEIGHT as f32) as usize
+}
+
+fn format_freq_hz(freq_hz: f32) -> String {
+    if freq_hz.abs() >= 1_000_000.0 {
+        format!("{:.3} MHz", freq_hz / 1_000_000.0)
+    } else if freq_hz.abs() >= 1_000.0 {
+        format!("{:.3} kHz", freq_hz / 1_000.0)
+    } else {
+        format!("{:.0} Hz", freq_hz)
+    }
+}
+
+fn draw_frequency_overlay(
+    buffer: &mut [u32],
+    fb_width: usize,
+    center_freq_hz: f32,
+    target_freq_hz: f32,
+) {
+    let cf = format!("CF: {}", format_freq_hz(center_freq_hz));
+    let tf = format!("TF: {}", format_freq_hz(target_freq_hz));
+
+    // top-left inside the spectrum panel, but to the right of the dB axis labels
+    let x = SPECTRUM_PLOT_X0 + 8;
+    let y0 = 8;
+    let y1 = y0 + 10;
+
+    draw_text(buffer, fb_width, x, y0, &cf, 0x00FFFF00);
+    draw_text(buffer, fb_width, x, y1, &tf, 0x00FFAA00);
 }
