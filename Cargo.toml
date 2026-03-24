@@ -3,6 +3,7 @@ members = [
     "radio-server",
     "desktop-client",
     "radio-protocol",
+    "radio-core",
 ]
 resolver = "2"
 
