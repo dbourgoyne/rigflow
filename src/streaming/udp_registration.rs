@@ -15,7 +15,7 @@ pub async fn run_udp_registration_listener(
     let socket = UdpSocket::bind(bind_addr).await?;
     let mut buf = [0u8; 256];
 
-    println!("UDP registration listener on {}", bind_addr);
+    //println!("UDP registration listener on {}", bind_addr);
 
     loop {
         let (len, src) = socket.recv_from(&mut buf).await?;
