@@ -5,6 +5,7 @@ use radio_server::audio_output::wav_writer::AudioWavWriter;
 use radio_server::dsp::demod::Sideband;
 use radio_server::dsp::pipeline::DspPipeline;
 use radio_server::input::iq_wav_reader::IqWavReader;
+use radio_server::dsp::demod::DemodMode;
 
 struct Config {
     input_path: String,
@@ -148,7 +149,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.decimation_factor,
         config.audio_cutoff_hz,
         config.audio_fir_taps,
-	config.client_output_sample_rate_hz,
+        output_sample_rate_hz as f32,
+	DemodMode::Wfm,
     );
 
     pipeline.set_sideband(config.sideband);

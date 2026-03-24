@@ -2,6 +2,7 @@ use radio_server::audio_output::wav_writer::AudioWavWriter;
 use radio_server::dsp::demod::Sideband;
 use radio_server::dsp::pipeline::DspPipeline;
 use radio_server::input::iq_wav_reader::IqWavReader;
+use radio_server::dsp::demod::DemodMode;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input_path = "input_iq.wav";
@@ -39,7 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         decimation_factor,
         audio_cutoff_hz,
         audio_fir_taps,
-	client_output_sample_rate_hz,
+        client_output_sample_rate_hz,
+	DemodMode::Wfm,
     );
 
     pipeline.set_sideband(Sideband::Lsb);

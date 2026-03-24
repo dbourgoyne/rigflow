@@ -2,7 +2,6 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::{SinkExt, StreamExt};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use radio_server::audio_client::jitter_buffer::JitterBuffer;
-use serde::{Deserialize, Serialize};
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -61,38 +60,7 @@ const COLOR_SEPARATOR: u32 = 0x404040;
 const COLOR_SPECTRUM: u32 = 0x00FF00;
 //const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ClientMessage {
-    SetFrequency { target_freq_hz: f32 },
-    SetCenterFrequency { center_freq_hz: f32 },
-    SetSideband { sideband: String },
-    SetDemodMode { mode: String },
-    Ping,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ServerMessage {
-    Ready,
-    Pong,
-    FrequencyChanged { target_freq_hz: f32 },
-    CenterFrequencyChanged { center_freq_hz: f32 },
-    SidebandChanged { sideband: String },
-    DemodModeChanged { mode: String },
-    StreamConfig {
-	audio_sample_rate_hz: f32,
-	audio_format: String,
-	waterfall_bins: usize,
-	waterfall_frame_rate_hz: f32,
-	center_freq_hz: f32,
-	target_freq_hz: f32,
-	input_sample_rate_hz: f32,
-    },
-    UdpAudioOffer { server_udp_port: u16 },
-    Info { message: String },
-    Error { message: String },
-}
+use radio_protocol::{ClientMessage, ServerMessage};
 
 #[derive(Debug, Clone)]
 struct UiState {
