@@ -1,15 +1,11 @@
 pub mod fm;
 pub mod ssb;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sideband {
-    Usb,
-    Lsb,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DemodMode {
-    Usb,
-    Lsb,
-    Wfm,
-}
+pub use radio_core::dsp::demod::{
+    DemodMode,
+    Sideband,
+    demod_mode_to_string,
+    sideband_to_string,
+    parse_demod_mode,
+    parse_sideband,
+};

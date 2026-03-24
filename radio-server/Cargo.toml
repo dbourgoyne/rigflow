@@ -20,4 +20,5 @@ futures-util = "0.3"
 url = "2"
 rtl-sdr-rs = "0.3.1"
 radio-protocol = { path = "../radio-protocol" }
+radio-core = { path = "../radio-core" }
 

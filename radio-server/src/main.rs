@@ -7,12 +7,10 @@ use std::time::{Duration, Instant};
 use axum::{routing::get, Router};
 use num_complex::Complex32;
 
+use radio_core::dsp::demod::{DemodMode, Sideband};
 use radio_server::{
     api::{protocol::ServerMessage, websocket::ws_handler},
-    dsp::{
-        demod::{DemodMode, Sideband},
-        pipeline::DspPipeline,
-    },
+    dsp::pipeline::DspPipeline,
     server::app_state::{AppState, RadioState, StreamState},
     source::factory::{create_source, SourceConfig},
     streaming::{
