@@ -1,7 +1,3 @@
-use num_complex::Complex32;
-
-use crate::dsp::demod::Sideband;
-
 /// Very simple first-pass SSB demodulator.
 ///
 /// Assumes the desired SSB signal has already been:
@@ -17,28 +13,23 @@ use crate::dsp::demod::Sideband;
 /// - DC blocking
 /// - audio low-pass filtering
 /// - better sideband image rejection
+use num_complex::Complex32;
+
 pub struct SsbDemodulator {
-    sideband: Sideband,
     audio_gain: f32,
 }
 
 impl SsbDemodulator {
-    pub fn new(sideband: Sideband) -> Self {
-        Self {
-            sideband,
-            audio_gain: 1.0,
-        }
+    pub fn new(_sideband: crate::dsp::demod::Sideband) -> Self {
+        Self { audio_gain: 1.0 }
     }
 
-    pub fn with_gain(sideband: Sideband, audio_gain: f32) -> Self {
-        Self {
-            sideband,
-            audio_gain,
-        }
+    pub fn with_gain(_sideband: crate::dsp::demod::Sideband, audio_gain: f32) -> Self {
+        Self { audio_gain }
     }
 
-    pub fn set_sideband(&mut self, sideband: Sideband) {
-        self.sideband = sideband;
+    pub fn set_sideband(&mut self, _sideband: crate::dsp::demod::Sideband) {
+        // no-op: sideband selection now happens in pipeline.rs
     }
 
     pub fn set_gain(&mut self, gain: f32) {
@@ -46,62 +37,6 @@ impl SsbDemodulator {
     }
 
     pub fn process(&mut self, input: &[Complex32]) -> Vec<f32> {
-        let mut output = Vec::with_capacity(input.len());
-
-        for &sample in input {
-            let audio = match self.sideband {
-                Sideband::Usb => sample.re,
-                Sideband::Lsb => -sample.re,
-            };
-
-            output.push(audio * self.audio_gain);
-        }
-
-        output
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use num_complex::Complex32;
-
-    #[test]
-    fn preserves_length() {
-        let mut demod = SsbDemodulator::new(Sideband::Usb);
-        let input = vec![Complex32::new(1.0, 0.0); 128];
-        let output = demod.process(&input);
-
-        assert_eq!(output.len(), input.len());
-    }
-
-    #[test]
-    fn usb_uses_real_component() {
-        let mut demod = SsbDemodulator::new(Sideband::Usb);
-
-        let input = vec![
-            Complex32::new(1.0, 2.0),
-            Complex32::new(-0.5, 7.0),
-            Complex32::new(0.25, -3.0),
-        ];
-
-        let output = demod.process(&input);
-
-        assert_eq!(output, vec![1.0, -0.5, 0.25]);
-    }
-
-    #[test]
-    fn lsb_inverts_real_component() {
-        let mut demod = SsbDemodulator::new(Sideband::Lsb);
-
-        let input = vec![
-            Complex32::new(1.0, 2.0),
-            Complex32::new(-0.5, 7.0),
-            Complex32::new(0.25, -3.0),
-        ];
-
-        let output = demod.process(&input);
-
-        assert_eq!(output, vec![-1.0, 0.5, -0.25]);
+        input.iter().map(|s| s.re * self.audio_gain).collect()
     }
 }

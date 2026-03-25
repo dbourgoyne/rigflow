@@ -30,6 +30,8 @@ enum SourceKind {
 
 #[derive(Debug, Clone)]
 struct ServerConfig {
+    demod: DemodMode,
+    
     source: SourceKind,
 
     wav_file: String,
@@ -50,6 +52,8 @@ struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+	    demod: DemodMode::Lsb,
+
             source: SourceKind::Fake,
 
             wav_file: "input_iq.wav".to_string(),
@@ -76,6 +80,17 @@ impl ServerConfig {
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
+
+		"--demod" => {
+                    let value = args.next().ok_or("--demod requires a value")?;
+                    cfg.demod = match value.as_str() {
+                        "usb" => DemodMode::Usb,
+                        "lsb" => DemodMode::Lsb,
+                        "wfm" => DemodMode::Wfm,
+                        _ => return Err(format!("unknown source '{value}'\n\n{}", Self::usage())),
+                    };
+		}
+		
                 "--source" => {
                     let value = args.next().ok_or("--source requires a value")?;
                     cfg.source = match value.as_str() {
@@ -185,6 +200,7 @@ impl ServerConfig {
 Common options:
   --center HZ
   --target HZ
+  --demod  "wfm|lsb|usb"
 
 Fake source:
   --fake-sample-rate HZ
@@ -443,6 +459,8 @@ fn spawn_dsp_worker(
             SourceKind::Fake => cfg.fake_sample_rate_hz,
             SourceKind::Wav => 0.0,
         };
+
+	// DWB: should this go away?
 	let initial_mode = if let Ok(radio) = radio_state.try_read() {
 	    radio.demod_mode
 	} else {
@@ -454,7 +472,7 @@ fn spawn_dsp_worker(
 	    cfg.target_freq_hz,
 	    input_sample_rate_hz,
 	    decimation_factor,
-	    initial_mode,
+	    cfg.demod, //initial_mode,
 	);
 	
         if let Ok(mut s) = stream_state.try_write() {
@@ -866,7 +884,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let center_freq_hz = cfg.center_freq_hz;
     let target_freq_hz = cfg.target_freq_hz;
     let sideband = Sideband::Lsb;
-    let demod_mode = DemodMode::Wfm;
+    let demod_mode = cfg.demod;
 
     let block_size = choose_block_size(&cfg.source);
     let waterfall_bins = 1024;
@@ -940,6 +958,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state.udp_audio_target.clone(),
                 state.tx.clone(),
                 state.audio_tx.clone(),
+
                 wf_tx,
             );
         }
