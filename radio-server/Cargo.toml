@@ -1,7 +1,8 @@
 [package]
-name = "radio-server"
+name = "rigflow-server"
 version = "0.1.0"
 edition = "2021"
+default-run = "rigflow-server"
 
 [dependencies]
 rustfft = "6.4.1"
@@ -19,6 +20,6 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 url = "2"
 rtl-sdr-rs = "0.3.1"
-radio-protocol = { path = "../radio-protocol" }
-radio-core = { path = "../radio-core" }
+rigflow-protocol = { path = "../radio-protocol" }
+rigflow-core = { path = "../radio-core" }
 

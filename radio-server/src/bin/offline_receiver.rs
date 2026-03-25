@@ -1,11 +1,10 @@
 use std::env;
 use std::error::Error;
 
-use radio_server::audio_output::wav_writer::AudioWavWriter;
-use radio_server::dsp::demod::Sideband;
-use radio_server::dsp::pipeline::DspPipeline;
-use radio_server::input::iq_wav_reader::IqWavReader;
-use radio_server::dsp::demod::DemodMode;
+use rigflow_core::dsp::demod::{DemodMode, Sideband};
+use rigflow_server::audio_output::wav_writer::AudioWavWriter;
+use rigflow_server::dsp::pipeline::DspPipeline;
+use rigflow_server::input::iq_wav_reader::IqWavReader;
 
 struct Config {
     input_path: String,

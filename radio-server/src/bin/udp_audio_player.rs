@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use radio_core::audio::jitter_buffer::JitterBuffer;
+use rigflow_core::audio::jitter_buffer::JitterBuffer;
 
 const MAGIC: u16 = 0x5253;
 const VERSION: u8 = 1;

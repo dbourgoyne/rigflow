@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use axum::{routing::get, Router};
 use num_complex::Complex32;
 
-use radio_core::dsp::demod::{DemodMode, Sideband};
-use radio_server::{
+use rigflow_core::dsp::demod::{DemodMode, Sideband};
+use rigflow_server::{
     api::{protocol::ServerMessage, websocket::ws_handler},
     dsp::pipeline::DspPipeline,
     server::app_state::{AppState, RadioState, StreamState},
@@ -178,9 +178,9 @@ impl ServerConfig {
 
     fn usage() -> String {
         r#"Usage:
-  radio_server --source fake [options]
-  radio_server --source wav --wav-file input_iq.wav [options]
-  radio_server --source rtlsdr [options]
+  rigflow_server --source fake [options]
+  rigflow_server --source wav --wav-file input_iq.wav [options]
+  rigflow_server --source rtlsdr [options]
 
 Common options:
   --center HZ
@@ -861,7 +861,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    println!("radio_server config: {:?}", cfg);
+    println!("rigflow_server config: {:?}", cfg);
 
     let center_freq_hz = cfg.center_freq_hz;
     let target_freq_hz = cfg.target_freq_hz;
@@ -879,7 +879,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 
-    println!("radio_server listening on ws://{ws_addr}/ws");
+    println!("rigflow_server listening on ws://{ws_addr}/ws");
     println!("UDP registration listener on {}", udp_registration_addr);
 
     {

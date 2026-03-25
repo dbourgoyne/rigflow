@@ -1,14 +1,14 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use futures_util::{SinkExt, StreamExt};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
-use radio_core::audio::jitter_buffer::JitterBuffer;
+use rigflow_core::audio::jitter_buffer::JitterBuffer;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use radio_core::net::udp_framing::{
+use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
     STREAM_TYPE_AUDIO,
     STREAM_TYPE_WATERFALL,
@@ -60,7 +60,7 @@ const COLOR_SEPARATOR: u32 = 0x404040;
 const COLOR_SPECTRUM: u32 = 0x00FF00;
 //const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
 
-use radio_protocol::{ClientMessage, ServerMessage};
+use rigflow_protocol::{ClientMessage, ServerMessage};
 
 #[derive(Debug, Clone)]
 struct UiState {
