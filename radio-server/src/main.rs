@@ -525,6 +525,7 @@ fn spawn_dsp_worker(
 
         let mut last_center_freq_hz = cfg.center_freq_hz;
         let mut last_target_freq_hz = cfg.target_freq_hz;
+	let mut last_pitch_hz = 0.0;
         let mut last_sideband = Sideband::Lsb;
         let mut last_demod_mode = initial_mode;
         let mut wf_counter = 0usize;
@@ -548,6 +549,15 @@ fn spawn_dsp_worker(
 
                     let _ = tx.send(ServerMessage::FrequencyChanged {
                         target_freq_hz: radio.target_freq_hz,
+                    });
+                }
+
+		if (radio.ssb_pitch_hz - last_pitch_hz).abs() > 0.5 {
+                    pipeline.set_ssb_pitch_hz(radio.ssb_pitch_hz);
+                    last_pitch_hz = radio.ssb_pitch_hz;
+		    println!("pitch_hz = {}", last_pitch_hz);
+                    let _ = tx.send(ServerMessage::SsbPitchChanged {
+                        pitch_hz: radio.ssb_pitch_hz,
                     });
                 }
 
@@ -748,6 +758,7 @@ fn spawn_nonrealtime_worker(
         let mut last_target_freq_hz = cfg.target_freq_hz;
         let mut last_sideband = Sideband::Lsb;
         let mut last_demod_mode = initial_mode;
+	let mut last_pitch_hz = 0.0;
         let mut wf_counter = 0usize;
 
         loop {
@@ -779,6 +790,16 @@ fn spawn_nonrealtime_worker(
                         target_freq_hz: radio.target_freq_hz,
                     });
                 }
+
+		if (radio.ssb_pitch_hz - last_pitch_hz).abs() > 0.5 {
+                    pipeline.set_ssb_pitch_hz(radio.ssb_pitch_hz);
+                    last_pitch_hz = radio.ssb_pitch_hz;
+                    println!("pitch_hz = {}", last_pitch_hz);
+                    let _ = tx.send(ServerMessage::SsbPitchChanged {
+                        pitch_hz: radio.ssb_pitch_hz,
+                    });
+                }
+
 
                 if radio.sideband != last_sideband {
                     pipeline.set_sideband(radio.sideband);

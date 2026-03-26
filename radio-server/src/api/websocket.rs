@@ -40,6 +40,8 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                                 Ok(t) => t,
                                 Err(_) => continue,
                             };
+			    println!("ws rx: {}", text);
+
 
                             if sender.send(Message::Text(text.into())).await.is_err() {
                                 break;
@@ -283,6 +285,7 @@ async fn handle_client_text(
 	    let new_pitch = {
 		let mut radio = state.radio.write().await;
 		radio.ssb_pitch_hz = pitch_hz;
+		println!("radio.ssb_pitch_hz = {}", radio.ssb_pitch_hz);
 		radio.ssb_pitch_hz
 	    };
 
