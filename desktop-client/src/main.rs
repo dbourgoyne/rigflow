@@ -84,6 +84,7 @@ impl Default for UiState {
             target_freq_hz: 0.0,
             sideband: "lsb".to_string(),
             demod_mode: "wfm".to_string(),
+            ssb_pitch_hz: 0.0,
             input_sample_rate_hz: 0.0,
             waterfall_bins: WIDTH,
             audio_sample_rate_hz: OUTPUT_SAMPLE_RATE as f32,
@@ -399,6 +400,18 @@ fn handle_keyboard(
         let new_center = state_snapshot.center_freq_hz - center_step;
         let _ = ws_cmd_tx.send(ClientMessage::SetCenterFrequency {
             center_freq_hz: new_center,
+        });
+    }
+
+    if window.is_key_pressed(Key::RightBracket, KeyRepeat::Yes) {
+        let _ = ws_cmd_tx.send(ClientMessage::SetSsbPitch {
+            pitch_hz: 500.0,
+        });
+    }
+
+    if window.is_key_pressed(Key::LeftBracket, KeyRepeat::Yes) {
+        let _ = ws_cmd_tx.send(ClientMessage::SetSsbPitch {
+            pitch_hz: -500.0,
         });
     }
 
