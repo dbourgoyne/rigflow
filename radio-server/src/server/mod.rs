@@ -4,3 +4,4 @@ pub mod connection;
 pub mod session;
 pub mod control;
 pub mod config;
+pub mod pipeline_factory;
