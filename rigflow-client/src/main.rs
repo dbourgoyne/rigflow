@@ -1,5 +1,4 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use futures_util::{SinkExt, StreamExt};
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 use std::net::UdpSocket;
@@ -7,6 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
+
+mod net;
+
+use crate::net::websocket::websocket_control_task;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -60,7 +63,7 @@ const COLOR_SEPARATOR: u32 = 0x404040;
 const COLOR_SPECTRUM: u32 = 0x00FF00;
 //const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
 
-use rigflow_protocol::{ClientMessage, ServerMessage};
+use rigflow_protocol::ClientMessage;
 
 #[derive(Debug, Clone)]
 struct UiState {
@@ -262,105 +265,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-async fn websocket_control_task(
-    ws_url: &str,
-    mut rx: mpsc::UnboundedReceiver<ClientMessage>,
-    ui_state: Arc<Mutex<UiState>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await?;
-    let (mut write, mut read) = ws_stream.split();
-
-    {
-        let mut state = ui_state.lock().unwrap();
-        state.status = "ws connected".to_string();
-    }
-
-    loop {
-        tokio::select! {
-            cmd = rx.recv() => {
-                match cmd {
-                    Some(cmd) => {
-                        let text = serde_json::to_string(&cmd)?;
-                        write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await?;
-                    }
-                    None => break,
-                }
-            }
-
-            msg = read.next() => {
-                match msg {
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-			println!("ws rx: {}", text);
-                        if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                            apply_server_message(server_msg, &ui_state);
-                        }
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(e)) => return Err(Box::new(e)),
-                    None => break,
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
-    let mut state = ui_state.lock().unwrap();
-
-    match msg {
-        ServerMessage::Ready => {
-            state.status = "ready".to_string();
-        }
-        ServerMessage::Pong => {
-            state.status = "pong".to_string();
-        }
-        ServerMessage::FrequencyChanged { target_freq_hz } => {
-            state.target_freq_hz = target_freq_hz;
-        }
-        ServerMessage::CenterFrequencyChanged { center_freq_hz } => {
-            state.center_freq_hz = center_freq_hz;
-        }
-        ServerMessage::SidebandChanged { sideband } => {
-            state.sideband = sideband;
-        }
-        ServerMessage::DemodModeChanged { mode } => {
-            state.demod_mode = mode;
-        }
-	ServerMessage::StreamConfig {
-	    audio_sample_rate_hz,
-	    audio_format,
-	    waterfall_bins,
-	    waterfall_frame_rate_hz,
-	    center_freq_hz,
-	    target_freq_hz,
-	    input_sample_rate_hz,
-	} => {
-	    state.audio_sample_rate_hz = audio_sample_rate_hz;
-	    state.audio_format = audio_format;
-	    state.waterfall_bins = waterfall_bins;
-	    state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-	    state.center_freq_hz = center_freq_hz;
-	    state.target_freq_hz = target_freq_hz;
-	    state.input_sample_rate_hz = input_sample_rate_hz;
-	    state.status = "stream configured".to_string();
-	}
-        ServerMessage::UdpAudioOffer { server_udp_port } => {
-            state.status = format!("udp port {}", server_udp_port);
-        }
-	ServerMessage::SsbPitchChanged { pitch_hz } => {
-	    state.ssb_pitch_hz = pitch_hz;
-	}
-        ServerMessage::Info { message } => {
-            state.status = message;
-        }
-        ServerMessage::Error { message } => {
-            state.status = format!("error: {}", message);
-        }
-    }
 }
 
 fn handle_keyboard(
