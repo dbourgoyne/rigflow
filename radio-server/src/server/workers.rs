@@ -51,17 +51,22 @@ pub fn apply_radio_command_to_pipeline(
             });
         }
 
-        RadioCommand::SetCenterFrequency(freq) => {
-            pipeline.set_center_frequency(freq);
+	RadioCommand::SetCenterFrequency(freq) => {
+	    pipeline.set_center_frequency(freq);
 
-            if let Ok(mut radio) = radio_state.try_write() {
-                radio.center_freq_hz = freq;
-            }
+	    if let Ok(mut radio) = radio_state.try_write() {
+		radio.center_freq_hz = freq;
+	    }
+	    
+	    if let Ok(mut stream) = stream_state.try_write() {
+		stream.center_freq_hz = freq;
+	    }
 
-            if let Ok(mut stream) = stream_state.try_write() {
-                stream.center_freq_hz = freq;
-            }
-        }
+	    // Immediate UI update (control path)
+	    let _ = tx.send(ServerMessage::CenterFrequencyChanged {
+		center_freq_hz: freq,
+	    });
+	}
 
         RadioCommand::SetDemodMode(mode) => {
             let (center_freq_hz, target_freq_hz, sideband, ssb_pitch_hz) =
@@ -196,6 +201,10 @@ pub fn spawn_realtime_capture_worker(
         let mut iq_samples_per_sec = 0usize;
 
         loop {
+	    // Hardware retune synchronization path.
+	    // Center frequency is updated through the command/control path first,
+	    // then the source-owning capture worker observes it here and applies
+	    // the actual device retune.
             if let Ok(radio) = radio_state.try_read() {
                 if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
                     if let Err(e) = source.set_center_frequency(radio.center_freq_hz) {
@@ -556,6 +565,9 @@ pub fn spawn_nonrealtime_worker(
             }
 
             if let Ok(radio) = radio_state.try_read() {
+		// Source retune synchronization path for non-realtime sources.
+		// Center frequency is command-updated in RadioState first, then the
+		// source-owning worker observes and applies the actual retune here.
                 if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
                     if let Err(e) = source.set_center_frequency(radio.center_freq_hz) {
                         let _ = tx.send(ServerMessage::Error {
