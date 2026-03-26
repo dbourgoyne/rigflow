@@ -160,6 +160,7 @@ pub struct DspPipeline {
     client_output_sample_rate_hz: f32,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl DspPipeline {
     pub fn new(
         center_freq_hz: f32,

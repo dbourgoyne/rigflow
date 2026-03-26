@@ -75,7 +75,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                             framed.push(b'W');
                             framed.append(&mut bytes);
 
-                            if sender.send(Message::Binary(framed.into())).await.is_err() {
+                            if sender.send(Message::Binary(framed)).await.is_err() {
                                 break;
                             }
                         }
@@ -215,7 +215,7 @@ async fn send_server_message(
     msg: &ServerMessage,
 ) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
-    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+    sender.send(Message::Text(text)).await.map_err(|_| ())
 }
 
 async fn handle_client_text(
