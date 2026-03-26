@@ -11,12 +11,14 @@ mod net;
 mod render;
 
 use crate::net::websocket::websocket_control_task;
-use crate::render::text::{draw_text, draw_text_2x};
+//use crate::render::text::{draw_text, draw_text_2x};
+use crate::render::text::draw_text;
+use crate::net::udp::handle_media_packet;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
-    STREAM_TYPE_AUDIO,
-    STREAM_TYPE_WATERFALL,
+//    STREAM_TYPE_AUDIO,
+//    STREAM_TYPE_WATERFALL,
     STREAM_TYPE_REGISTER_AUDIO,
 };
 
@@ -164,7 +166,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Received UDP registration ACK from {}", src);
                     }
                 } else if len >= 16 {
-                    handle_media_packet(&udp_buf[..len], &jitter, &waterfall_buffer, &spectrum_db);
+		    handle_media_packet(
+			&udp_buf[..len],
+			&jitter,
+			&waterfall_buffer,
+			&spectrum_db,
+			&ui_state,
+			WIDTH,
+			HEIGHT,
+			WATERFALL_TOP,
+		    );
                 }
             }
             Err(ref e)
@@ -401,72 +412,6 @@ fn x_to_frequency(x: f32, state: &UiState) -> Option<f32> {
     Some(state.center_freq_hz + offset_hz)
 }
 
-fn handle_media_packet(
-    packet: &[u8],
-    jitter: &Arc<Mutex<JitterBuffer>>,
-    waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
-    spectrum_db: &Arc<Mutex<Vec<f32>>>,
-) {
-    if packet.len() < 16 {
-        return;
-    }
-
-    let magic = u16::from_be_bytes([packet[0], packet[1]]);
-    let version = packet[2];
-    let stream_type = packet[3];
-    let sequence = u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]);
-    let _timestamp = u64::from_be_bytes([
-        packet[8], packet[9], packet[10], packet[11],
-        packet[12], packet[13], packet[14], packet[15],
-    ]);
-
-    if magic != MAGIC || version != VERSION {
-        return;
-    }
-
-    match stream_type {
-        STREAM_TYPE_AUDIO => {
-            let payload = &packet[16..];
-            let mut samples = Vec::with_capacity(payload.len() / 2);
-
-            for chunk in payload.chunks_exact(2) {
-                let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-                samples.push(s as f32 / 32768.0);
-            }
-
-            let mut jb = jitter.lock().unwrap();
-            jb.push_packet(sequence, samples);
-        }
-
-        STREAM_TYPE_WATERFALL => {
-            if packet.len() < 18 {
-                return;
-            }
-
-            let bin_count = u16::from_be_bytes([packet[16], packet[17]]) as usize;
-            let payload = &packet[18..];
-
-            if payload.len() < bin_count {
-                return;
-            }
-
-            let row = &payload[..bin_count];
-
-            {
-                let mut spectrum = spectrum_db.lock().unwrap();
-                update_spectrum_db(&mut spectrum, row);
-            }
-
-            {
-                let mut buffer = waterfall_buffer.lock().unwrap();
-                draw_row(&mut buffer, row, WIDTH, HEIGHT);
-            }
-        }
-
-        _ => {}
-    }
-}
-
 fn build_output_stream(
     jitter: Arc<Mutex<JitterBuffer>>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
@@ -544,31 +489,6 @@ fn update_spectrum_db(spectrum: &mut Vec<f32>, row: &[u8]) {
 
 fn byte_to_relative_db(v: u8) -> f32 {
     SPECTRUM_DB_MIN + (v as f32 / 255.0) * (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)
-}
-
-fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, _height: usize) {
-    if row.is_empty() {
-        return;
-    }
-
-    for y in (WATERFALL_TOP + 1..HEIGHT).rev() {
-        let dst = y * width + SPECTRUM_PLOT_X0;
-        let src = (y - 1) * width + SPECTRUM_PLOT_X0;
-        let len = SPECTRUM_PLOT_WIDTH;
-        buffer.copy_within(src..src + len, dst);
-    }
-
-    let top = &mut buffer[WATERFALL_TOP * width..(WATERFALL_TOP + 1) * width];
-
-    for (x, pixel) in top.iter_mut().enumerate() {
-	if !(SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1).contains(&x) {
-            *pixel = 0x000000;
-	} else {
-            let plot_x = x - SPECTRUM_PLOT_X0;
-            let src_x = plot_x * row.len() / SPECTRUM_PLOT_WIDTH;
-            *pixel = color_map(row[src_x.min(row.len() - 1)]);
-	}
-    }
 }
 
 fn draw_tuning_marker(
