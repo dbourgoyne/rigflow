@@ -6,9 +6,8 @@ use axum::{
     response::Response,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-
+use rigflow_protocol::{ClientMessage, ServerMessage};
 use crate::{
-    api::protocol::{ClientMessage, ServerMessage},
     dsp::demod::{DemodMode, Sideband},
     server::app_state::AppState,
 };
@@ -132,13 +131,14 @@ async fn send_initial_state(
         )
     };
 
-    let (center_freq_hz, target_freq_hz, demod_mode, sideband) = {
+    let (center_freq_hz, target_freq_hz, demod_mode, sideband, ssb_pitch_hz) = {
         let radio = state.radio.read().await;
         (
             radio.center_freq_hz,
             radio.target_freq_hz,
             radio.demod_mode,
             radio.sideband,
+	    radio.ssb_pitch_hz,
         )
     };
 
@@ -184,6 +184,13 @@ async fn send_initial_state(
         &ServerMessage::SidebandChanged {
             sideband: sideband_to_string(sideband),
         },
+    ).await?;
+
+    send_server_message(
+	sender,
+	&ServerMessage::SsbPitchChanged {
+            pitch_hz: ssb_pitch_hz,
+	},
     ).await?;
 
     Ok(())
@@ -270,7 +277,19 @@ async fn handle_client_text(
             let _ = state.tx.send(ServerMessage::SidebandChanged {
                 sideband: sideband_to_string(new_sideband),
             });
-    }
+	}
+
+	ClientMessage::SetSsbPitch { pitch_hz } => {
+	    let new_pitch = {
+		let mut radio = state.radio.write().await;
+		radio.ssb_pitch_hz = pitch_hz;
+		radio.ssb_pitch_hz
+	    };
+
+	    let _ = state.tx.send(ServerMessage::SsbPitchChanged {
+		pitch_hz: new_pitch,
+	    });
+	}
 
         ClientMessage::Ping => {
             let _ = state.tx.send(ServerMessage::Pong);

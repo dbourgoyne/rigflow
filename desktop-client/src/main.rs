@@ -68,6 +68,7 @@ struct UiState {
     target_freq_hz: f32,
     sideband: String,
     demod_mode: String,
+    ssb_pitch_hz: f32,
     input_sample_rate_hz: f32,
     waterfall_bins: usize,
     audio_sample_rate_hz: f32,
@@ -349,6 +350,9 @@ fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
         ServerMessage::UdpAudioOffer { server_udp_port } => {
             state.status = format!("udp port {}", server_udp_port);
         }
+	ServerMessage::SsbPitchChanged { pitch_hz } => {
+	    state.ssb_pitch_hz = pitch_hz;
+	}
         ServerMessage::Info { message } => {
             state.status = message;
         }

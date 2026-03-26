@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::api::protocol::ServerMessage;
+use rigflow_protocol::{ServerMessage};
 use crate::dsp::demod::{DemodMode, Sideband};
 
 #[derive(Debug)]
@@ -11,6 +11,7 @@ pub struct RadioState {
     pub target_freq_hz: f32,
     pub sideband: Sideband,
     pub demod_mode: DemodMode,
+    pub ssb_pitch_hz: f32,
 }
 
 impl RadioState {
@@ -19,12 +20,14 @@ impl RadioState {
         target_freq_hz: f32,
         sideband: Sideband,
         demod_mode: DemodMode,
+	ssb_pitch_hz: f32,
     ) -> Self {
         Self {
             center_freq_hz,
             target_freq_hz,
             sideband,
             demod_mode,
+	    ssb_pitch_hz,
         }
     }
 }
@@ -72,6 +75,7 @@ impl AppState {
         target_freq_hz: f32,
         sideband: Sideband,
         demod_mode: DemodMode,
+	ssb_pitch_hz: f32,
     ) -> Self {
         let (tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
@@ -83,6 +87,7 @@ impl AppState {
                 target_freq_hz,
                 sideband,
                 demod_mode,
+		ssb_pitch_hz,
             ))),
             stream: Arc::new(RwLock::new(StreamState::default())),
             tx,

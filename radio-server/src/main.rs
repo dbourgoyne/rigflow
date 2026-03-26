@@ -8,8 +8,10 @@ use axum::{routing::get, Router};
 use num_complex::Complex32;
 
 use rigflow_core::dsp::demod::{DemodMode, Sideband};
+use rigflow_protocol::{ServerMessage};
 use rigflow_server::{
-    api::{protocol::ServerMessage, websocket::ws_handler},
+
+    api::{websocket::ws_handler},
     dsp::pipeline::DspPipeline,
     server::app_state::{AppState, RadioState, StreamState},
     source::factory::{create_source, SourceConfig},
@@ -885,13 +887,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target_freq_hz = cfg.target_freq_hz;
     let sideband = Sideband::Lsb;
     let demod_mode = cfg.demod;
+    let pitch_hz = 0.0;
 
     let block_size = choose_block_size(&cfg.source);
     let waterfall_bins = 1024;
     let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
 
-    let state = AppState::new(center_freq_hz, target_freq_hz, sideband, demod_mode);
+    let state = AppState::new(center_freq_hz, target_freq_hz, sideband, demod_mode, pitch_hz);
 
     let app = Router::new()
         .route("/ws", get(ws_handler))

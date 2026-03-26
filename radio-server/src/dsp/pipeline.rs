@@ -27,10 +27,17 @@ impl ComplexSidebandFir {
     fn new(
         sample_rate_hz: f32,
         audio_bandwidth_hz: f32,
+        pitch_hz: f32,
         taps_len: usize,
         sideband: Sideband,
     ) -> Self {
-        let taps = design_sideband_taps(sample_rate_hz, audio_bandwidth_hz, taps_len, sideband);
+        let taps = design_sideband_taps(
+            sample_rate_hz,
+            audio_bandwidth_hz,
+            pitch_hz,
+            taps_len,
+            sideband,
+        );
         let delay = vec![Complex32::new(0.0, 0.0); taps_len];
 
         Self { taps, delay, pos: 0 }
@@ -86,18 +93,15 @@ fn sinc(x: f32) -> f32 {
 fn design_sideband_taps(
     sample_rate_hz: f32,
     audio_bandwidth_hz: f32,
+    pitch_hz: f32,
     taps_len: usize,
     sideband: Sideband,
 ) -> Vec<Complex32> {
-    let taps_len = taps_len.max(3) | 1; // force odd length
+    let taps_len = taps_len.max(3) | 1;
     let m = (taps_len - 1) as f32 / 2.0;
 
-    // Low-pass prototype with cutoff at half the desired sideband width.
-    // After modulation by +/- B/2, the passband becomes roughly:
-    // USB: 0..B
-    // LSB: -B..0
     let lp_cutoff_hz = (audio_bandwidth_hz * 0.5).max(100.0);
-    let shift_hz = audio_bandwidth_hz * 0.5;
+    let shift_hz = audio_bandwidth_hz * 0.5 + pitch_hz;
 
     let sign = match sideband {
         Sideband::Usb => 1.0,
@@ -112,20 +116,15 @@ fn design_sideband_taps(
     for i in 0..taps_len {
         let n = i as f32 - m;
 
-        // ideal real low-pass prototype
         let h_lp = 2.0 * fc * sinc(2.0 * fc * n);
-
-        // Hann window
         let w = 0.5 - 0.5 * (2.0 * PI * i as f32 / (taps_len as f32 - 1.0)).cos();
 
-        // modulate prototype to positive or negative side of baseband
         let phase = 2.0 * PI * fshift * n;
         let osc = Complex32::new(phase.cos(), phase.sin());
 
         taps.push(osc * (h_lp * w));
     }
 
-    // Normalize to near-unity gain in passband
     let sum_mag: f32 = taps.iter().map(|t| t.norm()).sum();
     if sum_mag > 0.0 {
         for t in &mut taps {
@@ -155,7 +154,8 @@ pub struct DspPipeline {
     ssb_lsb_fir: Option<ComplexSidebandFir>,
     ssb_bandwidth_hz: f32,
     ssb_fir_taps: usize,
-
+    ssb_pitch_hz: f32,
+    
     output_sample_rate_hz: f32,
     client_output_sample_rate_hz: f32,
 }
@@ -206,20 +206,23 @@ impl DspPipeline {
         // If you later split the config, give SSB its own bandwidth.
         let ssb_bandwidth_hz = audio_cutoff_hz.max(300.0);
         let ssb_fir_taps = audio_fir_taps.max(31) | 1;
+	let ssb_pitch_hz = 0.0;
 
-        let ssb_usb_fir = Some(ComplexSidebandFir::new(
-            output_sample_rate_hz,
-            ssb_bandwidth_hz,
-            ssb_fir_taps,
-            Sideband::Usb,
-        ));
+	let ssb_usb_fir = Some(ComplexSidebandFir::new(
+	    output_sample_rate_hz,
+	    ssb_bandwidth_hz,
+	    ssb_pitch_hz,
+	    ssb_fir_taps,
+	    Sideband::Usb,
+	));
 
-        let ssb_lsb_fir = Some(ComplexSidebandFir::new(
-            output_sample_rate_hz,
-            ssb_bandwidth_hz,
-            ssb_fir_taps,
-            Sideband::Lsb,
-        ));
+	let ssb_lsb_fir = Some(ComplexSidebandFir::new(
+	    output_sample_rate_hz,
+	    ssb_bandwidth_hz,
+	    ssb_pitch_hz,
+	    ssb_fir_taps,
+	    Sideband::Lsb,
+	));
 
         Self {
             tuner: VirtualTuner::new(
@@ -246,6 +249,7 @@ impl DspPipeline {
             ssb_lsb_fir,
             ssb_bandwidth_hz,
             ssb_fir_taps,
+	    ssb_pitch_hz,
             output_sample_rate_hz,
             client_output_sample_rate_hz,
         }
@@ -384,21 +388,30 @@ impl DspPipeline {
     }
 
     pub fn rebuild_ssb_filters(&mut self, bandwidth_hz: f32, taps: usize) {
-        self.ssb_bandwidth_hz = bandwidth_hz.max(300.0);
-        self.ssb_fir_taps = taps.max(31) | 1;
-
-        self.ssb_usb_fir = Some(ComplexSidebandFir::new(
+	self.ssb_bandwidth_hz = bandwidth_hz.max(300.0);
+	self.ssb_fir_taps = taps.max(31) | 1;
+	
+	self.ssb_usb_fir = Some(ComplexSidebandFir::new(
             self.output_sample_rate_hz,
             self.ssb_bandwidth_hz,
+            self.ssb_pitch_hz,
             self.ssb_fir_taps,
             Sideband::Usb,
-        ));
-
-        self.ssb_lsb_fir = Some(ComplexSidebandFir::new(
+	));
+	
+	self.ssb_lsb_fir = Some(ComplexSidebandFir::new(
             self.output_sample_rate_hz,
             self.ssb_bandwidth_hz,
+            self.ssb_pitch_hz,
             self.ssb_fir_taps,
             Sideband::Lsb,
-        ));
+	));
     }
+
+    pub fn set_ssb_pitch_hz(&mut self, pitch_hz: f32) {
+	println!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
+	self.ssb_pitch_hz = pitch_hz;
+	self.rebuild_ssb_filters(self.ssb_bandwidth_hz, self.ssb_fir_taps);
+    }
+    
 }

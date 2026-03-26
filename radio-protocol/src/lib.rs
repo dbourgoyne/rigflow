@@ -7,6 +7,7 @@ pub enum ClientMessage {
     SetCenterFrequency { center_freq_hz: f32 },
     SetSideband { sideband: String },
     SetDemodMode { mode: String },
+    SetSsbPitch { pitch_hz: f32 },
     Ping,
 }
 
@@ -19,6 +20,7 @@ pub enum ServerMessage {
     CenterFrequencyChanged { center_freq_hz: f32 },
     SidebandChanged { sideband: String },
     DemodModeChanged { mode: String },
+    SsbPitchChanged { pitch_hz: f32 },
     StreamConfig {
         audio_sample_rate_hz: f32,
         audio_format: String,
