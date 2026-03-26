@@ -6,14 +6,17 @@ use std::time::{Duration, Instant};
 
 use axum::{routing::get, Router};
 use num_complex::Complex32;
+use tokio::sync::mpsc as tokio_mpsc;
 
 use rigflow_core::dsp::demod::{DemodMode, Sideband};
-use rigflow_protocol::{ServerMessage};
+use rigflow_protocol::ServerMessage;
 use rigflow_server::{
-
-    api::{websocket::ws_handler},
+    api::websocket::ws_handler,
     dsp::pipeline::DspPipeline,
-    server::app_state::{AppState, RadioState, StreamState},
+    server::{
+        app_state::{AppState, RadioState, StreamState},
+        control::RadioCommand,
+    },
     source::factory::{create_source, SourceConfig},
     streaming::{
         udp_audio::UdpAudioSender,
@@ -33,7 +36,6 @@ enum SourceKind {
 #[derive(Debug, Clone)]
 struct ServerConfig {
     demod: DemodMode,
-    
     source: SourceKind,
 
     wav_file: String,
@@ -54,7 +56,7 @@ struct ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-	    demod: DemodMode::Lsb,
+            demod: DemodMode::Lsb,
 
             source: SourceKind::Fake,
 
@@ -82,17 +84,16 @@ impl ServerConfig {
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
-
-		"--demod" => {
+                "--demod" => {
                     let value = args.next().ok_or("--demod requires a value")?;
                     cfg.demod = match value.as_str() {
                         "usb" => DemodMode::Usb,
                         "lsb" => DemodMode::Lsb,
                         "wfm" => DemodMode::Wfm,
-                        _ => return Err(format!("unknown source '{value}'\n\n{}", Self::usage())),
+                        _ => return Err(format!("unknown demod '{value}'\n\n{}", Self::usage())),
                     };
-		}
-		
+                }
+
                 "--source" => {
                     let value = args.next().ok_or("--source requires a value")?;
                     cfg.source = match value.as_str() {
@@ -202,7 +203,7 @@ impl ServerConfig {
 Common options:
   --center HZ
   --target HZ
-  --demod  "wfm|lsb|usb"
+  --demod "wfm|lsb|usb"
 
 Fake source:
   --fake-sample-rate HZ
@@ -268,6 +269,13 @@ fn mode_to_string(mode: DemodMode) -> String {
     }
 }
 
+fn sideband_to_string(sideband: Sideband) -> String {
+    match sideband {
+        Sideband::Usb => "usb".to_string(),
+        Sideband::Lsb => "lsb".to_string(),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PipelineSettings {
     channel_cutoff_hz: f32,
@@ -322,6 +330,114 @@ fn build_pipeline(
     }
 
     pipeline
+}
+
+fn apply_radio_command_to_pipeline(
+    cmd: RadioCommand,
+    pipeline: &mut DspPipeline,
+    radio_state: &std::sync::Arc<tokio::sync::RwLock<RadioState>>,
+    stream_state: &std::sync::Arc<tokio::sync::RwLock<StreamState>>,
+    tx: &tokio::sync::broadcast::Sender<ServerMessage>,
+    input_sample_rate_hz: f32,
+    decimation_factor: usize,
+) {
+    match cmd {
+        RadioCommand::SetTargetFrequency(freq) => {
+            pipeline.set_target_frequency(freq);
+
+            if let Ok(mut radio) = radio_state.try_write() {
+                radio.target_freq_hz = freq;
+            }
+
+            if let Ok(mut stream) = stream_state.try_write() {
+                stream.target_freq_hz = freq;
+            }
+
+            let _ = tx.send(ServerMessage::FrequencyChanged {
+                target_freq_hz: freq,
+            });
+        }
+
+        RadioCommand::SetCenterFrequency(freq) => {
+            // Update logical state immediately. Hardware/source retune still happens
+            // in the capture/nonrealtime source owner loop.
+            pipeline.set_center_frequency(freq);
+
+            if let Ok(mut radio) = radio_state.try_write() {
+                radio.center_freq_hz = freq;
+            }
+
+            if let Ok(mut stream) = stream_state.try_write() {
+                stream.center_freq_hz = freq;
+            }
+        }
+
+        RadioCommand::SetDemodMode(mode) => {
+            let (center_freq_hz, target_freq_hz, sideband, ssb_pitch_hz) =
+                if let Ok(mut radio) = radio_state.try_write() {
+                    radio.demod_mode = mode;
+                    (
+                        radio.center_freq_hz,
+                        radio.target_freq_hz,
+                        radio.sideband,
+                        radio.ssb_pitch_hz,
+                    )
+                } else {
+                    (0.0, 0.0, Sideband::Lsb, 0.0)
+                };
+
+            *pipeline = build_pipeline(
+                center_freq_hz,
+                target_freq_hz,
+                input_sample_rate_hz,
+                decimation_factor,
+                mode,
+            );
+
+            if matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+                pipeline.set_sideband(sideband);
+                pipeline.set_ssb_pitch_hz(ssb_pitch_hz);
+            }
+
+            let _ = tx.send(ServerMessage::DemodModeChanged {
+                mode: mode_to_string(mode),
+            });
+
+            let settings = pipeline_settings_for_mode(mode);
+            let _ = tx.send(ServerMessage::Info {
+                message: format!(
+                    "rebuilt pipeline for mode={} channel_cutoff={}Hz audio_cutoff={}Hz",
+                    mode_to_string(mode),
+                    settings.channel_cutoff_hz,
+                    settings.audio_cutoff_hz
+                ),
+            });
+        }
+
+        RadioCommand::SetSideband(sideband) => {
+            pipeline.set_sideband(sideband);
+
+            if let Ok(mut radio) = radio_state.try_write() {
+                radio.sideband = sideband;
+            }
+
+            let _ = tx.send(ServerMessage::SidebandChanged {
+                sideband: sideband_to_string(sideband),
+            });
+        }
+
+        RadioCommand::SetSsbPitch(pitch_hz) => {
+            let pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
+
+            pipeline.set_ssb_pitch_hz(pitch_hz);
+
+            if let Ok(mut radio) = radio_state.try_write() {
+                radio.ssb_pitch_hz = pitch_hz;
+            }
+
+            let _ = tx.send(ServerMessage::SsbPitchChanged { pitch_hz });
+        }
+    }
 }
 
 fn spawn_waterfall_worker(
@@ -453,6 +569,7 @@ fn spawn_dsp_worker(
     _audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     iq_rx: Receiver<Vec<Complex32>>,
     waterfall_iq_tx: SyncSender<Vec<Complex32>>,
+    mut radio_cmd_rx: tokio_mpsc::UnboundedReceiver<RadioCommand>,
 ) {
     thread::spawn(move || {
         let decimation_factor = choose_decimation(&cfg.source);
@@ -462,27 +579,41 @@ fn spawn_dsp_worker(
             SourceKind::Wav => 0.0,
         };
 
-	// DWB: should this go away?
-	let initial_mode = if let Ok(radio) = radio_state.try_read() {
-	    radio.demod_mode
-	} else {
-	    DemodMode::Wfm
-	};
+        let initial_radio = if let Ok(radio) = radio_state.try_read() {
+            Some((
+                radio.center_freq_hz,
+                radio.target_freq_hz,
+                radio.sideband,
+                radio.demod_mode,
+                radio.ssb_pitch_hz,
+            ))
+        } else {
+            None
+        };
 
-	let mut pipeline = build_pipeline(
-	    cfg.center_freq_hz,
-	    cfg.target_freq_hz,
-	    input_sample_rate_hz,
-	    decimation_factor,
-	    cfg.demod, //initial_mode,
-	);
-	
+        let (initial_center, initial_target, initial_sideband, initial_mode, initial_pitch) =
+            initial_radio.unwrap_or((cfg.center_freq_hz, cfg.target_freq_hz, Sideband::Lsb, DemodMode::Wfm, 0.0));
+
+        let mut pipeline = build_pipeline(
+            initial_center,
+            initial_target,
+            input_sample_rate_hz,
+            decimation_factor,
+            initial_mode,
+        );
+
+        if matches!(initial_mode, DemodMode::Usb | DemodMode::Lsb) {
+            pipeline.set_sideband(initial_sideband);
+            pipeline.set_ssb_pitch_hz(initial_pitch);
+        }
+
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
             s.waterfall_bins = 1024;
             s.waterfall_frame_rate_hz = 10.0;
-            s.center_freq_hz = cfg.center_freq_hz;
+            s.center_freq_hz = initial_center;
+            s.target_freq_hz = initial_target;
             s.input_sample_rate_hz = input_sample_rate_hz;
             s.udp_audio_port = 9001;
         }
@@ -492,8 +623,8 @@ fn spawn_dsp_worker(
             audio_format: "i16".to_string(),
             waterfall_bins: 1024,
             waterfall_frame_rate_hz: 10.0,
-            center_freq_hz: cfg.center_freq_hz,
-	    target_freq_hz: cfg.target_freq_hz,
+            center_freq_hz: initial_center,
+            target_freq_hz: initial_target,
             input_sample_rate_hz,
         });
 
@@ -523,11 +654,6 @@ fn spawn_dsp_worker(
             }
         };
 
-        let mut last_center_freq_hz = cfg.center_freq_hz;
-        let mut last_target_freq_hz = cfg.target_freq_hz;
-	let mut last_pitch_hz = 0.0;
-        let mut last_sideband = Sideband::Lsb;
-        let mut last_demod_mode = initial_mode;
         let mut wf_counter = 0usize;
 
         let mut stats_start = Instant::now();
@@ -537,81 +663,28 @@ fn spawn_dsp_worker(
         let mut blocks_per_sec = 0usize;
 
         while let Ok(iq_block) = iq_rx.recv() {
-            if let Ok(radio) = radio_state.try_read() {
-                if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
-                    pipeline.set_center_frequency(radio.center_freq_hz);
-                    last_center_freq_hz = radio.center_freq_hz;
+            loop {
+                match radio_cmd_rx.try_recv() {
+                    Ok(cmd) => {
+                        apply_radio_command_to_pipeline(
+                            cmd,
+                            &mut pipeline,
+                            &radio_state,
+                            &stream_state,
+                            &tx,
+                            input_sample_rate_hz,
+                            decimation_factor,
+                        );
+                    }
+                    Err(tokio_mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio_mpsc::error::TryRecvError::Disconnected) => break,
                 }
-
-                if (radio.target_freq_hz - last_target_freq_hz).abs() > 0.5 {
-                    pipeline.set_target_frequency(radio.target_freq_hz);
-                    last_target_freq_hz = radio.target_freq_hz;
-
-                    let _ = tx.send(ServerMessage::FrequencyChanged {
-                        target_freq_hz: radio.target_freq_hz,
-                    });
-                }
-
-		if (radio.ssb_pitch_hz - last_pitch_hz).abs() > 0.5 {
-                    pipeline.set_ssb_pitch_hz(radio.ssb_pitch_hz);
-                    last_pitch_hz = radio.ssb_pitch_hz;
-		    println!("pitch_hz = {}", last_pitch_hz);
-                    let _ = tx.send(ServerMessage::SsbPitchChanged {
-                        pitch_hz: radio.ssb_pitch_hz,
-                    });
-                }
-
-                if radio.sideband != last_sideband {
-                    pipeline.set_sideband(radio.sideband);
-                    last_sideband = radio.sideband;
-
-                    let _ = tx.send(ServerMessage::SidebandChanged {
-                        sideband: match radio.sideband {
-                            Sideband::Usb => "usb".to_string(),
-                            Sideband::Lsb => "lsb".to_string(),
-                        },
-                    });
-                }
-
-		if radio.demod_mode != last_demod_mode {
-		    pipeline = build_pipeline(
-			last_center_freq_hz,
-			last_target_freq_hz,
-			input_sample_rate_hz,
-			decimation_factor,
-			radio.demod_mode,
-		    );
-
-		    if matches!(radio.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
-			pipeline.set_sideband(radio.sideband);
-		    }
-
-		    last_demod_mode = radio.demod_mode;
-
-		    let _ = tx.send(ServerMessage::DemodModeChanged {
-			mode: mode_to_string(radio.demod_mode),
-		    });
-
-		    let settings = pipeline_settings_for_mode(radio.demod_mode);
-		    let _ = tx.send(ServerMessage::Info {
-			message: format!(
-			    "rebuilt pipeline for mode={} channel_cutoff={}Hz audio_cutoff={}Hz",
-			    mode_to_string(radio.demod_mode),
-			    settings.channel_cutoff_hz,
-			    settings.audio_cutoff_hz
-			),
-		    });
-		}
             }
 
             iq_samples_per_sec += iq_block.len();
             blocks_per_sec += 1;
 
             let audio = pipeline.process_audio(&iq_block);
-
-            // Browser path intentionally disabled while tuning desktop live path.
-            // let audio_bytes = f32_samples_to_i16_bytes(&audio);
-            // let _ = audio_tx.send(audio_bytes);
 
             let audio_i16: Vec<i16> = audio
                 .iter()
@@ -675,6 +748,7 @@ fn spawn_nonrealtime_worker(
     tx: tokio::sync::broadcast::Sender<ServerMessage>,
     _audio_tx: tokio::sync::broadcast::Sender<Vec<u8>>,
     waterfall_iq_tx: SyncSender<Vec<Complex32>>,
+    mut radio_cmd_rx: tokio_mpsc::UnboundedReceiver<RadioCommand>,
 ) {
     thread::spawn(move || {
         let source_config = make_source_config(&cfg, block_size);
@@ -692,27 +766,41 @@ fn spawn_nonrealtime_worker(
         let input_sample_rate_hz = source.sample_rate();
         let decimation_factor = choose_decimation(&cfg.source);
 
-	let initial_mode = if let Ok(radio) = radio_state.try_read() {
-	    radio.demod_mode
-	} else {
-	    DemodMode::Wfm
-	};
+        let initial_radio = if let Ok(radio) = radio_state.try_read() {
+            Some((
+                radio.center_freq_hz,
+                radio.target_freq_hz,
+                radio.sideband,
+                radio.demod_mode,
+                radio.ssb_pitch_hz,
+            ))
+        } else {
+            None
+        };
 
-	let mut pipeline = build_pipeline(
-	    cfg.center_freq_hz,
-	    cfg.target_freq_hz,
-	    input_sample_rate_hz,
-	    decimation_factor,
-	    initial_mode,
-	);
-	
+        let (initial_center, initial_target, initial_sideband, initial_mode, initial_pitch) =
+            initial_radio.unwrap_or((cfg.center_freq_hz, cfg.target_freq_hz, Sideband::Lsb, DemodMode::Wfm, 0.0));
+
+        let mut pipeline = build_pipeline(
+            initial_center,
+            initial_target,
+            input_sample_rate_hz,
+            decimation_factor,
+            initial_mode,
+        );
+
+        if matches!(initial_mode, DemodMode::Usb | DemodMode::Lsb) {
+            pipeline.set_sideband(initial_sideband);
+            pipeline.set_ssb_pitch_hz(initial_pitch);
+        }
+
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
             s.waterfall_bins = 1024;
             s.waterfall_frame_rate_hz = 10.0;
-            s.center_freq_hz = cfg.center_freq_hz;
-	    s.target_freq_hz = cfg.target_freq_hz;
+            s.center_freq_hz = initial_center;
+            s.target_freq_hz = initial_target;
             s.input_sample_rate_hz = input_sample_rate_hz;
             s.udp_audio_port = 9001;
         }
@@ -722,8 +810,8 @@ fn spawn_nonrealtime_worker(
             audio_format: "i16".to_string(),
             waterfall_bins: 1024,
             waterfall_frame_rate_hz: 10.0,
-            center_freq_hz: cfg.center_freq_hz,
-	    target_freq_hz: cfg.target_freq_hz,
+            center_freq_hz: initial_center,
+            target_freq_hz: initial_target,
             input_sample_rate_hz,
         });
 
@@ -754,14 +842,29 @@ fn spawn_nonrealtime_worker(
         };
 
         let mut next_tick = Instant::now();
-        let mut last_center_freq_hz = cfg.center_freq_hz;
-        let mut last_target_freq_hz = cfg.target_freq_hz;
-        let mut last_sideband = Sideband::Lsb;
-        let mut last_demod_mode = initial_mode;
-	let mut last_pitch_hz = 0.0;
+        let mut last_center_freq_hz = initial_center;
         let mut wf_counter = 0usize;
 
         loop {
+            loop {
+                match radio_cmd_rx.try_recv() {
+                    Ok(cmd) => {
+                        apply_radio_command_to_pipeline(
+                            cmd,
+                            &mut pipeline,
+                            &radio_state,
+                            &stream_state,
+                            &tx,
+                            input_sample_rate_hz,
+                            decimation_factor,
+                        );
+                    }
+                    Err(tokio_mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio_mpsc::error::TryRecvError::Disconnected) => break,
+                }
+            }
+
+            // For non-realtime sources, keep source center-frequency retune here.
             if let Ok(radio) = radio_state.try_read() {
                 if (radio.center_freq_hz - last_center_freq_hz).abs() > 0.5 {
                     if let Err(e) = source.set_center_frequency(radio.center_freq_hz) {
@@ -781,67 +884,6 @@ fn spawn_nonrealtime_worker(
                         });
                     }
                 }
-
-                if (radio.target_freq_hz - last_target_freq_hz).abs() > 0.5 {
-                    pipeline.set_target_frequency(radio.target_freq_hz);
-                    last_target_freq_hz = radio.target_freq_hz;
-
-                    let _ = tx.send(ServerMessage::FrequencyChanged {
-                        target_freq_hz: radio.target_freq_hz,
-                    });
-                }
-
-		if (radio.ssb_pitch_hz - last_pitch_hz).abs() > 0.5 {
-                    pipeline.set_ssb_pitch_hz(radio.ssb_pitch_hz);
-                    last_pitch_hz = radio.ssb_pitch_hz;
-                    println!("pitch_hz = {}", last_pitch_hz);
-                    let _ = tx.send(ServerMessage::SsbPitchChanged {
-                        pitch_hz: radio.ssb_pitch_hz,
-                    });
-                }
-
-
-                if radio.sideband != last_sideband {
-                    pipeline.set_sideband(radio.sideband);
-                    last_sideband = radio.sideband;
-
-                    let _ = tx.send(ServerMessage::SidebandChanged {
-                        sideband: match radio.sideband {
-                            Sideband::Usb => "usb".to_string(),
-                            Sideband::Lsb => "lsb".to_string(),
-                        },
-                    });
-                }
-
-		if radio.demod_mode != last_demod_mode {
-		    pipeline = build_pipeline(
-			last_center_freq_hz,
-			last_target_freq_hz,
-			input_sample_rate_hz,
-			decimation_factor,
-			radio.demod_mode,
-		    );
-
-		    if matches!(radio.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
-			pipeline.set_sideband(radio.sideband);
-		    }
-
-		    last_demod_mode = radio.demod_mode;
-		    
-		    let _ = tx.send(ServerMessage::DemodModeChanged {
-			mode: mode_to_string(radio.demod_mode),
-		    });
-
-		    let settings = pipeline_settings_for_mode(radio.demod_mode);
-		    let _ = tx.send(ServerMessage::Info {
-			message: format!(
-			    "rebuilt pipeline for mode={} channel_cutoff={}Hz audio_cutoff={}Hz",
-			    mode_to_string(radio.demod_mode),
-			    settings.channel_cutoff_hz,
-			    settings.audio_cutoff_hz
-			),
-		    });
-		}
             }
 
             let iq_block = match source.read_block(block_size) {
@@ -915,7 +957,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
 
-    let state = AppState::new(center_freq_hz, target_freq_hz, sideband, demod_mode, pitch_hz);
+    let (radio_cmd_tx, radio_cmd_rx) = tokio_mpsc::unbounded_channel::<RadioCommand>();
+
+    let state = AppState::new(
+        center_freq_hz,
+        target_freq_hz,
+        sideband,
+        demod_mode,
+        pitch_hz,
+        radio_cmd_tx,
+    );
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
@@ -969,6 +1020,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state.audio_tx.clone(),
                 iq_rx,
                 wf_tx,
+                radio_cmd_rx,
             );
         }
 
@@ -982,8 +1034,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state.udp_audio_target.clone(),
                 state.tx.clone(),
                 state.audio_tx.clone(),
-
                 wf_tx,
+                radio_cmd_rx,
             );
         }
     }

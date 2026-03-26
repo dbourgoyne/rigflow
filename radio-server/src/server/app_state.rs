@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
-use rigflow_protocol::{ServerMessage};
+use rigflow_protocol::ServerMessage;
+
 use crate::dsp::demod::{DemodMode, Sideband};
+use crate::server::control::RadioCommand;
 
 #[derive(Debug)]
 pub struct RadioState {
@@ -20,14 +22,14 @@ impl RadioState {
         target_freq_hz: f32,
         sideband: Sideband,
         demod_mode: DemodMode,
-	ssb_pitch_hz: f32,
+        ssb_pitch_hz: f32,
     ) -> Self {
         Self {
             center_freq_hz,
             target_freq_hz,
             sideband,
             demod_mode,
-	    ssb_pitch_hz,
+            ssb_pitch_hz,
         }
     }
 }
@@ -52,7 +54,7 @@ impl Default for StreamState {
             waterfall_bins: 512,
             waterfall_frame_rate_hz: 10.0,
             center_freq_hz: 0.0,
-	    target_freq_hz: 0.0,
+            target_freq_hz: 0.0,
             input_sample_rate_hz: 0.0,
             udp_audio_port: 9001,
         }
@@ -67,6 +69,7 @@ pub struct AppState {
     pub audio_tx: broadcast::Sender<Vec<u8>>,
     pub waterfall_tx: broadcast::Sender<Vec<u8>>,
     pub udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
+    pub radio_cmd_tx: mpsc::UnboundedSender<RadioCommand>,
 }
 
 impl AppState {
@@ -75,7 +78,8 @@ impl AppState {
         target_freq_hz: f32,
         sideband: Sideband,
         demod_mode: DemodMode,
-	ssb_pitch_hz: f32,
+        ssb_pitch_hz: f32,
+        radio_cmd_tx: mpsc::UnboundedSender<RadioCommand>,
     ) -> Self {
         let (tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
@@ -87,13 +91,14 @@ impl AppState {
                 target_freq_hz,
                 sideband,
                 demod_mode,
-		ssb_pitch_hz,
+                ssb_pitch_hz,
             ))),
             stream: Arc::new(RwLock::new(StreamState::default())),
             tx,
             audio_tx,
             waterfall_tx,
             udp_audio_target: Arc::new(RwLock::new(None)),
+            radio_cmd_tx,
         }
     }
 }

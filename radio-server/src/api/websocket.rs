@@ -7,9 +7,13 @@ use axum::{
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use rigflow_protocol::{ClientMessage, ServerMessage};
+
 use crate::{
     dsp::demod::{DemodMode, Sideband},
-    server::app_state::AppState,
+    server::{
+        app_state::AppState,
+        control::RadioCommand,
+    },
 };
 
 pub async fn ws_handler(
@@ -40,6 +44,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                                 Ok(t) => t,
                                 Err(_) => continue,
                             };
+
                             if sender.send(Message::Text(text.into())).await.is_err() {
                                 break;
                             }
@@ -90,12 +95,15 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                         let _ = state_for_recv.tx.send(ServerMessage::Error { message: err });
                     }
                 }
+
                 Message::Close(_) => break,
+
                 Message::Ping(payload) => {
                     let _ = state_for_recv.tx.send(ServerMessage::Info {
                         message: format!("received ping ({} bytes)", payload.len()),
                     });
                 }
+
                 Message::Pong(_) | Message::Binary(_) => {}
             }
         }
@@ -137,7 +145,7 @@ async fn send_initial_state(
             radio.target_freq_hz,
             radio.demod_mode,
             radio.sideband,
-	    radio.ssb_pitch_hz,
+            radio.ssb_pitch_hz,
         )
     };
 
@@ -152,45 +160,52 @@ async fn send_initial_state(
             target_freq_hz,
             input_sample_rate_hz,
         },
-    ).await?;
+    )
+    .await?;
 
     send_server_message(
         sender,
         &ServerMessage::UdpAudioOffer {
             server_udp_port: udp_audio_port,
         },
-    ).await?;
+    )
+    .await?;
 
     send_server_message(
         sender,
         &ServerMessage::CenterFrequencyChanged { center_freq_hz },
-    ).await?;
+    )
+    .await?;
 
     send_server_message(
         sender,
         &ServerMessage::FrequencyChanged { target_freq_hz },
-    ).await?;
+    )
+    .await?;
 
     send_server_message(
         sender,
         &ServerMessage::DemodModeChanged {
             mode: demod_mode_to_string(demod_mode),
         },
-    ).await?;
+    )
+    .await?;
 
     send_server_message(
         sender,
         &ServerMessage::SidebandChanged {
             sideband: sideband_to_string(sideband),
         },
-    ).await?;
+    )
+    .await?;
 
     send_server_message(
-	sender,
-	&ServerMessage::SsbPitchChanged {
+        sender,
+        &ServerMessage::SsbPitchChanged {
             pitch_hz: ssb_pitch_hz,
-	},
-    ).await?;
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -201,6 +216,89 @@ async fn send_server_message(
 ) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     sender.send(Message::Text(text.into())).await.map_err(|_| ())
+}
+
+async fn handle_client_text(
+    text: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let cmd: ClientMessage = serde_json::from_str(text)
+        .map_err(|e| format!("invalid json: {}", e))?;
+
+    match client_message_to_radio_command(cmd)? {
+        ClientAction::RadioCommand(cmd) => {
+            state
+                .radio_cmd_tx
+                .send(cmd)
+                .map_err(|_| "failed to send radio command".to_string())?;
+        }
+
+        ClientAction::ImmediateResponse(msg) => {
+            let _ = state.tx.send(msg);
+        }
+    }
+
+    Ok(())
+}
+
+enum ClientAction {
+    RadioCommand(RadioCommand),
+    ImmediateResponse(ServerMessage),
+}
+
+fn client_message_to_radio_command(cmd: ClientMessage) -> Result<ClientAction, String> {
+    match cmd {
+        ClientMessage::SetFrequency { target_freq_hz } => {
+            Ok(ClientAction::RadioCommand(
+                RadioCommand::SetTargetFrequency(target_freq_hz),
+            ))
+        }
+
+        ClientMessage::SetCenterFrequency { center_freq_hz } => {
+            Ok(ClientAction::RadioCommand(
+                RadioCommand::SetCenterFrequency(center_freq_hz),
+            ))
+        }
+
+        ClientMessage::SetDemodMode { mode } => {
+            Ok(ClientAction::RadioCommand(
+                RadioCommand::SetDemodMode(parse_demod_mode(&mode)?),
+            ))
+        }
+
+        ClientMessage::SetSideband { sideband } => {
+            Ok(ClientAction::RadioCommand(
+                RadioCommand::SetSideband(parse_sideband(&sideband)?),
+            ))
+        }
+
+        ClientMessage::SetSsbPitch { pitch_hz } => {
+            Ok(ClientAction::RadioCommand(
+                RadioCommand::SetSsbPitch(pitch_hz),
+            ))
+        }
+
+        ClientMessage::Ping => {
+            Ok(ClientAction::ImmediateResponse(ServerMessage::Pong))
+        }
+    }
+}
+
+fn parse_sideband(s: &str) -> Result<Sideband, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "usb" => Ok(Sideband::Usb),
+        "lsb" => Ok(Sideband::Lsb),
+        _ => Err(format!("invalid sideband: '{}'", s)),
+    }
+}
+
+fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "wfm" | "fm" => Ok(DemodMode::Wfm),
+        "usb" => Ok(DemodMode::Usb),
+        "lsb" => Ok(DemodMode::Lsb),
+        _ => Err(format!("invalid demod mode: '{}'", s)),
+    }
 }
 
 fn demod_mode_to_string(mode: DemodMode) -> String {
@@ -215,108 +313,5 @@ fn sideband_to_string(sideband: Sideband) -> String {
     match sideband {
         Sideband::Usb => "usb".to_string(),
         Sideband::Lsb => "lsb".to_string(),
-    }
-}
-
-async fn handle_client_text(
-    text: &str,
-    state: &AppState,
-) -> Result<(), String> {
-    let cmd: ClientMessage = serde_json::from_str(text)
-        .map_err(|e| format!("invalid json: {}", e))?;
-
-    if let Some(msg) = apply_radio_command(state, cmd).await? {
-        let _ = state.tx.send(msg);
-    }
-
-    Ok(())
-}
-
-fn parse_sideband(s: &str) -> Result<Sideband, String> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "usb" => Ok(Sideband::Usb),
-        "lsb" => Ok(Sideband::Lsb),
-        _ => Err(format!("invalid sideband: '{}'", s)),
-    }
-}
-
-
-fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "wfm" | "fm" => Ok(DemodMode::Wfm),
-        "usb" => Ok(DemodMode::Usb),
-        "lsb" => Ok(DemodMode::Lsb),
-        _ => Err(format!("invalid demod mode: '{}'", s)),
-    }
-}
-
-async fn apply_radio_command(
-    state: &AppState,
-    cmd: ClientMessage,
-) -> Result<Option<ServerMessage>, String> {
-    match cmd {
-        ClientMessage::SetFrequency { target_freq_hz } => {
-            let new_target = {
-                let mut radio = state.radio.write().await;
-                radio.target_freq_hz = target_freq_hz;
-                radio.target_freq_hz
-            };
-
-            Ok(Some(ServerMessage::FrequencyChanged {
-                target_freq_hz: new_target,
-            }))
-        }
-
-        ClientMessage::SetCenterFrequency { center_freq_hz } => {
-            let new_center = {
-                let mut radio = state.radio.write().await;
-                radio.center_freq_hz = center_freq_hz;
-                radio.center_freq_hz
-            };
-
-            Ok(Some(ServerMessage::CenterFrequencyChanged {
-                center_freq_hz: new_center,
-            }))
-        }
-
-        ClientMessage::SetDemodMode { mode } => {
-            let new_mode = {
-                let mut radio = state.radio.write().await;
-                radio.demod_mode = parse_demod_mode(&mode)?;
-                radio.demod_mode
-            };
-
-            Ok(Some(ServerMessage::DemodModeChanged {
-                mode: demod_mode_to_string(new_mode),
-            }))
-        }
-
-        ClientMessage::SetSideband { sideband } => {
-            let new_sideband = {
-                let mut radio = state.radio.write().await;
-                radio.sideband = parse_sideband(&sideband)?;
-                radio.sideband
-            };
-
-            Ok(Some(ServerMessage::SidebandChanged {
-                sideband: sideband_to_string(new_sideband),
-            }))
-        }
-
-        ClientMessage::SetSsbPitch { pitch_hz } => {
-            let new_pitch = {
-                let mut radio = state.radio.write().await;
-                radio.ssb_pitch_hz = pitch_hz;
-                radio.ssb_pitch_hz
-            };
-
-            Ok(Some(ServerMessage::SsbPitchChanged {
-                pitch_hz: new_pitch,
-            }))
-        }
-
-        ClientMessage::Ping => {
-            Ok(Some(ServerMessage::Pong))
-        }
     }
 }
