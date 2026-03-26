@@ -1,6 +1,6 @@
 use rigflow_core::dsp::demod::{DemodMode, Sideband};
 
-use crate::dsp::pipeline::DspPipeline;
+use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PipelineSettings {
@@ -36,18 +36,18 @@ pub fn build_pipeline(
 ) -> DspPipeline {
     let settings = pipeline_settings_for_mode(mode);
 
-    let mut pipeline = DspPipeline::new(
-        center_freq_hz,
-        target_freq_hz,
-        input_sample_rate_hz,
-        settings.channel_cutoff_hz,
-        settings.fir_taps,
-        decimation_factor,
-        settings.audio_cutoff_hz,
-        settings.audio_fir_taps,
-        48_000.0,
-        mode,
-    );
+    let mut pipeline = DspPipeline::new(DspPipelineConfig {
+	center_freq_hz,
+	target_freq_hz,
+	input_sample_rate_hz,
+	channel_cutoff_hz: settings.channel_cutoff_hz,
+	fir_taps: settings.fir_taps,
+	decimation_factor,
+	audio_cutoff_hz: settings.audio_cutoff_hz,
+	audio_fir_taps: settings.audio_fir_taps,
+	client_output_sample_rate_hz: 48_000.0,
+	mode,
+    });
 
     match mode {
         DemodMode::Usb => pipeline.set_sideband(Sideband::Usb),

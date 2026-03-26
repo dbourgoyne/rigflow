@@ -12,6 +12,23 @@ use crate::dsp::demod::ssb::SsbDemodulator;
 use crate::dsp::demod::{DemodMode, Sideband};
 use crate::dsp::tuner::VirtualTuner;
 
+#[derive(Debug, Clone)]
+pub struct DspPipelineConfig {
+    pub center_freq_hz: f32,
+    pub target_freq_hz: f32,
+    pub input_sample_rate_hz: f32,
+
+    pub channel_cutoff_hz: f32,
+    pub fir_taps: usize,
+    pub decimation_factor: usize,
+
+    pub audio_cutoff_hz: f32,
+    pub audio_fir_taps: usize,
+
+    pub client_output_sample_rate_hz: f32,
+    pub mode: DemodMode,
+}
+
 const WFM_DEEMPHASIS_TAU_SECONDS: f32 = 75e-6;
 const WFM_AUDIO_GAIN: f32 = 1.5;
 
@@ -162,18 +179,24 @@ pub struct DspPipeline {
 
 #[allow(clippy::too_many_arguments)]
 impl DspPipeline {
-    pub fn new(
-        center_freq_hz: f32,
-        target_freq_hz: f32,
-        input_sample_rate_hz: f32,
-        channel_cutoff_hz: f32,
-        fir_taps: usize,
-        decimation_factor: usize,
-        audio_cutoff_hz: f32,
-        audio_fir_taps: usize,
-        client_output_sample_rate_hz: f32,
-        mode: DemodMode,
-    ) -> Self {
+    pub fn new(cfg: DspPipelineConfig) -> Self {
+        // Replace all uses of parameters with cfg.*
+        // For example:
+        // center_freq_hz → cfg.center_freq_hz
+        // target_freq_hz → cfg.target_freq_hz
+        // input_sample_rate_hz → cfg.input_sample_rate_hz
+        // etc.
+
+        let center_freq_hz = cfg.center_freq_hz;
+        let target_freq_hz = cfg.target_freq_hz;
+        let input_sample_rate_hz = cfg.input_sample_rate_hz;
+        let channel_cutoff_hz = cfg.channel_cutoff_hz;
+        let fir_taps = cfg.fir_taps;
+        let decimation_factor = cfg.decimation_factor;
+        let audio_cutoff_hz = cfg.audio_cutoff_hz;
+        let audio_fir_taps = cfg.audio_fir_taps;
+        let client_output_sample_rate_hz = cfg.client_output_sample_rate_hz;
+        let mode = cfg.mode;
         let output_sample_rate_hz = input_sample_rate_hz / decimation_factor as f32;
 
         let resampler = if (output_sample_rate_hz - client_output_sample_rate_hz).abs() > 1.0 {
