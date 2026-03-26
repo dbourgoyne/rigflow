@@ -40,9 +40,6 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                                 Ok(t) => t,
                                 Err(_) => continue,
                             };
-			    println!("ws rx: {}", text);
-
-
                             if sender.send(Message::Text(text.into())).await.is_err() {
                                 break;
                             }
@@ -221,10 +218,6 @@ fn sideband_to_string(sideband: Sideband) -> String {
     }
 }
 
-//use crate::api::protocol::{ClientMessage, ServerMessage};
-//use crate::server::app_state::AppState;
-
-//pub
 async fn handle_client_text(
     text: &str,
     state: &AppState,
@@ -232,71 +225,8 @@ async fn handle_client_text(
     let cmd: ClientMessage = serde_json::from_str(text)
         .map_err(|e| format!("invalid json: {}", e))?;
 
-    match cmd {
-        ClientMessage::SetFrequency { target_freq_hz } => {
-            let new_target = {
-                let mut radio = state.radio.write().await;
-                radio.target_freq_hz = target_freq_hz;
-                radio.target_freq_hz
-            };
-
-            let _ = state.tx.send(ServerMessage::FrequencyChanged {
-                target_freq_hz: new_target,
-            });
-        }
-
-        ClientMessage::SetCenterFrequency { center_freq_hz } => {
-            let new_center = {
-                let mut radio = state.radio.write().await;
-                radio.center_freq_hz = center_freq_hz;
-                radio.center_freq_hz
-            };
-
-            let _ = state.tx.send(ServerMessage::CenterFrequencyChanged {
-                center_freq_hz: new_center,
-            });
-        }
-
-        ClientMessage::SetDemodMode { mode } => {
-            let new_mode = {
-                let mut radio = state.radio.write().await;
-                radio.demod_mode = parse_demod_mode(&mode)?;
-                radio.demod_mode
-            };
-
-            let _ = state.tx.send(ServerMessage::DemodModeChanged {
-                mode: demod_mode_to_string(new_mode),
-            });
-        }
-
-        ClientMessage::SetSideband { sideband } => {
-            let new_sideband = {
-                let mut radio = state.radio.write().await;
-                radio.sideband = parse_sideband(&sideband)?;
-                radio.sideband
-            };
-
-            let _ = state.tx.send(ServerMessage::SidebandChanged {
-                sideband: sideband_to_string(new_sideband),
-            });
-	}
-
-	ClientMessage::SetSsbPitch { pitch_hz } => {
-	    let new_pitch = {
-		let mut radio = state.radio.write().await;
-		radio.ssb_pitch_hz = pitch_hz;
-		println!("radio.ssb_pitch_hz = {}", radio.ssb_pitch_hz);
-		radio.ssb_pitch_hz
-	    };
-
-	    let _ = state.tx.send(ServerMessage::SsbPitchChanged {
-		pitch_hz: new_pitch,
-	    });
-	}
-
-        ClientMessage::Ping => {
-            let _ = state.tx.send(ServerMessage::Pong);
-        }
+    if let Some(msg) = apply_radio_command(state, cmd).await? {
+        let _ = state.tx.send(msg);
     }
 
     Ok(())
@@ -317,5 +247,76 @@ fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
         "usb" => Ok(DemodMode::Usb),
         "lsb" => Ok(DemodMode::Lsb),
         _ => Err(format!("invalid demod mode: '{}'", s)),
+    }
+}
+
+async fn apply_radio_command(
+    state: &AppState,
+    cmd: ClientMessage,
+) -> Result<Option<ServerMessage>, String> {
+    match cmd {
+        ClientMessage::SetFrequency { target_freq_hz } => {
+            let new_target = {
+                let mut radio = state.radio.write().await;
+                radio.target_freq_hz = target_freq_hz;
+                radio.target_freq_hz
+            };
+
+            Ok(Some(ServerMessage::FrequencyChanged {
+                target_freq_hz: new_target,
+            }))
+        }
+
+        ClientMessage::SetCenterFrequency { center_freq_hz } => {
+            let new_center = {
+                let mut radio = state.radio.write().await;
+                radio.center_freq_hz = center_freq_hz;
+                radio.center_freq_hz
+            };
+
+            Ok(Some(ServerMessage::CenterFrequencyChanged {
+                center_freq_hz: new_center,
+            }))
+        }
+
+        ClientMessage::SetDemodMode { mode } => {
+            let new_mode = {
+                let mut radio = state.radio.write().await;
+                radio.demod_mode = parse_demod_mode(&mode)?;
+                radio.demod_mode
+            };
+
+            Ok(Some(ServerMessage::DemodModeChanged {
+                mode: demod_mode_to_string(new_mode),
+            }))
+        }
+
+        ClientMessage::SetSideband { sideband } => {
+            let new_sideband = {
+                let mut radio = state.radio.write().await;
+                radio.sideband = parse_sideband(&sideband)?;
+                radio.sideband
+            };
+
+            Ok(Some(ServerMessage::SidebandChanged {
+                sideband: sideband_to_string(new_sideband),
+            }))
+        }
+
+        ClientMessage::SetSsbPitch { pitch_hz } => {
+            let new_pitch = {
+                let mut radio = state.radio.write().await;
+                radio.ssb_pitch_hz = pitch_hz;
+                radio.ssb_pitch_hz
+            };
+
+            Ok(Some(ServerMessage::SsbPitchChanged {
+                pitch_hz: new_pitch,
+            }))
+        }
+
+        ClientMessage::Ping => {
+            Ok(Some(ServerMessage::Pong))
+        }
     }
 }
