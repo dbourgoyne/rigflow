@@ -20,6 +20,6 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 url = "2"
 rtl-sdr-rs = "0.3.1"
-rigflow-protocol = { path = "../radio-protocol" }
-rigflow-core = { path = "../radio-core" }
+rigflow-protocol = { path = "../rigflow-protocol" }
+rigflow-core = { path = "../rigflow-core" }
 

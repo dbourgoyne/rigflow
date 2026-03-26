@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "radio-server",
-    "desktop-client",
-    "radio-protocol",
-    "radio-core",
+    "rigflow-server",
+    "rigflow-client",
+    "rigflow-protocol",
+    "rigflow-core",
 ]
 resolver = "2"
 
