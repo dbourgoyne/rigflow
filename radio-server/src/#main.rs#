@@ -16,7 +16,7 @@ use rigflow_server::{
         app_state::{AppState, RadioState, StreamState},
         control::RadioCommand,
     },
-    source::factory::create_source,
+    source::factory::{create_source, SourceConfig},
     streaming::{
         udp_audio::UdpAudioSender,
         udp_registration::run_udp_registration_listener,
@@ -24,13 +24,114 @@ use rigflow_server::{
     },
     waterfall::simple::WaterfallGenerator,
 };
-use rigflow_server::server::config::{
-    choose_block_size,
-    choose_decimation,
-    make_source_config,
-    ServerConfig,
-    SourceKind,
-};
+
+
+                    cfg.rtlsdr_ppm_correction = args
+                        .next()
+                        .ok_or("--rtl-ppm requires a value")?
+                        .parse()
+                        .map_err(|_| "invalid --rtl-ppm".to_string())?;
+                }
+
+                "--rtl-direct-sampling" => {
+                    cfg.rtlsdr_direct_sampling = true;
+                }
+
+                "--center" => {
+                    cfg.center_freq_hz = args
+                        .next()
+                        .ok_or("--center requires a value")?
+                        .parse()
+                        .map_err(|_| "invalid --center".to_string())?;
+                }
+
+                "--target" => {
+                    cfg.target_freq_hz = args
+                        .next()
+                        .ok_or("--target requires a value")?
+                        .parse()
+                        .map_err(|_| "invalid --target".to_string())?;
+                }
+
+                "--help" | "-h" => {
+                    return Err(Self::usage());
+                }
+
+                other => {
+                    return Err(format!("unknown argument '{other}'\n\n{}", Self::usage()));
+                }
+            }
+        }
+
+        Ok(cfg)
+    }
+
+    fn usage() -> String {
+        r#"Usage:
+  rigflow_server --source fake [options]
+  rigflow_server --source wav --wav-file input_iq.wav [options]
+  rigflow_server --source rtlsdr [options]
+
+Common options:
+  --center HZ
+  --target HZ
+  --demod "wfm|lsb|usb"
+
+Fake source:
+  --fake-sample-rate HZ
+  --fake-tone HZ
+
+WAV source:
+  --wav-file PATH
+
+RTL-SDR source:
+  --rtl-device INDEX
+  --rtl-sample-rate HZ
+  --rtl-gain TENTHS_DB
+  --rtl-auto-gain
+  --rtl-ppm PPM
+  --rtl-direct-sampling
+"#
+        .to_string()
+    }
+}
+
+fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig {
+    match cfg.source {
+        SourceKind::Fake => SourceConfig::Fake {
+            sample_rate_hz: cfg.fake_sample_rate_hz,
+            tone_hz: cfg.fake_tone_hz,
+        },
+        SourceKind::Wav => SourceConfig::WavFile {
+            path: cfg.wav_file.clone(),
+        },
+        SourceKind::RtlSdr => SourceConfig::RtlSdr {
+            device_index: cfg.rtlsdr_device_index,
+            sample_rate_hz: cfg.rtlsdr_sample_rate_hz,
+            center_freq_hz: cfg.center_freq_hz as u32,
+            gain_tenths_db: cfg.rtlsdr_gain_tenths_db,
+            ppm_correction: cfg.rtlsdr_ppm_correction,
+            direct_sampling: cfg.rtlsdr_direct_sampling,
+            block_complex_samples: block_size,
+        },
+    }
+}
+
+fn choose_block_size(source: &SourceKind) -> usize {
+    match source {
+        SourceKind::Fake => 8192,
+        SourceKind::Wav => 8192,
+        SourceKind::RtlSdr => 65536,
+    }
+}
+
+fn choose_decimation(source: &SourceKind) -> usize {
+    match source {
+        SourceKind::Fake => 4,
+        SourceKind::Wav => 16,
+        SourceKind::RtlSdr => 8,
+    }
+}
 
 fn mode_to_string(mode: DemodMode) -> String {
     match mode {
