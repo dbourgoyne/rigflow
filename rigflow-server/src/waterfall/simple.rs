@@ -48,10 +48,10 @@ impl WaterfallGenerator {
         }
 
         // Copy IQ into FFT buffer with windowing
-        for i in 0..n {
-            self.buffer[i].re = iq[i].re * self.window[i];
-            self.buffer[i].im = iq[i].im * self.window[i];
-        }
+	for ((buf, iq), &w) in self.buffer.iter_mut().zip(iq.iter()).zip(self.window.iter()) {
+	    buf.re = iq.re * w;
+	    buf.im = iq.im * w;
+	}
 
         // FFT in place
         self.fft.process(&mut self.buffer);

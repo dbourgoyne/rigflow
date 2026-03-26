@@ -5,6 +5,12 @@ pub struct FmDemodulator {
     have_prev: bool,
 }
 
+impl Default for FmDemodulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FmDemodulator {
     pub fn new() -> Self {
         Self {

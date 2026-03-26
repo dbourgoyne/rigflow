@@ -283,7 +283,7 @@ async fn websocket_control_task(
                 match cmd {
                     Some(cmd) => {
                         let text = serde_json::to_string(&cmd)?;
-                        write.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await?;
+                        write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await?;
                     }
                     None => break,
                 }
@@ -654,17 +654,16 @@ fn draw_row(buffer: &mut [u32], row: &[u8], width: usize, _height: usize) {
 
     let top = &mut buffer[WATERFALL_TOP * width..(WATERFALL_TOP + 1) * width];
 
-    for x in 0..width {
-        if x < SPECTRUM_PLOT_X0 || x >= SPECTRUM_PLOT_X1 {
-            top[x] = 0x000000;
-        } else {
+    for (x, pixel) in top.iter_mut().enumerate() {
+	if !(SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1).contains(&x) {
+            *pixel = 0x000000;
+	} else {
             let plot_x = x - SPECTRUM_PLOT_X0;
             let src_x = plot_x * row.len() / SPECTRUM_PLOT_WIDTH;
-            top[x] = color_map(row[src_x.min(row.len() - 1)]);
-        }
+            *pixel = color_map(row[src_x.min(row.len() - 1)]);
+	}
     }
 }
-
 
 fn draw_tuning_marker(
     buffer: &mut [u32],

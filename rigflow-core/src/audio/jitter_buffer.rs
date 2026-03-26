@@ -75,11 +75,9 @@ impl JitterBuffer {
             return;
         }
 
-        if let Some(next) = self.next_sequence {
-            if sequence < next {
-                self.packets_dropped_late += 1;
-                return;
-            }
+	if let Some(next) = self.next_sequence && sequence < next {
+            self.packets_dropped_late += 1;
+            return;
         }
 
         if self.buffered_samples() >= self.max_buffer_samples {

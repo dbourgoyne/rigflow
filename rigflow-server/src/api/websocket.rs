@@ -45,7 +45,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                                 Err(_) => continue,
                             };
 
-                            if sender.send(Message::Text(text.into())).await.is_err() {
+                            if sender.send(Message::Text(text)).await.is_err() {
                                 break;
                             }
                         }
@@ -60,7 +60,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                             framed.push(b'A');
                             framed.append(&mut bytes);
 
-                            if sender.send(Message::Binary(framed.into())).await.is_err() {
+                            if sender.send(Message::Binary(framed)).await.is_err() {
                                 break;
                             }
                         }
