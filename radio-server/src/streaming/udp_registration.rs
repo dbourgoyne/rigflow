@@ -4,9 +4,11 @@ use tokio::sync::RwLock;
 
 use std::sync::Arc;
 
-const MAGIC: u16 = 0x5253; // "RS"
-const VERSION: u8 = 1;
-const STREAM_TYPE_REGISTER_AUDIO: u8 = 10;
+use rigflow_core::net::udp_framing::{
+    MAGIC,
+    VERSION,
+    STREAM_TYPE_REGISTER_AUDIO,
+};
 
 pub async fn run_udp_registration_listener(
     bind_addr: &str,

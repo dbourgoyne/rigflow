@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 
-const MAGIC: u16 = 0x5253;
-const VERSION: u8 = 1;
-const STREAM_TYPE_AUDIO: u8 = 1;
-const STREAM_TYPE_REGISTER_AUDIO: u8 = 10;
+use rigflow_core::net::udp_framing::{
+    MAGIC,
+    VERSION,
+    STREAM_TYPE_AUDIO,
+    STREAM_TYPE_REGISTER_AUDIO,
+};
 
 const LISTEN_ADDR: &str = "0.0.0.0:50000";
 const SERVER_UDP_REGISTRATION_ADDR: &str = "192.168.0.225:9001";
