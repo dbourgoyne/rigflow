@@ -18,3 +18,6 @@ pub const SPECTRUM_DB_MAX: f32 = 0.0;
 pub const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
 
 pub const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + SEPARATOR_HEIGHT;
+
+pub const FREQ_WIDGET_X: usize = 70;
+pub const FREQ_WIDGET_Y: usize = 28;

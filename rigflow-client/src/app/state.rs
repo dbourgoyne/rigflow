@@ -11,6 +11,7 @@ pub struct UiState {
     pub audio_format: String,
     pub waterfall_frame_rate_hz: f32,
     pub status: String,
+    pub hovered_center_freq_digit: Option<usize>,
 }
 
 
@@ -28,6 +29,7 @@ impl Default for UiState {
             audio_format: "unknown".to_string(),
             waterfall_frame_rate_hz: 0.0,
             status: "starting".to_string(),
+	    hovered_center_freq_digit: None,
         }
     }
 }

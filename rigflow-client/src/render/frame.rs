@@ -1,7 +1,10 @@
 use crate::{
     app::{
         layout::{
-            HEIGHT, SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_HEIGHT, WATERFALL_TOP, WIDTH,
+            WIDTH, HEIGHT,
+	    SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_HEIGHT,
+	    WATERFALL_TOP,
+	    FREQ_WIDGET_X, FREQ_WIDGET_Y,
         },
         state::UiState,
     },
@@ -13,6 +16,10 @@ use crate::{
 	    draw_spectrum_grid, draw_spectrum_trace, draw_tuning_marker,
         },
     },
+};
+
+use crate::{
+    widgets::frequency_widget::{draw_center_frequency_widget, FrequencyWidgetLayout},
 };
 
 pub fn render_frame(
@@ -62,6 +69,16 @@ pub fn render_frame(
 	state,
     );
     draw_frequency_overlay(display_buffer, WIDTH, state);
+    draw_center_frequency_widget(
+	display_buffer,
+	WIDTH,
+	FrequencyWidgetLayout {
+            x: FREQ_WIDGET_X,
+            y: FREQ_WIDGET_Y,
+	},
+	state,
+	state.hovered_center_freq_digit,
+    );
     draw_separator(display_buffer, WIDTH, WATERFALL_TOP.saturating_sub(1));
 }
 

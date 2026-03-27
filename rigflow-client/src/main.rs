@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-mod net;
-mod render;
 mod app;
 mod input;
+mod net;
+mod render;
+mod widgets;
 
 use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
@@ -130,12 +131,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let state_snapshot = ui_state.lock().unwrap().clone();
 
+	{
+	    let mut state_mut = ui_state.lock().unwrap();
+	    crate::input::mouse::update_center_freq_widget_hover(&window, &mut state_mut);
+	}
+
 	for action in collect_keyboard_actions(&window, &state_snapshot) {
 	    let msg = ui_action_to_client_message(action);
 	    let _ = ws_cmd_tx.send(msg);
 	}
 
 	for action in collect_mouse_actions(&window, &state_snapshot) {
+	    let msg = ui_action_to_client_message(action);
+	    let _ = ws_cmd_tx.send(msg);
+	}
+
+	for action in crate::input::mouse::collect_center_freq_widget_actions(&window, &state_snapshot) {
 	    let msg = ui_action_to_client_message(action);
 	    let _ = ws_cmd_tx.send(msg);
 	}
