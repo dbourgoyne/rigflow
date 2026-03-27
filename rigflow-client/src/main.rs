@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Window, WindowOptions};
+use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
@@ -10,10 +10,12 @@ use tokio::sync::mpsc;
 mod net;
 mod render;
 mod app;
+mod input;
 
 use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
+use crate::input::keyboard::{collect_keyboard_actions, UiAction};
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -134,7 +136,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         }
 
-        handle_keyboard(&window, &ws_cmd_tx, &ui_state);
+	let state_snapshot = ui_state.lock().unwrap().clone();
+
+	for action in collect_keyboard_actions(&window, &state_snapshot) {
+	    let msg = ui_action_to_client_message(action);
+	    let _ = ws_cmd_tx.send(msg);
+	}
+	
         handle_mouse_click_tune(&window, &ws_cmd_tx, &ui_state, &mut mouse_was_down);
 
         {
@@ -228,93 +236,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn handle_keyboard(
-    window: &Window,
-    ws_cmd_tx: &mpsc::UnboundedSender<ClientMessage>,
-    ui_state: &Arc<Mutex<UiState>>,
-) {
-    let shift = window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift);
-
-    let target_step = if shift { 1_000.0 } else { 100.0 };
-    let center_step = if shift { 10_000.0 } else { 1_000.0 };
-
-    let state_snapshot = { ui_state.lock().unwrap().clone() };
-
-    if window.is_key_pressed(Key::Left, KeyRepeat::Yes) {
-        let new_freq = state_snapshot.target_freq_hz - target_step;
-        let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
-            target_freq_hz: new_freq,
-        });
-    }
-
-    if window.is_key_pressed(Key::Right, KeyRepeat::Yes) {
-        let new_freq = state_snapshot.target_freq_hz + target_step;
-        let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
-            target_freq_hz: new_freq,
-        });
-    }
-
-    if window.is_key_pressed(Key::Up, KeyRepeat::Yes) {
-        let new_center = state_snapshot.center_freq_hz + center_step;
-        let _ = ws_cmd_tx.send(ClientMessage::SetCenterFrequency {
-            center_freq_hz: new_center,
-        });
-    }
-
-    if window.is_key_pressed(Key::Down, KeyRepeat::Yes) {
-        let new_center = state_snapshot.center_freq_hz - center_step;
-        let _ = ws_cmd_tx.send(ClientMessage::SetCenterFrequency {
-            center_freq_hz: new_center,
-        });
-    }
-
-    if window.is_key_pressed(Key::RightBracket, KeyRepeat::Yes) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetSsbPitch {
-            pitch_hz: 500.0,
-        });
-    }
-
-    if window.is_key_pressed(Key::LeftBracket, KeyRepeat::Yes) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetSsbPitch {
-            pitch_hz: -500.0,
-        });
-    }
-
-    if window.is_key_pressed(Key::L, KeyRepeat::No) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetSideband {
-            sideband: "lsb".to_string(),
-        });
-    }
-
-    if window.is_key_pressed(Key::U, KeyRepeat::No) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetSideband {
-            sideband: "usb".to_string(),
-        });
-    }
-
-    if window.is_key_pressed(Key::Key1, KeyRepeat::No) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
-            mode: "wfm".to_string(),
-        });
-    }
-
-    if window.is_key_pressed(Key::Key2, KeyRepeat::No) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
-            mode: "usb".to_string(),
-        });
-    }
-
-    if window.is_key_pressed(Key::Key3, KeyRepeat::No) {
-        let _ = ws_cmd_tx.send(ClientMessage::SetDemodMode {
-            mode: "lsb".to_string(),
-        });
-    }
-
-    if window.is_key_pressed(Key::P, KeyRepeat::No) {
-        let _ = ws_cmd_tx.send(ClientMessage::Ping);
-    }
 }
 
 fn handle_mouse_click_tune(
@@ -417,3 +338,27 @@ fn build_output_stream(
     Ok(stream)
 }
 
+fn ui_action_to_client_message(action: UiAction) -> ClientMessage {
+    match action {
+        UiAction::SetTargetFrequency(target_freq_hz) => {
+            ClientMessage::SetFrequency { target_freq_hz }
+        }
+        UiAction::SetCenterFrequency(center_freq_hz) => {
+            ClientMessage::SetCenterFrequency { center_freq_hz }
+        }
+        UiAction::SetDemodMode(mode) => {
+            ClientMessage::SetDemodMode {
+                mode: mode.to_string(),
+            }
+        }
+        UiAction::SetSideband(sideband) => {
+            ClientMessage::SetSideband {
+                sideband: sideband.to_string(),
+            }
+        }
+        UiAction::SetSsbPitch(pitch_hz) => {
+            ClientMessage::SetSsbPitch { pitch_hz }
+        }
+        UiAction::Ping => ClientMessage::Ping,
+    }
+}
