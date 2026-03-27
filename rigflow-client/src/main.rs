@@ -18,6 +18,7 @@ use crate::app::state::UiState;
 use crate::input::keyboard::{collect_keyboard_actions, UiAction};
 use crate::input::mouse::collect_mouse_actions;
 use crate::render::frame::render_frame;
+use crate::app::title::build_window_title;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -157,18 +158,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.update_with_buffer(&display_buffer, WIDTH, HEIGHT)?;
 
         if last_title.elapsed() >= Duration::from_millis(200) {
-            let state = ui_state.lock().unwrap().clone();
-            window.set_title(&format!(
-                "Rust Radio | Mode: {} | Ctr: {:.0} Hz | Tgt: {:.0} Hz | SB: {} | {} | {} Hz | {:.1} fps | {}",
-                state.demod_mode.to_uppercase(),
-                state.center_freq_hz,
-                state.target_freq_hz,
-                state.sideband.to_uppercase(),
-                state.audio_format,
-                state.audio_sample_rate_hz,
-                state.waterfall_frame_rate_hz,
-                state.status
-            ));
+	    window.set_title(&build_window_title(&state_snapshot));
             last_title = Instant::now();
         }
 
