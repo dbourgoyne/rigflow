@@ -18,6 +18,12 @@ pub fn pipeline_settings_for_mode(mode: DemodMode) -> PipelineSettings {
             audio_cutoff_hz: 15_000.0,
             audio_fir_taps: 101,
         },
+	DemodMode::Nfm => PipelineSettings {
+            channel_cutoff_hz: 12_500.0,
+            fir_taps: 129,
+            audio_cutoff_hz: 3_000.0,
+            audio_fir_taps: 101,
+        },
         DemodMode::Usb | DemodMode::Lsb => PipelineSettings {
             channel_cutoff_hz: 2_800.0,
             fir_taps: 129,
@@ -53,6 +59,7 @@ pub fn build_pipeline(
         DemodMode::Usb => pipeline.set_sideband(Sideband::Usb),
         DemodMode::Lsb => pipeline.set_sideband(Sideband::Lsb),
         DemodMode::Wfm => {}
+	DemodMode::Nfm => {}
     }
 
     pipeline
@@ -63,6 +70,7 @@ pub fn mode_to_string(mode: DemodMode) -> String {
         DemodMode::Usb => "usb".to_string(),
         DemodMode::Lsb => "lsb".to_string(),
         DemodMode::Wfm => "wfm".to_string(),
+	DemodMode::Nfm => "nfm".to_string(),
     }
 }
 

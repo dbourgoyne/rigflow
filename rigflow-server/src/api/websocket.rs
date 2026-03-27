@@ -295,6 +295,7 @@ fn parse_sideband(s: &str) -> Result<Sideband, String> {
 fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
     match s.trim().to_ascii_lowercase().as_str() {
         "wfm" | "fm" => Ok(DemodMode::Wfm),
+	"nfm" => Ok(DemodMode::Nfm),
         "usb" => Ok(DemodMode::Usb),
         "lsb" => Ok(DemodMode::Lsb),
         _ => Err(format!("invalid demod mode: '{}'", s)),
@@ -304,6 +305,7 @@ fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
 fn demod_mode_to_string(mode: DemodMode) -> String {
     match mode {
         DemodMode::Wfm => "wfm".to_string(),
+	DemodMode::Nfm => "nfm".to_string(),
         DemodMode::Usb => "usb".to_string(),
         DemodMode::Lsb => "lsb".to_string(),
     }

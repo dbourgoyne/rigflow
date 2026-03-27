@@ -36,6 +36,10 @@ pub fn collect_keyboard_actions(window: &Window, state: &UiState) -> Vec<UiActio
         actions.push(UiAction::SetSideband("lsb"));
     }
 
+    if window.is_key_pressed(Key::Key4, KeyRepeat::No) {
+	actions.push(UiAction::SetDemodMode("nfm"));
+    }
+
     // SSB pitch controls
     if window.is_key_pressed(Key::LeftBracket, KeyRepeat::Yes) {
         actions.push(UiAction::SetSsbPitch(state.ssb_pitch_hz - PITCH_STEP_HZ));

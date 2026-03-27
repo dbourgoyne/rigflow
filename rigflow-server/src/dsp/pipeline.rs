@@ -32,6 +32,9 @@ pub struct DspPipelineConfig {
 const WFM_DEEMPHASIS_TAU_SECONDS: f32 = 75e-6;
 const WFM_AUDIO_GAIN: f32 = 1.5;
 
+const NFM_DEEMPHASIS_TAU_SECONDS: f32 = 75e-6;
+const NFM_AUDIO_GAIN: f32 = 12.0;
+
 /// Complex sideband-selective FIR built by modulating a low-pass prototype.
 /// USB keeps roughly 0..B, LSB keeps roughly -B..0.
 struct ComplexSidebandFir {
@@ -213,6 +216,10 @@ impl DspPipeline {
                 output_sample_rate_hz,
                 WFM_DEEMPHASIS_TAU_SECONDS,
             )),
+	    DemodMode::Nfm => Some(DeemphasisFilter::new(
+		output_sample_rate_hz,
+		NFM_DEEMPHASIS_TAU_SECONDS,
+	    )),
             _ => None,
         };
 
@@ -337,6 +344,7 @@ impl DspPipeline {
             }
 
             DemodMode::Wfm => self.fm_demod.process(&iq),
+	    DemodMode::Nfm => self.fm_demod.process(&iq),
         };
 
         self.dc_blocker.process_in_place(&mut audio);
@@ -355,6 +363,21 @@ impl DspPipeline {
                     *s *= WFM_AUDIO_GAIN;
                     *s = s.tanh();
                 }
+            }
+
+	    DemodMode::Nfm => {
+		if let Some(fir) = &mut self.audio_fir {
+                    fir.process_in_place(&mut audio);
+		}
+
+		if let Some(deemphasis) = &mut self.deemphasis {
+                    deemphasis.process_in_place(&mut audio);
+		}
+
+		for s in &mut audio {
+                    *s *= NFM_AUDIO_GAIN;
+                    *s = s.tanh();
+		}
             }
 
             DemodMode::Usb | DemodMode::Lsb => {
