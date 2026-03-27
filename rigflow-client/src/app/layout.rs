@@ -22,6 +22,10 @@ pub const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + SEPARATOR_HEIGHT;
 pub const FREQ_WIDGET_X: usize = 70;
 pub const FREQ_WIDGET_Y: usize = 28;
 
+pub const OM_STRIP_HEIGHT: usize = 6;
+pub const OM_STRIP_Y0: usize = SPECTRUM_PLOT_Y1 + 3;
+pub const OM_STRIP_Y1: usize = OM_STRIP_Y0 + OM_STRIP_HEIGHT;
+
 pub const BAND_STRIP_HEIGHT: usize = 22;
-pub const BAND_STRIP_Y0: usize = SPECTRUM_PLOT_Y1 + 4;
+pub const BAND_STRIP_Y0: usize = OM_STRIP_Y1 + 4;
 pub const BAND_STRIP_Y1: usize = BAND_STRIP_Y0 + BAND_STRIP_HEIGHT;

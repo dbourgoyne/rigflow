@@ -1,3 +1,5 @@
+use crate::app::om_bands::LicenseClass;
+
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub center_freq_hz: f32,
@@ -12,6 +14,7 @@ pub struct UiState {
     pub waterfall_frame_rate_hz: f32,
     pub status: String,
     pub hovered_center_freq_digit: Option<usize>,
+    pub selected_license: LicenseClass,
 }
 
 
@@ -30,6 +33,7 @@ impl Default for UiState {
             waterfall_frame_rate_hz: 0.0,
             status: "starting".to_string(),
 	    hovered_center_freq_digit: None,
+	    selected_license: LicenseClass::General,
         }
     }
 }

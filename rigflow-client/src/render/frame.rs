@@ -23,6 +23,7 @@ use crate::{
 };
 
 use crate::render::bands::draw_band_strip;
+use crate::render::om_band::draw_om_band_strip;
 
 pub fn render_frame(
     display_buffer: &mut [u32],
@@ -70,6 +71,7 @@ pub fn render_frame(
 	WATERFALL_TOP,
 	state,
     );
+    draw_om_band_strip(display_buffer, WIDTH, state);
     draw_band_strip(display_buffer, WIDTH, state);
     draw_frequency_overlay(display_buffer, WIDTH, state);
     draw_center_frequency_widget(
