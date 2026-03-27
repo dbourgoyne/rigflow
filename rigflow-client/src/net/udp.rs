@@ -9,8 +9,8 @@ use rigflow_core::{
 };
 
 use crate::{
-    render::spectrum::color_map,
     render::spectrum::update_spectrum_db,
+    render::waterfall::draw_row,
     UiState,
 };
 
@@ -109,51 +109,12 @@ fn handle_waterfall_packet(
     }
 
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        draw_row_into_waterfall(
+        draw_row(
             &mut fb,
             row,
             width,
             height,
             waterfall_top,
         );
-    }
-}
-
-fn draw_row_into_waterfall(
-    framebuffer: &mut [u32],
-    row: &[u8],
-    width: usize,
-    height: usize,
-    waterfall_top: usize,
-) {
-    if width == 0 || height == 0 || waterfall_top >= height {
-        return;
-    }
-
-    let waterfall_height = height - waterfall_top;
-    if waterfall_height == 0 {
-        return;
-    }
-
-    // Scroll waterfall downward by one row inside the waterfall region only.
-    for y in (waterfall_top + 1..height).rev() {
-	let dst = y * width;
-	let src = (y - 1) * width;
-	framebuffer.copy_within(src..src + width, dst);
-    }
-
-    // Draw newest row at waterfall_top.
-    let top = &mut framebuffer[waterfall_top * width..(waterfall_top + 1) * width];
-
-    if row.is_empty() {
-        for pixel in top.iter_mut() {
-            *pixel = 0x000000;
-        }
-        return;
-    }
-
-    for (x, pixel) in top.iter_mut().enumerate() {
-        let src_x = x * row.len() / width;
-        *pixel = color_map(row[src_x.min(row.len() - 1)]);
     }
 }
