@@ -95,7 +95,7 @@ fn blend(dst: u32, src: u32) -> u32 {
     let sg = (src >> 8) & 0xff;
     let sb = src & 0xff;
 
-    let alpha_num = 1u32;
+    let alpha_num = 2u32;
     let alpha_den = 4u32;
 
     let r = (dr * (alpha_den - alpha_num) + sr * alpha_num) / alpha_den;
