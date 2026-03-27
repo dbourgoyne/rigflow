@@ -17,22 +17,13 @@ use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
 use crate::input::keyboard::{collect_keyboard_actions, UiAction};
 use crate::input::mouse::collect_mouse_actions;
+use crate::render::frame::render_frame;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
 //    STREAM_TYPE_AUDIO,
 //    STREAM_TYPE_WATERFALL,
     STREAM_TYPE_REGISTER_AUDIO,
-};
-
-use crate::render::spectrum::{
-    draw_spectrum_background,
-    draw_spectrum_grid,
-    draw_spectrum_trace,
-    draw_spectrum_axes_and_labels,
-    draw_frequency_overlay,
-    draw_separator,
-    draw_tuning_marker,
 };
 
 const LISTEN_ADDR: &str = "0.0.0.0:50000";
@@ -48,8 +39,8 @@ const MAX_BUFFER_SAMPLES: usize = 24_000;
 
 use crate::app::layout::{
     HEIGHT, WIDTH,
-    SPECTRUM_HEIGHT, WATERFALL_TOP,
-    SPECTRUM_DB_MIN, SPECTRUM_DB_MAX,
+    WATERFALL_TOP,
+    SPECTRUM_DB_MIN
 };
 
 use rigflow_protocol::ClientMessage;
@@ -152,56 +143,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             display_buffer.copy_from_slice(&buf);
         }
 
-        {
-            let spectrum = spectrum_db.lock().unwrap().clone();
-            draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
-            draw_spectrum_grid(
-                &mut display_buffer,
-                WIDTH,
-                SPECTRUM_HEIGHT,
-                SPECTRUM_DB_MIN,
-                SPECTRUM_DB_MAX,
-            );
-	    {
-		let state = ui_state.lock().unwrap().clone();
-		draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
-		draw_spectrum_axes_and_labels(&mut display_buffer, WIDTH, &state);
-	    }
-	    draw_spectrum_trace(
-		&mut display_buffer,
-		WIDTH,
-		&spectrum,
-	    );
-            draw_separator(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
-        }
+	let state_snapshot = ui_state.lock().unwrap().clone();
+	let spectrum_snapshot = spectrum_db.lock().unwrap().clone();
+	let waterfall_snapshot = waterfall_buffer.lock().unwrap().clone();
 
-        {
-            let state = ui_state.lock().unwrap().clone();
-            draw_tuning_marker(
-                &mut display_buffer,
-                WIDTH,
-                HEIGHT,
-                WATERFALL_TOP,
-                &state,
-            );
-        }
-
-	{
-	    let state = ui_state.lock().unwrap().clone();
-
-	    draw_spectrum_background(&mut display_buffer, WIDTH, SPECTRUM_HEIGHT);
-	    draw_spectrum_axes_and_labels(&mut display_buffer, WIDTH, &state);
-
-	    let spectrum = spectrum_db.lock().unwrap().clone();
-	    draw_spectrum_trace(&mut display_buffer, WIDTH, &spectrum);
-
-	    draw_frequency_overlay(
-		&mut display_buffer,
-		WIDTH,
-		&state,
-	    );
-
-	}
+	render_frame(
+	    &mut display_buffer,
+	    &waterfall_snapshot,
+	    &spectrum_snapshot,
+	    &state_snapshot,
+	);
 
         window.update_with_buffer(&display_buffer, WIDTH, HEIGHT)?;
 
