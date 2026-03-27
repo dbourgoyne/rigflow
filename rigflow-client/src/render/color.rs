@@ -9,3 +9,4 @@ pub const COLOR_SEPARATOR: u32 = 0x404040;
 pub const COLOR_BLACK: u32 = 0x000000;
 pub const COLOR_LABEL: u32 = 0xC0C0C0;
 pub const COLOR_SPECTRUM: u32 = 0x00FF00;
+pub const COLOR_PASSBAND: u32 = 0x2030a0;

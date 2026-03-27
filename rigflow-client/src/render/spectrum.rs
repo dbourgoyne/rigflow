@@ -18,6 +18,92 @@ use crate::render::color::{
 
 use crate::render::text::draw_text;
 use crate::app::state::UiState;
+use crate::render::color::COLOR_PASSBAND;
+
+const SSB_LOW_HZ: f32 = 300.0;
+const SSB_HIGH_HZ: f32 = 3000.0;
+const WFM_HALF_BW_HZ: f32 = 75_000.0;
+
+pub fn draw_passband(
+    buffer: &mut [u32],
+    width: usize,
+    state: &UiState,
+) {
+    let Some((mut x0, mut x1)) = passband_x_range(state) else {
+        return;
+    };
+
+    if x0 > x1 {
+        std::mem::swap(&mut x0, &mut x1);
+    }
+
+    x0 = x0.max(SPECTRUM_PLOT_X0);
+    x1 = x1.min(SPECTRUM_PLOT_X1.saturating_sub(1));
+
+    if x0 >= x1 {
+        return;
+    }
+
+    for y in SPECTRUM_PLOT_Y0..SPECTRUM_PLOT_Y1 {
+        let row = y * width;
+        for x in x0..=x1 {
+            let idx = row + x;
+            buffer[idx] = blend(buffer[idx], COLOR_PASSBAND);
+        }
+    }
+}
+
+fn passband_x_range(state: &UiState) -> Option<(usize, usize)> {
+    let target = state.target_freq_hz;
+    let (start_hz, end_hz) = match state.demod_mode.as_str() {
+        "usb" => (target + SSB_LOW_HZ, target + SSB_HIGH_HZ),
+        "lsb" => (target - SSB_HIGH_HZ, target - SSB_LOW_HZ),
+        "wfm" => (target - WFM_HALF_BW_HZ, target + WFM_HALF_BW_HZ),
+        _ => return None,
+    };
+
+    let x0 = freq_to_plot_x(start_hz, state)?;
+    let x1 = freq_to_plot_x(end_hz, state)?;
+    Some((x0, x1))
+}
+
+fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
+    if state.input_sample_rate_hz <= 0.0 {
+        return None;
+    }
+
+    let left_hz = state.center_freq_hz - state.input_sample_rate_hz * 0.5;
+    let right_hz = state.center_freq_hz + state.input_sample_rate_hz * 0.5;
+
+    if freq_hz < left_hz || freq_hz > right_hz {
+        return None;
+    }
+
+    let frac = (freq_hz - left_hz) / (right_hz - left_hz);
+    let plot_width = (SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0) as f32;
+    let x = SPECTRUM_PLOT_X0 as f32 + frac * plot_width;
+
+    Some(x.round() as usize)
+}
+
+fn blend(dst: u32, src: u32) -> u32 {
+    let dr = (dst >> 16) & 0xff;
+    let dg = (dst >> 8) & 0xff;
+    let db = dst & 0xff;
+
+    let sr = (src >> 16) & 0xff;
+    let sg = (src >> 8) & 0xff;
+    let sb = src & 0xff;
+
+    let alpha_num = 1u32;
+    let alpha_den = 4u32;
+
+    let r = (dr * (alpha_den - alpha_num) + sr * alpha_num) / alpha_den;
+    let g = (dg * (alpha_den - alpha_num) + sg * alpha_num) / alpha_den;
+    let b = (db * (alpha_den - alpha_num) + sb * alpha_num) / alpha_den;
+
+    (r << 16) | (g << 8) | b
+}
 
 pub fn update_spectrum_db(spectrum: &mut Vec<f32>, row: &[u8]) {
     if row.is_empty() {
@@ -279,17 +365,6 @@ fn format_freq_hz(freq_hz: f32) -> String {
     } else {
         format!("{:.0} Hz", freq_hz)
     }
-}
-
-fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
-    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
-        return None;
-    }
-
-    let frac =
-        ((freq_hz - state.center_freq_hz) / state.input_sample_rate_hz + 0.5).clamp(0.0, 1.0);
-
-    Some(SPECTRUM_PLOT_X0 + (frac * SPECTRUM_PLOT_WIDTH as f32).round() as usize)
 }
 
 

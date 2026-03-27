@@ -8,9 +8,9 @@ use crate::{
     render::{
         color::COLOR_BACKGROUND,
         spectrum::{
-            draw_frequency_overlay, draw_separator, draw_spectrum_axes_and_labels,
-            draw_spectrum_background, draw_spectrum_grid, draw_spectrum_trace,
-            draw_tuning_marker,
+            draw_frequency_overlay, draw_passband, draw_separator,
+	    draw_spectrum_axes_and_labels, draw_spectrum_background,
+	    draw_spectrum_grid, draw_spectrum_trace, draw_tuning_marker,
         },
     },
 };
@@ -36,6 +36,7 @@ pub fn render_frame(
     clear_spectrum_region(display_buffer);
 
     draw_spectrum_background(display_buffer, WIDTH, SPECTRUM_HEIGHT);
+    draw_passband(display_buffer, WIDTH, state);
     draw_spectrum_grid(
         display_buffer,
         WIDTH,
