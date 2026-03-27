@@ -1,11 +1,11 @@
-pub const WIDTH: usize = 1400;
-pub const HEIGHT: usize = 900;
+pub const WIDTH: usize = 1024;
+pub const HEIGHT: usize = 600;
 
 pub const SPECTRUM_HEIGHT: usize = 180;
-pub const SEPARATOR_HEIGHT: usize = 1;
+pub const SEPARATOR_HEIGHT: usize = 8;
 pub const SPECTRUM_LEFT_PAD: usize = 48;
 pub const SPECTRUM_RIGHT_PAD: usize = 12;
-pub const SPECTRUM_TOP_PAD: usize = 10;
+pub const SPECTRUM_TOP_PAD: usize = 16;
 pub const SPECTRUM_BOTTOM_PAD: usize = 18;
 pub const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
 pub const SPECTRUM_PLOT_X1: usize = WIDTH - SPECTRUM_RIGHT_PAD;
