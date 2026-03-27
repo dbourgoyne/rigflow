@@ -19,6 +19,7 @@ use crate::render::color::{
 use crate::render::text::draw_text;
 use crate::app::state::UiState;
 use crate::render::color::COLOR_PASSBAND;
+use crate::app::layout::BAND_STRIP_Y1;
 
 const SSB_LOW_HZ: f32 = 300.0;
 const SSB_HIGH_HZ: f32 = 3000.0;
@@ -240,7 +241,8 @@ pub fn draw_spectrum_axes_and_labels(
 
             let label_w = label.len() * 6;
             let label_x = x.saturating_sub(label_w / 2).min(width.saturating_sub(label_w));
-            let label_y = SPECTRUM_PLOT_Y1 + 16;
+            //let label_y = SPECTRUM_PLOT_Y1 + 16;
+	    let label_y = BAND_STRIP_Y1 + 4;
             draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
         }
     }
