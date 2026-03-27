@@ -51,6 +51,11 @@ pub fn draw_passband(
             buffer[idx] = blend(buffer[idx], COLOR_PASSBAND);
         }
     }
+
+    for y in SPECTRUM_PLOT_Y0..SPECTRUM_PLOT_Y1 {
+        buffer[y * width + x0] = 0x8090ff;
+        buffer[y * width + x1] = 0x8090ff;
+    }
 }
 
 fn passband_x_range(state: &UiState) -> Option<(usize, usize)> {
