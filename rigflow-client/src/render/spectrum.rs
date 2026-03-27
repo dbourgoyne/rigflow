@@ -245,8 +245,8 @@ pub fn draw_spectrum_axes_and_labels(
         }
     }
 
-    draw_text(buffer, width, 4, 2, "dB", COLOR_LABEL);
-    draw_text(buffer, width, SPECTRUM_PLOT_X1.saturating_sub(14), 2, "Hz", COLOR_LABEL);
+    //draw_text(buffer, width, 4, 2, "dB", COLOR_LABEL);
+    //draw_text(buffer, width, SPECTRUM_PLOT_X1.saturating_sub(14), 2, "Hz", COLOR_LABEL);
 }
 
 
@@ -268,7 +268,7 @@ pub fn draw_frequency_overlay(
     let cf_x = SPECTRUM_PLOT_X0 + 8;
     let cf_y = SPECTRUM_PLOT_Y0 + 6;
     //draw_text_2x(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
-    draw_text(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
+    //draw_text(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
 
     // Target-frequency label above the target marker location
     if let Some(tf_x_center) = freq_to_plot_x(state.target_freq_hz, state) {
