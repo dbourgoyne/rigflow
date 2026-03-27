@@ -15,10 +15,11 @@ mod input;
 use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
-use crate::input::keyboard::{collect_keyboard_actions, UiAction};
+use crate::input::keyboard::collect_keyboard_actions;
 use crate::input::mouse::collect_mouse_actions;
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
+use crate::app::actions::ui_action_to_client_message;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -234,29 +235,4 @@ fn build_output_stream(
     )?;
 
     Ok(stream)
-}
-
-fn ui_action_to_client_message(action: UiAction) -> ClientMessage {
-    match action {
-        UiAction::SetTargetFrequency(target_freq_hz) => {
-            ClientMessage::SetFrequency { target_freq_hz }
-        }
-        UiAction::SetCenterFrequency(center_freq_hz) => {
-            ClientMessage::SetCenterFrequency { center_freq_hz }
-        }
-        UiAction::SetDemodMode(mode) => {
-            ClientMessage::SetDemodMode {
-                mode: mode.to_string(),
-            }
-        }
-        UiAction::SetSideband(sideband) => {
-            ClientMessage::SetSideband {
-                sideband: sideband.to_string(),
-            }
-        }
-        UiAction::SetSsbPitch(pitch_hz) => {
-            ClientMessage::SetSsbPitch { pitch_hz }
-        }
-        UiAction::Ping => ClientMessage::Ping,
-    }
 }
