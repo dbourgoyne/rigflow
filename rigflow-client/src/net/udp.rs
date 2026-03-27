@@ -8,7 +8,11 @@ use rigflow_core::{
     },
 };
 
-use crate::{color_map, update_spectrum_db, UiState};
+use crate::{
+    render::spectrum::color_map,
+    render::spectrum::update_spectrum_db,
+    UiState,
+};
 
 pub fn handle_media_packet(
     packet: &[u8],

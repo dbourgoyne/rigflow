@@ -45,6 +45,7 @@ pub fn draw_text(
     }
 }
 
+/*
 pub fn draw_char_2x(
     buffer: &mut [u32],
     fb_width: usize,
@@ -94,6 +95,7 @@ pub fn draw_text_2x(
         cx += 12; // (5 px * 2) + 2 px spacing
     }
 }
+*/
 
 fn glyph_rows(c: char) -> Option<&'static [u8; 7]> {
     match c.to_ascii_uppercase() {
