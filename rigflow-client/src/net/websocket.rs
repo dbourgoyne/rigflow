@@ -4,7 +4,7 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use rigflow_protocol::{ClientMessage, ServerMessage};
 
-use crate::UiState;
+use crate::app::state::UiState;
 
 pub async fn websocket_control_task(
     ws_url: &str,

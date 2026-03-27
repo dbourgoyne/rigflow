@@ -27,7 +27,7 @@ const COLOR_GRID: u32 = 0x202020;
 const COLOR_SPECTRUM: u32 = 0x00FF00;
 
 use crate::render::text::draw_text;
-use crate::UiState;
+use crate::app::state::UiState;
 
 pub fn update_spectrum_db(spectrum: &mut Vec<f32>, row: &[u8]) {
     if row.is_empty() {

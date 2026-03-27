@@ -9,9 +9,11 @@ use tokio::sync::mpsc;
 
 mod net;
 mod render;
+mod app;
 
 use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
+use crate::app::state::UiState;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -75,39 +77,6 @@ const COLOR_SEPARATOR: u32 = 0x404040;
 //const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
 
 use rigflow_protocol::ClientMessage;
-
-#[derive(Debug, Clone)]
-struct UiState {
-    center_freq_hz: f32,
-    target_freq_hz: f32,
-    sideband: String,
-    demod_mode: String,
-    ssb_pitch_hz: f32,
-    input_sample_rate_hz: f32,
-    waterfall_bins: usize,
-    audio_sample_rate_hz: f32,
-    audio_format: String,
-    waterfall_frame_rate_hz: f32,
-    status: String,
-}
-
-impl Default for UiState {
-    fn default() -> Self {
-        Self {
-            center_freq_hz: 0.0,
-            target_freq_hz: 0.0,
-            sideband: "lsb".to_string(),
-            demod_mode: "wfm".to_string(),
-            ssb_pitch_hz: 0.0,
-            input_sample_rate_hz: 0.0,
-            waterfall_bins: WIDTH,
-            audio_sample_rate_hz: OUTPUT_SAMPLE_RATE as f32,
-            audio_format: "unknown".to_string(),
-            waterfall_frame_rate_hz: 0.0,
-            status: "starting".to_string(),
-        }
-    }
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jitter = Arc::new(Mutex::new(JitterBuffer::new(
