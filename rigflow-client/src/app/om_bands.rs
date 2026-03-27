@@ -4,13 +4,13 @@ const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
         start_hz: 28_000_000.0,
         end_hz: 28_300_000.0,
         kind: OmKind::RttyData,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
     OmSegment {
         start_hz: 28_300_000.0,
         end_hz: 29_700_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
 
     // 6 meters
@@ -18,7 +18,7 @@ const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
         start_hz: 50_000_000.0,
         end_hz: 54_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "6m",
+        //amateur_band_name: "6m",
     },
 
     // 2 meters
@@ -26,7 +26,7 @@ const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
         start_hz: 144_000_000.0,
         end_hz: 148_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "2m",
+        //amateur_band_name: "2m",
     },
 
     // 1.25 meters
@@ -34,7 +34,7 @@ const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
         start_hz: 222_000_000.0,
         end_hz: 225_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "1.25m",
+        //amateur_band_name: "1.25m",
     },
 
     // 70 cm
@@ -42,7 +42,7 @@ const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
         start_hz: 420_000_000.0,
         end_hz: 450_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "70cm",
+        //amateur_band_name: "70cm",
     },
 ];
 
@@ -52,37 +52,37 @@ const ADVANCED_SEGMENTS: &[OmSegment] = &[
         start_hz: 28_000_000.0,
         end_hz: 28_300_000.0,
         kind: OmKind::RttyData,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
     OmSegment {
         start_hz: 28_300_000.0,
         end_hz: 29_700_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
     OmSegment {
         start_hz: 50_000_000.0,
         end_hz: 54_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "6m",
+        //amateur_band_name: "6m",
     },
     OmSegment {
         start_hz: 144_000_000.0,
         end_hz: 148_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "2m",
+        //amateur_band_name: "2m",
     },
     OmSegment {
         start_hz: 222_000_000.0,
         end_hz: 225_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "1.25m",
+        //amateur_band_name: "1.25m",
     },
     OmSegment {
         start_hz: 420_000_000.0,
         end_hz: 450_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "70cm",
+        //amateur_band_name: "70cm",
     },
 ];
 
@@ -92,13 +92,13 @@ const GENERAL_SEGMENTS: &[OmSegment] = &[
         start_hz: 28_000_000.0,
         end_hz: 28_300_000.0,
         kind: OmKind::RttyData,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
     OmSegment {
         start_hz: 28_300_000.0,
         end_hz: 29_700_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
 
     // 6 meters
@@ -106,7 +106,7 @@ const GENERAL_SEGMENTS: &[OmSegment] = &[
         start_hz: 50_000_000.0,
         end_hz: 54_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "6m",
+        //amateur_band_name: "6m",
     },
 
     // 2 meters
@@ -114,7 +114,7 @@ const GENERAL_SEGMENTS: &[OmSegment] = &[
         start_hz: 144_000_000.0,
         end_hz: 148_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "2m",
+        //amateur_band_name: "2m",
     },
 
     // 1.25 meters
@@ -122,7 +122,7 @@ const GENERAL_SEGMENTS: &[OmSegment] = &[
         start_hz: 222_000_000.0,
         end_hz: 225_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "1.25m",
+        //amateur_band_name: "1.25m",
     },
 
     // 70 cm
@@ -130,7 +130,7 @@ const GENERAL_SEGMENTS: &[OmSegment] = &[
         start_hz: 420_000_000.0,
         end_hz: 450_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "70cm",
+        //amateur_band_name: "70cm",
     },
 ];
 
@@ -140,13 +140,13 @@ const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
         start_hz: 28_000_000.0,
         end_hz: 28_300_000.0,
         kind: OmKind::RttyData,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
     OmSegment {
         start_hz: 28_300_000.0,
         end_hz: 28_500_000.0,
         kind: OmKind::SsbPhone,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
 
     // 6 meters
@@ -154,7 +154,7 @@ const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
         start_hz: 50_000_000.0,
         end_hz: 54_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "6m",
+        //amateur_band_name: "6m",
     },
 
     // 2 meters
@@ -162,7 +162,7 @@ const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
         start_hz: 144_000_000.0,
         end_hz: 148_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "2m",
+        //amateur_band_name: "2m",
     },
 
     // 1.25 meters
@@ -170,7 +170,7 @@ const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
         start_hz: 222_000_000.0,
         end_hz: 225_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "1.25m",
+        //amateur_band_name: "1.25m",
     },
 
     // 70 cm
@@ -178,7 +178,7 @@ const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
         start_hz: 420_000_000.0,
         end_hz: 450_000_000.0,
         kind: OmKind::PhoneImage,
-        amateur_band_name: "70cm",
+        //amateur_band_name: "70cm",
     },
 ];
 
@@ -188,13 +188,13 @@ const NOVICE_SEGMENTS: &[OmSegment] = &[
         start_hz: 28_000_000.0,
         end_hz: 28_300_000.0,
         kind: OmKind::RttyData,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
     OmSegment {
         start_hz: 28_300_000.0,
         end_hz: 28_500_000.0,
         kind: OmKind::SsbPhone,
-        amateur_band_name: "10m",
+        //amateur_band_name: "10m",
     },
 
     // 23 cm / 1.25 m differences exist for Novice, but as a starter we keep this conservative.
@@ -229,6 +229,7 @@ pub fn prev_license(license: LicenseClass) -> LicenseClass {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OmKind {
     RttyData,
@@ -244,7 +245,7 @@ pub struct OmSegment {
     pub start_hz: f32,
     pub end_hz: f32,
     pub kind: OmKind,
-    pub amateur_band_name: &'static str,
+//    pub amateur_band_name: &'static str,
 }
 
 pub fn om_segments_for_license(license: LicenseClass) -> &'static [OmSegment] {

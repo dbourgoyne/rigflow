@@ -66,8 +66,10 @@ pub const RADIO_BANDS: &[RadioBand] = &[
     },
 ];
 
+/*
 pub fn band_for_frequency(freq_hz: f32) -> Option<&'static RadioBand> {
     RADIO_BANDS
         .iter()
         .find(|band| freq_hz >= band.start_hz && freq_hz <= band.end_hz)
 }
+*/
