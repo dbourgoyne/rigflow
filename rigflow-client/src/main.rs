@@ -28,6 +28,8 @@ use crate::render::spectrum::{
     draw_spectrum_trace,
     draw_spectrum_axes_and_labels,
     draw_frequency_overlay,
+    draw_separator,
+    draw_tuning_marker,
 };
 
 const LISTEN_ADDR: &str = "0.0.0.0:50000";
@@ -41,40 +43,12 @@ const PACKET_SAMPLES: usize = 480;
 const TARGET_BUFFER_SAMPLES: usize = 4_800;
 const MAX_BUFFER_SAMPLES: usize = 24_000;
 
-const WIDTH: usize = 1024;
-const HEIGHT: usize = 512;
-
-const SEPARATOR_HEIGHT: usize = 8; //1;
-
-const SPECTRUM_HEIGHT: usize = 196;
-
-//const SPECTRUM_TOP_PAD: usize = 6;
-const SPECTRUM_LEFT_PAD: usize = 0; //64;
-const SPECTRUM_RIGHT_PAD: usize = 0; //8;
-//const SPECTRUM_BOTTOM_PAD: usize = 32; //16;
-
-const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
-//const SPECTRUM_PLOT_Y0: usize = SPECTRUM_TOP_PAD;
-const SPECTRUM_PLOT_X1: usize = WIDTH - SPECTRUM_RIGHT_PAD;
-//const SPECTRUM_PLOT_Y1: usize = SPECTRUM_HEIGHT - SPECTRUM_BOTTOM_PAD;
-
-const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
-//const SPECTRUM_PLOT_HEIGHT: usize = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
-
-const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + SEPARATOR_HEIGHT;
-//const WATERFALL_HEIGHT: usize = HEIGHT - WATERFALL_TOP;
-
-const SPECTRUM_DB_MIN: f32 = -120.0;
-const SPECTRUM_DB_MAX: f32 = 0.0;
-//const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
-
-//const COLOR_AXIS: u32 = 0x808080;
-//const COLOR_LABEL: u32 = 0xC0C0C0;
-//const COLOR_BLACK: u32 = 0x000000;
-//const COLOR_GRID: u32 = 0x202020;
-const COLOR_SEPARATOR: u32 = 0x404040;
-//const COLOR_SPECTRUM: u32 = 0x00FF00;
-//const COLOR_TUNING_MARKER: u32 = 0x00FF0000;
+use crate::app::layout::{
+    HEIGHT, WIDTH,
+    SPECTRUM_HEIGHT, WATERFALL_TOP,
+    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_WIDTH,
+    SPECTRUM_DB_MIN, SPECTRUM_DB_MAX,
+};
 
 use rigflow_protocol::ClientMessage;
 
@@ -441,40 +415,5 @@ fn build_output_stream(
     )?;
 
     Ok(stream)
-}
-
-fn draw_tuning_marker(
-    buffer: &mut [u32],
-    width: usize,
-    height: usize,
-    y_start: usize,
-    state: &UiState,
-) {
-    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
-        return;
-    }
-
-    let offset_hz = state.target_freq_hz - state.center_freq_hz;
-    let frac = offset_hz / state.input_sample_rate_hz + 0.5;
-    let x = SPECTRUM_PLOT_X0 as f32 + frac * SPECTRUM_PLOT_WIDTH as f32;
-    let x = x.round() as isize;
-
-    if x < 0 || x >= width as isize {
-        return;
-    }
-
-    let x = x as usize;
-    for y in y_start..height {
-        buffer[y * width + x] = 0x00FF0000;
-    }
-}
-
-fn draw_separator(buffer: &mut [u32], width: usize, y: usize) {
-    if y >= HEIGHT {
-        return;
-    }
-
-    let row = &mut buffer[y * width..(y + 1) * width];
-    row.fill(COLOR_SEPARATOR);
 }
 

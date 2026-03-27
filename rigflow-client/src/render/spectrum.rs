@@ -1,30 +1,20 @@
-const WIDTH: usize = 1024;
-const HEIGHT: usize = 512;
+use crate::app::layout::{
+    HEIGHT,
+    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
+    SPECTRUM_PLOT_Y0, SPECTRUM_PLOT_Y1,
+    SPECTRUM_PLOT_WIDTH, SPECTRUM_PLOT_HEIGHT,
+    SPECTRUM_DB_MIN, SPECTRUM_DB_MAX,
+    SPECTRUM_SMOOTHING_ALPHA,
+};
 
-const SPECTRUM_HEIGHT: usize = 196;
-const SPECTRUM_LEFT_PAD: usize = 0; //64;
-const SPECTRUM_RIGHT_PAD: usize = 0; //8;
-const SPECTRUM_TOP_PAD: usize = 6;
-const SPECTRUM_BOTTOM_PAD: usize = 32; //16;
-
-const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
-const SPECTRUM_PLOT_Y0: usize = SPECTRUM_TOP_PAD;
-const SPECTRUM_PLOT_X1: usize = WIDTH - SPECTRUM_RIGHT_PAD;
-const SPECTRUM_PLOT_Y1: usize = SPECTRUM_HEIGHT - SPECTRUM_BOTTOM_PAD;
-
-const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
-const SPECTRUM_PLOT_HEIGHT: usize = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
-
-const SPECTRUM_DB_MIN: f32 = -120.0;
-const SPECTRUM_DB_MAX: f32 = 0.0;
-const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
-
-const COLOR_AXIS: u32 = 0x808080;
-const COLOR_LABEL: u32 = 0xC0C0C0;
-const COLOR_BLACK: u32 = 0x000000;
-const COLOR_GRID: u32 = 0x202020;
-//const COLOR_SEPARATOR: u32 = 0x404040;
-const COLOR_SPECTRUM: u32 = 0x00FF00;
+use crate::render::color::{
+    COLOR_AXIS,
+    COLOR_LABEL,
+    COLOR_BLACK,
+    COLOR_GRID,
+    COLOR_SPECTRUM,
+    COLOR_SEPARATOR,
+};
 
 use crate::render::text::draw_text;
 use crate::app::state::UiState;
@@ -339,4 +329,40 @@ pub fn color_map(v: u8) -> u32 {
     };
 
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+}
+
+
+pub fn draw_tuning_marker(
+    buffer: &mut [u32],
+    width: usize,
+    height: usize,
+    y_start: usize,
+    state: &UiState,
+) {
+    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
+        return;
+    }
+
+    let offset_hz = state.target_freq_hz - state.center_freq_hz;
+    let frac = offset_hz / state.input_sample_rate_hz + 0.5;
+    let x = SPECTRUM_PLOT_X0 as f32 + frac * SPECTRUM_PLOT_WIDTH as f32;
+    let x = x.round() as isize;
+
+    if x < 0 || x >= width as isize {
+        return;
+    }
+
+    let x = x as usize;
+    for y in y_start..height {
+        buffer[y * width + x] = 0x00FF0000;
+    }
+}
+
+pub fn draw_separator(buffer: &mut [u32], width: usize, y: usize) {
+    if y >= HEIGHT {
+        return;
+    }
+
+    let row = &mut buffer[y * width..(y + 1) * width];
+    row.fill(COLOR_SEPARATOR);
 }
