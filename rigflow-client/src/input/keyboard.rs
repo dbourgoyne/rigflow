@@ -9,6 +9,8 @@ pub enum UiAction {
     SetDemodMode(&'static str),
     SetSideband(&'static str),
     SetSsbPitch(f32),
+    CycleLicenseForward,
+    CycleLicenseBackward,
     Ping,
 }
 
@@ -69,6 +71,14 @@ pub fn collect_keyboard_actions(window: &Window, state: &UiState) -> Vec<UiActio
 
     if window.is_key_pressed(Key::Up, KeyRepeat::Yes) {
         actions.push(UiAction::SetCenterFrequency(state.center_freq_hz + step_hz));
+    }
+
+    if window.is_key_pressed(Key::L, KeyRepeat::No) {
+	if window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift) {
+            actions.push(UiAction::CycleLicenseBackward);
+	} else {
+            actions.push(UiAction::CycleLicenseForward);
+	}
     }
 
     // Optional ping/debug shortcut

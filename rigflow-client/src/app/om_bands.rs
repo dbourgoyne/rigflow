@@ -209,6 +209,26 @@ pub enum LicenseClass {
     Novice,
 }
 
+pub fn next_license(license: LicenseClass) -> LicenseClass {
+    match license {
+        LicenseClass::AmateurExtra => LicenseClass::Advanced,
+        LicenseClass::Advanced => LicenseClass::General,
+        LicenseClass::General => LicenseClass::Technician,
+        LicenseClass::Technician => LicenseClass::Novice,
+        LicenseClass::Novice => LicenseClass::AmateurExtra,
+    }
+}
+
+pub fn prev_license(license: LicenseClass) -> LicenseClass {
+    match license {
+        LicenseClass::AmateurExtra => LicenseClass::Novice,
+        LicenseClass::Advanced => LicenseClass::AmateurExtra,
+        LicenseClass::General => LicenseClass::Advanced,
+        LicenseClass::Technician => LicenseClass::General,
+        LicenseClass::Novice => LicenseClass::Technician,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OmKind {
     RttyData,

@@ -21,6 +21,7 @@ use crate::input::mouse::collect_mouse_actions;
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
 use crate::app::actions::ui_action_to_client_message;
+use crate::input::keyboard::UiAction;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -137,18 +138,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	}
 
 	for action in collect_keyboard_actions(&window, &state_snapshot) {
-	    let msg = ui_action_to_client_message(action);
-	    let _ = ws_cmd_tx.send(msg);
+	    match action {
+		UiAction::CycleLicenseForward => {
+		    let mut state = ui_state.lock().unwrap();
+		    state.selected_license = crate::app::om_bands::next_license(state.selected_license);
+		}
+		
+		UiAction::CycleLicenseBackward => {
+		    let mut state = ui_state.lock().unwrap();
+		    state.selected_license = crate::app::om_bands::prev_license(state.selected_license);
+		}
+
+		other => {
+		    if let Some(msg) = ui_action_to_client_message(other) {
+			let _ = ws_cmd_tx.send(msg);
+		    }
+		}
+	    }
 	}
 
 	for action in collect_mouse_actions(&window, &state_snapshot) {
-	    let msg = ui_action_to_client_message(action);
-	    let _ = ws_cmd_tx.send(msg);
+	    if let Some(msg) = ui_action_to_client_message(action) {
+		let _ = ws_cmd_tx.send(msg);
+	    }
 	}
 
 	for action in crate::input::mouse::collect_center_freq_widget_actions(&window, &state_snapshot) {
-	    let msg = ui_action_to_client_message(action);
-	    let _ = ws_cmd_tx.send(msg);
+	    if let Some(msg) = ui_action_to_client_message(action) {
+		let _ = ws_cmd_tx.send(msg);
+	    }
 	}
 
         {
