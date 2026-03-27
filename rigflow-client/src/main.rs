@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
+use minifb::{Key, Window, WindowOptions};
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,7 @@ use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
 use crate::input::keyboard::{collect_keyboard_actions, UiAction};
+use crate::input::mouse::collect_mouse_actions;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -48,7 +49,6 @@ const MAX_BUFFER_SAMPLES: usize = 24_000;
 use crate::app::layout::{
     HEIGHT, WIDTH,
     SPECTRUM_HEIGHT, WATERFALL_TOP,
-    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_WIDTH,
     SPECTRUM_DB_MIN, SPECTRUM_DB_MAX,
 };
 
@@ -101,7 +101,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut udp_buf = [0u8; 65536];
     let mut last_stats = Instant::now();
     let mut last_title = Instant::now();
-    let mut mouse_was_down = false;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         match socket.recv_from(&mut udp_buf) {
@@ -142,8 +141,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	    let msg = ui_action_to_client_message(action);
 	    let _ = ws_cmd_tx.send(msg);
 	}
-	
-        handle_mouse_click_tune(&window, &ws_cmd_tx, &ui_state, &mut mouse_was_down);
+
+	for action in collect_mouse_actions(&window, &state_snapshot) {
+	    let msg = ui_action_to_client_message(action);
+	    let _ = ws_cmd_tx.send(msg);
+	}
 
         {
             let buf = waterfall_buffer.lock().unwrap();
@@ -236,51 +238,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-fn handle_mouse_click_tune(
-    window: &Window,
-    ws_cmd_tx: &mpsc::UnboundedSender<ClientMessage>,
-    ui_state: &Arc<Mutex<UiState>>,
-    mouse_was_down: &mut bool,
-) {
-    let mouse_down = window.get_mouse_down(MouseButton::Left);
-
-    if mouse_down && !*mouse_was_down {
-        if let Some((mx, _my)) = window.get_mouse_pos(MouseMode::Discard) {
-            let state_snapshot = { ui_state.lock().unwrap().clone() };
-
-	    if let Some(target_freq_hz) = x_to_frequency(mx, &state_snapshot) {
-                let rounded = target_freq_hz.round();
-
-                let _ = ws_cmd_tx.send(ClientMessage::SetFrequency {
-                    target_freq_hz: rounded,
-                });
-
-                println!("click tune: x={:.1} -> target_freq_hz={:.0}", mx, rounded);
-            }
-        }
-    }
-
-    *mouse_was_down = mouse_down;
-}
-
-fn x_to_frequency(x: f32, state: &UiState) -> Option<f32> {
-    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
-        return None;
-    }
-
-    let x0 = SPECTRUM_PLOT_X0 as f32;
-    let x1 = SPECTRUM_PLOT_X1 as f32;
-
-    if x < x0 || x > x1 {
-        return None;
-    }
-
-    let frac = ((x - x0) / (x1 - x0)).clamp(0.0, 1.0);
-    let offset_hz = (frac - 0.5) * state.input_sample_rate_hz;
-
-    Some(state.center_freq_hz + offset_hz)
 }
 
 fn build_output_stream(
