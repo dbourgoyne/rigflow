@@ -22,6 +22,8 @@ use crate::{
     widgets::frequency_widget::{draw_center_frequency_widget, FrequencyWidgetLayout},
 };
 
+use crate::render::bands::draw_band_strip;
+
 pub fn render_frame(
     display_buffer: &mut [u32],
     waterfall_buffer: &[u32],
@@ -68,6 +70,7 @@ pub fn render_frame(
 	WATERFALL_TOP,
 	state,
     );
+    draw_band_strip(display_buffer, WIDTH, state);
     draw_frequency_overlay(display_buffer, WIDTH, state);
     draw_center_frequency_widget(
 	display_buffer,

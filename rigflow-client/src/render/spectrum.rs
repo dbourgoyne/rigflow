@@ -255,7 +255,7 @@ pub fn draw_frequency_overlay(
     fb_width: usize,
     state: &UiState,
 ) {
-    const CF_COLOR: u32 = 0x00FFFF00;
+    //const CF_COLOR: u32 = 0x00FFFF00;
     const TF_COLOR: u32 = 0x00FFA500;
 
     // 2x text metrics for the 5x7 font:
@@ -264,16 +264,17 @@ pub fn draw_frequency_overlay(
     const TEXT_HEIGHT_2X: usize = 14;
 
     // Top-left overlay for center frequency
-    let cf_text = format!("CF: {}", format_freq_hz(state.center_freq_hz));
-    let cf_x = SPECTRUM_PLOT_X0 + 8;
-    let cf_y = SPECTRUM_PLOT_Y0 + 6;
+    //let cf_text = format!("CF: {}", format_freq_hz(state.center_freq_hz));
+    //let cf_x = SPECTRUM_PLOT_X0 + 8;
+    //let cf_y = SPECTRUM_PLOT_Y0 + 6;
     //draw_text_2x(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
     //draw_text(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
 
     // Target-frequency label above the target marker location
     if let Some(tf_x_center) = freq_to_plot_x(state.target_freq_hz, state) {
         //let tf_text = format!("TF: {}", format_freq_hz(state.target_freq_hz));
-	let tf_text = format!("{}", format_freq_hz(state.target_freq_hz));
+	//let tf_text = format!("{}", format_freq_hz(state.target_freq_hz));
+	let tf_text = format_freq_hz(state.target_freq_hz).to_string();
         let tf_width = tf_text.chars().count() * CHAR_ADVANCE_2X;
 
         let mut tf_x = tf_x_center.saturating_sub(tf_width / 2);
