@@ -14,6 +14,7 @@ use crate::{
     UiState,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub fn handle_media_packet(
     packet: &[u8],
     jitter: &Arc<Mutex<JitterBuffer>>,
@@ -60,7 +61,8 @@ fn handle_audio_packet(
     sequence: u32,
     jitter: &Arc<Mutex<JitterBuffer>>,
 ) {
-    if payload.len() < 2 || payload.len() % 2 != 0 {
+    
+    if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
     }
 

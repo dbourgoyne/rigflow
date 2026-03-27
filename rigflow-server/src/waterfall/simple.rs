@@ -60,10 +60,12 @@ impl WaterfallGenerator {
         let mut mags = vec![0.0_f32; self.fft_size];
         let half = self.fft_size / 2;
 
-        for i in 0..self.fft_size {
-            let src = (i + half) % self.fft_size;
-            mags[i] = self.buffer[src].norm();
-        }
+	// 'mag' is a mutable reference to the element in 'mags'
+	for (i, mag) in mags.iter_mut().enumerate().take(self.fft_size) {
+	    // Use *mag to modify the value directly
+	    let src = (i + half) % self.fft_size;
+	    *mag = self.buffer[src].norm();
+	}
 
         // Convert to dB
         let eps = 1e-12_f32;

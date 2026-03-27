@@ -24,7 +24,7 @@ impl Default for UiState {
             ssb_pitch_hz: 0.0,
             input_sample_rate_hz: 0.0,
             waterfall_bins: 0,
-            audio_sample_rate_hz: 0.0 as f32,
+            audio_sample_rate_hz: 0.0,
             audio_format: "unknown".to_string(),
             waterfall_frame_rate_hz: 0.0,
             status: "starting".to_string(),
