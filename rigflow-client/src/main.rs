@@ -17,7 +17,7 @@ use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
 use crate::input::keyboard::collect_keyboard_actions;
-use crate::input::mouse::collect_mouse_actions;
+use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions};
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
 use crate::app::actions::ui_action_to_client_message;
@@ -164,6 +164,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	}
 
 	for action in crate::input::mouse::collect_center_freq_widget_actions(&window, &state_snapshot) {
+	    if let Some(msg) = ui_action_to_client_message(action) {
+		let _ = ws_cmd_tx.send(msg);
+	    }
+	}
+
+	for action in collect_waterfall_wheel_actions(&window, &state_snapshot) {
 	    if let Some(msg) = ui_action_to_client_message(action) {
 		let _ = ws_cmd_tx.send(msg);
 	    }

@@ -1,8 +1,12 @@
-use minifb::{MouseButton, MouseMode, Window};
+use minifb::{Key, MouseButton, MouseMode, Window};
 
 use crate::{
     app::{
-        layout::{SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_WIDTH, FREQ_WIDGET_X, FREQ_WIDGET_Y},
+        layout::{
+	    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_WIDTH,
+	    FREQ_WIDGET_X, FREQ_WIDGET_Y,
+	    HEIGHT, WATERFALL_TOP, WIDTH
+	},
         state::UiState,
     },
     input::keyboard::UiAction,
@@ -10,6 +14,52 @@ use crate::{
         apply_digit_wheel_delta, hit_test_digit, FrequencyWidgetLayout,
     },
 };
+
+const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
+const WATERFALL_TUNE_STEP_FAST_HZ: f32 = 10_000.0;
+
+pub fn collect_waterfall_wheel_actions(
+    window: &Window,
+    state: &UiState,
+) -> Vec<UiAction> {
+    let mut actions = Vec::new();
+
+    let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) else {
+        return actions;
+    };
+
+    if !mouse_over_waterfall(mx, my) {
+        return actions;
+    }
+
+    let (_, wheel_y) = window.get_scroll_wheel().unwrap_or((0.0, 0.0));
+    if wheel_y == 0.0 {
+        return actions;
+    }
+
+    let step_hz = if window.is_key_down(Key::LeftShift) || window.is_key_down(Key::RightShift) {
+        WATERFALL_TUNE_STEP_FAST_HZ
+    } else {
+        WATERFALL_TUNE_STEP_HZ
+    };
+
+    let dir = wheel_y.signum();
+    let next = state.target_freq_hz + dir * step_hz;
+
+    actions.push(UiAction::SetTargetFrequency(next));
+
+    actions
+}
+
+fn mouse_over_waterfall(mx: f32, my: f32) -> bool {
+    let x = mx as isize;
+    let y = my as isize;
+
+    x >= 0
+        && x < WIDTH as isize
+        && y >= WATERFALL_TOP as isize
+        && y < HEIGHT as isize
+}
 
 pub fn update_center_freq_widget_hover(window: &Window, state: &mut UiState) {
     let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) else {
