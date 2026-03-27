@@ -272,7 +272,8 @@ pub fn draw_frequency_overlay(
 
     // Target-frequency label above the target marker location
     if let Some(tf_x_center) = freq_to_plot_x(state.target_freq_hz, state) {
-        let tf_text = format!("TF: {}", format_freq_hz(state.target_freq_hz));
+        //let tf_text = format!("TF: {}", format_freq_hz(state.target_freq_hz));
+	let tf_text = format!("{}", format_freq_hz(state.target_freq_hz));
         let tf_width = tf_text.chars().count() * CHAR_ADVANCE_2X;
 
         let mut tf_x = tf_x_center.saturating_sub(tf_width / 2);
