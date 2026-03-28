@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
-
 use rigflow_protocol::ServerMessage;
 
 use crate::dsp::demod::{DemodMode, Sideband};
 use crate::server::control::RadioCommand;
+use crate::server::config::{WATERFALL_BINS, WATERFALL_FRAME_RATE_HZ};
 
 #[derive(Debug)]
 pub struct RadioState {
@@ -51,8 +51,8 @@ impl Default for StreamState {
         Self {
             audio_sample_rate_hz: 48_000.0,
             audio_format: "i16".to_string(),
-            waterfall_bins: 512,
-            waterfall_frame_rate_hz: 10.0,
+            waterfall_bins: WATERFALL_BINS,
+            waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
             input_sample_rate_hz: 0.0,

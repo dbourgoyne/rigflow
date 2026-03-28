@@ -10,7 +10,7 @@ use rigflow_server::{
     api::websocket::ws_handler,
     server::{
         app_state::AppState,
-        config::{choose_block_size, ServerConfig, SourceKind},
+        config::{choose_block_size, ServerConfig, SourceKind, WATERFALL_BINS, WATERFALL_EVERY_N_BLOCKS},
         control::RadioCommand,
         workers::{
             spawn_dsp_worker,
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pitch_hz = 0.0;
 
     let block_size = choose_block_size(&cfg.source);
-    let waterfall_bins = 1024;
+    let waterfall_bins = WATERFALL_BINS;
     let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
 
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             spawn_dsp_worker(
                 cfg.clone(),
                 block_size,
-                10,
+                WATERFALL_EVERY_N_BLOCKS,
                 state.radio.clone(),
                 state.stream.clone(),
                 state.udp_audio_target.clone(),
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             spawn_nonrealtime_worker(
                 cfg.clone(),
                 block_size,
-                10,
+                WATERFALL_EVERY_N_BLOCKS,
                 state.radio.clone(),
                 state.stream.clone(),
                 state.udp_audio_target.clone(),

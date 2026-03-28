@@ -36,6 +36,7 @@ pub fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
     Some(x.round() as usize)
 }
 
+/*
 pub fn plot_x_to_freq_hz(x: usize, state: &UiState) -> Option<f32> {
     if !(SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1).contains(&x) {
         return None;
@@ -49,3 +50,4 @@ pub fn plot_x_to_freq_hz(x: usize, state: &UiState) -> Option<f32> {
     let frac = (x - SPECTRUM_PLOT_X0) as f32 / (SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0) as f32;
     Some(visible_left_hz(state) + frac * span)
 }
+*/

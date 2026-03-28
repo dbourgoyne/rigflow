@@ -13,7 +13,7 @@ use crate::{
     dsp::pipeline::DspPipeline,
     server::{
         app_state::{RadioState, StreamState},
-        config::{choose_decimation, make_source_config, ServerConfig, SourceKind},
+        config::{choose_decimation, make_source_config, ServerConfig, SourceKind, WATERFALL_FRAME_RATE_HZ, WATERFALL_BINS},
         control::RadioCommand,
         pipeline_factory::{build_pipeline, mode_to_string, pipeline_settings_for_mode, sideband_to_string},
     },
@@ -310,8 +310,8 @@ pub fn spawn_dsp_worker(
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
-            s.waterfall_bins = 1024;
-            s.waterfall_frame_rate_hz = 10.0;
+            s.waterfall_bins = WATERFALL_BINS;
+            s.waterfall_frame_rate_hz = WATERFALL_FRAME_RATE_HZ;
             s.center_freq_hz = initial_center;
             s.target_freq_hz = initial_target;
             s.input_sample_rate_hz = input_sample_rate_hz;
@@ -321,8 +321,8 @@ pub fn spawn_dsp_worker(
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),
             audio_format: "i16".to_string(),
-            waterfall_bins: 1024,
-            waterfall_frame_rate_hz: 10.0,
+            waterfall_bins: WATERFALL_BINS,
+            waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
             center_freq_hz: initial_center,
             target_freq_hz: initial_target,
             input_sample_rate_hz,
@@ -497,8 +497,8 @@ pub fn spawn_nonrealtime_worker(
         if let Ok(mut s) = stream_state.try_write() {
             s.audio_sample_rate_hz = pipeline.client_output_sample_rate();
             s.audio_format = "i16".to_string();
-            s.waterfall_bins = 1024;
-            s.waterfall_frame_rate_hz = 10.0;
+            s.waterfall_bins = WATERFALL_BINS;
+            s.waterfall_frame_rate_hz = WATERFALL_FRAME_RATE_HZ;
             s.center_freq_hz = initial_center;
             s.target_freq_hz = initial_target;
             s.input_sample_rate_hz = input_sample_rate_hz;
@@ -508,8 +508,8 @@ pub fn spawn_nonrealtime_worker(
         let _ = tx.send(ServerMessage::StreamConfig {
             audio_sample_rate_hz: pipeline.client_output_sample_rate(),
             audio_format: "i16".to_string(),
-            waterfall_bins: 1024,
-            waterfall_frame_rate_hz: 10.0,
+            waterfall_bins: WATERFALL_BINS,
+            waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
             center_freq_hz: initial_center,
             target_freq_hz: initial_target,
             input_sample_rate_hz,

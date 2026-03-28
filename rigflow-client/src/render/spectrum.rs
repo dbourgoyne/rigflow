@@ -1,7 +1,7 @@
 use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz, visible_span_hz};
 use crate::app::layout::{
     BAND_STRIP_Y1, HEIGHT, SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_PLOT_HEIGHT,
-    SPECTRUM_PLOT_WIDTH, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_Y0,
+    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_Y0,
     SPECTRUM_PLOT_Y1, SPECTRUM_SMOOTHING_ALPHA,
 };
 use crate::app::state::UiState;
