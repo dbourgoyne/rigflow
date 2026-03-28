@@ -78,8 +78,8 @@ fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
         return None;
     }
 
-    let left_hz = state.center_freq_hz - state.input_sample_rate_hz * 0.5;
-    let right_hz = state.center_freq_hz + state.input_sample_rate_hz * 0.5;
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
 
     if freq_hz < left_hz || freq_hz > right_hz {
         return None;
@@ -449,4 +449,20 @@ pub fn draw_separator(buffer: &mut [u32], width: usize, y: usize) {
 
     let row = &mut buffer[y * width..(y + 1) * width];
     row.fill(COLOR_SEPARATOR);
+}
+
+pub fn visible_span_hz(state: &UiState) -> f32 {
+    if state.input_sample_rate_hz <= 0.0 {
+        0.0
+    } else {
+        state.input_sample_rate_hz / state.spectrum_zoom_x.max(1.0)
+    }
+}
+
+pub fn visible_left_hz(state: &UiState) -> f32 {
+    state.center_freq_hz - visible_span_hz(state) * 0.5
+}
+
+pub fn visible_right_hz(state: &UiState) -> f32 {
+    state.center_freq_hz + visible_span_hz(state) * 0.5
 }

@@ -15,6 +15,8 @@ pub struct UiState {
     pub status: String,
     pub hovered_center_freq_digit: Option<usize>,
     pub selected_license: LicenseClass,
+    pub spectrum_zoom_x: f32,
+    pub zoom_slider_dragging: bool,
 }
 
 
@@ -34,6 +36,8 @@ impl Default for UiState {
             status: "starting".to_string(),
 	    hovered_center_freq_digit: None,
 	    selected_license: LicenseClass::General,
+	    spectrum_zoom_x: 1.0,
+	    zoom_slider_dragging: false,
         }
     }
 }

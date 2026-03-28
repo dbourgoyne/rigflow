@@ -24,6 +24,7 @@ use crate::{
 
 use crate::render::bands::draw_band_strip;
 use crate::render::om_band::draw_om_band_strip;
+use crate::render::control_panel::draw_control_panel;
 
 pub fn render_frame(
     display_buffer: &mut [u32],
@@ -85,6 +86,7 @@ pub fn render_frame(
 	state.hovered_center_freq_digit,
     );
     draw_separator(display_buffer, WIDTH, WATERFALL_TOP.saturating_sub(1));
+    draw_control_panel(display_buffer, WIDTH, state);
 }
 
 fn clear_spectrum_region(display_buffer: &mut [u32]) {

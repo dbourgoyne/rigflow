@@ -110,6 +110,11 @@ fn handle_waterfall_packet(
         return;
     }
 
+    let state_snapshot = match ui_state.lock() {
+	Ok(state) => state.clone(),
+	Err(_) => return,
+    };
+
     if let Ok(mut fb) = waterfall_buffer.lock() {
         draw_row(
             &mut fb,
@@ -117,6 +122,7 @@ fn handle_waterfall_packet(
             width,
             height,
             waterfall_top,
+	    &state_snapshot,
         );
     }
 }

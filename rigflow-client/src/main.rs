@@ -135,6 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	{
 	    let mut state_mut = ui_state.lock().unwrap();
 	    crate::input::mouse::update_center_freq_widget_hover(&window, &mut state_mut);
+	    crate::input::mouse::update_zoom_slider(&window, &mut state_mut);
 	}
 
 	for action in collect_keyboard_actions(&window, &state_snapshot) {

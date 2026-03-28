@@ -7,9 +7,6 @@ pub const SPECTRUM_LEFT_PAD: usize = 48;
 pub const SPECTRUM_RIGHT_PAD: usize = 12;
 pub const SPECTRUM_TOP_PAD: usize = 16;
 pub const SPECTRUM_BOTTOM_PAD: usize = 40;
-pub const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
-pub const SPECTRUM_PLOT_X1: usize = WIDTH - SPECTRUM_RIGHT_PAD;
-pub const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
 pub const SPECTRUM_PLOT_Y0: usize = SPECTRUM_TOP_PAD;
 pub const SPECTRUM_PLOT_Y1: usize = SPECTRUM_HEIGHT - SPECTRUM_BOTTOM_PAD;
 pub const SPECTRUM_PLOT_HEIGHT: usize = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
@@ -29,3 +26,19 @@ pub const OM_STRIP_Y1: usize = OM_STRIP_Y0 + OM_STRIP_HEIGHT;
 pub const BAND_STRIP_HEIGHT: usize = 22;
 pub const BAND_STRIP_Y0: usize = OM_STRIP_Y1 + 4;
 pub const BAND_STRIP_Y1: usize = BAND_STRIP_Y0 + BAND_STRIP_HEIGHT;
+
+pub const CONTROL_PANEL_WIDTH: usize = 56;
+
+pub const PLOT_WIDTH: usize = WIDTH - CONTROL_PANEL_WIDTH;
+
+pub const CONTROL_PANEL_X0: usize = WIDTH - CONTROL_PANEL_WIDTH;
+pub const CONTROL_PANEL_X1: usize = WIDTH;
+
+pub const ZOOM_SLIDER_X0: usize = CONTROL_PANEL_X0 + 18;
+pub const ZOOM_SLIDER_X1: usize = CONTROL_PANEL_X0 + 38;
+pub const ZOOM_SLIDER_Y0: usize = 40;
+pub const ZOOM_SLIDER_Y1: usize = HEIGHT - 40;
+
+pub const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
+pub const SPECTRUM_PLOT_X1: usize = PLOT_WIDTH - SPECTRUM_RIGHT_PAD;
+pub const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;

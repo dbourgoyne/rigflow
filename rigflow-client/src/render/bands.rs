@@ -6,6 +6,7 @@ use crate::{
     },
     render::text::draw_text,
 };
+use crate::render::spectrum::{visible_left_hz, visible_right_hz};
 
 pub fn draw_band_strip(
     buffer: &mut [u32],
@@ -16,8 +17,8 @@ pub fn draw_band_strip(
         return;
     }
 
-    let left_hz = state.center_freq_hz - state.input_sample_rate_hz * 0.5;
-    let right_hz = state.center_freq_hz + state.input_sample_rate_hz * 0.5;
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
 
     let mut active_band: Option<(&'static RadioBand, usize, usize)> = None;
 
@@ -81,8 +82,8 @@ fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
         return None;
     }
 
-    let left_hz = state.center_freq_hz - state.input_sample_rate_hz * 0.5;
-    let right_hz = state.center_freq_hz + state.input_sample_rate_hz * 0.5;
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
 
     if freq_hz < left_hz || freq_hz > right_hz {
         return None;

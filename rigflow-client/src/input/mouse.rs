@@ -5,7 +5,8 @@ use crate::{
         layout::{
 	    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_WIDTH,
 	    FREQ_WIDGET_X, FREQ_WIDGET_Y,
-	    HEIGHT, WATERFALL_TOP, WIDTH
+	    HEIGHT, WATERFALL_TOP, WIDTH,
+	    ZOOM_SLIDER_X0, ZOOM_SLIDER_X1, ZOOM_SLIDER_Y0, ZOOM_SLIDER_Y1,
 	},
         state::UiState,
     },
@@ -14,6 +15,7 @@ use crate::{
         apply_digit_wheel_delta, hit_test_digit, FrequencyWidgetLayout,
     },
 };
+use crate::render::spectrum::visible_left_hz;
 
 const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
 const WATERFALL_TUNE_STEP_FAST_HZ: f32 = 10_000.0;
@@ -140,8 +142,39 @@ fn plot_x_to_frequency_hz(x: usize, state: &UiState) -> Option<f32> {
     let plot_x = x.checked_sub(SPECTRUM_PLOT_X0)?;
     let frac = plot_x as f32 / SPECTRUM_PLOT_WIDTH as f32;
 
-    let left_hz = state.center_freq_hz - state.input_sample_rate_hz * 0.5;
+    let left_hz = visible_left_hz(state);
     let freq_hz = left_hz + frac * state.input_sample_rate_hz;
 
     Some(freq_hz)
+}
+
+pub fn update_zoom_slider(window: &Window, state: &mut UiState) {
+    let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) else {
+        state.zoom_slider_dragging = false;
+        return;
+    };
+
+    let x = mx as isize;
+    let y = my as isize;
+
+    let over_slider =
+        x >= ZOOM_SLIDER_X0 as isize
+            && x <= ZOOM_SLIDER_X1 as isize
+            && y >= ZOOM_SLIDER_Y0 as isize
+            && y <= ZOOM_SLIDER_Y1 as isize;
+
+    if window.get_mouse_down(MouseButton::Left) {
+        if over_slider || state.zoom_slider_dragging {
+            state.zoom_slider_dragging = true;
+            state.spectrum_zoom_x = zoom_from_slider_y(my).clamp(1.0, 10.0);
+        }
+    } else {
+        state.zoom_slider_dragging = false;
+    }
+}
+
+fn zoom_from_slider_y(mouse_y: f32) -> f32 {
+    let y = mouse_y.clamp(ZOOM_SLIDER_Y0 as f32, ZOOM_SLIDER_Y1 as f32);
+    let t = (ZOOM_SLIDER_Y1 as f32 - y) / (ZOOM_SLIDER_Y1 - ZOOM_SLIDER_Y0) as f32;
+    1.0 + t * 9.0
 }
