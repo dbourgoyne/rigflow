@@ -50,6 +50,10 @@ use crate::app::layout::{
 use rigflow_protocol::ClientMessage;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::Builder::from_default_env()
+    .format_timestamp_millis()
+    .init();
+    
     let jitter = Arc::new(Mutex::new(JitterBuffer::new(
         PACKET_SAMPLES,
         TARGET_BUFFER_SAMPLES,

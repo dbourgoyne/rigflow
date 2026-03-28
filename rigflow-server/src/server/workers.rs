@@ -250,7 +250,7 @@ pub fn spawn_realtime_capture_worker(
             }
 
             if stats_start.elapsed() >= Duration::from_secs(1) {
-                info!("capture stats: iq_samples/sec={}", iq_samples_per_sec);
+                debug!("capture stats: iq_samples/sec={}", iq_samples_per_sec);
                 stats_start = Instant::now();
                 iq_samples_per_sec = 0;
             }
@@ -418,15 +418,34 @@ pub fn spawn_dsp_worker(
                     0.0
                 };
 
-                debug!("per-block avg audio samples = {}", per_block);
-                info!(
-                    "stats: iq_samples/sec={} audio_samples/sec={} audio_packets/sec={} blocks/sec={} block_size={} realtime=true",
-                    iq_samples_per_sec,
-                    audio_samples_per_sec,
-                    audio_packets_per_sec,
-                    blocks_per_sec,
-                    block_size
-                );
+		if log::log_enabled!(log::Level::Debug) {
+		    debug!("per-block avg audio samples = {}", per_block);
+		};
+		if log::log_enabled!(log::Level::Info) {
+		    let elapsed = stats_start.elapsed().as_secs_f64();
+		    let iq_rate = iq_samples_per_sec as f64 / elapsed;
+		    let audio_rate = audio_samples_per_sec as f64 / elapsed;
+		    let packet_rate = audio_packets_per_sec as f64 / elapsed;
+		    let block_rate = blocks_per_sec as f64 / elapsed;
+		    info!(
+			"stats: iq={:.3} Msps audio={:.1} ksps packets={:.0}/s blocks={:.1}/s block_size={}",
+			iq_rate / 1_000_000.0,
+			audio_rate / 1_000.0,
+			packet_rate,
+			block_rate,
+			block_size
+		    );
+		    /*
+                    info!(
+			"stats: iq_samples/sec={} audio_samples/sec={} audio_packets/sec={} blocks/sec={} block_size={} realtime=true",
+			iq_samples_per_sec,
+			audio_samples_per_sec,
+			audio_packets_per_sec,
+			blocks_per_sec,
+			block_size
+                    );
+		    */
+		};
 
                 stats_start = Instant::now();
                 iq_samples_per_sec = 0;
