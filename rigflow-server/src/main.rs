@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::mpsc::sync_channel;
 
+use log::info;
 use axum::{routing::get, Router};
 use num_complex::Complex32;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -24,6 +25,8 @@ use rigflow_server::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+    
     let cfg = match ServerConfig::from_args() {
         Ok(c) => c,
         Err(msg) => {
@@ -32,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    println!("rigflow_server config: {:?}", cfg);
+    info!("rigflow_server config: {:?}", cfg);
 
     let center_freq_hz = cfg.center_freq_hz;
     let target_freq_hz = cfg.target_freq_hz;
@@ -60,8 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/ws", get(ws_handler))
         .with_state(state.clone());
 
-    println!("rigflow_server listening on ws://{ws_addr}/ws");
-    println!("UDP registration listener on {}", udp_registration_addr);
+    info!("rigflow_server listening on ws://{ws_addr}/ws");
+    info!("UDP registration listener on {}", udp_registration_addr);
 
     {
         let udp_audio_target = state.udp_audio_target.clone();

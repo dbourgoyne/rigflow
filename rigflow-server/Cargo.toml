@@ -5,6 +5,8 @@ edition = "2021"
 default-run = "rigflow-server"
 
 [dependencies]
+log = "0.4"
+env_logger = "0.11"
 rustfft = "6.4.1"
 tokio = { version = "1", features = ["full"] }
 num-complex = "0.4"

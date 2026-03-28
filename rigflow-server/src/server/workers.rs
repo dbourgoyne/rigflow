@@ -3,6 +3,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use log::{debug, info, warn, error};
 use num_complex::Complex32;
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -249,7 +250,7 @@ pub fn spawn_realtime_capture_worker(
             }
 
             if stats_start.elapsed() >= Duration::from_secs(1) {
-                println!("capture stats: iq_samples/sec={}", iq_samples_per_sec);
+                info!("capture stats: iq_samples/sec={}", iq_samples_per_sec);
                 stats_start = Instant::now();
                 iq_samples_per_sec = 0;
             }
@@ -417,8 +418,8 @@ pub fn spawn_dsp_worker(
                     0.0
                 };
 
-                println!("per-block avg audio samples = {}", per_block);
-                println!(
+                debug!("per-block avg audio samples = {}", per_block);
+                info!(
                     "stats: iq_samples/sec={} audio_samples/sec={} audio_packets/sec={} blocks/sec={} block_size={} realtime=true",
                     iq_samples_per_sec,
                     audio_samples_per_sec,

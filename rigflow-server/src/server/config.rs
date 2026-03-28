@@ -3,8 +3,8 @@ use rigflow_core::dsp::demod::DemodMode;
 use crate::source::factory::SourceConfig;
 
 pub const WATERFALL_BINS: usize = 1024;
-pub const WATERFALL_FRAME_RATE_HZ: f32 = 20.0;
-pub const WATERFALL_EVERY_N_BLOCKS: usize = 5;
+pub const WATERFALL_FRAME_RATE_HZ: f32 = 100.0;
+pub const WATERFALL_EVERY_N_BLOCKS: usize = 1;
 
 #[derive(Debug, Clone)]
 pub enum SourceKind {
@@ -237,6 +237,6 @@ pub fn choose_decimation(source: &SourceKind) -> usize {
     match source {
         SourceKind::Fake => 4,
         SourceKind::Wav => 16,
-        SourceKind::RtlSdr => 8,
+        SourceKind::RtlSdr => 12, //8,
     }
 }
