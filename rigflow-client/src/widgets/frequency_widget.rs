@@ -71,7 +71,7 @@ pub fn apply_digit_wheel_delta(center_freq_hz: u64, digit_index: usize, wheel_de
     let step = digit_place_value(digit_index) as i64;
     let dir = if wheel_delta > 0.0 { 1i64 } else { -1i64 };
 
-    let next = center_freq_hz as i64 + dir * step;
+    let next = center_freq_hz as i64 - dir * step;
     next.clamp(0, 9_999_999_999) as u64
 }
 

@@ -1,3 +1,4 @@
+use crate::render::color::COLOR_TRACE;
 use crate::app::layout::{
     HEIGHT,
     SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
@@ -12,7 +13,6 @@ use crate::render::color::{
     COLOR_LABEL,
     COLOR_BLACK,
     COLOR_GRID,
-    COLOR_SPECTRUM,
     COLOR_SEPARATOR,
 };
 
@@ -166,29 +166,57 @@ pub fn draw_spectrum_grid(
 }
 
 
+
 pub fn draw_spectrum_trace(
     buffer: &mut [u32],
     width: usize,
     spectrum_db: &[f32],
+    state: &UiState,
 ) {
-    if spectrum_db.len() < 2 || SPECTRUM_PLOT_WIDTH < 2 {
+    if spectrum_db.is_empty() {
         return;
     }
 
-    let mut prev_x = SPECTRUM_PLOT_X0 as i32;
-    let mut prev_y = db_to_plot_y(spectrum_db[0]) as i32;
+    let plot_x0 = SPECTRUM_PLOT_X0;
+    let plot_x1 = SPECTRUM_PLOT_X1.min(width);
+    let plot_width = plot_x1.saturating_sub(plot_x0);
+    if plot_width == 0 {
+        return;
+    }
 
-    for plot_x in 1..SPECTRUM_PLOT_WIDTH {
-        let bin = plot_x * spectrum_db.len() / SPECTRUM_PLOT_WIDTH;
-        let bin = bin.min(spectrum_db.len() - 1);
+    let zoom = state.spectrum_zoom_x.clamp(1.0, 10.0);
+    let visible_bins = (spectrum_db.len() as f32 / zoom).round().max(1.0) as usize;
+    let start_bin = spectrum_db.len().saturating_sub(visible_bins) / 2;
 
-        let x = (SPECTRUM_PLOT_X0 + plot_x) as i32;
-        let y = db_to_plot_y(spectrum_db[bin]) as i32;
+    let mut prev: Option<(usize, usize)> = None;
 
-        draw_line(buffer, width, prev_x, prev_y, x, y, COLOR_SPECTRUM);
+    for x in plot_x0..plot_x1 {
+        let plot_x = x - plot_x0;
+        let src_x = start_bin + plot_x * visible_bins / plot_width;
+        let db = spectrum_db[src_x.min(spectrum_db.len() - 1)];
 
-        prev_x = x;
-        prev_y = y;
+	let plot_height = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
+
+	let y = db_to_y(
+	    db,
+	    SPECTRUM_DB_MIN,
+	    SPECTRUM_DB_MAX,
+	    plot_height,
+	) + SPECTRUM_PLOT_Y0;
+
+        if let Some((px, py)) = prev {
+  	    draw_line(
+		buffer,
+		width,
+		px as i32,
+		py as i32,
+		x as i32,
+		y as i32,
+		COLOR_TRACE,
+	    );
+        }
+
+        prev = Some((x, y));
     }
 }
 

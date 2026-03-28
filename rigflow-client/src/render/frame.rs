@@ -64,6 +64,7 @@ pub fn render_frame(
         display_buffer,
         WIDTH,
         spectrum_db,
+	state,
     );
     draw_tuning_marker(
 	display_buffer,

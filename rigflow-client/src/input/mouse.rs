@@ -46,7 +46,7 @@ pub fn collect_waterfall_wheel_actions(
     };
 
     let dir = wheel_y.signum();
-    let next = state.target_freq_hz + dir * step_hz;
+    let next = state.target_freq_hz - dir * step_hz;
 
     actions.push(UiAction::SetTargetFrequency(next));
 
