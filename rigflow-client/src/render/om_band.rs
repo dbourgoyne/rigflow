@@ -12,7 +12,7 @@ use crate::{
         text::draw_text,
     },
 };
-use crate::render::spectrum::{visible_left_hz, visible_right_hz};
+use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz, visible_span_hz};
 
 pub fn draw_om_band_strip(
     buffer: &mut [u32],
@@ -109,23 +109,4 @@ fn om_kind_color(kind: OmKind) -> u32 {
         OmKind::UsbPhoneCwRttyData => COLOR_OM_USB_PHONE_CW_RTTY_DATA,
         OmKind::FixedDigitalMessages => COLOR_OM_FIXED_DIGITAL,
     }
-}
-
-fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
-    if state.input_sample_rate_hz <= 0.0 {
-        return None;
-    }
-
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
-
-    if freq_hz < left_hz || freq_hz > right_hz {
-        return None;
-    }
-
-    let frac = (freq_hz - left_hz) / (right_hz - left_hz);
-    let plot_width = (SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0) as f32;
-    let x = SPECTRUM_PLOT_X0 as f32 + frac * plot_width;
-
-    Some(x.round() as usize)
 }

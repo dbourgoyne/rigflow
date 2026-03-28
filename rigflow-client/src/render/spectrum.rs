@@ -20,6 +20,7 @@ use crate::render::text::draw_text;
 use crate::app::state::UiState;
 use crate::render::color::COLOR_PASSBAND;
 use crate::app::layout::BAND_STRIP_Y1;
+use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz, visible_span_hz};
 
 const SSB_LOW_HZ: f32 = 300.0;
 const SSB_HIGH_HZ: f32 = 3000.0;
@@ -71,25 +72,6 @@ fn passband_x_range(state: &UiState) -> Option<(usize, usize)> {
     let x0 = freq_to_plot_x(start_hz, state)?;
     let x1 = freq_to_plot_x(end_hz, state)?;
     Some((x0, x1))
-}
-
-fn freq_to_plot_x(freq_hz: f32, state: &UiState) -> Option<usize> {
-    if state.input_sample_rate_hz <= 0.0 {
-        return None;
-    }
-
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
-
-    if freq_hz < left_hz || freq_hz > right_hz {
-        return None;
-    }
-
-    let frac = (freq_hz - left_hz) / (right_hz - left_hz);
-    let plot_width = (SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0) as f32;
-    let x = SPECTRUM_PLOT_X0 as f32 + frac * plot_width;
-
-    Some(x.round() as usize)
 }
 
 fn blend(dst: u32, src: u32) -> u32 {
@@ -477,20 +459,4 @@ pub fn draw_separator(buffer: &mut [u32], width: usize, y: usize) {
 
     let row = &mut buffer[y * width..(y + 1) * width];
     row.fill(COLOR_SEPARATOR);
-}
-
-pub fn visible_span_hz(state: &UiState) -> f32 {
-    if state.input_sample_rate_hz <= 0.0 {
-        0.0
-    } else {
-        state.input_sample_rate_hz / state.spectrum_zoom_x.max(1.0)
-    }
-}
-
-pub fn visible_left_hz(state: &UiState) -> f32 {
-    state.center_freq_hz - visible_span_hz(state) * 0.5
-}
-
-pub fn visible_right_hz(state: &UiState) -> f32 {
-    state.center_freq_hz + visible_span_hz(state) * 0.5
 }

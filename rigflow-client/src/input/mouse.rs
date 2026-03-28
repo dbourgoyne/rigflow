@@ -15,7 +15,7 @@ use crate::{
         apply_digit_wheel_delta, hit_test_digit, FrequencyWidgetLayout,
     },
 };
-use crate::render::spectrum::visible_left_hz;
+use crate::app::frequency_view::visible_left_hz;
 
 const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
 const WATERFALL_TUNE_STEP_FAST_HZ: f32 = 10_000.0;
