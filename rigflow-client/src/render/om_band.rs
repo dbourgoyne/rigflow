@@ -12,7 +12,11 @@ use crate::{
         text::draw_text,
     },
 };
-use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz, visible_span_hz};
+use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz};
+
+const OM_LABEL_COLOR: u32 = 0x00f0f0f0;
+const OM_BORDER_COLOR: u32 = 0x00505050;
+const OM_BACKGROUND: u32 = 0x00000000; // transparent/black depending on your style
 
 pub fn draw_om_band_strip(
     buffer: &mut [u32],
@@ -29,6 +33,14 @@ pub fn draw_om_band_strip(
     let segments = om_segments_for_license(state.selected_license);
 
     let mut any_visible = false;
+
+    // Optional: clear OM strip area first (prevents smear/artifacts)
+    for y in OM_STRIP_Y0..OM_STRIP_Y1 {
+        let row = y * fb_width;
+        for x in SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1 {
+            buffer[row + x] = OM_BACKGROUND;
+        }
+    }
 
     for seg in segments {
         let visible_start_hz = left_hz.max(seg.start_hz);
@@ -68,6 +80,12 @@ pub fn draw_om_band_strip(
         }
     }
 
+    // Top border for visual separation
+    let border_row = OM_STRIP_Y0 * fb_width;
+    for x in SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1 {
+        buffer[border_row + x] = OM_BORDER_COLOR;
+    }
+
     if any_visible {
         draw_license_label(buffer, fb_width, state.selected_license);
     }
@@ -82,12 +100,20 @@ fn draw_license_label(
 
     let text_width = label.len() * 6;
     let right_margin = 4usize;
-    let x = SPECTRUM_PLOT_X1
+
+    let mut x = SPECTRUM_PLOT_X1
         .saturating_sub(right_margin)
         .saturating_sub(text_width);
+
+    // Clamp to left side too (important when zoomed way in)
+    let min_x = SPECTRUM_PLOT_X0 + 4;
+    if x < min_x {
+        x = min_x;
+    }
+
     let y = OM_STRIP_Y0.saturating_sub(1);
 
-    draw_text(buffer, fb_width, x, y, label, 0x00f0f0f0);
+    draw_text(buffer, fb_width, x, y, label, OM_LABEL_COLOR);
 }
 
 fn license_name(license: LicenseClass) -> &'static str {

@@ -1,12 +1,15 @@
 use crate::{
     app::{
         bands::{RadioBand, RADIO_BANDS},
+        frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz},
         layout::{BAND_STRIP_Y0, BAND_STRIP_Y1, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1},
         state::UiState,
     },
     render::text::draw_text,
 };
-use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz, visible_span_hz};
+
+const BAND_LABEL_COLOR: u32 = 0x00f0f0f0;
+const BAND_BORDER_COLOR: u32 = 0x00606060;
 
 pub fn draw_band_strip(
     buffer: &mut [u32],
@@ -48,11 +51,18 @@ pub fn draw_band_strip(
             continue;
         }
 
+        // Fill the visible band region.
         for y in BAND_STRIP_Y0..BAND_STRIP_Y1 {
             let row = y * fb_width;
             for x in x0..=x1 {
                 buffer[row + x] = band.color;
             }
+        }
+
+        // Thin top border for visual separation.
+        let border_row = BAND_STRIP_Y0 * fb_width;
+        for x in x0..=x1 {
+            buffer[border_row + x] = BAND_BORDER_COLOR;
         }
 
         // Choose the band containing the center frequency as the one to label.
@@ -64,15 +74,22 @@ pub fn draw_band_strip(
     if let Some((band, x0, x1)) = active_band {
         let label = format!("{} ({})", band.name, band.preferred_demod);
 
-        let text_width = label.len() * 6; // draw_text uses 5 px + 1 px spacing
+        // draw_text uses 5 px glyph + 1 px spacing
+        let text_width = label.len() * 6;
         let band_width = x1.saturating_sub(x0);
-        let text_x = if band_width > text_width {
+
+        let mut text_x = if band_width > text_width {
             x0 + (band_width - text_width) / 2
         } else {
             x0 + 4
         };
 
+        let max_text_x = SPECTRUM_PLOT_X1.saturating_sub(text_width + 2);
+        if text_x > max_text_x {
+            text_x = max_text_x;
+        }
+
         let text_y = BAND_STRIP_Y0 + 7;
-        draw_text(buffer, fb_width, text_x, text_y, &label, 0x00f0f0f0);
+        draw_text(buffer, fb_width, text_x, text_y, &label, BAND_LABEL_COLOR);
     }
 }

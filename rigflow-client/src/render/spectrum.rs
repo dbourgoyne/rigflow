@@ -1,36 +1,21 @@
-use crate::render::color::COLOR_TRACE;
-use crate::app::layout::{
-    HEIGHT,
-    SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
-    SPECTRUM_PLOT_Y0, SPECTRUM_PLOT_Y1,
-    SPECTRUM_PLOT_WIDTH, SPECTRUM_PLOT_HEIGHT,
-    SPECTRUM_DB_MIN, SPECTRUM_DB_MAX,
-    SPECTRUM_SMOOTHING_ALPHA,
-};
-
-use crate::render::color::{
-    COLOR_AXIS,
-    COLOR_LABEL,
-    COLOR_BLACK,
-    COLOR_GRID,
-    COLOR_SEPARATOR,
-};
-
-use crate::render::text::draw_text;
-use crate::app::state::UiState;
-use crate::render::color::COLOR_PASSBAND;
-use crate::app::layout::BAND_STRIP_Y1;
 use crate::app::frequency_view::{freq_to_plot_x, visible_left_hz, visible_right_hz, visible_span_hz};
+use crate::app::layout::{
+    BAND_STRIP_Y1, HEIGHT, SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_PLOT_HEIGHT,
+    SPECTRUM_PLOT_WIDTH, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_Y0,
+    SPECTRUM_PLOT_Y1, SPECTRUM_SMOOTHING_ALPHA,
+};
+use crate::app::state::UiState;
+use crate::render::color::{
+    COLOR_AXIS, COLOR_BLACK, COLOR_GRID, COLOR_LABEL, COLOR_PASSBAND, COLOR_SEPARATOR,
+    COLOR_TRACE,
+};
+use crate::render::text::draw_text;
 
 const SSB_LOW_HZ: f32 = 300.0;
 const SSB_HIGH_HZ: f32 = 3000.0;
 const WFM_HALF_BW_HZ: f32 = 75_000.0;
 
-pub fn draw_passband(
-    buffer: &mut [u32],
-    width: usize,
-    state: &UiState,
-) {
+pub fn draw_passband(buffer: &mut [u32], width: usize, state: &UiState) {
     let Some((mut x0, mut x1)) = passband_x_range(state) else {
         return;
     };
@@ -55,8 +40,8 @@ pub fn draw_passband(
     }
 
     for y in SPECTRUM_PLOT_Y0..SPECTRUM_PLOT_Y1 {
-        buffer[y * width + x0] = 0x8090ff;
-        buffer[y * width + x1] = 0x8090ff;
+        buffer[y * width + x0] = 0x008090ff;
+        buffer[y * width + x1] = 0x008090ff;
     }
 }
 
@@ -66,6 +51,7 @@ fn passband_x_range(state: &UiState) -> Option<(usize, usize)> {
         "usb" => (target + SSB_LOW_HZ, target + SSB_HIGH_HZ),
         "lsb" => (target - SSB_HIGH_HZ, target - SSB_LOW_HZ),
         "wfm" => (target - WFM_HALF_BW_HZ, target + WFM_HALF_BW_HZ),
+        "nfm" => (target - 6_250.0, target + 6_250.0),
         _ => return None,
     };
 
@@ -113,14 +99,12 @@ pub fn update_spectrum_db(spectrum: &mut Vec<f32>, row: &[u8]) {
     }
 }
 
-
 pub fn draw_spectrum_background(buffer: &mut [u32], width: usize, height: usize) {
     for y in 0..height {
         let row = &mut buffer[y * width..(y + 1) * width];
         row.fill(COLOR_BLACK);
     }
 }
-
 
 pub fn draw_spectrum_grid(
     buffer: &mut [u32],
@@ -136,18 +120,16 @@ pub fn draw_spectrum_grid(
             continue;
         }
 
-        let y = db_to_y(db, db_min, db_max, plot_height);
-        if y >= plot_height {
+        let y = db_to_y(db, db_min, db_max, plot_height) + SPECTRUM_PLOT_Y0;
+        if y >= SPECTRUM_PLOT_Y1 {
             continue;
         }
 
-        for x in 0..width {
+        for x in SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1.min(width) {
             buffer[y * width + x] = COLOR_GRID;
         }
     }
 }
-
-
 
 pub fn draw_spectrum_trace(
     buffer: &mut [u32],
@@ -170,6 +152,7 @@ pub fn draw_spectrum_trace(
     let visible_bins = (spectrum_db.len() as f32 / zoom).round().max(1.0) as usize;
     let start_bin = spectrum_db.len().saturating_sub(visible_bins) / 2;
 
+    let plot_height = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
     let mut prev: Option<(usize, usize)> = None;
 
     for x in plot_x0..plot_x1 {
@@ -177,49 +160,37 @@ pub fn draw_spectrum_trace(
         let src_x = start_bin + plot_x * visible_bins / plot_width;
         let db = spectrum_db[src_x.min(spectrum_db.len() - 1)];
 
-	let plot_height = SPECTRUM_PLOT_Y1 - SPECTRUM_PLOT_Y0;
-
-	let y = db_to_y(
-	    db,
-	    SPECTRUM_DB_MIN,
-	    SPECTRUM_DB_MAX,
-	    plot_height,
-	) + SPECTRUM_PLOT_Y0;
+        let y = db_to_y(db, SPECTRUM_DB_MIN, SPECTRUM_DB_MAX, plot_height) + SPECTRUM_PLOT_Y0;
 
         if let Some((px, py)) = prev {
-  	    draw_line(
-		buffer,
-		width,
-		px as i32,
-		py as i32,
-		x as i32,
-		y as i32,
-		COLOR_TRACE,
-	    );
+            draw_line(
+                buffer,
+                width,
+                px as i32,
+                py as i32,
+                x as i32,
+                y as i32,
+                COLOR_TRACE,
+            );
         }
 
         prev = Some((x, y));
     }
 }
 
-
-pub fn draw_spectrum_axes_and_labels(
-    buffer: &mut [u32],
-    width: usize,
-    state: &UiState,
-) {
+pub fn draw_spectrum_axes_and_labels(buffer: &mut [u32], width: usize, state: &UiState) {
     for y in SPECTRUM_PLOT_Y0..=SPECTRUM_PLOT_Y1 {
         buffer[y * width + SPECTRUM_PLOT_X0] = COLOR_AXIS;
     }
 
-    for x in SPECTRUM_PLOT_X0..=SPECTRUM_PLOT_X1 {
+    for x in SPECTRUM_PLOT_X0..=SPECTRUM_PLOT_X1.min(width.saturating_sub(1)) {
         buffer[SPECTRUM_PLOT_Y1 * width + x] = COLOR_AXIS;
     }
 
     let db_ticks = [-120.0, -100.0, -80.0, -60.0, -40.0, -20.0, 0.0];
     for db in db_ticks {
         let y = db_to_plot_y(db);
-        for x in SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1 {
+        for x in SPECTRUM_PLOT_X0..SPECTRUM_PLOT_X1.min(width) {
             buffer[y * width + x] = COLOR_GRID;
         }
 
@@ -229,70 +200,47 @@ pub fn draw_spectrum_axes_and_labels(
         draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
     }
 
-    if state.input_sample_rate_hz > 0.0 {
-        let left = state.center_freq_hz - 0.5 * state.input_sample_rate_hz;
-        let center = state.center_freq_hz;
-        let right = state.center_freq_hz + 0.5 * state.input_sample_rate_hz;
+    let span_hz = visible_span_hz(state);
+    if span_hz <= 0.0 {
+        return;
+    }
 
-        let ticks = [
-            (SPECTRUM_PLOT_X0, format_freq_label(left)),
-            (SPECTRUM_PLOT_X0 + SPECTRUM_PLOT_WIDTH / 4, format_freq_label(left + 0.25 * state.input_sample_rate_hz)),
-            (SPECTRUM_PLOT_X0 + SPECTRUM_PLOT_WIDTH / 2, format_freq_label(center)),
-            (SPECTRUM_PLOT_X0 + 3 * SPECTRUM_PLOT_WIDTH / 4, format_freq_label(left + 0.75 * state.input_sample_rate_hz)),
-            (SPECTRUM_PLOT_X1, format_freq_label(right)),
-        ];
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+    let step_hz = tick_step_hz(span_hz);
+    let mut tick_hz = (left_hz / step_hz).ceil() * step_hz;
 
-        for (x, label) in ticks {
+    while tick_hz <= right_hz {
+        if let Some(x) = freq_to_plot_x(tick_hz, state) {
             for y in SPECTRUM_PLOT_Y0..=SPECTRUM_PLOT_Y1 {
                 if y % 4 == 0 {
                     buffer[y * width + x] = COLOR_GRID;
                 }
             }
 
+            let label = format_freq_label(tick_hz);
             let label_w = label.len() * 6;
             let label_x = x.saturating_sub(label_w / 2).min(width.saturating_sub(label_w));
-            //let label_y = SPECTRUM_PLOT_Y1 + 16;
-	    let label_y = BAND_STRIP_Y1 + 4;
+            let label_y = BAND_STRIP_Y1 + 4;
             draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
         }
-    }
 
-    //draw_text(buffer, width, 4, 2, "dB", COLOR_LABEL);
-    //draw_text(buffer, width, SPECTRUM_PLOT_X1.saturating_sub(14), 2, "Hz", COLOR_LABEL);
+        tick_hz += step_hz;
+    }
 }
 
-
-pub fn draw_frequency_overlay(
-    buffer: &mut [u32],
-    fb_width: usize,
-    state: &UiState,
-) {
-    //const CF_COLOR: u32 = 0x00FFFF00;
+pub fn draw_frequency_overlay(buffer: &mut [u32], fb_width: usize, state: &UiState) {
     const TF_COLOR: u32 = 0x00FFA500;
-
-    // 2x text metrics for the 5x7 font:
-    // width = 5*2 = 10 px, spacing = 2 px, so each char advances 12 px
     const CHAR_ADVANCE_2X: usize = 12;
     const TEXT_HEIGHT_2X: usize = 14;
 
-    // Top-left overlay for center frequency
-    //let cf_text = format!("CF: {}", format_freq_hz(state.center_freq_hz));
-    //let cf_x = SPECTRUM_PLOT_X0 + 8;
-    //let cf_y = SPECTRUM_PLOT_Y0 + 6;
-    //draw_text_2x(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
-    //draw_text(buffer, fb_width, cf_x, cf_y, &cf_text, CF_COLOR);
-
-    // Target-frequency label above the target marker location
     if let Some(tf_x_center) = freq_to_plot_x(state.target_freq_hz, state) {
-        //let tf_text = format!("TF: {}", format_freq_hz(state.target_freq_hz));
-	//let tf_text = format!("{}", format_freq_hz(state.target_freq_hz));
-	let tf_text = format_freq_hz(state.target_freq_hz).to_string();
+        let tf_text = format_freq_hz(state.target_freq_hz);
         let tf_width = tf_text.chars().count() * CHAR_ADVANCE_2X;
 
         let mut tf_x = tf_x_center.saturating_sub(tf_width / 2);
         let tf_y = SPECTRUM_PLOT_Y0 + 24;
 
-        // Clamp label to visible spectrum area
         let min_x = SPECTRUM_PLOT_X0 + 4;
         let max_x = SPECTRUM_PLOT_X1.saturating_sub(tf_width + 4);
 
@@ -305,7 +253,6 @@ pub fn draw_frequency_overlay(
 
         draw_text(buffer, fb_width, tf_x, tf_y, &tf_text, TF_COLOR);
 
-        // Optional small tick mark above the target x position
         let tick_top = tf_y + TEXT_HEIGHT_2X + 2;
         let tick_bottom = tick_top + 8;
         for y in tick_top..tick_bottom {
@@ -316,23 +263,19 @@ pub fn draw_frequency_overlay(
     }
 }
 
-
 fn byte_to_relative_db(v: u8) -> f32 {
     SPECTRUM_DB_MIN + (v as f32 / 255.0) * (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)
 }
-
 
 fn db_to_y(db: f32, db_min: f32, db_max: f32, height: usize) -> usize {
     let t = ((db - db_min) / (db_max - db_min)).clamp(0.0, 1.0);
     (height - 1).saturating_sub((t * (height as f32 - 1.0)) as usize)
 }
 
-
 fn db_to_plot_y(db: f32) -> usize {
     let t = ((db - SPECTRUM_DB_MIN) / (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)).clamp(0.0, 1.0);
     SPECTRUM_PLOT_Y1 - (t * SPECTRUM_PLOT_HEIGHT as f32) as usize
 }
-
 
 fn draw_line(
     buffer: &mut [u32],
@@ -366,6 +309,20 @@ fn draw_line(
     }
 }
 
+fn tick_step_hz(span_hz: f32) -> f32 {
+    if span_hz <= 20_000.0 {
+        1_000.0
+    } else if span_hz <= 100_000.0 {
+        5_000.0
+    } else if span_hz <= 500_000.0 {
+        25_000.0
+    } else if span_hz <= 2_000_000.0 {
+        100_000.0
+    } else {
+        500_000.0
+    }
+}
+
 fn format_freq_label(freq_hz: f32) -> String {
     if freq_hz.abs() >= 1_000_000.0 {
         format!("{:.3}M", freq_hz / 1_000_000.0)
@@ -385,7 +342,6 @@ fn format_freq_hz(freq_hz: f32) -> String {
         format!("{:.0} Hz", freq_hz)
     }
 }
-
 
 fn put_pixel(buffer: &mut [u32], fb_width: usize, x: i32, y: i32, color: u32) {
     if x < 0 || y < 0 {
@@ -425,7 +381,6 @@ pub fn color_map(v: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
 
-
 pub fn draw_tuning_marker(
     buffer: &mut [u32],
     width: usize,
@@ -433,20 +388,14 @@ pub fn draw_tuning_marker(
     y_start: usize,
     state: &UiState,
 ) {
-    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
+    let Some(x) = freq_to_plot_x(state.target_freq_hz, state) else {
+        return;
+    };
+
+    if x >= width {
         return;
     }
 
-    let offset_hz = state.target_freq_hz - state.center_freq_hz;
-    let frac = offset_hz / state.input_sample_rate_hz + 0.5;
-    let x = SPECTRUM_PLOT_X0 as f32 + frac * SPECTRUM_PLOT_WIDTH as f32;
-    let x = x.round() as isize;
-
-    if x < 0 || x >= width as isize {
-        return;
-    }
-
-    let x = x as usize;
     for y in y_start..height {
         buffer[y * width + x] = 0x00FF0000;
     }
