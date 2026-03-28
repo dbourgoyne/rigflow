@@ -3,7 +3,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{debug, info, warn, error};
+use log::{debug, info};
 use num_complex::Complex32;
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -337,7 +337,7 @@ pub fn spawn_dsp_worker(
             mode: mode_to_string(initial_mode),
         });
 
-        println!(
+        info!(
             "pipeline config: input_sample_rate_hz={} decimation_factor={} output_sample_rate_hz={} client_output_sample_rate_hz={}",
             input_sample_rate_hz,
             decimation_factor,
@@ -524,7 +524,7 @@ pub fn spawn_nonrealtime_worker(
             mode: mode_to_string(initial_mode),
         });
 
-        println!(
+        info!(
             "pipeline config: input_sample_rate_hz={} decimation_factor={} output_sample_rate_hz={} client_output_sample_rate_hz={}",
             input_sample_rate_hz,
             decimation_factor,

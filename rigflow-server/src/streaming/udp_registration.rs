@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 
 use std::sync::Arc;
 
+use log::info;
 use rigflow_core::net::udp_framing::{
     MAGIC,
     VERSION,
@@ -16,8 +17,6 @@ pub async fn run_udp_registration_listener(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket = UdpSocket::bind(bind_addr).await?;
     let mut buf = [0u8; 256];
-
-    //println!("UDP registration listener on {}", bind_addr);
 
     loop {
         let (len, src) = socket.recv_from(&mut buf).await?;
@@ -43,6 +42,6 @@ pub async fn run_udp_registration_listener(
         let ack = [buf[0], buf[1], buf[2], buf[3]];
         let _ = socket.send_to(&ack, src).await;
 
-        println!("Registered UDP audio client: {}", src);
+        info!("Registered UDP audio client: {}", src);
     }
 }

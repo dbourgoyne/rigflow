@@ -1,6 +1,7 @@
 use num_complex::Complex32;
 use std::f32::consts::PI;
 
+use log::info;
 use crate::dsp::audio::agc::Agc;
 use crate::dsp::audio::audio_fir::AudioFir;
 use crate::dsp::audio::dc_blocker::DcBlocker;
@@ -456,7 +457,7 @@ impl DspPipeline {
     }
 
     pub fn set_ssb_pitch_hz(&mut self, pitch_hz: f32) {
-	println!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
+	info!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
 	self.ssb_pitch_hz = pitch_hz;
 	self.rebuild_ssb_filters(self.ssb_bandwidth_hz, self.ssb_fir_taps);
     }
