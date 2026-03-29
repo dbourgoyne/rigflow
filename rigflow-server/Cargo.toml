@@ -5,6 +5,7 @@ edition = "2021"
 default-run = "rigflow-server"
 
 [dependencies]
+uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 env_logger = "0.11"
 rustfft = "6.4.1"

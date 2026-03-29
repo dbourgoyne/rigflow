@@ -17,13 +17,13 @@ pub enum HardwareKind {
     Unknown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum RadioState {
     Available,
     Starting,
     Running,
     Stopping,
-    Faulted,
+    Faulted { reason: String },
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +86,50 @@ pub enum StopReason {
     ServerShutdown,
     StartupFailed,
     InternalFault,
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkerCommand {
+    SetTargetFrequency { hz: u64 },
+    SetCenterFrequency { hz: u64 },
+    Stop { reason: StopReason },
+}
+
+#[derive(Debug, Clone)]
+pub enum WorkerStatus {
+    Starting,
+    Running {
+        center_freq_hz: u64,
+        target_freq_hz: u64,
+    },
+    Stopping {
+        reason: StopReason,
+    },
+    Stopped {
+        reason: StopReason,
+    },
+    Faulted {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkerReadyInfo {
+    pub center_freq_hz: u64,
+    pub target_freq_hz: u64,
+    pub audio_sample_rate_hz: u32,
+}
+
+#[derive(Debug)]
+pub enum WorkerStartResult {
+    Ready(WorkerReadyInfo),
+    Failed(String),
+}
+
+#[derive(Debug)]
+pub enum WorkerExit {
+    Clean { reason: StopReason },
+    Failed { reason: String },
 }
 
 #[derive(Debug, Clone)]
