@@ -1,8 +1,11 @@
 pub mod app_state;
 pub mod client_manager;
-pub mod connection;
-pub mod session;
-pub mod control;
 pub mod config;
+pub mod connection;
+pub mod control;
+pub mod discovery;
 pub mod pipeline_factory;
+pub mod radio_manager;
+pub mod radio_types;
+pub mod session;
 pub mod workers;
