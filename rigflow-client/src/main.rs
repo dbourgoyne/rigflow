@@ -22,6 +22,8 @@ use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
 use crate::app::actions::ui_action_to_client_message;
 use crate::input::keyboard::UiAction;
+use crate::app::stats::ClientStatsLogger;
+use crate::net::udp::MediaPacketStats;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -51,8 +53,11 @@ use rigflow_protocol::ClientMessage;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
-    .format_timestamp_millis()
-    .init();
+	.format_timestamp_millis()
+	.init();
+
+    let media_stats = Arc::new(Mutex::new(MediaPacketStats::new()));
+    let client_stats_logger = Arc::new(Mutex::new(ClientStatsLogger::new()));
     
     let jitter = Arc::new(Mutex::new(JitterBuffer::new(
         PACKET_SAMPLES,
@@ -65,7 +70,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut display_buffer = vec![0u32; WIDTH * HEIGHT];
     let ui_state = Arc::new(Mutex::new(UiState::default()));
 
-    let stream = build_output_stream(Arc::clone(&jitter))?;
+    let host = cpal::default_host();
+    let device = host
+	.default_output_device()
+	.ok_or("No default output device available")?;
+    let config = device.default_output_config()?.config();
+    let stream = build_output_stream(
+	&device,
+	&config,
+	Arc::clone(&jitter),
+	Arc::clone(&client_stats_logger),
+    )?;
     stream.play()?;
 
     let socket = UdpSocket::bind(LISTEN_ADDR)?;
@@ -122,6 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			&waterfall_buffer,
 			&spectrum_db,
 			&ui_state,
+			&media_stats,
 			WIDTH,
 			HEIGHT,
 			WATERFALL_TOP,
@@ -185,7 +201,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             display_buffer.copy_from_slice(&buf);
         }
 
-	let state_snapshot = ui_state.lock().unwrap().clone();
 	let spectrum_snapshot = spectrum_db.lock().unwrap().clone();
 	let waterfall_snapshot = waterfall_buffer.lock().unwrap().clone();
 
@@ -203,9 +218,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_title = Instant::now();
         }
 
+	let jitter_buffer_samples = {
+	    let jb = jitter.lock().unwrap();
+	    jb.buffered_samples()
+	};
+
+	if let Ok(mut logger) = client_stats_logger.lock() {
+	    if let Ok(mut stats) = media_stats.lock() {
+		logger.maybe_log(
+		    &mut stats,
+		    jitter_buffer_samples,
+		    state_snapshot.audio_sample_rate_hz,
+		);
+	    }
+	}
+
         if last_stats.elapsed() >= Duration::from_secs(1) {
             let jb = jitter.lock().unwrap();
-            println!(
+            log::debug!(
                 "started={} buffered_samples={} rx={} inserted={} concealed={} late_drop={} overflow_drop={}",
                 jb.started(),
                 jb.buffered_samples(),
@@ -223,17 +253,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn build_output_stream(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
     jitter: Arc<Mutex<JitterBuffer>>,
+    client_stats_logger: Arc<Mutex<ClientStatsLogger>>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
-    let host = cpal::default_host();
-
-    let device = host
-        .default_output_device()
-        .ok_or("No default output device available")?;
-
     let supported_configs = device.supported_output_configs()?;
 
     let mut selected = None;
+
+    let jitter_for_audio = jitter.clone();
+    let stats_for_audio = client_stats_logger.clone();
 
     for cfg in supported_configs {
         if cfg.channels() == CHANNELS
@@ -246,29 +276,41 @@ fn build_output_stream(
         }
     }
 
-    let config = if let Some(cfg) = selected {
+    let selected_config = if let Some(cfg) = selected {
         cfg.config()
     } else {
-        let default_cfg = device.default_output_config()?;
-        let mut cfg: cpal::StreamConfig = default_cfg.config();
+        let mut cfg = config.clone();
         cfg.channels = CHANNELS;
         cfg.sample_rate = cpal::SampleRate(OUTPUT_SAMPLE_RATE);
         cfg
     };
 
-    println!(
+    log::info!(
         "Using output device: {} @ {} Hz",
         device.name().unwrap_or_else(|_| "<unknown>".to_string()),
-        config.sample_rate.0
+        selected_config.sample_rate.0
     );
 
-    let err_fn = |err| eprintln!("audio stream error: {err}");
+    let err_fn = |err| {
+        log::error!("audio stream error: {err}");
+    };
 
     let stream = device.build_output_stream(
-        &config,
+        &selected_config,
         move |data: &mut [f32], _| {
-            let mut jb = jitter.lock().unwrap();
-            jb.pop_samples(data);
+            let delivered = data.len();
+
+            if let Ok(mut jb) = jitter_for_audio.lock() {
+                jb.pop_samples(data);
+            } else {
+                for s in data.iter_mut() {
+                    *s = 0.0;
+                }
+            }
+
+            if let Ok(mut stats) = stats_for_audio.lock() {
+                stats.add_audio_samples(delivered);
+            }
         },
         err_fn,
         None,
