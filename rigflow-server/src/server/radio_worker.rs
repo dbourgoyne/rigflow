@@ -2,8 +2,9 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, watch};
 
+use rigflow_core::radio::RadioDescriptor;
 use crate::server::radio_types::{
-    AcquireRequest, RadioDescriptor, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
+    AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
     WorkerStartResult, WorkerStatus,
 };
 

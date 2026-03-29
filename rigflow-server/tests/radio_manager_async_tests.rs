@@ -2,10 +2,11 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 use rigflow_server::server::discovery::discover_radios;
 use rigflow_server::server::radio_manager::{lease_expiry_loop, RadioManager};
 use rigflow_server::server::radio_types::{
-    AcquireRequest, ClientId, RadioId, RadioManagerConfig, RadioManagerError, StopReason,
+    AcquireRequest, ClientId, RadioManagerConfig, RadioManagerError, StopReason,
     WorkerCommand,
 };
 

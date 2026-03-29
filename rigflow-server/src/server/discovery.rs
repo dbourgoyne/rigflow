@@ -1,4 +1,4 @@
-use crate::server::radio_types::{
+use rigflow_core::radio::{
     HardwareKind, RadioCapabilities, RadioDescriptor, RadioId,
 };
 

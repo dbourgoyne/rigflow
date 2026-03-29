@@ -34,3 +34,9 @@ pub enum ServerMessage {
     Info { message: String },
     Error { message: String },
 }
+
+pub mod radio_control;
+
+pub use radio_control::{
+    ClientRadioMessage, RadioAvailability, RadioInfo, ServerRadioMessage,
+};
