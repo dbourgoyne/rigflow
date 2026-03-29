@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::mpsc::sync_channel;
+use std::sync::Arc;
+use std::time::Duration;
 
 use log::info;
 use axum::{routing::get, Router};
@@ -22,6 +24,9 @@ use rigflow_server::{
     },
     streaming::udp_registration::run_udp_registration_listener,
 };
+use rigflow_server::server::discovery::discover_radios;
+use rigflow_server::server::radio_manager::{lease_expiry_loop, RadioManager};
+use rigflow_server::server::radio_types::RadioManagerConfig;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -50,13 +55,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (radio_cmd_tx, radio_cmd_rx) = tokio_mpsc::unbounded_channel::<RadioCommand>();
 
+    let radio_manager = Arc::new(RadioManager::new(
+	discover_radios(),
+	RadioManagerConfig {
+            lease_ttl: Duration::from_secs(10),
+            startup_timeout: Duration::from_secs(5),
+            shutdown_timeout: Duration::from_secs(3),
+	},
+    ));
+
+    tokio::spawn(lease_expiry_loop(radio_manager.clone()));
+    
     let state = AppState::new(
-        center_freq_hz,
-        target_freq_hz,
-        sideband,
-        demod_mode,
-        pitch_hz,
-        radio_cmd_tx,
+	center_freq_hz,
+	target_freq_hz,
+	sideband,
+	demod_mode,
+	pitch_hz,
+	radio_cmd_tx,
+	radio_manager.clone(),   // <-- PASS IT IN
     );
 
     let app = Router::new()
