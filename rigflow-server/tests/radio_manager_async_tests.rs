@@ -6,8 +6,7 @@ use rigflow_core::radio::{RadioId};
 use rigflow_server::server::discovery::discover_radios;
 use rigflow_server::server::radio_manager::{lease_expiry_loop, RadioManager};
 use rigflow_server::server::radio_types::{
-    AcquireRequest, ClientId, RadioManagerConfig, RadioManagerError, StopReason,
-    WorkerCommand,
+    AcquireRequest, ClientId, RadioManagerConfig, RadioManagerError,
 };
 use rigflow_server::server::config::ServerConfig;
 
