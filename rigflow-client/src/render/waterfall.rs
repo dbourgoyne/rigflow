@@ -43,9 +43,19 @@ pub fn draw_row(
     let visible_bins = (row.len() as f32 / zoom).round().max(1.0) as usize;
     let start_bin = row.len().saturating_sub(visible_bins) / 2;
 
+    top[plot_x0..plot_x1]
+    .iter_mut()
+    .enumerate()
+    .for_each(|(plot_x, pixel)| {
+        let src_x = start_bin + plot_x * visible_bins / plot_width;
+        *pixel = color_map(row[src_x.min(row.len() - 1)]);
+    });
+
+    /*
     for x in plot_x0..plot_x1 {
         let plot_x = x - plot_x0;
         let src_x = start_bin + plot_x * visible_bins / plot_width;
         top[x] = color_map(row[src_x.min(row.len() - 1)]);
     }
+    */
 }
