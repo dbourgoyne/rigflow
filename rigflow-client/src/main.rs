@@ -223,15 +223,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	    jb.buffered_samples()
 	};
 
-	if let Ok(mut logger) = client_stats_logger.lock() {
-	    if let Ok(mut stats) = media_stats.lock() {
+	if let Ok(mut logger) = client_stats_logger.lock()
+	    && let Ok(mut stats) = media_stats.lock() {
 		logger.maybe_log(
 		    &mut stats,
 		    jitter_buffer_samples,
 		    state_snapshot.audio_sample_rate_hz,
 		);
 	    }
-	}
 
         if last_stats.elapsed() >= Duration::from_secs(1) {
             let jb = jitter.lock().unwrap();
