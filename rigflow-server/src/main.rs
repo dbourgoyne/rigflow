@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
 use std::time::Duration;
-use std::path::PathBuf;
 
 use log::info;
 use axum::{routing::get, Router};

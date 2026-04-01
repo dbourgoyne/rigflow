@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use rigflow_server::server::discovery::{debug_print_discovered_radios, discover_radios, DiscoveryConfig};
+use rigflow_server::server::discovery::{debug_print_discovered_radios, discover_radios};
+use rigflow_server::server::config::ServerConfig;
 
 #[test]
 fn discovers_wav_radios_and_fake_tone() {
@@ -12,8 +13,9 @@ fn discovers_wav_radios_and_fake_tone() {
     fs::write(dir.join("sample_b.WAV"), b"fake wav b").unwrap();
     fs::write(dir.join("ignore.txt"), b"not a wav").unwrap();
 
-    let config = DiscoveryConfig {
-        wav_dir: Some(dir),
+    let config = ServerConfig {
+	wav_dir: dir.to_string_lossy().into_owned(),
+	..Default::default()
     };
 
     let radios = discover_radios(&config);

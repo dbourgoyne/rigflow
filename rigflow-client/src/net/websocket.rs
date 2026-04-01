@@ -24,7 +24,7 @@ pub async fn websocket_control_task(
     let text = serde_json::to_string(&list_msg)?;
     println!("CLIENT sending: {}", text);
     write
-        .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+        .send(tokio_tungstenite::tungstenite::Message::Text(text))
         .await?;
 
     loop {
@@ -48,7 +48,7 @@ pub async fn websocket_control_task(
                 if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state) {
                     let text = serde_json::to_string(&outgoing)?;
                     println!("CLIENT sending AcquireRadio: {}", text);
-                    write.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await?;
+                    write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await?;
                 }
             }
             else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {

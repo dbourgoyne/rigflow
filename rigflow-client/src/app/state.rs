@@ -18,9 +18,6 @@ pub struct UiState {
     pub spectrum_zoom_x: f32,
     pub zoom_slider_dragging: bool,
     pub radio_acquired: bool,
-    pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
-    pub acquired_radio_id: Option<rigflow_core::radio::RadioId>,
-    pub lease_id: Option<rigflow_core::radio::LeaseId>,
 }
 
 impl Default for UiState {
@@ -42,9 +39,6 @@ impl Default for UiState {
             spectrum_zoom_x: 1.0,
             zoom_slider_dragging: false,
             radio_acquired: false,
-            available_radios: Vec::new(),
-            acquired_radio_id: None,
-            lease_id: None,
         }
     }
 }
