@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::mpsc;
+use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
 use rigflow_protocol::{ClientMessage, ServerMessage};
+use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 
@@ -19,6 +20,13 @@ pub async fn websocket_control_task(
         state.status = "ws connected".to_string();
     }
 
+    let list_msg = ClientRadioMessage::ListRadios;
+    let text = serde_json::to_string(&list_msg)?;
+    println!("CLIENT sending: {}", text);
+    write
+        .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+        .await?;
+
     loop {
         tokio::select! {
             cmd = rx.recv() => {
@@ -34,9 +42,21 @@ pub async fn websocket_control_task(
             msg = read.next() => {
                 match msg {
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                        if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                            apply_server_message(server_msg, &ui_state);
-                        }
+            if let Ok(radio_msg) = serde_json::from_str::<ServerRadioMessage>(&text) {
+                println!("CLIENT got radio message: {:?}", radio_msg);
+
+                if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state) {
+                    let text = serde_json::to_string(&outgoing)?;
+                    println!("CLIENT sending AcquireRadio: {}", text);
+                    write.send(tokio_tungstenite::tungstenite::Message::Text(text.into())).await?;
+                }
+            }
+            else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+                apply_server_message(server_msg, &ui_state);
+            }
+            else {
+                println!("CLIENT unknown message: {}", text);
+            }
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(Box::new(e)),
@@ -102,4 +122,52 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
             state.ssb_pitch_hz = pitch_hz;
         }
     }
+}
+
+pub fn apply_radio_server_message(
+    msg: ServerRadioMessage,
+    ui_state: &Arc<Mutex<UiState>>,
+) -> Option<ClientRadioMessage> {
+    let mut state = ui_state.lock().unwrap();
+
+    match msg {
+        ServerRadioMessage::RadiosListed { radios } => {
+            state.status = "acquiring radio".to_string();
+
+            if let Some(radio) = radios.into_iter().find(|r| !r.is_leased) {
+                let audio_udp_peer_string = "192.168.0.225:9001".to_string();
+                let waterfall_udp_peer_string = "192.168.0.225:9002".to_string();
+
+                return Some(ClientRadioMessage::AcquireRadio {
+                    radio_id: radio.id,
+                    center_freq_hz: state.center_freq_hz as u64,
+                    target_freq_hz: state.target_freq_hz as u64,
+                    audio_udp_peer: audio_udp_peer_string,
+                    waterfall_udp_peer: waterfall_udp_peer_string,
+                });
+            } else {
+                state.status = "no radios available".to_string();
+            }
+        }
+
+        ServerRadioMessage::RadioAcquired { .. } => {
+            state.radio_acquired = true;
+            state.status = "radio acquired".to_string();
+        }
+
+        ServerRadioMessage::RadioReleased { .. } => {
+            state.radio_acquired = false;
+            state.status = "radio released".to_string();
+        }
+
+        ServerRadioMessage::LeaseRenewed { .. } => {
+            state.status = "lease renewed".to_string();
+        }
+
+        ServerRadioMessage::RadioError { message, .. } => {
+            state.status = format!("radio error: {}", message);
+        }
+    }
+
+    None
 }

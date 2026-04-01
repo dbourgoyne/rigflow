@@ -17,8 +17,11 @@ pub struct UiState {
     pub selected_license: LicenseClass,
     pub spectrum_zoom_x: f32,
     pub zoom_slider_dragging: bool,
+    pub radio_acquired: bool,
+    pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
+    pub acquired_radio_id: Option<rigflow_core::radio::RadioId>,
+    pub lease_id: Option<rigflow_core::radio::LeaseId>,
 }
-
 
 impl Default for UiState {
     fn default() -> Self {
@@ -34,11 +37,14 @@ impl Default for UiState {
             audio_format: "unknown".to_string(),
             waterfall_frame_rate_hz: 0.0,
             status: "starting".to_string(),
-	    hovered_center_freq_digit: None,
-	    selected_license: LicenseClass::General,
-	    spectrum_zoom_x: 1.0,
-	    zoom_slider_dragging: false,
+            hovered_center_freq_digit: None,
+            selected_license: LicenseClass::General,
+            spectrum_zoom_x: 1.0,
+            zoom_slider_dragging: false,
+            radio_acquired: false,
+            available_radios: Vec::new(),
+            acquired_radio_id: None,
+            lease_id: None,
         }
     }
 }
-
