@@ -9,6 +9,8 @@ pub struct LeaseId(pub String);
 pub enum HardwareKind {
     RtlSdr,
     Soapy,
+    WavFile,
+    FakeTone,
     Unknown,
 }
 

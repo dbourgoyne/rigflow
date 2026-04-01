@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::mpsc::sync_channel;
 use std::sync::Arc;
 use std::time::Duration;
+use std::path::PathBuf;
 
 use log::info;
 use axum::{routing::get, Router};
@@ -24,7 +25,8 @@ use rigflow_server::{
     },
     streaming::udp_registration::run_udp_registration_listener,
 };
-use rigflow_server::server::discovery::discover_radios;
+
+use rigflow_server::server::discovery::{debug_print_discovered_radios, discover_radios};
 use rigflow_server::server::radio_manager::{lease_expiry_loop, RadioManager};
 use rigflow_server::server::radio_types::RadioManagerConfig;
 
@@ -55,8 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (radio_cmd_tx, radio_cmd_rx) = tokio_mpsc::unbounded_channel::<RadioCommand>();
 
+    let descriptors = discover_radios(&cfg);
+    debug_print_discovered_radios(&descriptors);
+
     let radio_manager = Arc::new(RadioManager::new(
-	discover_radios(),
+	descriptors,
 	RadioManagerConfig {
             lease_ttl: Duration::from_secs(30),
             startup_timeout: Duration::from_secs(5),
@@ -153,3 +158,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
