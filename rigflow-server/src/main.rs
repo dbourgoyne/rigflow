@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let radio_manager = Arc::new(RadioManager::new(
 	discover_radios(),
 	RadioManagerConfig {
-            lease_ttl: Duration::from_secs(10),
+            lease_ttl: Duration::from_secs(30),
             startup_timeout: Duration::from_secs(5),
             shutdown_timeout: Duration::from_secs(3),
 	},

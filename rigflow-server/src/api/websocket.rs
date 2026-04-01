@@ -305,6 +305,7 @@ async fn handle_legacy_client_text(
             {
                 Ok(()) => {}
                 Err(RadioManagerError::NoActiveLease) => {
+		    println!("LEGACY FALLBACK: no active lease, using old radio_cmd_tx path");
                     state
                         .radio_cmd_tx
                         .send(RadioCommand::SetTargetFrequency(target_freq_hz))
@@ -336,6 +337,7 @@ async fn handle_legacy_client_text(
             {
                 Ok(()) => {}
                 Err(RadioManagerError::NoActiveLease) => {
+		    println!("LEGACY FALLBACK: no active lease, using old radio_cmd_tx path");
                     state
                         .radio_cmd_tx
                         .send(RadioCommand::SetCenterFrequency(center_freq_hz))
@@ -441,6 +443,13 @@ pub async fn handle_radio_message(
                         .lease_expires_at
                         .saturating_duration_since(std::time::Instant::now())
                         .as_millis() as u64;
+
+		    println!(
+			"radio acquired: client_id={:?} radio_id={:?} lease_id={:?}",
+			session.client_id,
+			result.radio_id,
+			result.lease_id
+		    );
 
                     ServerRadioMessage::RadioAcquired {
                         radio_id: result.radio_id,
