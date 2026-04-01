@@ -134,7 +134,14 @@ pub fn apply_radio_server_message(
         ServerRadioMessage::RadiosListed { radios } => {
             state.status = "acquiring radio".to_string();
 
-            if let Some(radio) = radios.into_iter().find(|r| !r.is_leased) {
+	    let selected = radios
+                .iter()
+                .find(|r| !r.is_leased && r.id.0.starts_with("rtl:"))
+                .cloned()
+                .or_else(|| radios.into_iter().find(|r| !r.is_leased));
+
+            if let Some(radio) = selected {
+
                 let audio_udp_peer_string = "192.168.0.225:9001".to_string();
                 let waterfall_udp_peer_string = "192.168.0.225:9002".to_string();
 
