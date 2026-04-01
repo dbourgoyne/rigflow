@@ -296,13 +296,22 @@ async fn handle_legacy_client_text(
 
     match cmd {
         ClientMessage::SetFrequency { target_freq_hz } => {
-            send_worker_command_for_session(
+            match send_worker_command_for_session(
                 state,
                 session,
                 WorkerCommand::SetTargetFrequency { hz: target_freq_hz as u64 },
             )
             .await
-            .map_err(radio_manager_error_string)?;
+            {
+                Ok(()) => {}
+                Err(RadioManagerError::NoActiveLease) => {
+                    state
+                        .radio_cmd_tx
+                        .send(RadioCommand::SetTargetFrequency(target_freq_hz))
+                        .map_err(|_| "failed to send radio command".to_string())?;
+                }
+                Err(err) => return Err(radio_manager_error_string(err)),
+            }
 
             let new_target = {
                 let mut radio = state.radio.write().await;
@@ -318,13 +327,22 @@ async fn handle_legacy_client_text(
         }
 
         ClientMessage::SetCenterFrequency { center_freq_hz } => {
-            send_worker_command_for_session(
+            match send_worker_command_for_session(
                 state,
                 session,
                 WorkerCommand::SetCenterFrequency { hz: center_freq_hz as u64 },
             )
             .await
-            .map_err(radio_manager_error_string)?;
+            {
+                Ok(()) => {}
+                Err(RadioManagerError::NoActiveLease) => {
+                    state
+                        .radio_cmd_tx
+                        .send(RadioCommand::SetCenterFrequency(center_freq_hz))
+                        .map_err(|_| "failed to send radio command".to_string())?;
+                }
+                Err(err) => return Err(radio_manager_error_string(err)),
+            }
 
             let new_center = {
                 let mut radio = state.radio.write().await;
