@@ -26,7 +26,7 @@ use rigflow_server::{
 };
 
 use rigflow_server::server::discovery::{debug_print_discovered_radios, discover_radios};
-use rigflow_server::server::radio_manager::{lease_expiry_loop, RadioManager};
+use rigflow_server::server::radio_manager::RadioManager;
 use rigflow_server::server::radio_types::RadioManagerConfig;
 
 #[tokio::main]
@@ -66,9 +66,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             startup_timeout: Duration::from_secs(5),
             shutdown_timeout: Duration::from_secs(3),
 	},
+	radio_cmd_tx.clone(),
     ));
 
-    tokio::spawn(lease_expiry_loop(radio_manager.clone()));
+    tokio::spawn(RadioManager::lease_expiry_loop(radio_manager.clone()));
     
     let state = AppState::new(
 	center_freq_hz,
