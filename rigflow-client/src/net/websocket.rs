@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
-
+use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
+use tokio::sync::mpsc;
+
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
 use rigflow_protocol::{ClientMessage, ServerMessage};
-use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 
@@ -26,44 +27,63 @@ pub async fn websocket_control_task(
     write
         .send(tokio_tungstenite::tungstenite::Message::Text(text))
         .await?;
+    let mut renew_interval = tokio::time::interval(Duration::from_secs(10));
 
     loop {
-        tokio::select! {
+	tokio::select! {
+            _ = renew_interval.tick() => {
+		let should_renew = {
+                    let state = ui_state.lock().unwrap();
+                    state.radio_acquired
+		};
+
+		if should_renew {
+                    let renew = ClientRadioMessage::RenewLease;
+                    let text = serde_json::to_string(&renew)?;
+                    println!("CLIENT sending RenewLease");
+                    write
+			.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+			.await?;
+		}
+            }
+
             cmd = rx.recv() => {
-                match cmd {
+		match cmd {
                     Some(cmd) => {
-                        let text = serde_json::to_string(&cmd)?;
-                        write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await?;
+			let text = serde_json::to_string(&cmd)?;
+			write
+                            .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+                            .await?;
                     }
                     None => break,
-                }
+		}
             }
 
             msg = read.next() => {
-                match msg {
+		match msg {
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-            if let Ok(radio_msg) = serde_json::from_str::<ServerRadioMessage>(&text) {
-                println!("CLIENT got radio message: {:?}", radio_msg);
+			if let Ok(radio_msg) = serde_json::from_str::<ServerRadioMessage>(&text) {
+                            println!("CLIENT got radio message: {:?}", radio_msg);
 
-                if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state) {
-                    let text = serde_json::to_string(&outgoing)?;
-                    println!("CLIENT sending AcquireRadio: {}", text);
-                    write.send(tokio_tungstenite::tungstenite::Message::Text(text)).await?;
-                }
-            }
-            else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                apply_server_message(server_msg, &ui_state);
-            }
-            else {
-                println!("CLIENT unknown message: {}", text);
-            }
+                            if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state) {
+				let text = serde_json::to_string(&outgoing)?;
+				println!("CLIENT sending radio message: {}", text);
+				write
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+                                    .await?;
+                            }
+			} else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+                            apply_server_message(server_msg, &ui_state);
+			} else {
+                            println!("CLIENT unknown message: {}", text);
+			}
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(Box::new(e)),
                     None => break,
-                }
+		}
             }
-        }
+	}
     }
 
     Ok(())
