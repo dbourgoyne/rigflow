@@ -18,9 +18,11 @@ pub struct UiState {
     pub spectrum_zoom_x: f32,
     pub zoom_slider_dragging: bool,
     pub radio_acquired: bool,
-    pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
-    pub acquired_radio_id: Option<rigflow_core::radio::RadioId>,
-    pub lease_id: Option<rigflow_core::radio::LeaseId>,
+    pub rigflow_server_menu_expanded: bool,
+    pub rigflow_server_ip: String,
+    pub server_connected: bool,
+    pub server_status: String,
+    pub editing_server_ip: bool,
 }
 
 impl Default for UiState {
@@ -42,9 +44,11 @@ impl Default for UiState {
             spectrum_zoom_x: 1.0,
             zoom_slider_dragging: false,
             radio_acquired: false,
-            available_radios: Vec::new(),
-            acquired_radio_id: None,
-            lease_id: None,
+	    rigflow_server_menu_expanded: false,
+	    rigflow_server_ip: "127.0.0.1".to_string(),
+	    server_connected: false,
+	    server_status: "no server".to_string(),
+	    editing_server_ip: false,
         }
     }
 }

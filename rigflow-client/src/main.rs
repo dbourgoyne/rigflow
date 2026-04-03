@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use minifb::{Key, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
@@ -16,14 +16,18 @@ mod widgets;
 use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
-use crate::input::keyboard::collect_keyboard_actions;
-use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions};
+use crate::input::keyboard::{collect_keyboard_actions, key_to_text_char};
+use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions, collect_left_panel_actions};
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
-use crate::app::actions::ui_action_to_client_message;
 use crate::input::keyboard::UiAction;
 use crate::app::stats::ClientStatsLogger;
 use crate::net::udp::MediaPacketStats;
+use crate::app::actions::ui_action_to_control_command;
+use crate::render::left_panel::{
+    handle_left_pane_backspace,
+    handle_left_pane_text_input,
+};
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -50,6 +54,7 @@ use crate::app::layout::{
 };
 
 use rigflow_protocol::ClientMessage;
+use crate::net::control::ControlCommand;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
@@ -69,6 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
     let mut display_buffer = vec![0u32; WIDTH * HEIGHT];
     let ui_state = Arc::new(Mutex::new(UiState::default()));
+    let mut left_panel_click_state = crate::input::mouse::MouseClickState::default();
 
     let host = cpal::default_host();
     let device = host
@@ -96,7 +102,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Listening on {}", LISTEN_ADDR);
 
     let rt = Runtime::new()?;
-    let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ClientMessage>();
+    let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ControlCommand>();
+
+    ws_cmd_tx
+        .send(ControlCommand::Connect {
+            server_ip: "192.168.0.225".to_string(),
+        })
+        .unwrap();
+
     let ui_state_for_ws = Arc::clone(&ui_state);
 
     rt.spawn(async move {
@@ -117,6 +130,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_title = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+
+	let keys = window.get_keys_pressed(KeyRepeat::Yes);
+	if !keys.is_empty() {
+	    if let Ok(mut ui) = ui_state.lock() {
+		if ui.editing_server_ip {
+		    for key in keys {
+			match key {
+			    Key::Backspace => {
+				handle_left_pane_backspace(&mut ui);
+			    }
+			    _ => {
+				if let Some(ch) = key_to_text_char(key) {
+				    handle_left_pane_text_input(&mut ui, ch);
+				}
+			    }
+			}
+		    }
+		}
+	    }
+	}
+	
         match socket.recv_from(&mut udp_buf) {
             Ok((len, src)) => {
                 if len == 4 {
@@ -169,31 +203,79 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		    let mut state = ui_state.lock().unwrap();
 		    state.selected_license = crate::app::om_bands::prev_license(state.selected_license);
 		}
+		
+		other => {
+		    let server_ip = {
+			let state = ui_state.lock().unwrap();
+			state.rigflow_server_ip.clone()
+		    };
+		    let ui = ui_state.lock().unwrap();
+		    if !ui.editing_server_ip {
+			if let Some(msg) = ui_action_to_control_command(other, &server_ip) {
+			    let _ = ws_cmd_tx.send(msg);
+			}
+		    }
+		}
+	    }
+	}
+
+
+	for action in collect_left_panel_actions(&window, &state_snapshot, &mut left_panel_click_state) {
+	    match action {
+		UiAction::ToggleRigflowServerMenu => {
+		    if let Ok(mut ui) = ui_state.lock() {
+			ui.rigflow_server_menu_expanded = !ui.rigflow_server_menu_expanded;
+			ui.editing_server_ip = false;
+		    }
+		}
+
+		UiAction::FocusRigflowServerIpField => {
+		    if let Ok(mut ui) = ui_state.lock() {
+			ui.editing_server_ip = true;
+		    }
+		}
 
 		other => {
-		    if let Some(msg) = ui_action_to_client_message(other) {
-			let _ = ws_cmd_tx.send(msg);
+		    let server_ip = {
+			let state = ui_state.lock().unwrap();
+			state.rigflow_server_ip.clone()
+		    };
+
+		    if let Some(cmd) = ui_action_to_control_command(other, &server_ip) {
+			let _ = ws_cmd_tx.send(cmd);
 		    }
 		}
 	    }
 	}
 
 	for action in collect_mouse_actions(&window, &state_snapshot) {
-	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(msg);
-	    }
+	    let server_ip = {
+                let state = ui_state.lock().unwrap();
+                state.rigflow_server_ip.clone()
+            };
+            if let Some(msg) = ui_action_to_control_command(action, &server_ip) {
+                let _ = ws_cmd_tx.send(msg);
+            }
 	}
 
 	for action in crate::input::mouse::collect_center_freq_widget_actions(&window, &state_snapshot) {
-	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(msg);
-	    }
+	    let server_ip = {
+                let state = ui_state.lock().unwrap();
+                state.rigflow_server_ip.clone()
+            };
+            if let Some(msg) = ui_action_to_control_command(action, &server_ip) {
+                let _ = ws_cmd_tx.send(msg);
+            }
 	}
 
 	for action in collect_waterfall_wheel_actions(&window, &state_snapshot) {
-	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(msg);
-	    }
+	    let server_ip = {
+                let state = ui_state.lock().unwrap();
+                state.rigflow_server_ip.clone()
+            };
+            if let Some(msg) = ui_action_to_control_command(action, &server_ip) {
+                let _ = ws_cmd_tx.send(msg);
+            }
 	}
 
         {
@@ -223,15 +305,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	    jb.buffered_samples()
 	};
 
-	if let Ok(mut logger) = client_stats_logger.lock() {
-	    if let Ok(mut stats) = media_stats.lock() {
+	if let Ok(mut logger) = client_stats_logger.lock()
+	    && let Ok(mut stats) = media_stats.lock() {
 		logger.maybe_log(
 		    &mut stats,
 		    jitter_buffer_samples,
 		    state_snapshot.audio_sample_rate_hz,
 		);
 	    }
-	}
 
         if last_stats.elapsed() >= Duration::from_secs(1) {
             let jb = jitter.lock().unwrap();

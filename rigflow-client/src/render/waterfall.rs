@@ -14,6 +14,7 @@ pub fn draw_row(
     waterfall_top: usize,
     state: &UiState,
 ) {
+
     if width == 0 || height == 0 || waterfall_top >= height || row.is_empty() {
         return;
     }
@@ -35,17 +36,24 @@ pub fn draw_row(
     let plot_x0 = SPECTRUM_PLOT_X0.min(width);
     let plot_x1 = SPECTRUM_PLOT_X1.min(width);
     let plot_width = plot_x1.saturating_sub(plot_x0);
-    if plot_width == 0 {
-        return;
-    }
 
     let zoom = state.spectrum_zoom_x.clamp(1.0, 10.0);
     let visible_bins = (row.len() as f32 / zoom).round().max(1.0) as usize;
     let start_bin = row.len().saturating_sub(visible_bins) / 2;
 
+    top[plot_x0..plot_x1]
+    .iter_mut()
+    .enumerate()
+    .for_each(|(plot_x, pixel)| {
+        let src_x = start_bin + plot_x * visible_bins / plot_width;
+        *pixel = color_map(row[src_x.min(row.len() - 1)]);
+    });
+
+    /*
     for x in plot_x0..plot_x1 {
         let plot_x = x - plot_x0;
         let src_x = start_bin + plot_x * visible_bins / plot_width;
         top[x] = color_map(row[src_x.min(row.len() - 1)]);
     }
+    */
 }

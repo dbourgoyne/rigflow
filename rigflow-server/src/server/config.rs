@@ -19,6 +19,7 @@ pub struct ServerConfig {
     pub source: SourceKind,
 
     pub wav_file: String,
+    pub wav_dir: String,
 
     pub fake_sample_rate_hz: f32,
     pub fake_tone_hz: f32,
@@ -41,6 +42,7 @@ impl Default for ServerConfig {
             source: SourceKind::Fake,
 
             wav_file: "input_iq.wav".to_string(),
+	    wav_dir: "./".to_string(),
 
             fake_sample_rate_hz: 48_000.0,
             fake_tone_hz: 1_500.0,
@@ -73,6 +75,10 @@ impl ServerConfig {
                         _ => return Err(format!("unknown demod '{value}'\n\n{}", Self::usage())),
                     };
                 }
+
+		"--wav-dir" => {
+		    cfg.wav_dir = args.next().ok_or("--wav_dir requires a value")?;
+		}
 
                 "--source" => {
                     let value = args.next().ok_or("--source requires a value")?;

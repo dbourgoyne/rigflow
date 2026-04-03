@@ -82,7 +82,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                             framed.push(b'A');
                             framed.append(&mut bytes);
 
-                            if sender.send(Message::Binary(framed.into())).await.is_err() {
+                            if sender.send(Message::Binary(framed)).await.is_err() {
                                 break;
                             }
                         }
@@ -97,7 +97,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                             framed.push(b'W');
                             framed.append(&mut bytes);
 
-                            if sender.send(Message::Binary(framed.into())).await.is_err() {
+                            if sender.send(Message::Binary(framed)).await.is_err() {
                                 break;
                             }
                         }
@@ -248,7 +248,7 @@ async fn send_connection_message(
     };
 
     sender
-        .send(Message::Text(text.into()))
+        .send(Message::Text(text))
         .await
         .map_err(|_| ())
 }
@@ -258,7 +258,7 @@ async fn send_server_message(
     msg: &ServerMessage,
 ) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
-    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+    sender.send(Message::Text(text)).await.map_err(|_| ())
 }
 
 async fn handle_incoming_text(
@@ -296,23 +296,13 @@ async fn handle_legacy_client_text(
 
     match cmd {
         ClientMessage::SetFrequency { target_freq_hz } => {
-            match send_worker_command_for_session(
+            send_worker_command_for_session(
                 state,
                 session,
                 WorkerCommand::SetTargetFrequency { hz: target_freq_hz as u64 },
             )
             .await
-            {
-                Ok(()) => {}
-                Err(RadioManagerError::NoActiveLease) => {
-		    println!("LEGACY FALLBACK: no active lease, using old radio_cmd_tx path");
-                    state
-                        .radio_cmd_tx
-                        .send(RadioCommand::SetTargetFrequency(target_freq_hz))
-                        .map_err(|_| "failed to send radio command".to_string())?;
-                }
-                Err(err) => return Err(radio_manager_error_string(err)),
-            }
+            .map_err(radio_manager_error_string)?;
 
             let new_target = {
                 let mut radio = state.radio.write().await;
@@ -328,23 +318,13 @@ async fn handle_legacy_client_text(
         }
 
         ClientMessage::SetCenterFrequency { center_freq_hz } => {
-            match send_worker_command_for_session(
+            send_worker_command_for_session(
                 state,
                 session,
                 WorkerCommand::SetCenterFrequency { hz: center_freq_hz as u64 },
             )
             .await
-            {
-                Ok(()) => {}
-                Err(RadioManagerError::NoActiveLease) => {
-		    println!("LEGACY FALLBACK: no active lease, using old radio_cmd_tx path");
-                    state
-                        .radio_cmd_tx
-                        .send(RadioCommand::SetCenterFrequency(center_freq_hz))
-                        .map_err(|_| "failed to send radio command".to_string())?;
-                }
-                Err(err) => return Err(radio_manager_error_string(err)),
-            }
+            .map_err(radio_manager_error_string)?;
 
             let new_center = {
                 let mut radio = state.radio.write().await;

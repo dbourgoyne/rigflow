@@ -7,6 +7,7 @@ use crate::server::radio_types::{
     AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
     WorkerStartResult, WorkerStatus,
 };
+use crate::server::control::RadioCommand;
 
 pub async fn run_radio_worker(
     descriptor: RadioDescriptor,
@@ -15,6 +16,7 @@ pub async fn run_radio_worker(
     status_tx: watch::Sender<WorkerStatus>,
     mut stop_rx: oneshot::Receiver<()>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
+    radio_cmd_tx: mpsc::UnboundedSender<RadioCommand>,
 ) -> WorkerExit {
     println!(
         "[radio-worker {}] starting mock worker center={} target={}",
@@ -50,24 +52,43 @@ pub async fn run_radio_worker(
             }
 
             cmd = worker_rx.recv() => {
-                match cmd {
-                    Some(WorkerCommand::SetTargetFrequency { hz }) => {
-                        println!("[radio-worker {}] SetTargetFrequency {}", descriptor.id.0, hz);
-                    }
-                    Some(WorkerCommand::SetCenterFrequency { hz }) => {
-                        println!("[radio-worker {}] SetCenterFrequency {}", descriptor.id.0, hz);
-                    }
-                    Some(WorkerCommand::Stop { reason }) => {
-                        let _ = status_tx.send(WorkerStatus::Stopping { reason: reason.clone() });
-                        let _ = status_tx.send(WorkerStatus::Stopped { reason: reason.clone() });
-                        return WorkerExit::Clean { reason };
-                    }
-                    None => {
-                        return WorkerExit::Failed {
-                            reason: "worker command channel closed".to_string(),
-                        };
-                    }
-                }
+		match cmd {
+		    Some(WorkerCommand::SetTargetFrequency { hz }) => {
+			println!("[radio-worker {}] SetTargetFrequency {}", descriptor.id.0, hz);
+
+			if let Err(err) = radio_cmd_tx
+			    .send(RadioCommand::SetTargetFrequency(hz as f32))
+			{
+			    return WorkerExit::Failed {
+				reason: format!("failed to forward SetTargetFrequency: {err}"),
+			    };
+			}
+		    }
+
+		    Some(WorkerCommand::SetCenterFrequency { hz }) => {
+			println!("[radio-worker {}] SetCenterFrequency {}", descriptor.id.0, hz);
+
+			if let Err(err) = radio_cmd_tx
+			    .send(RadioCommand::SetCenterFrequency(hz as f32))
+			{
+			    return WorkerExit::Failed {
+				reason: format!("failed to forward SetCenterFrequency: {err}"),
+			    };
+			}
+		    }
+
+		    Some(WorkerCommand::Stop { reason }) => {
+			let _ = status_tx.send(WorkerStatus::Stopping { reason: reason.clone() });
+			let _ = status_tx.send(WorkerStatus::Stopped { reason: reason.clone() });
+			return WorkerExit::Clean { reason };
+		    }
+
+		    None => {
+			return WorkerExit::Failed {
+			    reason: "worker command channel closed".to_string(),
+			};
+		    }
+		}
             }
         }
     }

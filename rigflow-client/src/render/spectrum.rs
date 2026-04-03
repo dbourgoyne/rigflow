@@ -3,6 +3,7 @@ use crate::app::layout::{
     BAND_STRIP_Y1, HEIGHT, SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_PLOT_HEIGHT,
     SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, SPECTRUM_PLOT_Y0,
     SPECTRUM_PLOT_Y1, SPECTRUM_SMOOTHING_ALPHA,
+    MAIN_CONTENT_X0,
 };
 use crate::app::state::UiState;
 use crate::render::color::{
@@ -195,7 +196,7 @@ pub fn draw_spectrum_axes_and_labels(buffer: &mut [u32], width: usize, state: &U
         }
 
         let label = format!("{:.0}", db);
-        let label_x = 4;
+        let label_x = MAIN_CONTENT_X0 + 4;
         let label_y = y.saturating_sub(3);
         draw_text(buffer, width, label_x, label_y, &label, COLOR_LABEL);
     }

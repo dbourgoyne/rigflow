@@ -1,3 +1,6 @@
+pub const GLYPH_WIDTH: usize = 5;   // adjust if needed
+pub const GLYPH_SPACING: usize = 1; // optional extra spacing
+
 pub fn draw_char(
     buffer: &mut [u32],
     fb_width: usize,
@@ -477,4 +480,16 @@ fn glyph_rows(c: char) -> Option<&'static [u8; 7]> {
         ]),
         _ => None,
     }
+}
+
+
+pub fn text_width_px(s: &str) -> usize {
+    if s.is_empty() {
+        return 0;
+    }
+
+    // width = sum of glyph widths + spacing between characters
+    let char_count = s.chars().count();
+
+    char_count * GLYPH_WIDTH + (char_count - 1) * GLYPH_SPACING
 }

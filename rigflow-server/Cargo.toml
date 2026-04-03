@@ -25,4 +25,4 @@ url = "2"
 rtl-sdr-rs = "0.3.1"
 rigflow-protocol = { path = "../rigflow-protocol" }
 rigflow-core = { path = "../rigflow-core" }
-
+tempfile = "3"
