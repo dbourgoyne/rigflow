@@ -1,4 +1,6 @@
 use eframe::egui;
+use crate::ControlCommand;
+use crate::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -48,6 +50,16 @@ impl eframe::App for RigflowApp {
                         };
 
                         if ui.button(button_text).clicked() {
+
+			    let ip = self.state.rigflow_server_ip.clone();
+			    let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ControlCommand>();
+
+			    if self.state.server_connected {
+				let _ = ws_cmd_tx.send(ControlCommand::Disconnect);
+			    } else {
+				let _ = ws_cmd_tx.send(ControlCommand::Connect { server_ip: ip });
+			    }
+			    
                             if self.state.server_connected {
                                 self.state.server_connected = false;
                                 self.state.server_status = "no server".to_string();
