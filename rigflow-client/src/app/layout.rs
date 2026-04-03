@@ -16,7 +16,6 @@ pub const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
 
 pub const WATERFALL_TOP: usize = SPECTRUM_HEIGHT + SEPARATOR_HEIGHT;
 
-pub const FREQ_WIDGET_X: usize = 70;
 pub const FREQ_WIDGET_Y: usize = 28;
 
 pub const OM_STRIP_HEIGHT: usize = 6;
@@ -29,7 +28,10 @@ pub const BAND_STRIP_Y1: usize = BAND_STRIP_Y0 + BAND_STRIP_HEIGHT;
 
 pub const CONTROL_PANEL_WIDTH: usize = 56;
 
-pub const PLOT_WIDTH: usize = WIDTH - CONTROL_PANEL_WIDTH;
+pub const MAIN_CONTENT_X0: usize = LEFT_PANE_WIDTH;
+pub const MAIN_CONTENT_WIDTH: usize = WIDTH - LEFT_PANE_WIDTH;
+
+pub const PLOT_WIDTH: usize = MAIN_CONTENT_WIDTH - CONTROL_PANEL_WIDTH;
 
 pub const CONTROL_PANEL_X0: usize = WIDTH - CONTROL_PANEL_WIDTH;
 pub const CONTROL_PANEL_X1: usize = WIDTH;
@@ -39,9 +41,11 @@ pub const ZOOM_SLIDER_X1: usize = CONTROL_PANEL_X0 + 38;
 pub const ZOOM_SLIDER_Y0: usize = 40;
 pub const ZOOM_SLIDER_Y1: usize = HEIGHT - 40;
 
-pub const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
-pub const SPECTRUM_PLOT_X1: usize = PLOT_WIDTH - SPECTRUM_RIGHT_PAD;
+pub const SPECTRUM_PLOT_X0: usize = MAIN_CONTENT_X0 + SPECTRUM_LEFT_PAD;
+pub const SPECTRUM_PLOT_X1: usize = CONTROL_PANEL_X0 - SPECTRUM_RIGHT_PAD;
 pub const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
+
+pub const FREQ_WIDGET_X: usize = MAIN_CONTENT_X0 + 70;
 
 pub const LEFT_PANE_WIDTH: usize = 260;
 pub const PANEL_PADDING: usize = 10;
