@@ -213,6 +213,12 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
             target_freq_hz,
             input_sample_rate_hz,
         } => {
+	    println!(
+		"CLIENT StreamConfig: waterfall_bins={} waterfall_frame_rate_hz={} audio_sample_rate_hz={}",
+		waterfall_bins,
+		waterfall_frame_rate_hz,
+		audio_sample_rate_hz
+	    );
             state.audio_sample_rate_hz = audio_sample_rate_hz;
             state.audio_format = audio_format;
             state.waterfall_bins = waterfall_bins;
