@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use crate::app::frequency_view::visible_left_hz;
+use crate::render::left_panel::compute_left_pane_layout;
 
 const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
 const WATERFALL_TUNE_STEP_FAST_HZ: f32 = 10_000.0;
@@ -177,4 +178,53 @@ fn zoom_from_slider_y(mouse_y: f32) -> f32 {
     let y = mouse_y.clamp(ZOOM_SLIDER_Y0 as f32, ZOOM_SLIDER_Y1 as f32);
     let t = (ZOOM_SLIDER_Y1 as f32 - y) / (ZOOM_SLIDER_Y1 - ZOOM_SLIDER_Y0) as f32;
     1.0 + t * 9.0
+}
+
+pub fn collect_left_panel_actions(
+    window: &Window,
+    state: &UiState,
+) -> Vec<UiAction> {
+    let mut actions = Vec::new();
+
+    if !window.get_mouse_down(MouseButton::Left) {
+        return actions;
+    }
+
+    let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) else {
+        return actions;
+    };
+
+    let x = mx as usize;
+    let y = my as usize;
+
+    let layout = compute_left_pane_layout(state);
+
+    if layout.rigflow_header.contains(x, y) {
+        actions.push(UiAction::ToggleRigflowServerMenu);
+        return actions;
+    }
+
+    if !state.rigflow_server_menu_expanded {
+        return actions;
+    }
+
+    if let Some(ip_rect) = layout.server_ip_field {
+        if ip_rect.contains(x, y) {
+            actions.push(UiAction::FocusRigflowServerIpField);
+            return actions;
+        }
+    }
+
+    if let Some(button_rect) = layout.connect_button {
+        if button_rect.contains(x, y) {
+            if state.server_connected {
+                actions.push(UiAction::DisconnectFromRigflowServer);
+            } else {
+                actions.push(UiAction::ConnectToRigflowServer);
+            }
+            return actions;
+        }
+    }
+
+    actions
 }

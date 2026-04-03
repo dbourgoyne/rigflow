@@ -20,10 +20,10 @@ use crate::input::keyboard::collect_keyboard_actions;
 use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions};
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
-use crate::app::actions::ui_action_to_client_message;
 use crate::input::keyboard::UiAction;
 use crate::app::stats::ClientStatsLogger;
 use crate::net::udp::MediaPacketStats;
+use crate::app::actions::ui_action_to_control_command;
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -179,29 +179,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		}
 
 		other => {
-		    if let Some(msg) = ui_action_to_client_message(other) {
-			let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
+		    let server_ip = {
+			let state = ui_state.lock().unwrap();
+			state.rigflow_server_ip.clone()
+		    };
+		    if let Some(msg) = ui_action_to_control_command(other, &server_ip) {
+			let _ = ws_cmd_tx.send(msg);
 		    }
 		}
 	    }
 	}
 
 	for action in collect_mouse_actions(&window, &state_snapshot) {
-	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
-	    }
+	    let server_ip = {
+                let state = ui_state.lock().unwrap();
+                state.rigflow_server_ip.clone()
+            };
+            if let Some(msg) = ui_action_to_control_command(action, &server_ip) {
+                let _ = ws_cmd_tx.send(msg);
+            }
 	}
 
 	for action in crate::input::mouse::collect_center_freq_widget_actions(&window, &state_snapshot) {
-	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
-	    }
+	    let server_ip = {
+                let state = ui_state.lock().unwrap();
+                state.rigflow_server_ip.clone()
+            };
+            if let Some(msg) = ui_action_to_control_command(action, &server_ip) {
+                let _ = ws_cmd_tx.send(msg);
+            }
 	}
 
 	for action in collect_waterfall_wheel_actions(&window, &state_snapshot) {
-	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
-	    }
+	    let server_ip = {
+                let state = ui_state.lock().unwrap();
+                state.rigflow_server_ip.clone()
+            };
+            if let Some(msg) = ui_action_to_control_command(action, &server_ip) {
+                let _ = ws_cmd_tx.send(msg);
+            }
 	}
 
         {

@@ -9,9 +9,15 @@ pub enum UiAction {
     SetDemodMode(&'static str),
     SetSideband(&'static str),
     SetSsbPitch(f32),
+    Ping,
+
+    ToggleRigflowServerMenu,
+    FocusRigflowServerIpField,
+    ConnectToRigflowServer,
+    DisconnectFromRigflowServer,
+
     CycleLicenseForward,
     CycleLicenseBackward,
-    Ping,
 }
 
 const DEFAULT_TUNE_STEP_HZ: f32 = 1_000.0;
