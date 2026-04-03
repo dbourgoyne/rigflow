@@ -192,25 +192,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	    crate::input::mouse::update_zoom_slider(&window, &mut state_mut);
 	}
 
-	for action in collect_keyboard_actions(&window, &state_snapshot) {
-	    match action {
-		UiAction::CycleLicenseForward => {
-		    let mut state = ui_state.lock().unwrap();
-		    state.selected_license = crate::app::om_bands::next_license(state.selected_license);
-		}
-		
-		UiAction::CycleLicenseBackward => {
-		    let mut state = ui_state.lock().unwrap();
-		    state.selected_license = crate::app::om_bands::prev_license(state.selected_license);
-		}
-
-		other => {
-		    let server_ip = {
-			let state = ui_state.lock().unwrap();
-			state.rigflow_server_ip.clone()
-		    };
-		    if let Some(msg) = ui_action_to_control_command(other, &server_ip) {
-			let _ = ws_cmd_tx.send(msg);
+	if let Ok(mut ui) = ui_state.lock() {	
+	    if !ui.editing_server_ip {
+		for action in collect_keyboard_actions(&window, &state_snapshot) {
+		    match action {
+			UiAction::CycleLicenseForward => {
+			    let mut state = ui_state.lock().unwrap();
+			    state.selected_license = crate::app::om_bands::next_license(state.selected_license);
+			}
+			
+			UiAction::CycleLicenseBackward => {
+			    let mut state = ui_state.lock().unwrap();
+			    state.selected_license = crate::app::om_bands::prev_license(state.selected_license);
+			}
+			
+			other => {
+			    let server_ip = {
+				let state = ui_state.lock().unwrap();
+				state.rigflow_server_ip.clone()
+			    };
+			    if let Some(msg) = ui_action_to_control_command(other, &server_ip) {
+				let _ = ws_cmd_tx.send(msg);
+			    }
+			}
 		    }
 		}
 	    }
