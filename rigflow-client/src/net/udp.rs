@@ -69,7 +69,6 @@ pub fn handle_media_packet(
 
     match header.stream_type {
         STREAM_TYPE_AUDIO => {
-	    println!("UDP AUDIO packet seq={}", header.sequence);
             if let Ok(mut s) = stats.lock() {
                 s.audio_packets += 1;
                 update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
@@ -79,7 +78,6 @@ pub fn handle_media_packet(
         }
 
         STREAM_TYPE_WATERFALL => {
-	    println!("UDP WATERFALL packet seq={} payload_len={}", header.sequence, payload.len());
             if let Ok(mut s) = stats.lock() {
                 s.waterfall_packets += 1;
                 update_sequence_stats(&mut s, StreamKind::Waterfall, header.sequence);
@@ -161,13 +159,6 @@ fn handle_waterfall_packet(
     height: usize,
     waterfall_top: usize,
 ) {
-    println!(
-	"handle_waterfall_packet: payload_len={} width={} height={} waterfall_top={}",
-	payload.len(),
-	width,
-	height,
-	waterfall_top
-    );
     if payload.is_empty() {
         return;
     }
@@ -183,9 +174,7 @@ fn handle_waterfall_packet(
         Err(_) => return,
     };
 
-    println!("handle_waterfall_packet: waterfall_bins={}", state_snapshot.waterfall_bins);
     if state_snapshot.waterfall_bins == 0 {
-	println!("handle_waterfall_packet: early return because waterfall_bins == 0");
         return;
     }
 
