@@ -1,4 +1,4 @@
-pub const WIDTH: usize = 1024;
+pub const WIDTH: usize = 1400;
 pub const HEIGHT: usize = 600;
 
 pub const SPECTRUM_HEIGHT: usize = 180;
