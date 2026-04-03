@@ -7,3 +7,4 @@ pub mod om_band;
 pub mod spectrum;
 pub mod text;
 pub mod waterfall;
+pub mod widgets;
