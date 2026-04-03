@@ -17,7 +17,7 @@ use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
 use crate::input::keyboard::collect_keyboard_actions;
-use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions};
+use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions, collect_left_panel_actions};
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
 use crate::input::keyboard::UiAction;
@@ -185,6 +185,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		    };
 		    if let Some(msg) = ui_action_to_control_command(other, &server_ip) {
 			let _ = ws_cmd_tx.send(msg);
+		    }
+		}
+	    }
+	}
+
+	for action in collect_left_panel_actions(&window, &state_snapshot) {
+	    match action {
+		UiAction::ToggleRigflowServerMenu => {
+		    if let Ok(mut ui) = ui_state.lock() {
+			ui.rigflow_server_menu_expanded = !ui.rigflow_server_menu_expanded;
+			ui.editing_server_ip = false;
+		    }
+		}
+
+		UiAction::FocusRigflowServerIpField => {
+		    if let Ok(mut ui) = ui_state.lock() {
+			ui.editing_server_ip = true;
+		    }
+		}
+
+		other => {
+		    let server_ip = {
+			let state = ui_state.lock().unwrap();
+			state.rigflow_server_ip.clone()
+		    };
+
+		    if let Some(cmd) = ui_action_to_control_command(other, &server_ip) {
+			let _ = ws_cmd_tx.send(cmd);
 		    }
 		}
 	    }
