@@ -5,6 +5,7 @@ use crate::{
 	    SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_HEIGHT,
 	    WATERFALL_TOP,
 	    FREQ_WIDGET_X, FREQ_WIDGET_Y,
+	    LEFT_PANE_WIDTH,
         },
         state::UiState,
     },
@@ -25,6 +26,7 @@ use crate::{
 use crate::render::bands::draw_band_strip;
 use crate::render::om_band::draw_om_band_strip;
 use crate::render::control_panel::draw_control_panel;
+use crate::render::left_panel::draw_left_pane;
 
 pub fn render_frame(
     display_buffer: &mut [u32],
@@ -88,6 +90,7 @@ pub fn render_frame(
     );
     draw_separator(display_buffer, WIDTH, WATERFALL_TOP.saturating_sub(1));
     draw_control_panel(display_buffer, WIDTH, state);
+    draw_left_pane(display_buffer, LEFT_PANE_WIDTH, HEIGHT, state);
 }
 
 fn clear_spectrum_region(display_buffer: &mut [u32]) {
