@@ -14,6 +14,17 @@ pub fn draw_row(
     waterfall_top: usize,
     state: &UiState,
 ) {
+
+    println!(
+	"WATERFALL draw_row: width={} height={} top={} row_len={} plot_x0={} plot_x1={}",
+	width,
+	height,
+	waterfall_top,
+	row.len(),
+	SPECTRUM_PLOT_X0.min(width),
+	SPECTRUM_PLOT_X1.min(width),
+    );
+    
     if width == 0 || height == 0 || waterfall_top >= height || row.is_empty() {
         return;
     }
@@ -36,6 +47,7 @@ pub fn draw_row(
     let plot_x1 = SPECTRUM_PLOT_X1.min(width);
     let plot_width = plot_x1.saturating_sub(plot_x0);
     if plot_width == 0 {
+	println!("WATERFALL early return: plot_width == 0");
         return;
     }
 

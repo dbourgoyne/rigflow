@@ -40,6 +40,12 @@ pub fn render_frame(
 
     // Start from the latest waterfall image if available.
     if waterfall_buffer.len() == display_buffer.len() {
+	println!(
+	    "FRAME copy: waterfall_buffer len={} display_buffer len={}",
+	    waterfall_buffer.len(),
+	    display_buffer.len()
+	);
+
         display_buffer.copy_from_slice(waterfall_buffer);
     } else {
         display_buffer.fill(COLOR_BACKGROUND);
