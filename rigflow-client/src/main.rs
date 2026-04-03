@@ -1,5 +1,8 @@
 mod app;
+mod input;
 mod net;
+mod render;
+mod widgets;
 mod eframe_app;
 
 use eframe::NativeOptions;

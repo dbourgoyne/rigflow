@@ -56,7 +56,7 @@ use crate::app::layout::{
 use rigflow_protocol::ClientMessage;
 use crate::net::control::ControlCommand;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
 	.format_timestamp_millis()
 	.init();

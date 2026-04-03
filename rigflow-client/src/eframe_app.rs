@@ -1,6 +1,6 @@
 use eframe::egui;
-use crate::ControlCommand;
-use crate::mpsc;
+use crate::net::control::ControlCommand;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
