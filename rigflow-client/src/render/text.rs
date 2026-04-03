@@ -1,4 +1,4 @@
-pub const GLYPH_WIDTH: usize = 6;   // adjust if needed
+pub const GLYPH_WIDTH: usize = 5;   // adjust if needed
 pub const GLYPH_SPACING: usize = 1; // optional extra spacing
 
 pub fn draw_char(
