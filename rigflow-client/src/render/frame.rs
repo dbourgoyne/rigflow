@@ -114,8 +114,8 @@ fn clear_spectrum_region(display_buffer: &mut [u32]) {
 fn clear_left_pane_region(display_buffer: &mut [u32]) {
     for y in 0..HEIGHT {
         let row_start = y * WIDTH;
-        let start = row_start;
         let end = row_start + LEFT_PANE_WIDTH.min(WIDTH);
-        display_buffer[start..end].fill(COLOR_BACKGROUND);
+        display_buffer[row_start..end].fill(COLOR_BACKGROUND);
     }
 }
+
