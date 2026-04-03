@@ -57,7 +57,7 @@ pub async fn websocket_control_task(
 			    continue;
 			}
 
-			let ws_url = format!("ws://{}:8080/ws", server_ip);
+			let ws_url = format!("ws://{}:9000/ws", server_ip);
 			println!("CLIENT connecting to {}", ws_url);
 
 			match tokio_tungstenite::connect_async(&ws_url).await {

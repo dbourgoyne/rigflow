@@ -98,6 +98,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rt = Runtime::new()?;
     let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ControlCommand>();
+
+    ws_cmd_tx
+        .send(ControlCommand::Connect {
+            server_ip: "192.168.0.225".to_string(),
+        })
+        .unwrap();
+
     let ui_state_for_ws = Arc::clone(&ui_state);
 
     rt.spawn(async move {
