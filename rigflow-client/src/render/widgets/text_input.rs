@@ -1,4 +1,4 @@
-use crate::render::text::draw_text;
+use crate::render::text::{draw_text, text_width_px};
 
 use super::types::{MouseState, Rect, WidgetColors};
 
@@ -29,7 +29,7 @@ pub fn draw_text_input(
     );
 
     if focused {
-        let cursor_x = rect.x + 6 + value.len() * 8;
+        let cursor_x = rect.x + 6 + text_width_px(value);
         draw_rect(
             frame,
             frame_width,
