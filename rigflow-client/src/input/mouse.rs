@@ -21,6 +21,11 @@ use crate::render::left_panel::compute_left_pane_layout;
 const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
 const WATERFALL_TUNE_STEP_FAST_HZ: f32 = 10_000.0;
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MouseClickState {
+    pub prev_left_down: bool,
+}
+
 pub fn collect_waterfall_wheel_actions(
     window: &Window,
     state: &UiState,
@@ -183,10 +188,11 @@ fn zoom_from_slider_y(mouse_y: f32) -> f32 {
 pub fn collect_left_panel_actions(
     window: &Window,
     state: &UiState,
+    click_state: &mut MouseClickState,
 ) -> Vec<UiAction> {
     let mut actions = Vec::new();
 
-    if !window.get_mouse_down(MouseButton::Left) {
+    if !poll_left_click(window, click_state) {
         return actions;
     }
 
@@ -197,7 +203,7 @@ pub fn collect_left_panel_actions(
     let x = mx as usize;
     let y = my as usize;
 
-    let layout = compute_left_pane_layout(state);
+    let layout = crate::render::left_panel::compute_left_pane_layout(state);
 
     if layout.rigflow_header.contains(x, y) {
         actions.push(UiAction::ToggleRigflowServerMenu);
@@ -227,4 +233,11 @@ pub fn collect_left_panel_actions(
     }
 
     actions
+}
+
+pub fn poll_left_click(window: &Window, click_state: &mut MouseClickState) -> bool {
+    let left_down = window.get_mouse_down(MouseButton::Left);
+    let clicked = left_down && !click_state.prev_left_down;
+    click_state.prev_left_down = left_down;
+    clicked
 }

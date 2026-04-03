@@ -70,6 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
     let mut display_buffer = vec![0u32; WIDTH * HEIGHT];
     let ui_state = Arc::new(Mutex::new(UiState::default()));
+    let mut left_panel_click_state = crate::input::mouse::MouseClickState::default();
 
     let host = cpal::default_host();
     let device = host
@@ -190,7 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	    }
 	}
 
-	for action in collect_left_panel_actions(&window, &state_snapshot) {
+	for action in collect_left_panel_actions(&window, &state_snapshot, &mut left_panel_click_state) {
 	    match action {
 		UiAction::ToggleRigflowServerMenu => {
 		    if let Ok(mut ui) = ui_state.lock() {
