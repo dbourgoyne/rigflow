@@ -42,3 +42,11 @@ pub const ZOOM_SLIDER_Y1: usize = HEIGHT - 40;
 pub const SPECTRUM_PLOT_X0: usize = SPECTRUM_LEFT_PAD;
 pub const SPECTRUM_PLOT_X1: usize = PLOT_WIDTH - SPECTRUM_RIGHT_PAD;
 pub const SPECTRUM_PLOT_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
+
+pub const LEFT_PANE_WIDTH: usize = 260;
+pub const PANEL_PADDING: usize = 10;
+pub const HEADER_HEIGHT: usize = 28;
+pub const ROW_HEIGHT: usize = 26;
+pub const BUTTON_HEIGHT: usize = 30;
+pub const FIELD_HEIGHT: usize = 26;
+pub const SECTION_SPACING: usize = 10;

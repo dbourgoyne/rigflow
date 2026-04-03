@@ -239,6 +239,11 @@ impl RadioManager {
 	
 	lease.last_renewed_at = now;
 	lease.expires_at = now + self.config.lease_ttl;
+
+	println!(
+	    "LEASE RENEWED: client_id={:?} radio_id={:?} lease_id={:?}",
+	    client_id, radio_id, lease_id
+	);
 	
 	Ok(lease.clone())
     }

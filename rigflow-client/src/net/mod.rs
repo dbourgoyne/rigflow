@@ -1,2 +1,3 @@
-pub mod websocket;
+pub mod control;
 pub mod udp;
+pub mod websocket;

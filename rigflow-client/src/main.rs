@@ -50,6 +50,7 @@ use crate::app::layout::{
 };
 
 use rigflow_protocol::ClientMessage;
+use crate::net::control::ControlCommand;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_default_env()
@@ -96,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Listening on {}", LISTEN_ADDR);
 
     let rt = Runtime::new()?;
-    let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ClientMessage>();
+    let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ControlCommand>();
     let ui_state_for_ws = Arc::clone(&ui_state);
 
     rt.spawn(async move {
@@ -172,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 		other => {
 		    if let Some(msg) = ui_action_to_client_message(other) {
-			let _ = ws_cmd_tx.send(msg);
+			let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
 		    }
 		}
 	    }
@@ -180,19 +181,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	for action in collect_mouse_actions(&window, &state_snapshot) {
 	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(msg);
+		let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
 	    }
 	}
 
 	for action in crate::input::mouse::collect_center_freq_widget_actions(&window, &state_snapshot) {
 	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(msg);
+		let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
 	    }
 	}
 
 	for action in collect_waterfall_wheel_actions(&window, &state_snapshot) {
 	    if let Some(msg) = ui_action_to_client_message(action) {
-		let _ = ws_cmd_tx.send(msg);
+		let _ = ws_cmd_tx.send(ControlCommand::LegacyClientMessage(msg));
 	    }
 	}
 
