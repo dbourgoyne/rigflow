@@ -98,3 +98,20 @@ pub fn collect_keyboard_actions(window: &Window, state: &UiState) -> Vec<UiActio
 
     actions
 }
+
+pub fn key_to_text_char(key: Key) -> Option<char> {
+    match key {
+        Key::Key0 | Key::NumPad0 => Some('0'),
+        Key::Key1 | Key::NumPad1 => Some('1'),
+        Key::Key2 | Key::NumPad2 => Some('2'),
+        Key::Key3 | Key::NumPad3 => Some('3'),
+        Key::Key4 | Key::NumPad4 => Some('4'),
+        Key::Key5 | Key::NumPad5 => Some('5'),
+        Key::Key6 | Key::NumPad6 => Some('6'),
+        Key::Key7 | Key::NumPad7 => Some('7'),
+        Key::Key8 | Key::NumPad8 => Some('8'),
+        Key::Key9 | Key::NumPad9 => Some('9'),
+        Key::Period => Some('.'),
+        _ => None,
+    }
+}

@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use minifb::{Key, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ mod widgets;
 use crate::net::websocket::websocket_control_task;
 use crate::net::udp::handle_media_packet;
 use crate::app::state::UiState;
-use crate::input::keyboard::collect_keyboard_actions;
+use crate::input::keyboard::{collect_keyboard_actions, key_to_text_char};
 use crate::input::mouse::{collect_mouse_actions, collect_waterfall_wheel_actions, collect_left_panel_actions};
 use crate::render::frame::render_frame;
 use crate::app::title::build_window_title;
@@ -24,6 +24,10 @@ use crate::input::keyboard::UiAction;
 use crate::app::stats::ClientStatsLogger;
 use crate::net::udp::MediaPacketStats;
 use crate::app::actions::ui_action_to_control_command;
+use crate::render::left_panel::{
+    handle_left_pane_backspace,
+    handle_left_pane_text_input,
+};
 
 use rigflow_core::net::udp_framing::{
     MAGIC, VERSION,
@@ -126,6 +130,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_title = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+
+	let keys = window.get_keys_pressed(KeyRepeat::Yes);
+	if !keys.is_empty() {
+	    if let Ok(mut ui) = ui_state.lock() {
+		if ui.editing_server_ip {
+		    for key in keys {
+			match key {
+			    Key::Backspace => {
+				handle_left_pane_backspace(&mut ui);
+			    }
+			    _ => {
+				if let Some(ch) = key_to_text_char(key) {
+				    handle_left_pane_text_input(&mut ui, ch);
+				}
+			    }
+			}
+		    }
+		}
+	    }
+	}
+	
         match socket.recv_from(&mut udp_buf) {
             Ok((len, src)) => {
                 if len == 4 {
