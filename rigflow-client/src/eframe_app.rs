@@ -37,43 +37,6 @@ impl eframe::App for RigflowApp {
             state.clone()
         };
 
-	egui::CentralPanel::default().show(ctx, |ui| {
-	    egui::Frame::NONE
-		.inner_margin(egui::Margin {
-		    left: 12,
-		    right: 12,
-		    top: 4,
-		    bottom: 4,
-		})
-		.show(ui, |ui| {
-		    let spectrum_snapshot = {
-			let guard = self.spectrum_db.lock().unwrap();
-			guard.clone()
-		    };
-
-		    let spectrum_snapshot = {
-			let guard = self.spectrum_db.lock().unwrap();
-			guard.clone()
-		    };
-		    
-		    draw_spectrum_plot(
-			ui,
-			egui::vec2(ui.available_width(), 220.0),
-			&spectrum_snapshot,
-			-120.0,
-			0.0,
-			snapshot.center_freq_hz,
-			snapshot.input_sample_rate_hz,
-		    );
-		    
-		    ui.add_space(4.0);
-		    ui.separator();
-		    ui.label("Waterfall placeholder");
-		});
-	});
-
-	ctx.request_repaint(); 
-
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(260.0)
@@ -178,5 +141,39 @@ impl eframe::App for RigflowApp {
 			}
 		    });
             });
+
+	
+	egui::CentralPanel::default().show(ctx, |ui| {
+	    egui::Frame::NONE
+		.inner_margin(egui::Margin {
+		    left: 12,
+		    right: 12,
+		    top: 4,
+		    bottom: 4,
+		})
+		.show(ui, |ui| {
+		    let spectrum_snapshot = {
+			let guard = self.spectrum_db.lock().unwrap();
+			guard.clone()
+		    };
+		    
+		    draw_spectrum_plot(
+			ui,
+			egui::vec2(ui.available_width(), 220.0),
+			&spectrum_snapshot,
+			-120.0,
+			0.0,
+			snapshot.center_freq_hz,
+			snapshot.input_sample_rate_hz,
+		    );
+		    
+		    ui.add_space(4.0);
+		    ui.separator();
+		    ui.label("Waterfall placeholder");
+		});
+	});
+
+	ctx.request_repaint(); 
+
     }
 }
