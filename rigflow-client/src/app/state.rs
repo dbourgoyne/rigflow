@@ -24,6 +24,7 @@ pub struct UiState {
     pub server_status: String,
     pub editing_server_ip: bool,
     pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
+    pub selected_radio_id: Option<String>,
 }
 
 impl Default for UiState {
@@ -51,6 +52,7 @@ impl Default for UiState {
 	    server_status: "no server".to_string(),
 	    editing_server_ip: false,
 	    available_radios: Vec::new(),
+	    selected_radio_id: None,
         }
     }
 }

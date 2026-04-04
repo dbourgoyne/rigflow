@@ -78,6 +78,58 @@ impl eframe::App for RigflowApp {
 
                 ui.separator();
 
+		egui::CollapsingHeader::new("Radios")
+		    .default_open(true)
+		    .show(ui, |ui| {
+			if snapshot.available_radios.is_empty() {
+			    ui.label("no radios");
+			} else {
+			    let mut selected = snapshot.selected_radio_id.clone();
+
+			    for radio in &snapshot.available_radios {
+				let label = if radio.is_leased {
+				    format!("{} (busy)", radio.display_name)
+				} else {
+				    radio.display_name.clone()
+				};
+
+				let is_selected = selected.as_deref() == Some(&radio.id.0);
+
+				if ui.selectable_label(is_selected, label).clicked() {
+				    selected = Some(radio.id.0.clone());
+				}
+			    }
+
+			    if selected != snapshot.selected_radio_id {
+				if let Ok(mut state) = self.state.lock() {
+				    state.selected_radio_id = selected.clone();
+				}
+			    }
+
+			    ui.add_space(8.0);
+
+			    let can_acquire = selected.is_some() && !snapshot.radio_acquired;
+			    let can_release = snapshot.radio_acquired;
+
+			    ui.horizontal(|ui| {
+				if ui
+				    .add_enabled(can_acquire, egui::Button::new("Acquire"))
+				    .clicked()
+				{
+				    if let Some(radio_id) = selected.clone() {
+					let _ = self.ws_cmd_tx.send(ControlCommand::AcquireRadio { radio_id });
+				    }
+				}
+
+				if ui
+				    .add_enabled(can_release, egui::Button::new("Release"))
+				    .clicked()
+				{
+				    let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
+				}
+			    });
+			}
+		    });
                 egui::CollapsingHeader::new("Radios")
                     .default_open(true)
                     .show(ui, |ui| {
@@ -94,26 +146,5 @@ impl eframe::App for RigflowApp {
                         }
                     });
             });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Spectrum / Waterfall Placeholder");
-            ui.separator();
-
-            let available = ui.available_size();
-            let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
-
-            ui.painter()
-                .rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 24));
-
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "central render area",
-                egui::TextStyle::Heading.resolve(ui.style()),
-                egui::Color32::LIGHT_GRAY,
-            );
-        });
-
-        ctx.request_repaint();
     }
 }

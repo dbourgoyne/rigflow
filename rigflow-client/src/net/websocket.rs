@@ -51,6 +51,38 @@ pub async fn websocket_control_task(
 
 	    cmd = rx.recv() => {
 		match cmd {
+
+		    Some(ControlCommand::AcquireRadio { radio_id }) => {
+			if let Some(write) = write_opt.as_mut() {
+			    let acquire = ClientRadioMessage::AcquireRadio {
+				radio_id: rigflow_core::radio::RadioId(radio_id),
+				center_freq_hz: 101_100_000,
+				target_freq_hz: 101_100_000,
+				audio_udp_peer: "192.168.0.225:50000".to_string(),
+				waterfall_udp_peer: "192.168.0.225:50000".to_string(),
+			    };
+
+			    let text = serde_json::to_string(&acquire)?;
+			    println!("CLIENT sending AcquireRadio: {}", text);
+
+			    write
+				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+				.await?;
+			}
+		    }
+
+		    Some(ControlCommand::ReleaseRadio) => {
+			if let Some(write) = write_opt.as_mut() {
+			    let msg = ClientRadioMessage::ReleaseRadio;
+			    let text = serde_json::to_string(&msg)?;
+			    println!("CLIENT sending ReleaseRadio");
+
+			    write
+				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+				.await?;
+			}
+		    }
+		    
 		    Some(ControlCommand::Connect { server_ip }) => {
 			if write_opt.is_some() {
 			    continue;
@@ -103,6 +135,7 @@ pub async fn websocket_control_task(
 			state.server_connected = false;
 			state.server_status = "no server".to_string();
 			state.radio_acquired = false;
+			state.selected_radio_id = None;
 			state.available_radios.clear();
 		    }
 
@@ -257,15 +290,16 @@ pub fn apply_radio_server_message(
 	    // Optional: do NOT auto-acquire here if you want the UI list to drive selection.
 	}
 
-        ServerRadioMessage::RadioAcquired { .. } => {
-            state.radio_acquired = true;
-            state.status = "radio acquired".to_string();
-        }
+	ServerRadioMessage::RadioAcquired { radio_id, .. } => {
+	    state.radio_acquired = true;
+	    state.selected_radio_id = Some(radio_id.0.clone());
+	    state.server_status = format!("radio acquired: {}", radio_id.0);
+	}
 
-        ServerRadioMessage::RadioReleased { .. } => {
-            state.radio_acquired = false;
-            state.status = "radio released".to_string();
-        }
+	ServerRadioMessage::RadioReleased { .. } => {
+	    state.radio_acquired = false;
+	    state.server_status = "radio released".to_string();
+	}
 
         ServerRadioMessage::LeaseRenewed { .. } => {
             state.status = "lease renewed".to_string();
