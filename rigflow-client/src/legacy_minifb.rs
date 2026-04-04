@@ -89,6 +89,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     stream.play()?;
 
+    println!("HERE==========================HERE");
     let socket = UdpSocket::bind(LISTEN_ADDR)?;
     let udp_listen_port = socket.local_addr()?.port();
 

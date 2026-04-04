@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::net::UdpSocket;
 
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
@@ -188,4 +189,29 @@ fn handle_waterfall_packet(
             &state_snapshot,
         );
     }
+}
+
+pub fn compute_advertised_udp_peer(
+    udp_socket: &UdpSocket,
+    server_ip: &str,
+    server_port_for_route_probe: u16,
+) -> Result<String, String> {
+    let udp_port = udp_socket
+        .local_addr()
+        .map_err(|e| format!("failed to get udp local addr: {e}"))?
+        .port();
+
+    let probe = UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("failed to bind UDP probe socket: {e}"))?;
+
+    probe
+        .connect((server_ip, server_port_for_route_probe))
+        .map_err(|e| format!("failed to probe route to server {server_ip}:{server_port_for_route_probe}: {e}"))?;
+
+    let local_ip = probe
+        .local_addr()
+        .map_err(|e| format!("failed to get probe local addr: {e}"))?
+        .ip();
+
+    Ok(format!("{local_ip}:{udp_port}"))
 }

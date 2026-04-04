@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
-
 use eframe::egui;
+
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
@@ -9,14 +9,23 @@ use crate::net::control::ControlCommand;
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
     pub ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
+    pub waterfall_buffer: Arc<Mutex<Vec<u32>>>,
+    pub spectrum_db: Arc<Mutex<Vec<f32>>>,
 }
 
 impl RigflowApp {
     pub fn new(
         state: Arc<Mutex<UiState>>,
         ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
+        waterfall_buffer: Arc<Mutex<Vec<u32>>>,
+        spectrum_db: Arc<Mutex<Vec<f32>>>,
     ) -> Self {
-        Self { state, ws_cmd_tx }
+        Self {
+            state,
+            ws_cmd_tx,
+            waterfall_buffer,
+            spectrum_db,
+        }
     }
 }
 

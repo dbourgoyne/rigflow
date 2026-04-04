@@ -14,6 +14,7 @@ use rigflow_protocol::{ClientMessage, ServerMessage};
 
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
+use crate::client_runtime::MediaCommand;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = SplitSink<WsStream, Message>;
@@ -22,6 +23,7 @@ type WsRead = SplitStream<WsStream>;
 pub async fn websocket_control_task(
     mut rx: mpsc::UnboundedReceiver<ControlCommand>,
     ui_state: Arc<Mutex<UiState>>,
+    media_cmd_tx: mpsc::UnboundedSender<MediaCommand>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut write_opt: Option<WsWrite> = None;
@@ -54,7 +56,6 @@ pub async fn websocket_control_task(
 		match cmd {
 
 		    Some(ControlCommand::AcquireRadio { radio_id }) => {
-			
 			let Some(server_ip) = connected_server_ip.clone() else {
 			    let mut state = ui_state.lock().unwrap();
 			    state.server_status = "acquire failed: not connected to a server".to_string();
@@ -79,6 +80,11 @@ pub async fn websocket_control_task(
 				continue;
 			    }
 			};
+
+			{
+			    let mut state = ui_state.lock().unwrap();
+			    state.advertised_udp_peer = udp_peer_addr.clone();
+			}
 
 			if let Some(write) = write_opt.as_mut() {
 			    let acquire = ClientRadioMessage::AcquireRadio {
@@ -136,6 +142,16 @@ pub async fn websocket_control_task(
 				    state.server_status =
 					format!("connected to server {}", server_ip);
 				}
+
+				let server_udp_port = {
+				    let state = ui_state.lock().unwrap();
+				    state.rigflow_server_udp_port
+				};
+
+				let _ = media_cmd_tx.send(MediaCommand::RegisterUdp {
+				    server_ip: server_ip.clone(),
+				    server_udp_port,
+				});
 
 				if let Some(write) = write_opt.as_mut() {
 				    let list_msg = ClientRadioMessage::ListRadios;
@@ -351,7 +367,7 @@ pub fn apply_radio_server_message(
 
 fn build_udp_peer_addr(
     server_ip: &str,
-    server_ws_port: u16,
+    server_port_for_route_probe: u16,
     udp_listen_port: u16,
 ) -> Result<String, String> {
     if udp_listen_port == 0 {
@@ -362,8 +378,8 @@ fn build_udp_peer_addr(
         .map_err(|e| format!("failed to bind UDP probe socket: {e}"))?;
 
     probe
-        .connect((server_ip, server_ws_port))
-        .map_err(|e| format!("failed to probe route to server {server_ip}:{server_ws_port}: {e}"))?;
+        .connect((server_ip, server_port_for_route_probe))
+        .map_err(|e| format!("failed to probe route to server {server_ip}:{server_port_for_route_probe}: {e}"))?;
 
     let local_ip = probe
         .local_addr()
