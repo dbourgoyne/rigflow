@@ -14,6 +14,8 @@ pub fn draw_spectrum_plot(
     center_freq_hz: f32,
     target_freq_hz: f32,
     sample_rate_hz: f32,
+    demod_mode: &str,
+    sideband: &str,
 ) -> Option<f32> {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
     let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -33,6 +35,15 @@ pub fn draw_spectrum_plot(
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, center_freq_hz, sample_rate_hz);
+    draw_passband_overlay(
+	&painter,
+	plot_rect,
+	center_freq_hz,
+	target_freq_hz,
+	sample_rate_hz,
+	demod_mode,
+	sideband,
+    );
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
     draw_frequency_markers(&painter, plot_rect, center_freq_hz, target_freq_hz, sample_rate_hz);
 
@@ -266,4 +277,73 @@ fn draw_frequency_markers(
 	    Stroke::NONE,
 	));
     }
+}
+
+fn draw_passband_overlay(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    center_freq_hz: f32,
+    target_freq_hz: f32,
+    sample_rate_hz: f32,
+    demod_mode: &str,
+    sideband: &str,
+) {
+    if sample_rate_hz <= 0.0 {
+        return;
+    }
+
+    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
+    let right_hz = center_freq_hz + sample_rate_hz * 0.5;
+
+    let (pb_left_hz, pb_right_hz) = match demod_mode {
+        "wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
+        "nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
+        "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
+        "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
+        _ => match sideband {
+            "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
+            "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
+            _ => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
+        },
+    };
+
+    let visible_left_hz = pb_left_hz.max(left_hz);
+    let visible_right_hz = pb_right_hz.min(right_hz);
+
+    if visible_right_hz <= visible_left_hz {
+        return;
+    }
+
+    let x0_frac = (visible_left_hz - left_hz) / (right_hz - left_hz);
+    let x1_frac = (visible_right_hz - left_hz) / (right_hz - left_hz);
+
+    let x0 = plot_rect.left() + x0_frac * plot_rect.width();
+    let x1 = plot_rect.left() + x1_frac * plot_rect.width();
+
+    let pb_rect = Rect::from_min_max(
+        Pos2::new(x0, plot_rect.top()),
+        Pos2::new(x1, plot_rect.bottom()),
+    );
+
+    painter.rect_filled(
+        pb_rect,
+        0.0,
+        Color32::from_rgba_premultiplied(100, 140, 255, 40),
+    );
+
+    painter.line_segment(
+        [
+            Pos2::new(x0, plot_rect.top()),
+            Pos2::new(x0, plot_rect.bottom()),
+        ],
+        Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
+    );
+
+    painter.line_segment(
+        [
+            Pos2::new(x1, plot_rect.top()),
+            Pos2::new(x1, plot_rect.bottom()),
+        ],
+        Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
+    );
 }

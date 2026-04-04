@@ -166,6 +166,8 @@ impl eframe::App for RigflowApp {
 			snapshot.center_freq_hz,
 			snapshot.target_freq_hz,
 			snapshot.input_sample_rate_hz,
+			&snapshot.demod_mode,
+			&snapshot.sideband,
 		    ) {
 			println!("UI clicked spectrum at {}", clicked_freq_hz);
 			let _ = self.ws_cmd_tx.send(
