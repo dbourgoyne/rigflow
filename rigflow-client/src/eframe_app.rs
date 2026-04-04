@@ -51,20 +51,21 @@ impl eframe::App for RigflowApp {
 			guard.clone()
 		    };
 
-		    // Fixed-height top spectrum region
-		    let spectrum_height = 220.0;
-		    let width = ui.available_width();
-
+		    let spectrum_snapshot = {
+			let guard = self.spectrum_db.lock().unwrap();
+			guard.clone()
+		    };
+		    
 		    draw_spectrum_plot(
 			ui,
-			egui::vec2(width, spectrum_height),
+			egui::vec2(ui.available_width(), 220.0),
 			&spectrum_snapshot,
 			-120.0,
 			0.0,
 			snapshot.center_freq_hz,
 			snapshot.input_sample_rate_hz,
 		    );
-
+		    
 		    ui.add_space(4.0);
 		    ui.separator();
 		    ui.label("Waterfall placeholder");

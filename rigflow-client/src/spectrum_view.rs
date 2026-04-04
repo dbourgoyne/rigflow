@@ -1,9 +1,9 @@
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
 
-const Y_AXIS_WIDTH: f32 = 72.0;
-const X_AXIS_HEIGHT: f32 = 34.0;
-const PLOT_PAD_TOP: f32 = 2.0;
-const PLOT_PAD_RIGHT: f32 = 10.0;
+const LEFT_GUTTER: f32 = 64.0;
+const RIGHT_GUTTER: f32 = 12.0;
+const TOP_GUTTER: f32 = 6.0;
+const BOTTOM_GUTTER: f32 = 34.0;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -15,54 +15,49 @@ pub fn draw_spectrum_plot(
     sample_rate_hz: f32,
 ) {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
+    let (outer_rect, _response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(outer_rect);
 
-    let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let painter = ui.painter_at(rect);
+    // Background
+    painter.rect_filled(outer_rect, 4.0, Color32::from_rgb(20, 20, 24));
 
-    painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 24));
-
-    let content_rect = rect.shrink2(egui::vec2(8.0, 4.0));
-
-    let plot_rect = egui::Rect::from_min_max(
-        egui::Pos2::new(content_rect.left() + Y_AXIS_WIDTH, content_rect.top() + PLOT_PAD_TOP),
-        egui::Pos2::new(content_rect.right() - PLOT_PAD_RIGHT, content_rect.bottom() - X_AXIS_HEIGHT),
-    );
-
-    // DEBUG: only draw plot_rect, not rect/content_rect
-    painter.rect_stroke(
-        plot_rect,
-        0.0,
-        egui::Stroke::new(1.0, egui::Color32::YELLOW),
-        egui::StrokeKind::Middle,
+    let plot_rect = Rect::from_min_max(
+        Pos2::new(outer_rect.left() + LEFT_GUTTER, outer_rect.top() + TOP_GUTTER),
+        Pos2::new(outer_rect.right() - RIGHT_GUTTER, outer_rect.bottom() - BOTTOM_GUTTER),
     );
 
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
         return;
     }
 
-    draw_db_axis_and_grid(&painter, content_rect, plot_rect, db_min, db_max);
-    draw_freq_axis_and_grid(&painter, content_rect, plot_rect, center_freq_hz, sample_rate_hz);
-    draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
-}
+    // Debug center line if needed
+    // painter.line_segment(
+    //     [Pos2::new(plot_rect.center().x, plot_rect.top()), Pos2::new(plot_rect.center().x, plot_rect.bottom())],
+    //     Stroke::new(1.0, Color32::RED),
+    // );
 
-fn draw_plot_border(painter: &egui::Painter, plot_rect: Rect) {
+    draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
+    draw_x_axis(&painter, plot_rect, outer_rect, center_freq_hz, sample_rate_hz);
+    draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
+
+    // Draw only the plot border, and draw it INSIDE so it won't clip
     painter.rect_stroke(
         plot_rect,
         0.0,
-        Stroke::new(1.0, Color32::from_gray(90)),
-        egui::StrokeKind::Middle,
+        Stroke::new(1.0, Color32::from_gray(110)),
+        egui::StrokeKind::Inside,
     );
 }
 
-fn draw_db_axis_and_grid(
+fn draw_grid_and_y_axis(
     painter: &egui::Painter,
-    content_rect: egui::Rect,
-    plot_rect: egui::Rect,
+    plot_rect: Rect,
+    outer_rect: Rect,
     db_min: f32,
     db_max: f32,
 ) {
-    let grid_color = egui::Color32::from_gray(55);
-    let text_color = egui::Color32::from_gray(180);
+    let grid_color = Color32::from_gray(55);
+    let text_color = Color32::from_gray(180);
 
     let steps = 6;
     for i in 0..=steps {
@@ -70,39 +65,39 @@ fn draw_db_axis_and_grid(
         let y = egui::lerp(plot_rect.bottom()..=plot_rect.top(), t);
 
         painter.line_segment(
-            [egui::Pos2::new(plot_rect.left(), y), egui::Pos2::new(plot_rect.right(), y)],
-            egui::Stroke::new(1.0, grid_color),
+            [Pos2::new(plot_rect.left(), y), Pos2::new(plot_rect.right(), y)],
+            Stroke::new(1.0, grid_color),
         );
 
         let db = egui::lerp(db_min..=db_max, t);
 
         painter.text(
-            egui::Pos2::new(plot_rect.left() - 8.0, y),
-            egui::Align2::RIGHT_CENTER,
+            Pos2::new(plot_rect.left() - 8.0, y),
+            Align2::RIGHT_CENTER,
             format!("{db:.0}"),
-            egui::FontId::monospace(12.0),
+            FontId::monospace(11.0),
             text_color,
         );
     }
 
     painter.text(
-        egui::Pos2::new(content_rect.left() + 4.0, plot_rect.top()),
-        egui::Align2::LEFT_TOP,
+        Pos2::new(outer_rect.left() + 6.0, plot_rect.top()),
+        Align2::LEFT_TOP,
         "dB",
-        egui::FontId::monospace(11.0),
+        FontId::monospace(11.0),
         text_color,
     );
 }
 
-fn draw_freq_axis_and_grid(
+fn draw_x_axis(
     painter: &egui::Painter,
-    content_rect: egui::Rect,
-    plot_rect: egui::Rect,
+    plot_rect: Rect,
+    outer_rect: Rect,
     center_freq_hz: f32,
     sample_rate_hz: f32,
 ) {
-    let grid_color = egui::Color32::from_gray(55);
-    let text_color = egui::Color32::from_gray(180);
+    let grid_color = Color32::from_gray(55);
+    let text_color = Color32::from_gray(180);
 
     if sample_rate_hz <= 0.0 {
         return;
@@ -117,30 +112,37 @@ fn draw_freq_axis_and_grid(
         let x = egui::lerp(plot_rect.left()..=plot_rect.right(), t);
 
         painter.line_segment(
-            [egui::Pos2::new(x, plot_rect.top()), egui::Pos2::new(x, plot_rect.bottom())],
-            egui::Stroke::new(1.0, grid_color),
+            [Pos2::new(x, plot_rect.top()), Pos2::new(x, plot_rect.bottom())],
+            Stroke::new(1.0, grid_color),
         );
 
         let freq_hz = egui::lerp(left_hz..=right_hz, t);
+        let label = format_freq(freq_hz);
 
-	painter.text(
-	    egui::Pos2::new(plot_rect.center().x, content_rect.bottom() - 2.0),
-	    egui::Align2::CENTER_BOTTOM,
-	    "Frequency",
-	    egui::FontId::monospace(11.0),
-	    text_color,
-	);
+        let align = if i == 0 {
+            Align2::LEFT_TOP
+        } else if i == steps {
+            Align2::RIGHT_TOP
+        } else {
+            Align2::CENTER_TOP
+        };
 
+        painter.text(
+            Pos2::new(x, plot_rect.bottom() + 6.0),
+            align,
+            label,
+            FontId::monospace(11.0),
+            text_color,
+        );
     }
 
     painter.text(
-	egui::Pos2::new(plot_rect.center().x, content_rect.bottom() - 2.0),
-	egui::Align2::CENTER_BOTTOM,
-	"Frequency",
-	egui::FontId::monospace(11.0),
-	text_color,
+        Pos2::new(plot_rect.center().x, outer_rect.bottom() - 4.0),
+        Align2::CENTER_BOTTOM,
+        "Frequency",
+        FontId::monospace(11.0),
+        text_color,
     );
-
 }
 
 fn draw_trace(
@@ -176,10 +178,10 @@ fn draw_trace(
 
 fn format_freq(freq_hz: f32) -> String {
     if freq_hz.abs() >= 1_000_000.0 {
-        format!("{:.3} MHz", freq_hz / 1_000_000.0)
+        format!("{:.3}", freq_hz / 1_000_000.0)
     } else if freq_hz.abs() >= 1_000.0 {
-        format!("{:.1} kHz", freq_hz / 1_000.0)
+        format!("{:.1}k", freq_hz / 1_000.0)
     } else {
-        format!("{:.0} Hz", freq_hz)
+        format!("{:.0}", freq_hz)
     }
 }
