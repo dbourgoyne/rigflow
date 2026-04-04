@@ -1,9 +1,9 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
-const Y_AXIS_WIDTH: f32 = 52.0;
-const X_AXIS_HEIGHT: f32 = 26.0;
-const PLOT_PAD_TOP: f32 = 8.0;
-const PLOT_PAD_RIGHT: f32 = 8.0;
+const Y_AXIS_WIDTH: f32 = 72.0;
+const X_AXIS_HEIGHT: f32 = 28.0;
+const PLOT_PAD_TOP: f32 = 10.0;
+const PLOT_PAD_RIGHT: f32 = 10.0;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -67,13 +67,13 @@ fn draw_db_axis_and_grid(
 
         let db = egui::lerp(db_min..=db_max, t);
 
-        painter.text(
-            Pos2::new(full_rect.left() + Y_AXIS_WIDTH - 6.0, y),
-            Align2::RIGHT_CENTER,
-            format!("{db:.0}"),
-            FontId::monospace(11.0),
-            text_color,
-        );
+	painter.text(
+	    Pos2::new(plot_rect.left() - 8.0, y),
+	    Align2::RIGHT_CENTER,
+	    format!("{db:.0} dB"),
+	    FontId::monospace(12.0),
+	    text_color,
+	);
     }
 
     painter.text(
