@@ -38,39 +38,42 @@ impl eframe::App for RigflowApp {
         };
 
 	egui::CentralPanel::default().show(ctx, |ui| {
-	    let available = ui.available_size();
-	    let spectrum_height = (available.y * 0.35).max(140.0);
+	    ui.add_space(8.0);
 
-	    ui.heading("Spectrum");
-	    ui.separator();
+	    ui.horizontal(|ui| {
+		ui.add_space(12.0);
 
-	    ui.allocate_ui_with_layout(
-		egui::vec2(available.x, spectrum_height),
-		egui::Layout::top_down(egui::Align::Min),
-		|ui| {
-		    let spectrum_snapshot = {
-			let guard = self.spectrum_db.lock().unwrap();
-			guard.clone()
-		    };
+		ui.vertical(|ui| {
+		    ui.heading("Spectrum");
+		    ui.separator();
 
 		    let spectrum_snapshot = {
 			let guard = self.spectrum_db.lock().unwrap();
 			guard.clone()
 		    };
 
-		    draw_spectrum_plot(
-			ui,
-			&spectrum_snapshot,
-			-120.0,
-			0.0,
-			snapshot.center_freq_hz,
-			snapshot.input_sample_rate_hz,
+		    let spectrum_height = 220.0;
+
+		    ui.allocate_ui_with_layout(
+			egui::vec2(ui.available_width() - 12.0, spectrum_height),
+			egui::Layout::top_down(egui::Align::Min),
+			|ui| {
+			    draw_spectrum_plot(
+				ui,
+				&spectrum_snapshot,
+				-120.0,
+				0.0,
+				snapshot.center_freq_hz,
+				snapshot.input_sample_rate_hz,
+			    );
+			},
 		    );
-		},
-	    );
 
-	    ui.separator();
-	    ui.label("Waterfall placeholder");
+		    ui.add_space(12.0);
+		    ui.separator();
+		    ui.label("Waterfall placeholder");
+		});
+	    });
 	});
 
 	ctx.request_repaint(); 
