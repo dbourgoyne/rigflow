@@ -27,13 +27,6 @@ pub fn draw_spectrum_plot(
 
     // begin debug
     painter.rect_stroke(
-	rect,
-	0.0,
-	Stroke::new(1.0, Color32::RED),
-	egui::StrokeKind::Middle,
-    );
-
-    painter.rect_stroke(
 	plot_rect,
 	0.0,
 	Stroke::new(1.0, Color32::YELLOW),
