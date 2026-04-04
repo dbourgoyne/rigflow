@@ -164,6 +164,7 @@ impl eframe::App for RigflowApp {
 			-120.0,
 			0.0,
 			snapshot.center_freq_hz,
+			snapshot.target_freq_hz,
 			snapshot.input_sample_rate_hz,
 		    );
 		    

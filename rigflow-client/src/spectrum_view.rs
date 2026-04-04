@@ -12,6 +12,7 @@ pub fn draw_spectrum_plot(
     db_min: f32,
     db_max: f32,
     center_freq_hz: f32,
+    target_freq_hz: f32,
     sample_rate_hz: f32,
 ) {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
@@ -39,6 +40,7 @@ pub fn draw_spectrum_plot(
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, center_freq_hz, sample_rate_hz);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
+    draw_frequency_markers(&painter, plot_rect, center_freq_hz, target_freq_hz, sample_rate_hz);
 
     // Draw only the plot border, and draw it INSIDE so it won't clip
     painter.rect_stroke(
@@ -183,5 +185,61 @@ fn format_freq(freq_hz: f32) -> String {
         format!("{:.1}k", freq_hz / 1_000.0)
     } else {
         format!("{:.0}", freq_hz)
+    }
+}
+
+fn draw_frequency_markers(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    center_freq_hz: f32,
+    target_freq_hz: f32,
+    sample_rate_hz: f32,
+) {
+    if sample_rate_hz <= 0.0 {
+        return;
+    }
+
+    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
+    let right_hz = center_freq_hz + sample_rate_hz * 0.5;
+
+    // Center marker is exactly in the middle of the visible plot
+    let center_x = plot_rect.center().x;
+
+    painter.line_segment(
+        [
+            Pos2::new(center_x, plot_rect.top()),
+            Pos2::new(center_x, plot_rect.bottom()),
+        ],
+        Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
+    );
+
+    painter.text(
+        Pos2::new(center_x + 4.0, plot_rect.top() + 4.0),
+        Align2::LEFT_TOP,
+        "CF",
+        FontId::monospace(10.0),
+        Color32::from_rgb(120, 160, 255),
+    );
+
+    // Target marker is placed according to its frequency within visible bandwidth
+    if target_freq_hz >= left_hz && target_freq_hz <= right_hz {
+        let frac = (target_freq_hz - left_hz) / (right_hz - left_hz);
+        let target_x = plot_rect.left() + frac * plot_rect.width();
+
+        painter.line_segment(
+            [
+                Pos2::new(target_x, plot_rect.top()),
+                Pos2::new(target_x, plot_rect.bottom()),
+            ],
+            Stroke::new(1.5, Color32::from_rgb(255, 220, 80)),
+        );
+
+        painter.text(
+            Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
+            Align2::LEFT_TOP,
+            "T",
+            FontId::monospace(10.0),
+            Color32::from_rgb(255, 220, 80),
+        );
     }
 }
