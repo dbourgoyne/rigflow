@@ -130,21 +130,6 @@ impl eframe::App for RigflowApp {
 			    });
 			}
 		    });
-                egui::CollapsingHeader::new("Radios")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if snapshot.available_radios.is_empty() {
-                            ui.label("no radios");
-                        } else {
-                            for radio in &snapshot.available_radios {
-                                ui.label(format!(
-                                    "{}{}",
-                                    radio.display_name,
-                                    if radio.is_leased { " (busy)" } else { "" }
-                                ));
-                            }
-                        }
-                    });
             });
     }
 }
