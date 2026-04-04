@@ -190,11 +190,13 @@ pub async fn websocket_control_task(
 		    }
 
 		    Some(ControlCommand::LegacyClientMessage(cmd)) => {
+			println!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
 			if let Some(write) = write_opt.as_mut() {
 			    let text = serde_json::to_string(&cmd)?;
-				write
-				    .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-				    .await?;
+			    println!("WEBSOCKET sending text: {}", text);
+			    write
+				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
+				.await?;
 			}
 		    }
 
