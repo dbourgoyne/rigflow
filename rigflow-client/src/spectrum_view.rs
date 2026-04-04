@@ -26,6 +26,22 @@ pub fn draw_spectrum_plot(
         Pos2::new(rect.right() - PLOT_PAD_RIGHT, rect.bottom() - X_AXIS_HEIGHT),
     );
 
+    // begin debug
+    painter.rect_stroke(
+	rect,
+	0.0,
+	Stroke::new(1.0, Color32::RED),
+	egui::StrokeKind::Middle,
+    );
+
+    painter.rect_stroke(
+	plot_rect,
+	0.0,
+	Stroke::new(1.0, Color32::YELLOW),
+	egui::StrokeKind::Middle,
+    );
+    // end debug
+
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
         return;
     }
