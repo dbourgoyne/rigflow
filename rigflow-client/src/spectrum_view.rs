@@ -241,5 +241,17 @@ fn draw_frequency_markers(
             FontId::monospace(10.0),
             Color32::from_rgb(255, 220, 80),
         );
+
+	let tri = vec![
+	    Pos2::new(target_x, plot_rect.top() + 2.0),
+	    Pos2::new(target_x - 5.0, plot_rect.top() + 10.0),
+	    Pos2::new(target_x + 5.0, plot_rect.top() + 10.0),
+	];
+
+	painter.add(egui::Shape::convex_polygon(
+	    tri,
+	    Color32::from_rgb(255, 220, 80),
+	    Stroke::NONE,
+	));
     }
 }
