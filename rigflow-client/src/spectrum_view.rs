@@ -295,16 +295,25 @@ fn draw_passband_overlay(
     let left_hz = center_freq_hz - sample_rate_hz * 0.5;
     let right_hz = center_freq_hz + sample_rate_hz * 0.5;
 
-    let (pb_left_hz, pb_right_hz) = match demod_mode {
-        "wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
-        "nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
-        "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
-        "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
-        _ => match sideband {
+    let demod_mode = demod_mode.to_ascii_lowercase();
+    let sideband = sideband.to_ascii_lowercase();
+
+    let (pb_left_hz, pb_right_hz) = match demod_mode.as_str() {
+	"wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
+	"nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
+
+	// legacy representation
+	"usb" => (target_freq_hz, target_freq_hz + 3_000.0),
+	"lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
+
+	// cleaner future representation
+	"ssb" => match sideband.as_str() {
             "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
             "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
-            _ => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
-        },
+            _ => (target_freq_hz - 3_000.0, target_freq_hz + 3_000.0),
+	},
+
+	_ => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
     };
 
     let visible_left_hz = pb_left_hz.max(left_hz);
