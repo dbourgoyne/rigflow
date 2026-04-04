@@ -103,6 +103,7 @@ pub async fn websocket_control_task(
 			state.server_connected = false;
 			state.server_status = "no server".to_string();
 			state.radio_acquired = false;
+			state.available_radios.clear();
 		    }
 
 		    Some(ControlCommand::LegacyClientMessage(cmd)) => {
