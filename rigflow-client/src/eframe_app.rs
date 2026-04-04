@@ -38,25 +38,26 @@ impl eframe::App for RigflowApp {
         };
 
 	egui::CentralPanel::default().show(ctx, |ui| {
-	    ui.add_space(8.0);
-
 	    egui::Frame::NONE
-		.inner_margin(egui::Margin::symmetric(12, 8))
+		.inner_margin(egui::Margin {
+		    left: 12,
+		    right: 12,
+		    top: 4,
+		    bottom: 4,
+		})
 		.show(ui, |ui| {
-		    ui.heading("Spectrum");
-		    ui.separator();
-
 		    let spectrum_snapshot = {
 			let guard = self.spectrum_db.lock().unwrap();
 			guard.clone()
 		    };
 
+		    // Fixed-height top spectrum region
+		    let spectrum_height = 220.0;
 		    let width = ui.available_width();
-		    let height = 220.0;
 
 		    draw_spectrum_plot(
 			ui,
-			egui::vec2(width, height),
+			egui::vec2(width, spectrum_height),
 			&spectrum_snapshot,
 			-120.0,
 			0.0,
@@ -64,7 +65,7 @@ impl eframe::App for RigflowApp {
 			snapshot.input_sample_rate_hz,
 		    );
 
-		    ui.add_space(8.0);
+		    ui.add_space(4.0);
 		    ui.separator();
 		    ui.label("Waterfall placeholder");
 		});

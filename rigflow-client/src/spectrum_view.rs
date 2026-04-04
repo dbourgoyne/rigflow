@@ -1,8 +1,8 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 
 const Y_AXIS_WIDTH: f32 = 72.0;
-const X_AXIS_HEIGHT: f32 = 28.0;
-const PLOT_PAD_TOP: f32 = 10.0;
+const X_AXIS_HEIGHT: f32 = 34.0;
+const PLOT_PAD_TOP: f32 = 2.0;
 const PLOT_PAD_RIGHT: f32 = 10.0;
 
 pub fn draw_spectrum_plot(
@@ -19,25 +19,16 @@ pub fn draw_spectrum_plot(
     let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
-    // Full widget background
     painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 24));
 
-    // NEW: create inner content rect so the plot is not flush to the edges
-    let content_rect = rect.shrink2(egui::vec2(12.0, 8.0));
+    let content_rect = rect.shrink2(egui::vec2(8.0, 4.0));
 
     let plot_rect = egui::Rect::from_min_max(
         egui::Pos2::new(content_rect.left() + Y_AXIS_WIDTH, content_rect.top() + PLOT_PAD_TOP),
         egui::Pos2::new(content_rect.right() - PLOT_PAD_RIGHT, content_rect.bottom() - X_AXIS_HEIGHT),
     );
 
-    // DEBUG: draw only these
-    painter.rect_stroke(
-        content_rect,
-        0.0,
-        egui::Stroke::new(1.0, egui::Color32::RED),
-        egui::StrokeKind::Middle,
-    );
-
+    // DEBUG: only draw plot_rect, not rect/content_rect
     painter.rect_stroke(
         plot_rect,
         0.0,
@@ -105,7 +96,7 @@ fn draw_db_axis_and_grid(
 
 fn draw_freq_axis_and_grid(
     painter: &egui::Painter,
-    _content_rect: egui::Rect,
+    content_rect: egui::Rect,
     plot_rect: egui::Rect,
     center_freq_hz: f32,
     sample_rate_hz: f32,
@@ -132,22 +123,24 @@ fn draw_freq_axis_and_grid(
 
         let freq_hz = egui::lerp(left_hz..=right_hz, t);
 
-        painter.text(
-            egui::Pos2::new(x, plot_rect.bottom() + 6.0),
-            egui::Align2::CENTER_TOP,
-            format_freq(freq_hz),
-            egui::FontId::monospace(11.0),
-            text_color,
-        );
+	painter.text(
+	    egui::Pos2::new(plot_rect.center().x, content_rect.bottom() - 2.0),
+	    egui::Align2::CENTER_BOTTOM,
+	    "Frequency",
+	    egui::FontId::monospace(11.0),
+	    text_color,
+	);
+
     }
 
     painter.text(
-        egui::Pos2::new(plot_rect.center().x, plot_rect.bottom() + 22.0),
-        egui::Align2::CENTER_TOP,
-        "Frequency",
-        egui::FontId::monospace(11.0),
-        text_color,
+	egui::Pos2::new(plot_rect.center().x, content_rect.bottom() - 2.0),
+	egui::Align2::CENTER_BOTTOM,
+	"Frequency",
+	egui::FontId::monospace(11.0),
+	text_color,
     );
+
 }
 
 fn draw_trace(
