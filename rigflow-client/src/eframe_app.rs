@@ -157,6 +157,15 @@ impl eframe::App for RigflowApp {
 			guard.clone()
 		    };
 
+		    println!(
+			"demod_mode={:?} sideband={:?} target={} center={} sample_rate={}",
+			snapshot.demod_mode,
+			snapshot.sideband,
+			snapshot.target_freq_hz,
+			snapshot.center_freq_hz,
+			snapshot.input_sample_rate_hz,
+		    );
+
 		    if let Some(clicked_freq_hz) = draw_spectrum_plot(
 			ui,
 			egui::vec2(ui.available_width(), 220.0),
