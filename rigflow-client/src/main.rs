@@ -4,6 +4,7 @@ mod eframe_app;
 mod input;
 mod net;
 mod render;
+mod spectrum_view;
 mod widgets;
 
 use std::sync::{Arc, Mutex};

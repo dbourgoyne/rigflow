@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
+use crate::spectrum_view::draw_spectrum_trace;
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -35,6 +36,30 @@ impl eframe::App for RigflowApp {
             let state = self.state.lock().unwrap();
             state.clone()
         };
+
+	egui::CentralPanel::default().show(ctx, |ui| {
+	    let available = ui.available_size();
+	    let spectrum_height = (available.y * 0.35).max(140.0);
+
+	    ui.heading("Spectrum");
+	    ui.separator();
+
+	    ui.allocate_ui_with_layout(
+		egui::vec2(available.x, spectrum_height),
+		egui::Layout::top_down(egui::Align::Min),
+		|ui| {
+		    let spectrum_snapshot = {
+			let guard = self.spectrum_db.lock().unwrap();
+			guard.clone()
+		    };
+
+		    draw_spectrum_trace(ui, &spectrum_snapshot, -120.0, 0.0);
+		},
+	    );
+
+	    ui.separator();
+	    ui.label("Waterfall placeholder");
+	});
 
         egui::SidePanel::left("left_panel")
             .resizable(true)
