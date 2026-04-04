@@ -243,31 +243,18 @@ pub fn apply_radio_server_message(
     let mut state = ui_state.lock().unwrap();
 
     match msg {
-        ServerRadioMessage::RadiosListed { radios } => {
-            state.status = "acquiring radio".to_string();
 
-	    let selected = radios
-                .iter()
-                .find(|r| !r.is_leased && r.id.0.starts_with("rtl:"))
-                .cloned()
-                .or_else(|| radios.into_iter().find(|r| !r.is_leased));
+	ServerRadioMessage::RadiosListed { radios } => {
+	    state.available_radios = radios.clone();
+	    
+	    if radios.is_empty() {
+		state.server_status = "connected, no radios available".to_string();
+	    } else {
+		state.server_status = format!("connected, {} radios available", radios.len());
+	    }
 
-            if let Some(radio) = selected {
-
-                let audio_udp_peer_string = "192.168.0.225:9001".to_string();
-                let waterfall_udp_peer_string = "192.168.0.225:9002".to_string();
-
-                return Some(ClientRadioMessage::AcquireRadio {
-                    radio_id: radio.id,
-                    center_freq_hz: state.center_freq_hz as u64,
-                    target_freq_hz: state.target_freq_hz as u64,
-                    audio_udp_peer: audio_udp_peer_string,
-                    waterfall_udp_peer: waterfall_udp_peer_string,
-                });
-            } else {
-                state.status = "no radios available".to_string();
-            }
-        }
+	    // Optional: do NOT auto-acquire here if you want the UI list to drive selection.
+	}
 
         ServerRadioMessage::RadioAcquired { .. } => {
             state.radio_acquired = true;
