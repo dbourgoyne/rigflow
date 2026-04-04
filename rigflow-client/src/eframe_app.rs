@@ -61,6 +61,8 @@ impl eframe::App for RigflowApp {
 	    ui.label("Waterfall placeholder");
 	});
 
+	ctx.request_repaint(); 
+
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(260.0)
