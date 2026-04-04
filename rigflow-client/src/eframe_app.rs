@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
-use crate::spectrum_view::draw_spectrum_trace;
+use crate::spectrum_view::draw_spectrum_plot;
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -53,7 +53,19 @@ impl eframe::App for RigflowApp {
 			guard.clone()
 		    };
 
-		    draw_spectrum_trace(ui, &spectrum_snapshot, -120.0, 0.0);
+		    let spectrum_snapshot = {
+			let guard = self.spectrum_db.lock().unwrap();
+			guard.clone()
+		    };
+
+		    draw_spectrum_plot(
+			ui,
+			&spectrum_snapshot,
+			-120.0,
+			0.0,
+			snapshot.center_freq_hz,
+			snapshot.input_sample_rate_hz,
+		    );
 		},
 	    );
 
