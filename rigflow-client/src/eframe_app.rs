@@ -156,8 +156,8 @@ impl eframe::App for RigflowApp {
 			let guard = self.spectrum_db.lock().unwrap();
 			guard.clone()
 		    };
-		    
-		    draw_spectrum_plot(
+
+		    if let Some(clicked_freq_hz) = draw_spectrum_plot(
 			ui,
 			egui::vec2(ui.available_width(), 220.0),
 			&spectrum_snapshot,
@@ -166,12 +166,38 @@ impl eframe::App for RigflowApp {
 			snapshot.center_freq_hz,
 			snapshot.target_freq_hz,
 			snapshot.input_sample_rate_hz,
-		    );
+		    ) {
+			let _ = self.ws_cmd_tx.send(
+			    crate::net::control::ControlCommand::LegacyClientMessage(
+				rigflow_protocol::ClientMessage::SetFrequency {
+				    target_freq_hz: clicked_freq_hz,
+				},
+			    ),
+			);
+		    }
 		    
 		    ui.add_space(4.0);
 		    ui.separator();
 		    ui.label("Waterfall placeholder");
 		});
+
+	    // Update immediately, don't wait for server response
+	    // Makes UI feel snappier
+	    /*
+	    if let Some(clicked_freq_hz) = draw_spectrum_plot(...) {
+		if let Ok(mut state) = self.state.lock() {
+		    state.target_freq_hz = clicked_freq_hz;
+		}
+
+		let _ = self.ws_cmd_tx.send(
+		    crate::net::control::ControlCommand::LegacyClientMessage(
+			rigflow_protocol::ClientMessage::SetFrequency {
+			    target_freq_hz: clicked_freq_hz,
+			},
+		    ),
+		);
+	}
+	    */
 	});
 
 	ctx.request_repaint(); 

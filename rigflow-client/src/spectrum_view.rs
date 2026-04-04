@@ -14,9 +14,9 @@ pub fn draw_spectrum_plot(
     center_freq_hz: f32,
     target_freq_hz: f32,
     sample_rate_hz: f32,
-) {
+) -> Option<f32> {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
-    let (outer_rect, _response) = ui.allocate_exact_size(size, Sense::hover());
+    let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter_at(outer_rect);
 
     // Background
@@ -28,14 +28,8 @@ pub fn draw_spectrum_plot(
     );
 
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
-        return;
+        return None;
     }
-
-    // Debug center line if needed
-    // painter.line_segment(
-    //     [Pos2::new(plot_rect.center().x, plot_rect.top()), Pos2::new(plot_rect.center().x, plot_rect.bottom())],
-    //     Stroke::new(1.0, Color32::RED),
-    // );
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, center_freq_hz, sample_rate_hz);
@@ -49,6 +43,24 @@ pub fn draw_spectrum_plot(
         Stroke::new(1.0, Color32::from_gray(110)),
         egui::StrokeKind::Inside,
     );
+
+    let mut clicked_freq_hz = None;
+
+    if response.clicked() && sample_rate_hz > 0.0 {
+	if let Some(pointer_pos) = response.interact_pointer_pos() {
+            if plot_rect.contains(pointer_pos) {
+		let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
+                    .clamp(0.0, 1.0);
+
+		let left_hz = center_freq_hz - sample_rate_hz * 0.5;
+		let clicked_hz = left_hz + frac * sample_rate_hz;
+
+		clicked_freq_hz = Some(clicked_hz);
+            }
+	}
+    }
+    
+    clicked_freq_hz
 }
 
 fn draw_grid_and_y_axis(
