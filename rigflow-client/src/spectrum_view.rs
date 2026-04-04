@@ -7,16 +7,15 @@ const PLOT_PAD_RIGHT: f32 = 10.0;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
+    size: egui::Vec2,
     spectrum_db: &[f32],
     db_min: f32,
     db_max: f32,
     center_freq_hz: f32,
     sample_rate_hz: f32,
 ) {
-    let desired_size = ui.available_size();
-    let desired_size = Vec2::new(desired_size.x.max(300.0), desired_size.y.max(180.0));
 
-    let (rect, _response) = ui.allocate_exact_size(desired_size, Sense::hover());
+    let (rect, _response) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
 
     painter.rect_filled(rect, 4.0, Color32::from_rgb(20, 20, 24));
