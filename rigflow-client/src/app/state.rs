@@ -25,6 +25,8 @@ pub struct UiState {
     pub editing_server_ip: bool,
     pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
     pub selected_radio_id: Option<String>,
+    pub rigflow_server_ws_port: u16,
+    pub udp_listen_port: u16,
 }
 
 impl Default for UiState {
@@ -53,6 +55,8 @@ impl Default for UiState {
 	    editing_server_ip: false,
 	    available_radios: Vec::new(),
 	    selected_radio_id: None,
+	    rigflow_server_ws_port: 9000,
+	    udp_listen_port: 0,
         }
     }
 }

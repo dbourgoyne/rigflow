@@ -90,6 +90,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     stream.play()?;
 
     let socket = UdpSocket::bind(LISTEN_ADDR)?;
+    let udp_listen_port = socket.local_addr()?.port();
+
+    {
+	let mut state = ui_state.lock().unwrap();
+	state.udp_listen_port = udp_listen_port;
+    }
     socket.set_read_timeout(Some(Duration::from_millis(5)))?;
 
     let mut reg = Vec::with_capacity(4);

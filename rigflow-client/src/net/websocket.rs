@@ -26,6 +26,7 @@ pub async fn websocket_control_task(
 
     let mut write_opt: Option<WsWrite> = None;
     let mut read_opt: Option<WsRead> = None;
+    let mut connected_server_ip: Option<String> = None;
     let mut renew_interval = tokio::time::interval(Duration::from_secs(10));
 
     loop {
@@ -53,13 +54,39 @@ pub async fn websocket_control_task(
 		match cmd {
 
 		    Some(ControlCommand::AcquireRadio { radio_id }) => {
+			
+			let Some(server_ip) = connected_server_ip.clone() else {
+			    let mut state = ui_state.lock().unwrap();
+			    state.server_status = "acquire failed: not connected to a server".to_string();
+			    continue;
+			};
+
+			let (udp_listen_port, ws_port, center_freq_hz, target_freq_hz) = {
+			    let state = ui_state.lock().unwrap();
+			    (
+				state.udp_listen_port,
+				state.rigflow_server_ws_port,
+				state.center_freq_hz as u64,
+				state.target_freq_hz as u64,
+			    )
+			};
+
+			let udp_peer_addr = match build_udp_peer_addr(&server_ip, ws_port, udp_listen_port) {
+			    Ok(addr) => addr,
+			    Err(err) => {
+				let mut state = ui_state.lock().unwrap();
+				state.server_status = format!("acquire failed: {}", err);
+				continue;
+			    }
+			};
+
 			if let Some(write) = write_opt.as_mut() {
 			    let acquire = ClientRadioMessage::AcquireRadio {
 				radio_id: rigflow_core::radio::RadioId(radio_id),
-				center_freq_hz: 101_100_000,
-				target_freq_hz: 101_100_000,
-				audio_udp_peer: "192.168.0.225:50000".to_string(),
-				waterfall_udp_peer: "192.168.0.225:50000".to_string(),
+				center_freq_hz,
+				target_freq_hz,
+				audio_udp_peer: udp_peer_addr.clone(),
+				waterfall_udp_peer: udp_peer_addr,
 			    };
 
 			    let text = serde_json::to_string(&acquire)?;
@@ -88,7 +115,12 @@ pub async fn websocket_control_task(
 			    continue;
 			}
 
-			let ws_url = format!("ws://{}:9000/ws", server_ip);
+			let ws_port = {
+			    let state = ui_state.lock().unwrap();
+			    state.rigflow_server_ws_port
+			};
+
+			let ws_url = format!("ws://{}:{}/ws", server_ip, ws_port);
 			println!("CLIENT connecting to {}", ws_url);
 
 			match tokio_tungstenite::connect_async(&ws_url).await {
@@ -96,6 +128,7 @@ pub async fn websocket_control_task(
 				let (write, read) = ws_stream.split();
 				write_opt = Some(write);
 				read_opt = Some(read);
+				connected_server_ip = Some(server_ip.clone());
 
 				{
 				    let mut state = ui_state.lock().unwrap();
@@ -137,6 +170,7 @@ pub async fn websocket_control_task(
 			state.radio_acquired = false;
 			state.selected_radio_id = None;
 			state.available_radios.clear();
+			connected_server_ip = None;
 		    }
 
 		    Some(ControlCommand::LegacyClientMessage(cmd)) => {
@@ -184,6 +218,7 @@ pub async fn websocket_control_task(
 
 			write_opt = None;
 			read_opt = None;
+			connected_server_ip = None;
 
 			let mut state = ui_state.lock().unwrap();
 			state.server_connected = false;
@@ -198,6 +233,7 @@ pub async fn websocket_control_task(
 
 			write_opt = None;
 			read_opt = None;
+			connected_server_ip = None;
 
 			let mut state = ui_state.lock().unwrap();
 			state.server_connected = false;
@@ -311,4 +347,28 @@ pub fn apply_radio_server_message(
     }
 
     None
+}
+
+fn build_udp_peer_addr(
+    server_ip: &str,
+    server_ws_port: u16,
+    udp_listen_port: u16,
+) -> Result<String, String> {
+    if udp_listen_port == 0 {
+        return Err("udp listen port is not initialized".to_string());
+    }
+
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("failed to bind UDP probe socket: {e}"))?;
+
+    probe
+        .connect((server_ip, server_ws_port))
+        .map_err(|e| format!("failed to probe route to server {server_ip}:{server_ws_port}: {e}"))?;
+
+    let local_ip = probe
+        .local_addr()
+        .map_err(|e| format!("failed to get local probe socket address: {e}"))?
+        .ip();
+
+    Ok(format!("{}:{}", local_ip, udp_listen_port))
 }
