@@ -14,33 +14,43 @@ pub fn draw_spectrum_plot(
     center_freq_hz: f32,
     sample_rate_hz: f32,
 ) {
+    let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
 
-    let (rect, _response) = ui.allocate_exact_size(size, Sense::hover());
+    let (rect, _response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 4.0, Color32::from_rgb(20, 20, 24));
+    // Full widget background
+    painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 24));
 
-    let plot_rect = Rect::from_min_max(
-        Pos2::new(rect.left() + Y_AXIS_WIDTH, rect.top() + PLOT_PAD_TOP),
-        Pos2::new(rect.right() - PLOT_PAD_RIGHT, rect.bottom() - X_AXIS_HEIGHT),
+    // NEW: create inner content rect so the plot is not flush to the edges
+    let content_rect = rect.shrink2(egui::vec2(12.0, 8.0));
+
+    let plot_rect = egui::Rect::from_min_max(
+        egui::Pos2::new(content_rect.left() + Y_AXIS_WIDTH, content_rect.top() + PLOT_PAD_TOP),
+        egui::Pos2::new(content_rect.right() - PLOT_PAD_RIGHT, content_rect.bottom() - X_AXIS_HEIGHT),
     );
 
-    // begin debug
+    // DEBUG: draw only these
     painter.rect_stroke(
-	plot_rect,
-	0.0,
-	Stroke::new(1.0, Color32::YELLOW),
-	egui::StrokeKind::Middle,
+        content_rect,
+        0.0,
+        egui::Stroke::new(1.0, egui::Color32::RED),
+        egui::StrokeKind::Middle,
     );
-    // end debug
+
+    painter.rect_stroke(
+        plot_rect,
+        0.0,
+        egui::Stroke::new(1.0, egui::Color32::YELLOW),
+        egui::StrokeKind::Middle,
+    );
 
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
         return;
     }
 
-    draw_db_axis_and_grid(&painter, rect, plot_rect, db_min, db_max);
-    draw_freq_axis_and_grid(&painter, rect, plot_rect, center_freq_hz, sample_rate_hz);
-    draw_plot_border(&painter, plot_rect);
+    draw_db_axis_and_grid(&painter, content_rect, plot_rect, db_min, db_max);
+    draw_freq_axis_and_grid(&painter, content_rect, plot_rect, center_freq_hz, sample_rate_hz);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
 }
 
@@ -55,13 +65,13 @@ fn draw_plot_border(painter: &egui::Painter, plot_rect: Rect) {
 
 fn draw_db_axis_and_grid(
     painter: &egui::Painter,
-    full_rect: Rect,
-    plot_rect: Rect,
+    content_rect: egui::Rect,
+    plot_rect: egui::Rect,
     db_min: f32,
     db_max: f32,
 ) {
-    let grid_color = Color32::from_gray(55);
-    let text_color = Color32::from_gray(180);
+    let grid_color = egui::Color32::from_gray(55);
+    let text_color = egui::Color32::from_gray(180);
 
     let steps = 6;
     for i in 0..=steps {
@@ -69,39 +79,39 @@ fn draw_db_axis_and_grid(
         let y = egui::lerp(plot_rect.bottom()..=plot_rect.top(), t);
 
         painter.line_segment(
-            [Pos2::new(plot_rect.left(), y), Pos2::new(plot_rect.right(), y)],
-            Stroke::new(1.0, grid_color),
+            [egui::Pos2::new(plot_rect.left(), y), egui::Pos2::new(plot_rect.right(), y)],
+            egui::Stroke::new(1.0, grid_color),
         );
 
         let db = egui::lerp(db_min..=db_max, t);
 
-	painter.text(
-	    Pos2::new(plot_rect.left() - 8.0, y),
-	    Align2::RIGHT_CENTER,
-	    format!("{db:.0} dB"),
-	    FontId::monospace(12.0),
-	    text_color,
-	);
+        painter.text(
+            egui::Pos2::new(plot_rect.left() - 8.0, y),
+            egui::Align2::RIGHT_CENTER,
+            format!("{db:.0}"),
+            egui::FontId::monospace(12.0),
+            text_color,
+        );
     }
 
     painter.text(
-        Pos2::new(full_rect.left() + 8.0, plot_rect.top() - 2.0),
-        Align2::LEFT_TOP,
+        egui::Pos2::new(content_rect.left() + 4.0, plot_rect.top()),
+        egui::Align2::LEFT_TOP,
         "dB",
-        FontId::monospace(11.0),
+        egui::FontId::monospace(11.0),
         text_color,
     );
 }
 
 fn draw_freq_axis_and_grid(
     painter: &egui::Painter,
-    _full_rect: Rect,
-    plot_rect: Rect,
+    _content_rect: egui::Rect,
+    plot_rect: egui::Rect,
     center_freq_hz: f32,
     sample_rate_hz: f32,
 ) {
-    let grid_color = Color32::from_gray(55);
-    let text_color = Color32::from_gray(180);
+    let grid_color = egui::Color32::from_gray(55);
+    let text_color = egui::Color32::from_gray(180);
 
     if sample_rate_hz <= 0.0 {
         return;
@@ -116,26 +126,26 @@ fn draw_freq_axis_and_grid(
         let x = egui::lerp(plot_rect.left()..=plot_rect.right(), t);
 
         painter.line_segment(
-            [Pos2::new(x, plot_rect.top()), Pos2::new(x, plot_rect.bottom())],
-            Stroke::new(1.0, grid_color),
+            [egui::Pos2::new(x, plot_rect.top()), egui::Pos2::new(x, plot_rect.bottom())],
+            egui::Stroke::new(1.0, grid_color),
         );
 
         let freq_hz = egui::lerp(left_hz..=right_hz, t);
 
         painter.text(
-            Pos2::new(x, plot_rect.bottom() + 6.0),
-            Align2::CENTER_TOP,
+            egui::Pos2::new(x, plot_rect.bottom() + 6.0),
+            egui::Align2::CENTER_TOP,
             format_freq(freq_hz),
-            FontId::monospace(11.0),
+            egui::FontId::monospace(11.0),
             text_color,
         );
     }
 
     painter.text(
-        Pos2::new(plot_rect.center().x, plot_rect.bottom() + 20.0),
-        Align2::CENTER_TOP,
+        egui::Pos2::new(plot_rect.center().x, plot_rect.bottom() + 22.0),
+        egui::Align2::CENTER_TOP,
         "Frequency",
-        FontId::monospace(11.0),
+        egui::FontId::monospace(11.0),
         text_color,
     );
 }
