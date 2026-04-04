@@ -20,7 +20,6 @@ type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
 
 pub async fn websocket_control_task(
-    ws_url: &str,
     mut rx: mpsc::UnboundedReceiver<ControlCommand>,
     ui_state: Arc<Mutex<UiState>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

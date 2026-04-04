@@ -1,37 +1,37 @@
+use std::sync::{Arc, Mutex};
+
 use eframe::egui;
-use crate::net::control::ControlCommand;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone)]
-pub struct AppState {
-    pub rigflow_server_ip: String,
-    pub server_connected: bool,
-    pub server_status: String,
-}
+use crate::app::state::UiState;
+use crate::net::control::ControlCommand;
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            rigflow_server_ip: "192.168.0.225".to_string(),
-            server_connected: false,
-            server_status: "no server".to_string(),
-        }
-    }
-}
-
-#[derive(Default)]
 pub struct RigflowApp {
-    pub state: AppState,
+    pub state: Arc<Mutex<UiState>>,
+    pub ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
+}
+
+impl RigflowApp {
+    pub fn new(
+        state: Arc<Mutex<UiState>>,
+        ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
+    ) -> Self {
+        Self { state, ws_cmd_tx }
+    }
 }
 
 impl eframe::App for RigflowApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let snapshot = {
+            let state = self.state.lock().unwrap();
+            state.clone()
+        };
+
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(260.0)
             .show(ctx, |ui| {
                 ui.heading("rigflow");
-
                 ui.separator();
 
                 egui::CollapsingHeader::new("Rigflow Server")
@@ -39,55 +39,65 @@ impl eframe::App for RigflowApp {
                     .show(ui, |ui| {
                         ui.label("rigflow server IP:");
 
-                        ui.text_edit_singleline(&mut self.state.rigflow_server_ip);
+                        let mut ip = snapshot.rigflow_server_ip.clone();
+                        if ui.text_edit_singleline(&mut ip).changed() {
+                            if let Ok(mut state) = self.state.lock() {
+                                state.rigflow_server_ip = ip;
+                            }
+                        }
 
                         ui.add_space(8.0);
 
-                        let button_text = if self.state.server_connected {
+                        let button_text = if snapshot.server_connected {
                             "Disconnect"
                         } else {
                             "Connect"
                         };
 
                         if ui.button(button_text).clicked() {
+                            let ip = snapshot.rigflow_server_ip.trim().to_string();
 
-			    let ip = self.state.rigflow_server_ip.clone();
-			    let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ControlCommand>();
-
-			    if self.state.server_connected {
-				let _ = ws_cmd_tx.send(ControlCommand::Disconnect);
-			    } else {
-				let _ = ws_cmd_tx.send(ControlCommand::Connect { server_ip: ip });
-			    }
-			    
-                            if self.state.server_connected {
-                                self.state.server_connected = false;
-                                self.state.server_status = "no server".to_string();
-                            } else {
-                                let ip = self.state.rigflow_server_ip.trim();
-
-                                if ip.is_empty() {
-                                    self.state.server_status =
+                            if snapshot.server_connected {
+                                let _ = self.ws_cmd_tx.send(ControlCommand::Disconnect);
+                            } else if ip.is_empty() {
+                                if let Ok(mut state) = self.state.lock() {
+                                    state.server_status =
                                         "connect failed: missing server IP".to_string();
-                                } else {
-                                    self.state.server_connected = true;
-                                    self.state.server_status =
-                                        format!("connected to server {}", ip);
                                 }
+                            } else {
+                                let _ = self.ws_cmd_tx.send(ControlCommand::Connect {
+                                    server_ip: ip,
+                                });
                             }
                         }
 
                         ui.add_space(8.0);
                         ui.label("Status:");
-                        ui.monospace(&self.state.server_status);
+                        ui.monospace(&snapshot.server_status);
+                    });
+
+                ui.separator();
+
+                egui::CollapsingHeader::new("Radios")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if snapshot.available_radios.is_empty() {
+                            ui.label("no radios");
+                        } else {
+                            for radio in &snapshot.available_radios {
+                                ui.label(format!(
+                                    "{}{}",
+                                    radio.display_name,
+                                    if radio.is_leased { " (busy)" } else { "" }
+                                ));
+                            }
+                        }
                     });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("Spectrum / Waterfall Placeholder");
             ui.separator();
-            ui.label("Later this will host the SDR visualizations.");
-            ui.add_space(12.0);
 
             let available = ui.available_size();
             let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
@@ -103,5 +113,7 @@ impl eframe::App for RigflowApp {
                 egui::Color32::LIGHT_GRAY,
             );
         });
+
+        ctx.request_repaint();
     }
 }
