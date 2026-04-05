@@ -140,6 +140,52 @@ impl eframe::App for RigflowApp {
 			    });
 			}
 		    });
+
+		if snapshot.radio_acquired {
+		    egui::CollapsingHeader::new("Radio Control")
+			.default_open(true)
+			.show(ui, |ui| {
+			    ui.label("Demod");
+
+			    let mut selected_demod = snapshot.demod_mode.clone();
+
+			    ui.horizontal(|ui| {
+				ui.radio_value(&mut selected_demod, "wfm".to_string(), "wfm");
+				ui.radio_value(&mut selected_demod, "nfm".to_string(), "nfm");
+				ui.radio_value(&mut selected_demod, "lsb".to_string(), "lsb");
+				ui.radio_value(&mut selected_demod, "usb".to_string(), "usb");
+			    });
+
+			    if selected_demod != snapshot.demod_mode {
+				if let Ok(mut state) = self.state.lock() {
+				    state.demod_mode = selected_demod.clone();
+				    state.sideband = match selected_demod.as_str() {
+					"lsb" => "lsb".to_string(),
+					"usb" => "usb".to_string(),
+					_ => state.sideband.clone(),
+				    };
+				}
+
+				let _ = self.ws_cmd_tx.send(
+				    crate::net::control::ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetDemodMode {
+					    mode: selected_demod.clone(),
+					},
+				    ),
+				);
+
+				if selected_demod == "lsb" || selected_demod == "usb" {
+				    let _ = self.ws_cmd_tx.send(
+					crate::net::control::ControlCommand::LegacyClientMessage(
+					    rigflow_protocol::ClientMessage::SetSideband {
+						sideband: selected_demod,
+					    },
+					),
+				    );
+				}
+			    }
+			});
+		}
             });
 
 	
