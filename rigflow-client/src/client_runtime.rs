@@ -2,6 +2,7 @@ use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use tokio::sync::mpsc;
 
@@ -24,6 +25,9 @@ const PACKET_SAMPLES: usize = 480;
 const TARGET_BUFFER_SAMPLES: usize = 4_800;
 const MAX_BUFFER_SAMPLES: usize = 24_000;
 
+const OUTPUT_SAMPLE_RATE: u32 = 48_000;
+const CHANNELS: u16 = 1;
+
 #[derive(Debug, Clone)]
 pub enum MediaCommand {
     RegisterUdp {
@@ -32,11 +36,11 @@ pub enum MediaCommand {
     },
 }
 
-#[derive(Clone)]
 pub struct MediaRuntimeHandles {
     pub media_cmd_tx: mpsc::UnboundedSender<MediaCommand>,
     pub waterfall_buffer: Arc<Mutex<Vec<u32>>>,
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
+    pub _audio_stream: cpal::Stream,
 }
 
 pub fn start_media_runtime(
@@ -59,6 +63,15 @@ pub fn start_media_runtime(
         TARGET_BUFFER_SAMPLES,
         MAX_BUFFER_SAMPLES,
     )));
+
+    let host = cpal::default_host();
+    let device = host
+	.default_output_device()
+	.ok_or("No default output device available")?;
+    let config = device.default_output_config()?.config();
+
+    let audio_stream = build_output_stream(&device, &config, Arc::clone(&jitter))?;
+    audio_stream.play()?;
 
     let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; WIDTH * HEIGHT]));
     let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
@@ -142,5 +155,65 @@ pub fn start_media_runtime(
         media_cmd_tx,
         waterfall_buffer,
         spectrum_db,
+	_audio_stream: audio_stream,
     })
+}
+
+fn build_output_stream(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    jitter: Arc<Mutex<JitterBuffer>>,
+) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
+    let supported_configs = device.supported_output_configs()?;
+
+    let mut selected = None;
+
+    for cfg in supported_configs {
+        if cfg.channels() == CHANNELS
+            && cfg.sample_format() == cpal::SampleFormat::F32
+            && OUTPUT_SAMPLE_RATE >= cfg.min_sample_rate().0
+            && OUTPUT_SAMPLE_RATE <= cfg.max_sample_rate().0
+        {
+            selected = Some(cfg.with_sample_rate(cpal::SampleRate(OUTPUT_SAMPLE_RATE)));
+            break;
+        }
+    }
+
+    let selected_config = if let Some(cfg) = selected {
+        cfg.config()
+    } else {
+        let mut cfg = config.clone();
+        cfg.channels = CHANNELS;
+        cfg.sample_rate = cpal::SampleRate(OUTPUT_SAMPLE_RATE);
+        cfg
+    };
+
+    log::info!(
+        "Using output device: {} @ {} Hz",
+        device.name().unwrap_or_else(|_| "<unknown>".to_string()),
+        selected_config.sample_rate.0
+    );
+
+    let err_fn = |err| {
+        log::error!("audio stream error: {err}");
+    };
+
+    let jitter_for_audio = Arc::clone(&jitter);
+
+    let stream = device.build_output_stream(
+        &selected_config,
+        move |data: &mut [f32], _| {
+            if let Ok(mut jb) = jitter_for_audio.lock() {
+                jb.pop_samples(data);
+            } else {
+                for s in data.iter_mut() {
+                    *s = 0.0;
+                }
+            }
+        },
+        err_fn,
+        None,
+    )?;
+
+    Ok(stream)
 }
