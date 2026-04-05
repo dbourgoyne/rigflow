@@ -32,65 +32,22 @@ impl RigflowApp {
         }
     }
 
-        
-    pub fn update_waterfall_texture(
-	&mut self,
-	ctx: &egui::Context,
-	width: usize,
-	height: usize,
-	waterfall_top: usize,
-    ) {
-	let pixels = {
-            let guard = self.waterfall_buffer.lock().unwrap();
-            guard.clone()
-	};
+    error: `self` parameter is only allowed in associated functions
+   --> rigflow-client/src/eframe_app.rs:277:5
+    |
+277 |     &mut self,
+    |     ^^^^^^^^^ not semantically valid as function parameter
+    |
+    = note: associated functions are those in `impl` or `trait` definitions
 
-	if pixels.len() != width * height || waterfall_top >= height {
-            return;
-	}
+error[E0573]: expected type, found variant `None`
+  --> rigflow-client/src/eframe_app.rs:25:21
+   |
+25 |     waterfall_texture: None,
+   |                        ^^^^ not a type
+   |
+help: try using the variant's enum
 
-	let wf_height = height - waterfall_top;
-	let mut image = egui::ColorImage {
-            size: [width, wf_height],
-            pixels: vec![egui::Color32::BLACK; width * wf_height],
-	};
-
-	for y in 0..wf_height {
-            let src_row = waterfall_top + y;
-            let src_start = src_row * width;
-            let src_end = src_start + width;
-
-            let dst_start = y * width;
-            let dst_end = dst_start + width;
-
-            for (dst, src) in image.pixels[dst_start..dst_end]
-		.iter_mut()
-		.zip(pixels[src_start..src_end].iter())
-            {
-		let argb = *src;
-
-		let r = ((argb >> 16) & 0xff) as u8;
-		let g = ((argb >> 8) & 0xff) as u8;
-		let b = (argb & 0xff) as u8;
-
-		*dst = egui::Color32::from_rgb(r, g, b);
-            }
-	}
-
-	match &mut self.waterfall_texture {
-            Some(tex) => {
-		tex.set(image, egui::TextureOptions::NEAREST);
-            }
-            None => {
-		let tex = ctx.load_texture(
-                    "waterfall_texture",
-                    image,
-                    egui::TextureOptions::NEAREST,
-		);
-		self.waterfall_texture = Some(tex);
-            }
-	}
-    }
 }
 
 impl eframe::App for RigflowApp {
