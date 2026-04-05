@@ -17,12 +17,18 @@ pub struct UiState {
     pub selected_license: LicenseClass,
     pub spectrum_zoom_x: f32,
     pub zoom_slider_dragging: bool,
-    pub radio_acquired: bool,
     pub rigflow_server_menu_expanded: bool,
-    pub rigflow_server_ip: String,
+    pub editing_server_ip: bool,
+    pub rigflow_server_ws_port: u16,
+    pub rigflow_server_udp_port: u16,
+    pub udp_listen_port: u16,
+    pub advertised_udp_peer: String,
+    pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
+    pub selected_radio_id: Option<String>,
     pub server_connected: bool,
     pub server_status: String,
-    pub editing_server_ip: bool,
+    pub rigflow_server_ip: String,
+    pub radio_acquired: bool,
 }
 
 impl Default for UiState {
@@ -43,12 +49,18 @@ impl Default for UiState {
             selected_license: LicenseClass::General,
             spectrum_zoom_x: 1.0,
             zoom_slider_dragging: false,
-            radio_acquired: false,
 	    rigflow_server_menu_expanded: false,
-	    rigflow_server_ip: "127.0.0.1".to_string(),
+	    editing_server_ip: false,
+	    rigflow_server_ws_port: 9000,
+	    rigflow_server_udp_port: 9001,
+	    udp_listen_port: 0,
+	    advertised_udp_peer: String::new(),
+	    available_radios: Vec::new(),
+	    selected_radio_id: None,
 	    server_connected: false,
 	    server_status: "no server".to_string(),
-	    editing_server_ip: false,
+	    rigflow_server_ip: "192.168.0.225".to_string(),
+	    radio_acquired: false,
         }
     }
 }
