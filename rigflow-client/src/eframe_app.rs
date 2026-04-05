@@ -325,7 +325,7 @@ impl eframe::App for RigflowApp {
 			ui.horizontal(|ui| {
 			    ui.add_space(LEFT_GUTTER);
 			    ui.image((tex.id(), egui::vec2(image_width, wf_height)));
-//			    ui.add_space(RIGHT_GUTTER);
+			    ui.add_space(RIGHT_GUTTER);
 			});
 		    }
 		});
