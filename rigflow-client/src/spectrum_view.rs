@@ -352,3 +352,13 @@ fn draw_passband_overlay(
         Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
     );
 }
+
+pub fn x_frac_to_frequency_hz(
+    frac: f32,
+    center_freq_hz: f32,
+    sample_rate_hz: f32,
+) -> f32 {
+    let frac = frac.clamp(0.0, 1.0);
+    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
+    left_hz + frac * sample_rate_hz
+}
