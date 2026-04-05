@@ -341,6 +341,7 @@ impl eframe::App for RigflowApp {
 		    ui.add_space(4.0);
 		    ui.separator();
 		    ui.label("Waterfall placeholder");
+		    self.update_waterfall_texture(ctx, WIDTH, HEIGHT, WATERFALL_TOP);
 		    if let Some(tex) = &self.waterfall_texture {
 			let wf_height = (HEIGHT - WATERFALL_TOP) as f32;
 			ui.image((tex.id(), egui::vec2(ui.available_width(), wf_height)));
