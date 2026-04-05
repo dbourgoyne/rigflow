@@ -262,9 +262,9 @@ fn draw_frequency_markers(
         );
 
 	let tri = vec![
-	    Pos2::new(target_x, plot_rect.bottom() + 2.0),
-	    Pos2::new(target_x - 5.0, plot_rect.bottom() + 10.0),
-	    Pos2::new(target_x + 5.0, plot_rect.bottom() + 10.0),
+	    Pos2::new(target_x, plot_rect.bottom() - 2.0),
+	    Pos2::new(target_x - 5.0, plot_rect.bottom() - 10.0),
+	    Pos2::new(target_x + 5.0, plot_rect.bottom() - 10.0),
 	];
 
 	painter.add(egui::Shape::convex_polygon(
