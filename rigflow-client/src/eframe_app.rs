@@ -40,16 +40,55 @@ impl RigflowApp {
 	height: usize,
 	waterfall_top: usize,
     ) {
+	println!(
+    "update_waterfall_texture: width={} height={} waterfall_top={}",
+    width, height, waterfall_top
+);
+
+let pixels = {
+    let guard = self.waterfall_buffer.lock().unwrap();
+    guard.clone()
+};
+
+	println!(
+	    "waterfall pixels len={} expected={}",
+	    pixels.len(),
+	    width * height
+	);
+	
 	let pixels = {
             let guard = self.waterfall_buffer.lock().unwrap();
             guard.clone()
 	};
 
+	println!(
+	    "waterfall pixels len={} expected={}",
+	    pixels.len(),
+	    width * height
+	);
+
 	if pixels.len() != width * height || waterfall_top >= height {
+	    println!("update_waterfall_texture: early return on size check");
             return;
 	}
 
 	let wf_height = height - waterfall_top;
+
+	let mut non_black = 0usize;
+	for y in 0..wf_height {
+	    let src_row = waterfall_top + y;
+	    let src_start = src_row * width;
+	    let src_end = src_start + width;
+
+	    for px in &pixels[src_start..src_end] {
+		if *px != 0 {
+		    non_black += 1;
+		}
+	    }
+	}
+
+println!("waterfall non_black pixels={}", non_black);
+	
 	let mut image = egui::ColorImage {
             size: [width, wf_height],
             pixels: vec![egui::Color32::BLACK; width * wf_height],
