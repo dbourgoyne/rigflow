@@ -1,9 +1,5 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
-
-const LEFT_GUTTER: f32 = 64.0;
-const RIGHT_GUTTER: f32 = 12.0;
-const TOP_GUTTER: f32 = 6.0;
-const BOTTOM_GUTTER: f32 = 34.0;
+use crate::app::layout::{LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER, BOTTOM_GUTTER};
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,

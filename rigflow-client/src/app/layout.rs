@@ -54,3 +54,8 @@ pub const ROW_HEIGHT: usize = 26;
 pub const BUTTON_HEIGHT: usize = 30;
 pub const FIELD_HEIGHT: usize = 26;
 pub const SECTION_SPACING: usize = 10;
+
+pub const LEFT_GUTTER: f32 = 64.0;
+pub const RIGHT_GUTTER: f32 = 12.0;
+pub const TOP_GUTTER: f32 = 6.0;
+pub const BOTTOM_GUTTER: f32 = 34.0;

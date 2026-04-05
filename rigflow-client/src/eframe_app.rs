@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
 use crate::spectrum_view::draw_spectrum_plot;
-use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP};
+use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, LEFT_GUTTER, RIGHT_GUTTER};
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -32,48 +32,49 @@ impl RigflowApp {
         }
     }
 
-        
-    pub fn update_waterfall_texture(
+    fn update_waterfall_texture(
 	&mut self,
 	ctx: &egui::Context,
 	width: usize,
 	height: usize,
 	waterfall_top: usize,
+	x0: usize,
+	x1: usize,
     ) {
-
 	let pixels = {
             let guard = self.waterfall_buffer.lock().unwrap();
             guard.clone()
 	};
 
-	if pixels.len() != width * height || waterfall_top >= height {
+	if pixels.len() != width * height || waterfall_top >= height || x0 >= x1 || x1 > width {
             return;
 	}
 
 	let wf_height = height - waterfall_top;
+	let wf_width = x1 - x0;
 
-	let mut image = egui::ColorImage {
-            size: [width, wf_height],
-            pixels: vec![egui::Color32::BLACK; width * wf_height],
-	};
+	let mut image = egui::ColorImage::new(
+            [wf_width, wf_height],
+            egui::Color32::BLACK,
+	);
 
 	for y in 0..wf_height {
             let src_row = waterfall_top + y;
-            let src_start = src_row * width;
-            let src_end = src_start + width;
+            let src_start = src_row * width + x0;
+            let src_end = src_row * width + x1;
 
-            let dst_start = y * width;
-            let dst_end = dst_start + width;
+            let dst_start = y * wf_width;
+            let dst_end = dst_start + wf_width;
 
             for (dst, src) in image.pixels[dst_start..dst_end]
 		.iter_mut()
 		.zip(pixels[src_start..src_end].iter())
             {
-		let argb = *src;
+		let rgb = *src;
 
-		let r = ((argb >> 16) & 0xff) as u8;
-		let g = ((argb >> 8) & 0xff) as u8;
-		let b = (argb & 0xff) as u8;
+		let r = ((rgb >> 16) & 0xff) as u8;
+		let g = ((rgb >> 8) & 0xff) as u8;
+		let b = (rgb & 0xff) as u8;
 
 		*dst = egui::Color32::from_rgb(r, g, b);
             }
@@ -303,11 +304,24 @@ impl eframe::App for RigflowApp {
 		    
 		    ui.add_space(4.0);
 		    ui.separator();
-		    ui.label("Waterfall placeholder");
-		    self.update_waterfall_texture(ctx, WIDTH, HEIGHT, WATERFALL_TOP);
+		    self.update_waterfall_texture(
+			ctx,
+			WIDTH,
+			HEIGHT,
+			WATERFALL_TOP,
+			SPECTRUM_PLOT_X0,
+			SPECTRUM_PLOT_X1,
+		    );
+
 		    if let Some(tex) = &self.waterfall_texture {
 			let wf_height = (HEIGHT - WATERFALL_TOP) as f32;
-			ui.image((tex.id(), egui::vec2(ui.available_width(), wf_height)));
+			let image_width = (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER).max(100.0);
+
+			ui.horizontal(|ui| {
+			    ui.add_space(LEFT_GUTTER);
+			    ui.image((tex.id(), egui::vec2(image_width, wf_height)));
+			    ui.add_space(RIGHT_GUTTER);
+			});
 		    }
 		});
 
