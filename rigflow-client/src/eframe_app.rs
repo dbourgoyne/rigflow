@@ -315,17 +315,12 @@ impl eframe::App for RigflowApp {
 
 		    if let Some(tex) = &self.waterfall_texture {
 			let wf_height = (HEIGHT - WATERFALL_TOP) as f32;
-//			let image_width = (SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0 - LEFT_GUTTER - RIGHT_GUTTER) as f32;
-			//			let image_width = ui.available_width();
-			let ui_avail_w = ui.available_width();
-			println!("ui available width = {}", ui_avail_w);
 			let image_width = (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER);
-//			let image_width = (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER).max(100.0);
 
 			ui.horizontal(|ui| {
 			    ui.add_space(LEFT_GUTTER);
 			    ui.image((tex.id(), egui::vec2(image_width, wf_height)));
-			    ui.add_space(RIGHT_GUTTER);
+			    //ui.add_space(RIGHT_GUTTER);
 			});
 		    }
 		});
