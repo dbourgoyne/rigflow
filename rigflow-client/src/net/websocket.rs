@@ -279,41 +279,18 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
         ServerMessage::Pong => {
             state.status = "pong".to_string();
         }
-	ServerMessage::FrequencyChanged { .. } => {
-	    // Phase 1: ignore legacy runtime frequency updates.
-	}
-
-	ServerMessage::CenterFrequencyChanged { .. } => {
-	    // Phase 1: ignore legacy runtime center-frequency updates.
-	}
-
-	ServerMessage::DemodModeChanged { .. } => {
-	    // Phase 1: ignore legacy runtime demod updates.
-	}
-
-	ServerMessage::StreamConfig {
-	    audio_sample_rate_hz,
-	    audio_format,
-	    waterfall_bins,
-	    waterfall_frame_rate_hz,
-	    center_freq_hz: _,
-	    target_freq_hz: _,
-	    input_sample_rate_hz,
-	} => {
-	    // Phase 1: keep non-frequency stream metadata only.
-	    state.audio_sample_rate_hz = audio_sample_rate_hz;
-	    state.audio_format = audio_format;
-	    state.waterfall_bins = waterfall_bins;
-	    state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-	    state.input_sample_rate_hz = input_sample_rate_hz;
-	    state.status = "stream configured".to_string();
-	}
-
-	
         ServerMessage::SidebandChanged { sideband } => {
+            // Optional during transition; can be removed later.
             state.sideband = sideband;
         }
-
+        ServerMessage::DemodModeChanged { mode } => {
+            // Optional during transition; can be removed later.
+            state.demod_mode = mode;
+        }
+        ServerMessage::SsbPitchChanged { pitch_hz } => {
+            // Optional during transition; can be removed later.
+            state.ssb_pitch_hz = pitch_hz;
+        }
         ServerMessage::UdpAudioOffer { server_udp_port } => {
             state.status = format!("udp audio offered on {}", server_udp_port);
         }
@@ -322,9 +299,6 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
         }
         ServerMessage::Error { message } => {
             state.status = format!("error: {}", message);
-        }
-        ServerMessage::SsbPitchChanged { pitch_hz } => {
-            state.ssb_pitch_hz = pitch_hz;
         }
     }
 }
@@ -367,29 +341,24 @@ pub fn apply_radio_server_message(
             target_freq_hz,
             input_sample_rate_hz,
             audio_sample_rate_hz,
+            audio_format,
             waterfall_bins,
             waterfall_frame_rate_hz,
             demod_mode,
+            sideband,
+            ssb_pitch_hz,
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.audio_sample_rate_hz = audio_sample_rate_hz as f32;
+            state.audio_format = audio_format;
             state.waterfall_bins = waterfall_bins as usize;
             state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
             state.demod_mode = demod_mode;
+            state.sideband = sideband;
+            state.ssb_pitch_hz = ssb_pitch_hz;
             state.status = "runtime snapshot received".to_string();
-
-            println!(
-                "CLIENT runtime snapshot: center={} target={} input_sr={} audio_sr={} bins={} fps={} demod={}",
-                center_freq_hz,
-                target_freq_hz,
-                input_sample_rate_hz,
-                audio_sample_rate_hz,
-                waterfall_bins,
-                waterfall_frame_rate_hz,
-                state.demod_mode
-            );
         }
 
         ServerRadioMessage::RuntimeChanged {
@@ -397,6 +366,8 @@ pub fn apply_radio_server_message(
             center_freq_hz,
             target_freq_hz,
             demod_mode,
+            sideband,
+            ssb_pitch_hz,
         } => {
             if let Some(v) = center_freq_hz {
                 state.center_freq_hz = v as f32;
@@ -404,16 +375,15 @@ pub fn apply_radio_server_message(
             if let Some(v) = target_freq_hz {
                 state.target_freq_hz = v as f32;
             }
-	    if let Some(ref v) = demod_mode {
-		state.demod_mode = v.clone();
-	    }
-
-	    println!( "CLIENT runtime changed: center={:?} target={:?} demod={:?}",
-		       center_freq_hz,
-		       target_freq_hz,
-		       demod_mode
-	    );
-
+            if let Some(ref v) = demod_mode {
+                state.demod_mode = v.clone();
+            }
+            if let Some(ref v) = sideband {
+                state.sideband = v.clone();
+            }
+            if let Some(v) = ssb_pitch_hz {
+                state.ssb_pitch_hz = v;
+            }
         }
 
         ServerRadioMessage::RadioError { message, .. } => {

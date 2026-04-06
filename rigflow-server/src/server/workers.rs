@@ -47,9 +47,6 @@ pub fn apply_radio_command_to_pipeline(
                 stream.target_freq_hz = freq;
             }
 
-            let _ = tx.send(ServerMessage::FrequencyChanged {
-                target_freq_hz: freq,
-            });
         }
 
 	RadioCommand::SetCenterFrequency(freq) => {
@@ -63,10 +60,6 @@ pub fn apply_radio_command_to_pipeline(
 		stream.center_freq_hz = freq;
 	    }
 
-	    // Immediate UI update (control path)
-	    let _ = tx.send(ServerMessage::CenterFrequencyChanged {
-		center_freq_hz: freq,
-	    });
 	}
 
         RadioCommand::SetDemodMode(mode) => {
@@ -218,10 +211,6 @@ pub fn spawn_realtime_capture_worker(
                         if let Ok(mut s) = stream_state.try_write() {
                             s.center_freq_hz = radio.center_freq_hz;
                         }
-
-                        let _ = tx.send(ServerMessage::CenterFrequencyChanged {
-                            center_freq_hz: radio.center_freq_hz,
-                        });
                     }
                 }
             }
@@ -318,16 +307,6 @@ pub fn spawn_dsp_worker(
             s.input_sample_rate_hz = input_sample_rate_hz;
             s.udp_audio_port = 9001;
         }
-
-        let _ = tx.send(ServerMessage::StreamConfig {
-            audio_sample_rate_hz: pipeline.client_output_sample_rate(),
-            audio_format: "i16".to_string(),
-            waterfall_bins: WATERFALL_BINS,
-            waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
-            center_freq_hz: initial_center,
-            target_freq_hz: initial_target,
-            input_sample_rate_hz,
-        });
 
         let _ = tx.send(ServerMessage::UdpAudioOffer {
             server_udp_port: 9001,
@@ -525,16 +504,6 @@ pub fn spawn_nonrealtime_worker(
             s.udp_audio_port = 9001;
         }
 
-        let _ = tx.send(ServerMessage::StreamConfig {
-            audio_sample_rate_hz: pipeline.client_output_sample_rate(),
-            audio_format: "i16".to_string(),
-            waterfall_bins: WATERFALL_BINS,
-            waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
-            center_freq_hz: initial_center,
-            target_freq_hz: initial_target,
-            input_sample_rate_hz,
-        });
-
         let _ = tx.send(ServerMessage::UdpAudioOffer {
             server_udp_port: 9001,
         });
@@ -601,9 +570,6 @@ pub fn spawn_nonrealtime_worker(
                             s.center_freq_hz = radio.center_freq_hz;
                         }
 
-                        let _ = tx.send(ServerMessage::CenterFrequencyChanged {
-                            center_freq_hz: radio.center_freq_hz,
-                        });
                     }
                 }
             }

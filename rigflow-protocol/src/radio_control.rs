@@ -33,27 +33,34 @@ pub enum ServerRadioMessage {
         radio_id: RadioId,
         lease_ttl_ms: u64,
     },
+
+    RuntimeSnapshot {
+        radio_id: RadioId,
+        center_freq_hz: u64,
+        target_freq_hz: u64,
+        input_sample_rate_hz: f32,
+        audio_sample_rate_hz: u32,
+        audio_format: String,
+        waterfall_bins: u32,
+        waterfall_frame_rate_hz: f32,
+        demod_mode: String,
+        sideband: String,
+        ssb_pitch_hz: f32,
+    },
+
+    RuntimeChanged {
+        radio_id: RadioId,
+        center_freq_hz: Option<u64>,
+        target_freq_hz: Option<u64>,
+        demod_mode: Option<String>,
+        sideband: Option<String>,
+        ssb_pitch_hz: Option<f32>,
+    },
+
     RadioError {
         code: String,
         message: String,
     },
-    RuntimeSnapshot {
-	radio_id: RadioId,
-	center_freq_hz: u64,
-	target_freq_hz: u64,
-	input_sample_rate_hz: f32,
-	audio_sample_rate_hz: u32,
-	waterfall_bins: u32,
-	waterfall_frame_rate_hz: f32,
-	demod_mode: String,
-    },
-    RuntimeChanged {
-	radio_id: RadioId,
-	center_freq_hz: Option<u64>,
-	target_freq_hz: Option<u64>,
-	demod_mode: Option<String>,
-    },
-
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

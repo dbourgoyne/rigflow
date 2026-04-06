@@ -42,10 +42,6 @@ async fn client_socket(socket: WebSocket, state: AppState) {
 
     let mut session = SessionState::new(ClientId(uuid::Uuid::new_v4().to_string()));
 
-    if send_initial_state(&mut sender, &state).await.is_err() {
-        return;
-    }
-
     let mut msg_rx = state.tx.subscribe();
     let mut audio_rx = state.audio_tx.subscribe();
     let mut waterfall_rx = state.waterfall_tx.subscribe();
@@ -142,101 +138,6 @@ async fn client_socket(socket: WebSocket, state: AppState) {
         _ = send_task => {},
         _ = recv_task => {},
     }
-}
-
-async fn send_initial_state(
-    sender: &mut futures::stream::SplitSink<WebSocket, Message>,
-    state: &AppState,
-) -> Result<(), ()> {
-    let (
-        audio_sample_rate_hz,
-        audio_format,
-        waterfall_bins,
-        waterfall_frame_rate_hz,
-        udp_audio_port,
-        input_sample_rate_hz,
-    ) = {
-        let stream = state.stream.read().await;
-        (
-            stream.audio_sample_rate_hz,
-            stream.audio_format.clone(),
-            stream.waterfall_bins,
-            stream.waterfall_frame_rate_hz,
-            stream.udp_audio_port,
-            stream.input_sample_rate_hz,
-        )
-    };
-
-    let (center_freq_hz, target_freq_hz, demod_mode, sideband, ssb_pitch_hz) = {
-        let radio = state.radio.read().await;
-        (
-            radio.center_freq_hz,
-            radio.target_freq_hz,
-            radio.demod_mode,
-            radio.sideband,
-            radio.ssb_pitch_hz,
-        )
-    };
-
-    send_server_message(
-        sender,
-        &ServerMessage::StreamConfig {
-            audio_sample_rate_hz,
-            audio_format,
-            waterfall_bins,
-            waterfall_frame_rate_hz,
-            center_freq_hz,
-            target_freq_hz,
-            input_sample_rate_hz,
-        },
-    )
-    .await?;
-
-    send_server_message(
-        sender,
-        &ServerMessage::UdpAudioOffer {
-            server_udp_port: udp_audio_port,
-        },
-    )
-    .await?;
-
-    send_server_message(
-        sender,
-        &ServerMessage::CenterFrequencyChanged { center_freq_hz },
-    )
-    .await?;
-
-    send_server_message(
-        sender,
-        &ServerMessage::FrequencyChanged { target_freq_hz },
-    )
-    .await?;
-
-    send_server_message(
-        sender,
-        &ServerMessage::DemodModeChanged {
-            mode: demod_mode_to_string(demod_mode),
-        },
-    )
-    .await?;
-
-    send_server_message(
-        sender,
-        &ServerMessage::SidebandChanged {
-            sideband: sideband_to_string(sideband),
-        },
-    )
-    .await?;
-
-    send_server_message(
-        sender,
-        &ServerMessage::SsbPitchChanged {
-            pitch_hz: ssb_pitch_hz,
-        },
-    )
-    .await?;
-
-    Ok(())
 }
 
 async fn send_connection_message(
@@ -671,14 +572,20 @@ async fn runtime_snapshot_from_status(
             center_freq_hz,
             target_freq_hz,
         } => {
-            let demod_mode = {
+            let (demod_mode, sideband, ssb_pitch_hz) = {
                 let radio = app_state.radio.read().await;
-                radio.demod_mode
+                (radio.demod_mode, radio.sideband, radio.ssb_pitch_hz)
             };
 
-            let input_sample_rate_hz = {
+            let (input_sample_rate_hz, audio_sample_rate_hz, audio_format, waterfall_bins, waterfall_frame_rate_hz) = {
                 let stream = app_state.stream.read().await;
-                stream.input_sample_rate_hz
+                (
+                    stream.input_sample_rate_hz,
+                    stream.audio_sample_rate_hz as u32,
+                    stream.audio_format.clone(),
+                    stream.waterfall_bins as u32,
+                    stream.waterfall_frame_rate_hz,
+                )
             };
 
             Some(ServerRadioMessage::RuntimeSnapshot {
@@ -686,10 +593,13 @@ async fn runtime_snapshot_from_status(
                 center_freq_hz: *center_freq_hz,
                 target_freq_hz: *target_freq_hz,
                 input_sample_rate_hz,
-                audio_sample_rate_hz: 48_000,
-                waterfall_bins: crate::server::config::WATERFALL_BINS as u32,
-                waterfall_frame_rate_hz: 10.0,
+                audio_sample_rate_hz,
+                audio_format,
+                waterfall_bins,
+                waterfall_frame_rate_hz,
                 demod_mode: demod_mode_to_protocol_string(demod_mode),
+                sideband: sideband_to_string(sideband),
+                ssb_pitch_hz,
             })
         }
         _ => None,
@@ -709,7 +619,10 @@ fn runtime_changed_from_status(
             center_freq_hz: Some(*center_freq_hz),
             target_freq_hz: Some(*target_freq_hz),
             demod_mode: None,
+            sideband: None,
+            ssb_pitch_hz: None,
         }),
         _ => None,
     }
 }
+
