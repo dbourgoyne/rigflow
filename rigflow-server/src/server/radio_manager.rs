@@ -65,6 +65,45 @@ impl RadioManager {
             server_cfg,
 	}
     }
+
+    pub async fn subscribe_runtime_status(
+	&self,
+	client_id: &ClientId,
+	radio_id: &RadioId,
+	lease_id: &LeaseId,
+    ) -> Result<watch::Receiver<WorkerStatus>, RadioManagerError> {
+	let radios = self.radios.read().await;
+	let radio = radios
+            .get(radio_id)
+            .ok_or(RadioManagerError::RadioNotFound)?;
+
+	let lease = radio
+            .lease
+            .as_ref()
+            .ok_or(RadioManagerError::NoActiveLease)?;
+
+	if &lease.client_id != client_id {
+            return Err(RadioManagerError::NotLeaseOwner);
+	}
+	if &lease.lease_id != lease_id {
+            return Err(RadioManagerError::InvalidLease);
+	}
+
+	match radio.state {
+            RadioState::Running | RadioState::Starting => {}
+            _ => return Err(RadioManagerError::RadioNotRunning),
+	}
+
+	let status_rx = radio
+            .runtime
+            .as_ref()
+            .ok_or(RadioManagerError::RadioNotRunning)?
+            .status_rx
+            .clone();
+
+	Ok(status_rx)
+    }
+    
     pub async fn lease_expiry_loop(manager: Arc<RadioManager>) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
