@@ -105,14 +105,30 @@ async fn run_fake_worker(
 
     let mut source = FakeIqSource::new(server_cfg.fake_sample_rate_hz, server_cfg.fake_tone_hz);
 
-    if let Err(reason) = source.set_center_frequency(request.center_freq_hz as f32) {
-        let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
-        return WorkerExit::Failed { reason };
+    let initial_center_freq_hz = if request.center_freq_hz == 0 {
+	server_cfg.center_freq_hz as u64
+    } else {
+	request.center_freq_hz
+    };
+
+    let initial_target_freq_hz = if request.target_freq_hz == 0 {
+	if request.center_freq_hz == 0 {
+            server_cfg.target_freq_hz as u64
+	} else {
+            request.target_freq_hz
+	}
+    } else {
+	request.target_freq_hz
+    };
+
+    if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
+	let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
+	return WorkerExit::Failed { reason };
     }
 
-        let mut runtime = WorkerRuntimeState {
-	center_freq_hz: request.center_freq_hz,
-	target_freq_hz: request.target_freq_hz,
+    let mut runtime = WorkerRuntimeState {
+	center_freq_hz: initial_center_freq_hz,
+	target_freq_hz: initial_target_freq_hz,
 
 	demod_mode: server_cfg.demod,
 	sideband: rigflow_core::dsp::demod::Sideband::Lsb,
@@ -124,6 +140,7 @@ async fn run_fake_worker(
 	waterfall_bins: WATERFALL_BINS as u32,
 	waterfall_frame_rate_hz: 10.0,
     };
+
 
     let mut pipeline = DspPipeline::new(pipeline_cfg_for_fake(
 	&server_cfg,
@@ -225,8 +242,11 @@ async fn run_fake_worker(
                 }
 
                 // Waterfall from tuned/channelized IQ.
-                let wf_iq = pipeline.process_iq(&iq);
-                let row = waterfall_gen.generate_row(&wf_iq);
+                //let wf_iq = pipeline.process_iq(&iq);
+                //let row = waterfall_gen.generate_row(&wf_iq);
+		// Going back to:
+		// Waterfall/spectrum from raw IQ, matching old StreamConfig semantics.
+		let row = waterfall_gen.generate_row(&iq);
                 if !row.is_empty() {
                     waterfall.send_row_to(wf_target, &row);
                 }

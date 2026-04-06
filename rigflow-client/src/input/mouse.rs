@@ -149,7 +149,8 @@ fn plot_x_to_frequency_hz(x: usize, state: &UiState) -> Option<f32> {
     let frac = plot_x as f32 / SPECTRUM_PLOT_WIDTH as f32;
 
     let left_hz = visible_left_hz(state);
-    let freq_hz = left_hz + frac * state.input_sample_rate_hz;
+    let span = state.input_sample_rate_hz / state.spectrum_zoom_x.clamp(1.0, 10.0);
+    let freq_hz = left_hz + frac * span;
 
     Some(freq_hz)
 }

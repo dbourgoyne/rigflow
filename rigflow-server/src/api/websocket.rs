@@ -15,7 +15,6 @@ use crate::{
     dsp::demod::{DemodMode, Sideband},
     server::{
         app_state::AppState,
-        control::RadioCommand,
         radio_protocol::{
             manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol,
         },
@@ -220,31 +219,45 @@ async fn handle_legacy_client_text(
 	    Ok(None)
 	}
 
-        ClientMessage::SetDemodMode { mode } => {
-            let cmd = RadioCommand::SetDemodMode(parse_demod_mode(&mode)?);
-            state
-                .radio_cmd_tx
-                .send(cmd)
-                .map_err(|_| "failed to send radio command".to_string())?;
-            Ok(None)
-        }
+	ClientMessage::SetDemodMode { mode } => {
+	    send_worker_command_for_session(
+		state,
+		session,
+		WorkerCommand::SetDemodMode {
+		    mode: parse_demod_mode(&mode)?,
+		},
+	    )
+		.await
+		.map_err(radio_manager_error_string)?;
 
-        ClientMessage::SetSideband { sideband } => {
-            let cmd = RadioCommand::SetSideband(parse_sideband(&sideband)?);
-            state
-                .radio_cmd_tx
-                .send(cmd)
-                .map_err(|_| "failed to send radio command".to_string())?;
-            Ok(None)
-        }
+	    Ok(None)
+	}
 
-        ClientMessage::SetSsbPitch { pitch_hz } => {
-            state
-                .radio_cmd_tx
-                .send(RadioCommand::SetSsbPitch(pitch_hz))
-                .map_err(|_| "failed to send radio command".to_string())?;
-            Ok(None)
-        }
+	ClientMessage::SetSideband { sideband } => {
+	    send_worker_command_for_session(
+		state,
+		session,
+		WorkerCommand::SetSideband {
+		    sideband: parse_sideband(&sideband)?,
+		},
+	    )
+		.await
+		.map_err(radio_manager_error_string)?;
+
+	    Ok(None)
+	}
+
+	ClientMessage::SetSsbPitch { pitch_hz } => {
+	    send_worker_command_for_session(
+		state,
+		session,
+		WorkerCommand::SetSsbPitch { pitch_hz },
+	    )
+		.await
+		.map_err(radio_manager_error_string)?;
+
+	    Ok(None)
+	}
 
         ClientMessage::Ping => Ok(Some(ServerMessage::Pong)),
     }
@@ -342,13 +355,45 @@ pub async fn handle_radio_message(
                     {
                         Ok(mut status_rx) => {
                             // 3) Send immediate RuntimeSnapshot from current worker state.
-                            let initial_status = status_rx.borrow().clone();
+			    let initial_status = status_rx.borrow().clone();
 			    if let Some(snapshot) = runtime_snapshot_from_status(
 				result.radio_id.clone(),
 				&initial_status,
 			    ) {
-                                let _ = local_tx.send(ConnectionMessage::Radio(snapshot));
-                            }
+				match &snapshot {
+				    ServerRadioMessage::RuntimeSnapshot {
+					radio_id,
+					center_freq_hz,
+					target_freq_hz,
+					input_sample_rate_hz,
+					audio_sample_rate_hz,
+					audio_format,
+					waterfall_bins,
+					waterfall_frame_rate_hz,
+					demod_mode,
+					sideband,
+					ssb_pitch_hz,
+				    } => {
+					println!(
+					    "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={}",
+					    radio_id.0,
+					    center_freq_hz,
+					    target_freq_hz,
+					    input_sample_rate_hz,
+					    audio_sample_rate_hz,
+					    audio_format,
+					    waterfall_bins,
+					    waterfall_frame_rate_hz,
+					    demod_mode,
+					    sideband,
+					    ssb_pitch_hz,
+					);
+				    }
+				    _ => {}
+				}
+
+				let _ = local_tx.send(ConnectionMessage::Radio(snapshot));
+			    }
 
                             // 4) Forward future RuntimeChanged messages.
                             let local_tx_clone = local_tx.clone();
@@ -360,12 +405,36 @@ pub async fn handle_radio_message(
                                         break;
                                     }
 
-                                    let status = status_rx.borrow().clone();
-                                    if let Some(changed) =
-                                        runtime_changed_from_status(radio_id_clone.clone(), &status)
-                                    {
-                                        let _ = local_tx_clone.send(ConnectionMessage::Radio(changed));
-                                    }
+				    let status = status_rx.borrow().clone();
+				    if let Some(changed) =
+					runtime_changed_from_status(radio_id_clone.clone(), &status)
+				    {
+					match &changed {
+					    ServerRadioMessage::RuntimeChanged {
+						radio_id,
+						center_freq_hz,
+						target_freq_hz,
+						demod_mode,
+						sideband,
+						ssb_pitch_hz,
+					    } => {
+						println!(
+						    "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?}",
+						    radio_id.0,
+						    center_freq_hz,
+						    target_freq_hz,
+						    demod_mode,
+						    sideband,
+						    ssb_pitch_hz,
+						);
+					    }
+					    _ => {}
+					}
+
+					let _ = local_tx_clone.send(ConnectionMessage::Radio(changed));
+				    }
+
+				    
                                 }
                             });
                         }
