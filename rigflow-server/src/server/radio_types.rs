@@ -54,6 +54,7 @@ pub enum StopReason {
     ServerShutdown,
     StartupFailed,
     InternalFault,
+    UserRequested,
 }
 
 #[derive(Debug, Clone)]
