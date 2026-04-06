@@ -343,11 +343,10 @@ pub async fn handle_radio_message(
                         Ok(mut status_rx) => {
                             // 3) Send immediate RuntimeSnapshot from current worker state.
                             let initial_status = status_rx.borrow().clone();
-                            if let Some(snapshot) = runtime_snapshot_from_status(
-                                app_state,
-                                result.radio_id.clone(),
-                                &initial_status,
-                            ).await {
+			    if let Some(snapshot) = runtime_snapshot_from_status(
+				result.radio_id.clone(),
+				&initial_status,
+			    ) {
                                 let _ = local_tx.send(ConnectionMessage::Radio(snapshot));
                             }
 
@@ -562,46 +561,24 @@ fn demod_mode_to_protocol_string(mode: crate::dsp::demod::DemodMode) -> String {
     }
 }
 
-async fn runtime_snapshot_from_status(
-    app_state: &AppState,
+fn runtime_snapshot_from_status(
     radio_id: rigflow_core::radio::RadioId,
     status: &WorkerStatus,
 ) -> Option<ServerRadioMessage> {
     match status {
-        WorkerStatus::Running {
-            center_freq_hz,
-            target_freq_hz,
-        } => {
-            let (demod_mode, sideband, ssb_pitch_hz) = {
-                let radio = app_state.radio.read().await;
-                (radio.demod_mode, radio.sideband, radio.ssb_pitch_hz)
-            };
-
-            let (input_sample_rate_hz, audio_sample_rate_hz, audio_format, waterfall_bins, waterfall_frame_rate_hz) = {
-                let stream = app_state.stream.read().await;
-                (
-                    stream.input_sample_rate_hz,
-                    stream.audio_sample_rate_hz as u32,
-                    stream.audio_format.clone(),
-                    stream.waterfall_bins as u32,
-                    stream.waterfall_frame_rate_hz,
-                )
-            };
-
-            Some(ServerRadioMessage::RuntimeSnapshot {
-                radio_id,
-                center_freq_hz: *center_freq_hz,
-                target_freq_hz: *target_freq_hz,
-                input_sample_rate_hz,
-                audio_sample_rate_hz,
-                audio_format,
-                waterfall_bins,
-                waterfall_frame_rate_hz,
-                demod_mode: demod_mode_to_protocol_string(demod_mode),
-                sideband: sideband_to_string(sideband),
-                ssb_pitch_hz,
-            })
-        }
+        WorkerStatus::Running { runtime } => Some(ServerRadioMessage::RuntimeSnapshot {
+            radio_id,
+            center_freq_hz: runtime.center_freq_hz,
+            target_freq_hz: runtime.target_freq_hz,
+            input_sample_rate_hz: runtime.input_sample_rate_hz,
+            audio_sample_rate_hz: runtime.audio_sample_rate_hz,
+            audio_format: runtime.audio_format.clone(),
+            waterfall_bins: runtime.waterfall_bins,
+            waterfall_frame_rate_hz: runtime.waterfall_frame_rate_hz,
+            demod_mode: demod_mode_to_protocol_string(runtime.demod_mode),
+            sideband: sideband_to_string(runtime.sideband),
+            ssb_pitch_hz: runtime.ssb_pitch_hz,
+        }),
         _ => None,
     }
 }
@@ -611,16 +588,13 @@ fn runtime_changed_from_status(
     status: &WorkerStatus,
 ) -> Option<ServerRadioMessage> {
     match status {
-        WorkerStatus::Running {
-            center_freq_hz,
-            target_freq_hz,
-        } => Some(ServerRadioMessage::RuntimeChanged {
+        WorkerStatus::Running { runtime } => Some(ServerRadioMessage::RuntimeChanged {
             radio_id,
-            center_freq_hz: Some(*center_freq_hz),
-            target_freq_hz: Some(*target_freq_hz),
-            demod_mode: None,
-            sideband: None,
-            ssb_pitch_hz: None,
+            center_freq_hz: Some(runtime.center_freq_hz),
+            target_freq_hz: Some(runtime.target_freq_hz),
+            demod_mode: Some(demod_mode_to_protocol_string(runtime.demod_mode)),
+            sideband: Some(sideband_to_string(runtime.sideband)),
+            ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
         }),
         _ => None,
     }

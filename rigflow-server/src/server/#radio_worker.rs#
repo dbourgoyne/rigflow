@@ -105,25 +105,92 @@ async fn run_fake_worker(
 
     let mut source = FakeIqSource::new(server_cfg.fake_sample_rate_hz, server_cfg.fake_tone_hz);
 
-    if let Err(reason) = source.set_center_frequency(request.center_freq_hz as f32) {
+    if let Err(reason) = source.set_center_frequency(runtime.center_freq_hz as f32) {
         let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
         return WorkerExit::Failed { reason };
     }
 
-        let mut runtime = WorkerRuntimeState {
-	center_freq_hz: request.center_freq_hz,
-	target_freq_hz: request.target_freq_hz,
+    error[E0425]: cannot find value `source` in this scope
+   --> rigflow-server/src/server/radio_worker.rs:112:24
+    |
+112 |     input_sample_rate_hz: source.sample_rate(),
+    |                           ^^^^^^ not found in this scope
 
-	demod_mode: server_cfg.demod,
-	sideband: rigflow_core::dsp::demod::Sideband::Lsb,
-	ssb_pitch_hz: 0.0,
+error[E0026]: variant `WorkerStatus::Running` does not have fields named `center_freq_hz`, `target_freq_hz`
+   --> rigflow-server/src/api/websocket.rs:572:13
+    |
+572 |             center_freq_hz,
+    |             ^^^^^^^^^^^^^^
+573 |             target_freq_hz,
+    |             ^^^^^^^^^^^^^^ variant `WorkerStatus::Running` does not have these fields
 
-	input_sample_rate_hz: source.sample_rate(),
-	audio_sample_rate_hz: 48_000,
-	audio_format: "i16".to_string(),
-	waterfall_bins: WATERFALL_BINS as u32,
-	waterfall_frame_rate_hz: 10.0,
-    };
+error[E0027]: pattern does not mention field `runtime`
+   --> rigflow-server/src/api/websocket.rs:571:9
+    |
+571 | /         WorkerStatus::Running {
+572 | |             center_freq_hz,
+573 | |             target_freq_hz,
+574 | |         } => {
+    | |_________^ missing field `runtime`
+    |
+help: include the missing field in the pattern
+    |
+573 -             target_freq_hz,
+574 -         } => {
+573 +             target_freq_hz, runtime } => {
+    |
+help: if you don't care about this missing field, you can explicitly ignore it
+    |
+573 -             target_freq_hz,
+574 -         } => {
+573 +             target_freq_hz, runtime: _ } => {
+    |
+help: or always ignore missing fields here
+    |
+573 -             target_freq_hz,
+574 -         } => {
+573 +             target_freq_hz, .. } => {
+    |
+
+error[E0026]: variant `WorkerStatus::Running` does not have fields named `center_freq_hz`, `target_freq_hz`
+   --> rigflow-server/src/api/websocket.rs:615:13
+    |
+615 |             center_freq_hz,
+    |             ^^^^^^^^^^^^^^
+616 |             target_freq_hz,
+    |             ^^^^^^^^^^^^^^ variant `WorkerStatus::Running` does not have these fields
+
+error[E0027]: pattern does not mention field `runtime`
+   --> rigflow-server/src/api/websocket.rs:614:9
+    |
+614 | /         WorkerStatus::Running {
+615 | |             center_freq_hz,
+616 | |             target_freq_hz,
+617 | |         } => Some(ServerRadioMessage::RuntimeChanged {
+    | |_________^ missing field `runtime`
+    |
+help: include the missing field in the pattern
+    |
+616 -             target_freq_hz,
+617 -         } => Some(ServerRadioMessage::RuntimeChanged {
+616 +             target_freq_hz, runtime } => Some(ServerRadioMessage::RuntimeChanged {
+    |
+help: if you don't care about this missing field, you can explicitly ignore it
+    |
+616 -             target_freq_hz,
+617 -         } => Some(ServerRadioMessage::RuntimeChanged {
+616 +             target_freq_hz, runtime: _ } => Some(ServerRadioMessage::RuntimeChanged {
+    |
+help: or always ignore missing fields here
+    |
+616 -             target_freq_hz,
+617 -         } => Some(ServerRadioMessage::RuntimeChanged {
+616 +             target_freq_hz, .. } => Some(ServerRadioMessage::RuntimeChanged {
+    |
+
+Some errors have detailed explanations: E0026, E0027, E0425.
+For more information about an error, try `rustc --explain E0026`.
+error: could not compile `rigflow-server` (lib) due to 5 previous errors
 
     let mut pipeline = DspPipeline::new(pipeline_cfg_for_fake(
 	&server_cfg,
