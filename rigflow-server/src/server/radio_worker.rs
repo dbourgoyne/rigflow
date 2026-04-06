@@ -1,4 +1,6 @@
 use std::time::Duration;
+use std::collections::VecDeque;
+use num_complex::Complex32;
 
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -138,8 +140,18 @@ async fn run_fake_worker(
 	audio_sample_rate_hz: 48_000,
 	audio_format: "i16".to_string(),
 	waterfall_bins: WATERFALL_BINS as u32,
-	waterfall_frame_rate_hz: 10.0,
+	waterfall_frame_rate_hz: 30.0,
     };
+
+    let waterfall_frame_rate_hz = runtime.waterfall_frame_rate_hz.max(1.0);
+    let mut waterfall_tick =
+	tokio::time::interval(Duration::from_secs_f32(1.0 / waterfall_frame_rate_hz));
+
+    let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
+    let waterfall_window_len = runtime.waterfall_bins as usize;
+    let waterfall_max_len = waterfall_window_len * 8;
+
+
 
 
     let mut pipeline = DspPipeline::new(pipeline_cfg_for_fake(
@@ -211,6 +223,24 @@ async fn run_fake_worker(
 
     loop {
         tokio::select! {
+	    _ = waterfall_tick.tick() => {
+		if waterfall_iq_buffer.len() < waterfall_window_len {
+		    continue;
+		}
+
+		let start = waterfall_iq_buffer.len() - waterfall_window_len;
+		let mut fft_input = Vec::with_capacity(waterfall_window_len);
+		
+		for sample in waterfall_iq_buffer.iter().skip(start) {
+		    fft_input.push(*sample);
+		}
+
+		let row = waterfall_gen.generate_row(&fft_input);
+		if !row.is_empty() {
+		    waterfall.send_row_to(wf_target, &row);
+		}
+	    }
+	    
             _ = &mut stop_rx => {
                 let reason = StopReason::InternalFault;
                 let _ = status_tx.send(WorkerStatus::Stopping { reason: reason.clone() });
@@ -246,10 +276,13 @@ async fn run_fake_worker(
                 //let row = waterfall_gen.generate_row(&wf_iq);
 		// Going back to:
 		// Waterfall/spectrum from raw IQ, matching old StreamConfig semantics.
-		let row = waterfall_gen.generate_row(&iq);
-                if !row.is_empty() {
-                    waterfall.send_row_to(wf_target, &row);
-                }
+		for &sample in &iq {
+		    waterfall_iq_buffer.push_back(sample);
+		}
+
+		while waterfall_iq_buffer.len() > waterfall_max_len {
+		    waterfall_iq_buffer.pop_front();
+		}
 
                 // Audio from the full DSP pipeline.
                 let audio_f32 = pipeline.process_audio(&iq);
