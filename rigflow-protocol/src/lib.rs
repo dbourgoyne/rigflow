@@ -8,13 +8,11 @@ pub enum ClientMessage {
     SetSideband { sideband: String },
     SetDemodMode { mode: String },
     SetSsbPitch { pitch_hz: f32 },
-    Ping,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    Pong,
     Info { message: String },
     Error { message: String },
 }

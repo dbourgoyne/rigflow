@@ -127,7 +127,6 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                     }));
                 }
 
-                Message::Pong(_) | Message::Binary(_) => {}
             }
         }
 
@@ -260,7 +259,6 @@ async fn handle_legacy_client_text(
 	    Ok(None)
 	}
 
-        ClientMessage::Ping => Ok(Some(ServerMessage::Pong)),
     }
 }
 

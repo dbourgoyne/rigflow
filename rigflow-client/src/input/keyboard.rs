@@ -9,7 +9,6 @@ pub enum UiAction {
     SetDemodMode(&'static str),
     SetSideband(&'static str),
     SetSsbPitch(f32),
-    Ping,
 
     ToggleRigflowServerMenu,
     FocusRigflowServerIpField,
@@ -89,11 +88,6 @@ pub fn collect_keyboard_actions(window: &Window, state: &UiState) -> Vec<UiActio
 	} else {
             actions.push(UiAction::CycleLicenseForward);
 	}
-    }
-
-    // Optional ping/debug shortcut
-    if window.is_key_pressed(Key::P, KeyRepeat::No) {
-        actions.push(UiAction::Ping);
     }
 
     actions

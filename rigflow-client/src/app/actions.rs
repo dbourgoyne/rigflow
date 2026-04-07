@@ -44,10 +44,6 @@ pub fn ui_action_to_control_command(
             ))
         }
 
-        UiAction::Ping => {
-            Some(ControlCommand::LegacyClientMessage(ClientMessage::Ping))
-        }
-
         UiAction::ConnectToRigflowServer => {
             Some(ControlCommand::Connect {
                 server_ip: server_ip.to_string(),
