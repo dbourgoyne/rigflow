@@ -289,132 +289,21 @@ fn run_iq_worker_threads(
     );
 
     // Capture thread
-    let descriptor_for_capture = descriptor.clone();
-    let server_cfg_for_capture = server_cfg.clone();
-    let control_for_capture = control.clone();
-    let stop_flag_for_capture = stop_flag.clone();
-    let stop_reason_for_capture = stop_reason.clone();
-    let fatal_tx_for_capture = fatal_tx.clone();
-    let capture_thread = thread::spawn(move || {
-        let mut source = match create_worker_source(
-            &descriptor_for_capture,
-            &server_cfg_for_capture,
-            block_size,
-            initial_center_freq_hz,
-        ) {
-            Ok(source) => source,
-            Err(reason) => {
-                let _ = startup_info_tx.send(Err(reason.clone()));
-                let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
-                return;
-            }
-        };
-
-        if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
-            let _ = startup_info_tx.send(Err(reason.clone()));
-            let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
-            return;
-        }
-
-        let startup_runtime = build_runtime_state(
-            &current_control(&control_for_capture),
-            source.sample_rate(),
-        );
-
-        let _ = startup_info_tx.send(Ok(StartupInfo {
-            input_sample_rate_hz: source.sample_rate(),
-            runtime: startup_runtime,
-        }));
-
-        // Wait until coordinator has spawned the other threads and published startup state.
-        let _ = capture_start_rx.recv();
-
-        let realtime = source.is_realtime();
-        let source_block_period =
-            Duration::from_secs_f32((block_size as f32 / source.sample_rate()).max(0.001));
-        let mut next_source_tick = Instant::now();
-        let mut last_center_freq_hz = initial_center_freq_hz;
-        let mut blocks_read: u64 = 0;
-
-        println!(
-            "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
-            descriptor_for_capture.id.0,
-            source.sample_rate(),
-            block_size,
-            realtime,
-        );
-
-        loop {
-            if stop_requested(&stop_flag_for_capture) {
-                break;
-            }
-
-            let control_snapshot = current_control(&control_for_capture);
-            if control_snapshot.center_freq_hz != last_center_freq_hz {
-                if let Err(reason) = source.set_center_frequency(control_snapshot.center_freq_hz as f32) {
-                    stop_flag_for_capture.store(true, Ordering::Relaxed);
-                    let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
-                    break;
-                }
-                last_center_freq_hz = control_snapshot.center_freq_hz;
-            }
-
-            if !realtime {
-                let now = Instant::now();
-                if now < next_source_tick {
-                    thread::sleep(next_source_tick - now);
-                }
-                next_source_tick += source_block_period;
-            }
-
-            let iq = match source.read_block(block_size) {
-                Ok(v) => v,
-                Err(reason) => {
-                    stop_flag_for_capture.store(true, Ordering::Relaxed);
-                    let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
-                    break;
-                }
-            };
-
-            if iq.is_empty() {
-                if realtime {
-                    continue;
-                } else {
-                    // WAV EOF or similar: clean stop.
-                    set_stop_reason(&stop_reason_for_capture, StopReason::UserRequested);
-                    stop_flag_for_capture.store(true, Ordering::Relaxed);
-                    break;
-                }
-            }
-
-            blocks_read += 1;
-            if blocks_read % 20 == 0 {
-                println!(
-                    "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
-                    descriptor_for_capture.id.0,
-                    blocks_read,
-                    iq.len(),
-                    control_snapshot.center_freq_hz,
-                    control_snapshot.target_freq_hz,
-                );
-            }
-
-            if iq_audio_tx.send(iq.clone()).is_err() {
-                stop_flag_for_capture.store(true, Ordering::Relaxed);
-                break;
-            }
-
-            match iq_wf_tx.try_send(iq) {
-                Ok(_) => {}
-                Err(std_mpsc::TrySendError::Full(_)) => {}
-                Err(std_mpsc::TrySendError::Disconnected(_)) => {
-                    stop_flag_for_capture.store(true, Ordering::Relaxed);
-                    break;
-                }
-            }
-        }
-    });
-
+    let capture_thread = spawn_capture_thread(
+	descriptor.clone(),
+	server_cfg.clone(),
+	control.clone(),
+	stop_flag.clone(),
+	stop_reason.clone(),
+	fatal_tx.clone(),
+	startup_info_tx,
+	capture_start_rx,
+	iq_audio_tx,
+	iq_wf_tx,
+	block_size,
+	initial_center_freq_hz,
+    );
+    
     let startup_info = match startup_info_rx.recv() {
         Ok(Ok(info)) => info,
         Ok(Err(reason)) => {
@@ -753,5 +642,140 @@ fn spawn_waterfall_thread(
         }
 
         println!("[radio-worker {}] waterfall thread exiting", descriptor.id.0);
+    })
+}
+
+fn spawn_capture_thread(
+    descriptor: RadioDescriptor,
+    server_cfg: ServerConfig,
+    control: Arc<Mutex<SharedControlState>>,
+    stop_flag: Arc<AtomicBool>,
+    stop_reason: Arc<Mutex<StopReason>>,
+    fatal_tx: std_mpsc::Sender<WorkerExit>,
+    startup_info_tx: std_mpsc::SyncSender<Result<StartupInfo, String>>,
+    capture_start_rx: std_mpsc::Receiver<()>,
+    iq_audio_tx: std_mpsc::SyncSender<Vec<Complex32>>,
+    iq_wf_tx: std_mpsc::SyncSender<Vec<Complex32>>,
+    block_size: usize,
+    initial_center_freq_hz: u64,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut source = match create_worker_source(
+            &descriptor,
+            &server_cfg,
+            block_size,
+            initial_center_freq_hz,
+        ) {
+            Ok(source) => source,
+            Err(reason) => {
+                let _ = startup_info_tx.send(Err(reason.clone()));
+                let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                return;
+            }
+        };
+
+        if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
+            let _ = startup_info_tx.send(Err(reason.clone()));
+            let _ = fatal_tx.send(WorkerExit::Failed { reason });
+            return;
+        }
+
+        let startup_runtime = build_runtime_state(
+            &current_control(&control),
+            source.sample_rate(),
+        );
+
+        let _ = startup_info_tx.send(Ok(StartupInfo {
+            input_sample_rate_hz: source.sample_rate(),
+            runtime: startup_runtime,
+        }));
+
+        // Wait until coordinator has spawned the other threads and published startup state.
+        let _ = capture_start_rx.recv();
+
+        let realtime = source.is_realtime();
+        let source_block_period =
+            Duration::from_secs_f32((block_size as f32 / source.sample_rate()).max(0.001));
+        let mut next_source_tick = Instant::now();
+        let mut last_center_freq_hz = initial_center_freq_hz;
+        let mut blocks_read: u64 = 0;
+
+        println!(
+            "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
+            descriptor.id.0,
+            source.sample_rate(),
+            block_size,
+            realtime,
+        );
+
+        loop {
+            if stop_requested(&stop_flag) {
+                break;
+            }
+
+            let control_snapshot = current_control(&control);
+            if control_snapshot.center_freq_hz != last_center_freq_hz {
+                if let Err(reason) = source.set_center_frequency(control_snapshot.center_freq_hz as f32) {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                    break;
+                }
+                last_center_freq_hz = control_snapshot.center_freq_hz;
+            }
+
+            if !realtime {
+                let now = Instant::now();
+                if now < next_source_tick {
+                    thread::sleep(next_source_tick - now);
+                }
+                next_source_tick += source_block_period;
+            }
+
+            let iq = match source.read_block(block_size) {
+                Ok(v) => v,
+                Err(reason) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                    break;
+                }
+            };
+
+            if iq.is_empty() {
+                if realtime {
+                    continue;
+                } else {
+                    // WAV EOF or similar: clean stop.
+                    set_stop_reason(&stop_reason, StopReason::UserRequested);
+                    stop_flag.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+
+            blocks_read += 1;
+            if blocks_read % 20 == 0 {
+                println!(
+                    "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
+                    descriptor.id.0,
+                    blocks_read,
+                    iq.len(),
+                    control_snapshot.center_freq_hz,
+                    control_snapshot.target_freq_hz,
+                );
+            }
+
+            if iq_audio_tx.send(iq.clone()).is_err() {
+                stop_flag.store(true, Ordering::Relaxed);
+                break;
+            }
+
+            match iq_wf_tx.try_send(iq) {
+                Ok(_) => {}
+                Err(std_mpsc::TrySendError::Full(_)) => {}
+                Err(std_mpsc::TrySendError::Disconnected(_)) => {
+                    stop_flag.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
     })
 }
