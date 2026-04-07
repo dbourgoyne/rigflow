@@ -127,6 +127,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                     }));
                 }
 
+		Message::Pong(_) | Message::Binary(_) => {}
             }
         }
 
