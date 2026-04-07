@@ -15,8 +15,8 @@ use crate::{
         apply_digit_wheel_delta, hit_test_digit, FrequencyWidgetLayout,
     },
 };
-use crate::app::frequency_view::visible_left_hz;
 use crate::render::left_panel::compute_left_pane_layout;
+use crate::app::frequency_view::plot_x_to_freq_hz;
 
 const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
 const WATERFALL_TUNE_STEP_FAST_HZ: f32 = 10_000.0;
@@ -131,28 +131,13 @@ pub fn collect_mouse_actions(
         return actions;
     }
 
-    let Some(freq_hz) = plot_x_to_frequency_hz(x, state) else {
+    let Some(freq_hz) = plot_x_to_freq_hz(x, state) else {
         return actions;
     };
 
     actions.push(UiAction::SetTargetFrequency(freq_hz));
 
     actions
-}
-
-fn plot_x_to_frequency_hz(x: usize, state: &UiState) -> Option<f32> {
-    if state.input_sample_rate_hz <= 0.0 || SPECTRUM_PLOT_WIDTH == 0 {
-        return None;
-    }
-
-    let plot_x = x.checked_sub(SPECTRUM_PLOT_X0)?;
-    let frac = plot_x as f32 / SPECTRUM_PLOT_WIDTH as f32;
-
-    let left_hz = visible_left_hz(state);
-    let span = state.input_sample_rate_hz / state.spectrum_zoom_x.clamp(1.0, 10.0);
-    let freq_hz = left_hz + frac * span;
-
-    Some(freq_hz)
 }
 
 pub fn update_zoom_slider(window: &Window, state: &mut UiState) {
