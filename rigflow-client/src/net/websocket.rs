@@ -225,7 +225,12 @@ pub async fn websocket_control_task(
 				}
                             }
 			} else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                            apply_server_message(server_msg, &ui_state);
+			    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+				if let ServerMessage::Error { message } = server_msg {
+				    let mut state = ui_state.lock().unwrap();
+				    state.runtime_status = format!("error: {}", message);
+				}
+			    }
 			} else {
                             println!("CLIENT unknown message: {}", text);
 			}
@@ -267,25 +272,6 @@ pub async fn websocket_control_task(
     }
 
     Ok(())
-}
-
-pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
-    let mut state = ui_state.lock().unwrap();
-
-    match msg {
-        ServerMessage::Pong => {
-            state.runtime_status = "pong".to_string();
-        }
-        ServerMessage::Info { message } => {
-            state.runtime_status = message;
-        }
-        ServerMessage::Error { message } => {
-            state.runtime_status = format!("error: {}", message);
-        }
-	_ => {
-	    println!("Unexpected message = {:?}", msg);
-	}
-    }
 }
 
 pub fn apply_radio_server_message(
@@ -343,7 +329,6 @@ pub fn apply_radio_server_message(
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.ssb_pitch_hz = ssb_pitch_hz;
-            state.runtime_status = "runtime snapshot received".to_string();
         }
 
         ServerRadioMessage::RuntimeChanged {
