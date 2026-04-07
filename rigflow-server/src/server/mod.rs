@@ -10,4 +10,3 @@ pub mod radio_protocol;
 pub mod radio_types;
 pub mod radio_worker;
 pub mod session;
-pub mod workers;
