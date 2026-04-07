@@ -15,7 +15,7 @@ use crate::{
     dsp::demod::{DemodMode, Sideband},
     server::{
         app_state::AppState,
-        radio_protocol::{
+        radio_api::{
             manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol,
         },
         radio_types::{ClientId, RadioManagerError, StopReason, WorkerCommand},
