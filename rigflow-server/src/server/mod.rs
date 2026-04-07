@@ -2,7 +2,6 @@ pub mod app_state;
 pub mod client_manager;
 pub mod config;
 pub mod connection;
-pub mod control;
 pub mod discovery;
 pub mod pipeline_factory;
 pub mod radio_manager;
