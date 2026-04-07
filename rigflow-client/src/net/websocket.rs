@@ -273,26 +273,8 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
     let mut state = ui_state.lock().unwrap();
 
     match msg {
-        ServerMessage::Ready => {
-            state.status = "ready".to_string();
-        }
         ServerMessage::Pong => {
             state.status = "pong".to_string();
-        }
-        ServerMessage::SidebandChanged { sideband } => {
-            // Optional during transition; can be removed later.
-            state.sideband = sideband;
-        }
-        ServerMessage::DemodModeChanged { mode } => {
-            // Optional during transition; can be removed later.
-            state.demod_mode = mode;
-        }
-        ServerMessage::SsbPitchChanged { pitch_hz } => {
-            // Optional during transition; can be removed later.
-            state.ssb_pitch_hz = pitch_hz;
-        }
-        ServerMessage::UdpAudioOffer { server_udp_port } => {
-            state.status = format!("udp audio offered on {}", server_udp_port);
         }
         ServerMessage::Info { message } => {
             state.status = message;
@@ -300,6 +282,9 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
         ServerMessage::Error { message } => {
             state.status = format!("error: {}", message);
         }
+	_ => {
+	    println!("Unexpected message = {:?}", msg);
+	}
     }
 }
 
