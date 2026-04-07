@@ -12,6 +12,6 @@ pub fn build_window_title(state: &UiState) -> String {
         state.audio_sample_rate_hz,
         state.waterfall_bins,
         state.waterfall_frame_rate_hz,
-        state.status,
+        state.runtime_status,
     )
 }

@@ -274,13 +274,13 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
 
     match msg {
         ServerMessage::Pong => {
-            state.status = "pong".to_string();
+            state.runtime_status = "pong".to_string();
         }
         ServerMessage::Info { message } => {
-            state.status = message;
+            state.runtime_status = message;
         }
         ServerMessage::Error { message } => {
-            state.status = format!("error: {}", message);
+            state.runtime_status = format!("error: {}", message);
         }
 	_ => {
 	    println!("Unexpected message = {:?}", msg);
@@ -317,7 +317,7 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::LeaseRenewed { .. } => {
-            state.status = "lease renewed".to_string();
+            state.runtime_status = "lease renewed".to_string();
         }
 
         ServerRadioMessage::RuntimeSnapshot {
@@ -343,7 +343,7 @@ pub fn apply_radio_server_message(
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.ssb_pitch_hz = ssb_pitch_hz;
-            state.status = "runtime snapshot received".to_string();
+            state.runtime_status = "runtime snapshot received".to_string();
         }
 
         ServerRadioMessage::RuntimeChanged {
@@ -372,7 +372,7 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::RadioError { message, .. } => {
-            state.status = format!("radio error: {}", message);
+            state.runtime_status = format!("radio error: {}", message);
         }
     }
 
