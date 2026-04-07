@@ -4,7 +4,6 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 use rigflow_protocol::ServerMessage;
 use crate::dsp::demod::{DemodMode, Sideband};
-use crate::server::control::RadioCommand;
 use crate::server::config::{WATERFALL_BINS, WATERFALL_FRAME_RATE_HZ};
 use crate::server::radio_manager::RadioManager;
 
@@ -70,7 +69,6 @@ pub struct AppState {
     pub audio_tx: broadcast::Sender<Vec<u8>>,
     pub waterfall_tx: broadcast::Sender<Vec<u8>>,
     pub udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
-    pub radio_cmd_tx: mpsc::UnboundedSender<RadioCommand>,
     pub radio_manager: Arc<RadioManager>,
 }
 
@@ -81,7 +79,6 @@ impl AppState {
         sideband: Sideband,
         demod_mode: DemodMode,
         ssb_pitch_hz: f32,
-        radio_cmd_tx: mpsc::UnboundedSender<RadioCommand>,
 	radio_manager: Arc<RadioManager>,
     ) -> Self {
         let (tx, _) = broadcast::channel(256);
@@ -101,7 +98,6 @@ impl AppState {
             audio_tx,
             waterfall_tx,
             udp_audio_target: Arc::new(RwLock::new(None)),
-            radio_cmd_tx,
 	    radio_manager,
         }
     }
