@@ -121,13 +121,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
 
                 Message::Close(_) => break,
 
-                Message::Ping(payload) => {
-                    let _ = local_tx.send(ConnectionMessage::Legacy(ServerMessage::Info {
-                        message: format!("received ping ({} bytes)", payload.len()),
-                    }));
-                }
-
-		Message::Pong(_) | Message::Binary(_) => {}
+		Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
             }
         }
 
