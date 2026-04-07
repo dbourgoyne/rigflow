@@ -5,6 +5,7 @@ pub mod frame;
 pub mod left_panel;
 pub mod om_band;
 pub mod spectrum;
+pub mod spectrum_utils;
 pub mod text;
 pub mod waterfall;
 pub mod widgets;
