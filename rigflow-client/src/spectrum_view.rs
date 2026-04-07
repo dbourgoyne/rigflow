@@ -1,5 +1,6 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
 use crate::app::layout::{LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER, BOTTOM_GUTTER};
+use crate::app::frequency_view::plot_x_to_freq_hz;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -59,10 +60,19 @@ pub fn draw_spectrum_plot(
 		let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
                     .clamp(0.0, 1.0);
 
-		let left_hz = center_freq_hz - sample_rate_hz * 0.5;
-		let clicked_hz = left_hz + frac * sample_rate_hz;
+		// TODO: migrate to frequency_view::plot_x_to_freq_hz once UiState is available here
+		/*
+		let x = pointer_pos.x as usize;
 
-		clicked_freq_hz = Some(clicked_hz);
+		if let Some(freq_hz) = plot_x_to_freq_hz(x, /* state needed */) {
+		    clicked_freq_hz = Some(freq_hz);
+	        }
+		*/
+
+		let span = sample_rate_hz;
+		let left_hz = center_freq_hz - span * 0.5;
+		let clicked_hz = left_hz + frac * span;
+
             }
 	}
     }
