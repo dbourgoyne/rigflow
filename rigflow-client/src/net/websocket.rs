@@ -279,35 +279,17 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
         ServerMessage::Pong => {
             state.status = "pong".to_string();
         }
-        ServerMessage::FrequencyChanged { target_freq_hz } => {
-            state.target_freq_hz = target_freq_hz;
-        }
-        ServerMessage::CenterFrequencyChanged { center_freq_hz } => {
-            state.center_freq_hz = center_freq_hz;
-        }
         ServerMessage::SidebandChanged { sideband } => {
+            // Optional during transition; can be removed later.
             state.sideband = sideband;
         }
         ServerMessage::DemodModeChanged { mode } => {
+            // Optional during transition; can be removed later.
             state.demod_mode = mode;
         }
-        ServerMessage::StreamConfig {
-            audio_sample_rate_hz,
-            audio_format,
-            waterfall_bins,
-            waterfall_frame_rate_hz,
-            center_freq_hz,
-            target_freq_hz,
-            input_sample_rate_hz,
-        } => {
-            state.audio_sample_rate_hz = audio_sample_rate_hz;
-            state.audio_format = audio_format;
-            state.waterfall_bins = waterfall_bins;
-            state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
-            state.center_freq_hz = center_freq_hz;
-            state.target_freq_hz = target_freq_hz;
-            state.input_sample_rate_hz = input_sample_rate_hz;
-            state.status = "stream configured".to_string();
+        ServerMessage::SsbPitchChanged { pitch_hz } => {
+            // Optional during transition; can be removed later.
+            state.ssb_pitch_hz = pitch_hz;
         }
         ServerMessage::UdpAudioOffer { server_udp_port } => {
             state.status = format!("udp audio offered on {}", server_udp_port);
@@ -317,9 +299,6 @@ pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) 
         }
         ServerMessage::Error { message } => {
             state.status = format!("error: {}", message);
-        }
-        ServerMessage::SsbPitchChanged { pitch_hz } => {
-            state.ssb_pitch_hz = pitch_hz;
         }
     }
 }
@@ -331,32 +310,80 @@ pub fn apply_radio_server_message(
     let mut state = ui_state.lock().unwrap();
 
     match msg {
+        ServerRadioMessage::RadiosListed { radios } => {
+            state.available_radios = radios.clone();
 
-	ServerRadioMessage::RadiosListed { radios } => {
-	    state.available_radios = radios.clone();
-	    
-	    if radios.is_empty() {
-		state.server_status = "connected, no radios available".to_string();
-	    } else {
-		state.server_status = format!("connected, {} radios available", radios.len());
-	    }
+            if radios.is_empty() {
+                state.server_status = "connected, no radios available".to_string();
+            } else {
+                state.server_status = format!("connected, {} radios available", radios.len());
+            }
+        }
 
-	    // Optional: do NOT auto-acquire here if you want the UI list to drive selection.
-	}
+        ServerRadioMessage::RadioAcquired { radio_id, .. } => {
+            state.radio_acquired = true;
+            state.selected_radio_id = Some(radio_id.0.clone());
+            state.server_status = format!("radio acquired: {}", radio_id.0);
+        }
 
-	ServerRadioMessage::RadioAcquired { radio_id, .. } => {
-	    state.radio_acquired = true;
-	    state.selected_radio_id = Some(radio_id.0.clone());
-	    state.server_status = format!("radio acquired: {}", radio_id.0);
-	}
-
-	ServerRadioMessage::RadioReleased { .. } => {
-	    state.radio_acquired = false;
-	    state.server_status = "radio released".to_string();
-	}
+        ServerRadioMessage::RadioReleased { .. } => {
+            state.radio_acquired = false;
+            state.server_status = "radio released".to_string();
+        }
 
         ServerRadioMessage::LeaseRenewed { .. } => {
             state.status = "lease renewed".to_string();
+        }
+
+        ServerRadioMessage::RuntimeSnapshot {
+            radio_id: _,
+            center_freq_hz,
+            target_freq_hz,
+            input_sample_rate_hz,
+            audio_sample_rate_hz,
+            audio_format,
+            waterfall_bins,
+            waterfall_frame_rate_hz,
+            demod_mode,
+            sideband,
+            ssb_pitch_hz,
+        } => {
+            state.center_freq_hz = center_freq_hz as f32;
+            state.target_freq_hz = target_freq_hz as f32;
+            state.input_sample_rate_hz = input_sample_rate_hz;
+            state.audio_sample_rate_hz = audio_sample_rate_hz as f32;
+            state.audio_format = audio_format;
+            state.waterfall_bins = waterfall_bins as usize;
+            state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
+            state.demod_mode = demod_mode;
+            state.sideband = sideband;
+            state.ssb_pitch_hz = ssb_pitch_hz;
+            state.status = "runtime snapshot received".to_string();
+        }
+
+        ServerRadioMessage::RuntimeChanged {
+            radio_id: _,
+            center_freq_hz,
+            target_freq_hz,
+            demod_mode,
+            sideband,
+            ssb_pitch_hz,
+        } => {
+            if let Some(v) = center_freq_hz {
+                state.center_freq_hz = v as f32;
+            }
+            if let Some(v) = target_freq_hz {
+                state.target_freq_hz = v as f32;
+            }
+            if let Some(ref v) = demod_mode {
+                state.demod_mode = v.clone();
+            }
+            if let Some(ref v) = sideband {
+                state.sideband = v.clone();
+            }
+            if let Some(v) = ssb_pitch_hz {
+                state.ssb_pitch_hz = v;
+            }
         }
 
         ServerRadioMessage::RadioError { message, .. } => {

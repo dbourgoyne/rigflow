@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use rigflow_core::dsp::demod::{DemodMode, Sideband};
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -54,12 +55,31 @@ pub enum StopReason {
     ServerShutdown,
     StartupFailed,
     InternalFault,
+    UserRequested,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkerRuntimeState {
+    pub center_freq_hz: u64,
+    pub target_freq_hz: u64,
+    pub demod_mode: DemodMode,
+    pub sideband: Sideband,
+    pub ssb_pitch_hz: f32,
+
+    pub input_sample_rate_hz: f32,
+    pub audio_sample_rate_hz: u32,
+    pub audio_format: String,
+    pub waterfall_bins: u32,
+    pub waterfall_frame_rate_hz: f32,
 }
 
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
     SetTargetFrequency { hz: u64 },
     SetCenterFrequency { hz: u64 },
+    SetDemodMode { mode: DemodMode },
+    SetSideband { sideband: Sideband },
+    SetSsbPitch { pitch_hz: f32 },
     Stop { reason: StopReason },
 }
 
@@ -67,8 +87,7 @@ pub enum WorkerCommand {
 pub enum WorkerStatus {
     Starting,
     Running {
-        center_freq_hz: u64,
-        target_freq_hz: u64,
+        runtime: WorkerRuntimeState,
     },
     Stopping {
         reason: StopReason,
@@ -83,9 +102,7 @@ pub enum WorkerStatus {
 
 #[derive(Debug, Clone)]
 pub struct WorkerReadyInfo {
-    pub center_freq_hz: u64,
-    pub target_freq_hz: u64,
-    pub audio_sample_rate_hz: u32,
+    pub runtime: WorkerRuntimeState,
 }
 
 #[derive(Debug)]

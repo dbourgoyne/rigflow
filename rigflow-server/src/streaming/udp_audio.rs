@@ -41,7 +41,14 @@ impl UdpAudioSender {
             for &s in &chunk {
                 buf.extend_from_slice(&s.to_le_bytes());
             }
-
+/*
+	    println!(
+		"UDP AUDIO SEND: target={} seq={} samples={}",
+		target,
+		self.sequence,
+		chunk.len()
+        	);
+*/
             let _ = self.socket.send_to(&buf, target);
 
             self.sequence = self.sequence.wrapping_add(1);
