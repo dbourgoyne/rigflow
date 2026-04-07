@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
-use crate::spectrum_view::draw_spectrum_plot;
+use crate::spectrum_view::{draw_spectrum_plot, x_frac_to_frequency_hz};
 use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, LEFT_GUTTER, RIGHT_GUTTER};
 
 pub struct RigflowApp {
@@ -269,16 +269,10 @@ impl eframe::App for RigflowApp {
 			guard.clone()
 		    };
 
-		    /*
-		    println!(
-			"demod_mode={:?} sideband={:?} target={} center={} sample_rate={}",
-			snapshot.demod_mode,
-			snapshot.sideband,
-			snapshot.target_freq_hz,
-			snapshot.center_freq_hz,
-			snapshot.input_sample_rate_hz,
-		);
-		    */
+		    let state_snapshot = {
+			let state = self.state.lock().unwrap();
+			state.clone()
+		    };
 
 		    if let Some(clicked_freq_hz) = draw_spectrum_plot(
 			ui,
@@ -286,11 +280,7 @@ impl eframe::App for RigflowApp {
 			&spectrum_snapshot,
 			-120.0,
 			0.0,
-			snapshot.center_freq_hz,
-			snapshot.target_freq_hz,
-			snapshot.input_sample_rate_hz,
-			&snapshot.demod_mode,
-			&snapshot.sideband,
+			&state_snapshot
 		    ) {
 			println!("UI clicked spectrum at {}", clicked_freq_hz);
 			let _ = self.ws_cmd_tx.send(
@@ -333,12 +323,13 @@ impl eframe::App for RigflowApp {
 				    let frac = ((pointer_pos.x - response.rect.left()) / response.rect.width())
 					.clamp(0.0, 1.0);
 
+				    let state_snapshot = {
+					let state = self.state.lock().unwrap();
+					state.clone()
+				    };
+
 				    clicked_freq_hz = Some(
-					crate::spectrum_view::x_frac_to_frequency_hz(
-					    frac,
-					    snapshot.center_freq_hz,
-					    snapshot.input_sample_rate_hz,
-					)
+					x_frac_to_frequency_hz(frac, &state_snapshot)
 				    );
 				}
 			    }
@@ -367,24 +358,6 @@ impl eframe::App for RigflowApp {
 			}
 		    }
 		})
-		
-	    // Update immediately, don't wait for server response
-	    // Makes UI feel snappier
-	    /*
-	    if let Some(clicked_freq_hz) = draw_spectrum_plot(...) {
-		if let Ok(mut state) = self.state.lock() {
-		    state.target_freq_hz = clicked_freq_hz;
-		}
-
-		let _ = self.ws_cmd_tx.send(
-		    crate::net::control::ControlCommand::LegacyClientMessage(
-			rigflow_protocol::ClientMessage::SetFrequency {
-			    target_freq_hz: clicked_freq_hz,
-			},
-		    ),
-		);
-	}
-	    */
 	});
 
 	ctx.request_repaint(); 
