@@ -249,21 +249,8 @@ fn run_iq_worker_threads(
 
     let block_size = choose_block_size(&source_kind);
 
-    let initial_center_freq_hz = if request.center_freq_hz == 0 {
-        server_cfg.center_freq_hz as u64
-    } else {
-        request.center_freq_hz
-    };
-
-    let initial_target_freq_hz = if request.target_freq_hz == 0 {
-        if request.center_freq_hz == 0 {
-            server_cfg.target_freq_hz as u64
-        } else {
-            request.target_freq_hz
-        }
-    } else {
-        request.target_freq_hz
-    };
+    let (initial_center_freq_hz, initial_target_freq_hz) =
+	normalize_initial_frequencies(&request, &server_cfg);
 
     let control = Arc::new(Mutex::new(SharedControlState {
         center_freq_hz: initial_center_freq_hz,
@@ -796,4 +783,27 @@ fn spawn_dsp_thread(
             }
         }
     })
+}
+
+fn normalize_initial_frequencies(
+    request: &AcquireRequest,
+    server_cfg: &ServerConfig,
+) -> (u64, u64) {
+    let initial_center_freq_hz = if request.center_freq_hz == 0 {
+        server_cfg.center_freq_hz as u64
+    } else {
+        request.center_freq_hz
+    };
+
+    let initial_target_freq_hz = if request.target_freq_hz == 0 {
+        if request.center_freq_hz == 0 {
+            server_cfg.target_freq_hz as u64
+        } else {
+            request.target_freq_hz
+        }
+    } else {
+        request.target_freq_hz
+    };
+
+    (initial_center_freq_hz, initial_target_freq_hz)
 }
