@@ -23,6 +23,7 @@ use crate::{
     },
 };
 use crate::server::radio_types::WorkerStatus;
+use crate::dsp::demod::{demod_mode_to_string, sideband_to_string};
 
 enum ConnectionMessage {
     Legacy(ServerMessage),
@@ -605,31 +606,6 @@ fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
     }
 }
 
-fn demod_mode_to_string(mode: DemodMode) -> String {
-    match mode {
-        DemodMode::Wfm => "wfm".to_string(),
-        DemodMode::Nfm => "nfm".to_string(),
-        DemodMode::Usb => "usb".to_string(),
-        DemodMode::Lsb => "lsb".to_string(),
-    }
-}
-
-fn sideband_to_string(sideband: Sideband) -> String {
-    match sideband {
-        Sideband::Usb => "usb".to_string(),
-        Sideband::Lsb => "lsb".to_string(),
-    }
-}
-
-fn demod_mode_to_protocol_string(mode: crate::dsp::demod::DemodMode) -> String {
-    match mode {
-        crate::dsp::demod::DemodMode::Wfm => "wfm".to_string(),
-        crate::dsp::demod::DemodMode::Nfm => "nfm".to_string(),
-        crate::dsp::demod::DemodMode::Usb => "usb".to_string(),
-        crate::dsp::demod::DemodMode::Lsb => "lsb".to_string(),
-    }
-}
-
 fn runtime_snapshot_from_status(
     radio_id: rigflow_core::radio::RadioId,
     status: &WorkerStatus,
@@ -644,7 +620,7 @@ fn runtime_snapshot_from_status(
             audio_format: runtime.audio_format.clone(),
             waterfall_bins: runtime.waterfall_bins,
             waterfall_frame_rate_hz: runtime.waterfall_frame_rate_hz,
-            demod_mode: demod_mode_to_protocol_string(runtime.demod_mode),
+            demod_mode: demod_mode_to_string(runtime.demod_mode),
             sideband: sideband_to_string(runtime.sideband),
             ssb_pitch_hz: runtime.ssb_pitch_hz,
         }),
@@ -661,7 +637,7 @@ fn runtime_changed_from_status(
             radio_id,
             center_freq_hz: Some(runtime.center_freq_hz),
             target_freq_hz: Some(runtime.target_freq_hz),
-            demod_mode: Some(demod_mode_to_protocol_string(runtime.demod_mode)),
+            demod_mode: Some(demod_mode_to_string(runtime.demod_mode)),
             sideband: Some(sideband_to_string(runtime.sideband)),
             ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
         }),
