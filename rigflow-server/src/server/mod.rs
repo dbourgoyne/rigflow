@@ -3,7 +3,6 @@ pub mod client_manager;
 pub mod config;
 pub mod connection;
 pub mod discovery;
-pub mod pipeline_factory;
 pub mod radio_manager;
 pub mod radio_api;
 pub mod radio_types;
