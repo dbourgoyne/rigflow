@@ -81,11 +81,6 @@ pub async fn websocket_control_task(
 			    }
 			};
 
-			{
-			    let mut state = ui_state.lock().unwrap();
-			    state.advertised_udp_peer = udp_peer_addr.clone();
-			}
-
 			if let Some(write) = write_opt.as_mut() {
 			    let acquire = ClientRadioMessage::AcquireRadio {
 				radio_id: rigflow_core::radio::RadioId(radio_id),
