@@ -577,68 +577,16 @@ fn run_iq_worker_threads(
     });
 
     // Waterfall thread
-    let descriptor_for_wf = descriptor.clone();
-    let stop_flag_for_wf = stop_flag.clone();
-    let fatal_tx_for_wf = fatal_tx.clone();
-    let wf_target = request.waterfall_udp_peer;
-    let waterfall_thread = thread::spawn(move || {
-        let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
-        let mut waterfall = match UdpWaterfallSender::new() {
-            Ok(s) => s,
-            Err(e) => {
-                let reason = format!("failed to create UDP waterfall sender: {e}");
-                stop_flag_for_wf.store(true, Ordering::Relaxed);
-                let _ = fatal_tx_for_wf.send(WorkerExit::Failed { reason });
-                return;
-            }
-        };
-
-        let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
-        let waterfall_window_len = startup_info.runtime.waterfall_bins as usize;
-        let waterfall_max_len = waterfall_window_len * 8;
-        let waterfall_period = Duration::from_secs_f32(
-            (1.0 / startup_info.runtime.waterfall_frame_rate_hz.max(1.0)).max(0.001),
-        );
-        let mut next_waterfall_tick = Instant::now();
-
-        loop {
-            if stop_requested(&stop_flag_for_wf) {
-                break;
-            }
-
-            while let Ok(iq) = iq_wf_rx.try_recv() {
-                for sample in iq {
-                    waterfall_iq_buffer.push_back(sample);
-                }
-                while waterfall_iq_buffer.len() > waterfall_max_len {
-                    waterfall_iq_buffer.pop_front();
-                }
-            }
-
-            let now = Instant::now();
-            if now >= next_waterfall_tick {
-                if waterfall_iq_buffer.len() >= waterfall_window_len {
-                    let start = waterfall_iq_buffer.len() - waterfall_window_len;
-                    let mut fft_input = Vec::with_capacity(waterfall_window_len);
-                    for sample in waterfall_iq_buffer.iter().skip(start) {
-                        fft_input.push(*sample);
-                    }
-
-                    let row = waterfall_gen.generate_row(&fft_input);
-                    if !row.is_empty() {
-                        waterfall.send_row_to(wf_target, &row);
-                    }
-                }
-
-                next_waterfall_tick += waterfall_period;
-            } else {
-                thread::sleep((next_waterfall_tick - now).min(Duration::from_millis(5)));
-            }
-        }
-
-        println!("[radio-worker {}] waterfall thread exiting", descriptor_for_wf.id.0);
-    });
-
+    let waterfall_thread = spawn_waterfall_thread(
+        descriptor.clone(),
+        iq_wf_rx,
+        stop_flag.clone(),
+        fatal_tx.clone(),
+        request.waterfall_udp_peer,
+        startup_info.runtime.waterfall_bins as usize,
+        startup_info.runtime.waterfall_frame_rate_hz,
+    );
+    
     // Wait for stop or fatal error.
     let exit = loop {
         if stop_requested(&stop_flag) {
@@ -736,5 +684,74 @@ fn spawn_command_thread(
                 }
             }
         }
+    })
+}
+
+
+fn spawn_waterfall_thread(
+    descriptor: RadioDescriptor,
+    iq_wf_rx: std_mpsc::Receiver<Vec<Complex32>>,
+    stop_flag: Arc<AtomicBool>,
+    fatal_tx: std_mpsc::Sender<WorkerExit>,
+    wf_target: std::net::SocketAddr,
+    waterfall_window_len: usize,
+    waterfall_frame_rate_hz: f32,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
+        let mut waterfall = match UdpWaterfallSender::new() {
+            Ok(s) => s,
+            Err(e) => {
+                let reason = format!("failed to create UDP waterfall sender: {e}");
+                stop_flag.store(true, Ordering::Relaxed);
+                let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                return;
+            }
+        };
+
+        let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
+        let waterfall_max_len = waterfall_window_len * 8;
+        let waterfall_period = Duration::from_secs_f32(
+            (1.0 / waterfall_frame_rate_hz.max(1.0)).max(0.001),
+        );
+        let mut next_waterfall_tick = Instant::now();
+
+        loop {
+            if stop_requested(&stop_flag) {
+                break;
+            }
+
+            while let Ok(iq) = iq_wf_rx.try_recv() {
+                for sample in iq {
+                    waterfall_iq_buffer.push_back(sample);
+                }
+                while waterfall_iq_buffer.len() > waterfall_max_len {
+                    waterfall_iq_buffer.pop_front();
+                }
+            }
+
+            let now = Instant::now();
+            if now >= next_waterfall_tick {
+                if waterfall_iq_buffer.len() >= waterfall_window_len {
+                    let start = waterfall_iq_buffer.len() - waterfall_window_len;
+                    let mut fft_input = Vec::with_capacity(waterfall_window_len);
+
+                    for sample in waterfall_iq_buffer.iter().skip(start) {
+                        fft_input.push(*sample);
+                    }
+
+                    let row = waterfall_gen.generate_row(&fft_input);
+                    if !row.is_empty() {
+                        waterfall.send_row_to(wf_target, &row);
+                    }
+                }
+
+                next_waterfall_tick += waterfall_period;
+            } else {
+                thread::sleep((next_waterfall_tick - now).min(Duration::from_millis(5)));
+            }
+        }
+
+        println!("[radio-worker {}] waterfall thread exiting", descriptor.id.0);
     })
 }
