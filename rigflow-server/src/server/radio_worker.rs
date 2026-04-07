@@ -280,55 +280,13 @@ fn run_iq_worker_threads(
     let (fatal_tx, fatal_rx) = std_mpsc::channel::<WorkerExit>();
 
     // Command thread
-    let control_for_cmd = control.clone();
-    let stop_flag_for_cmd = stop_flag.clone();
-    let stop_reason_for_cmd = stop_reason.clone();
-    let fatal_tx_for_cmd = fatal_tx.clone();
-    let cmd_thread = thread::spawn(move || {
-        while !stop_requested(&stop_flag_for_cmd) {
-            match cmd_rx.recv_timeout(Duration::from_millis(20)) {
-                Ok(cmd) => match cmd {
-                    WorkerCommand::SetTargetFrequency { hz } => {
-                        if let Ok(mut c) = control_for_cmd.lock() {
-                            c.target_freq_hz = hz;
-                        }
-                    }
-                    WorkerCommand::SetCenterFrequency { hz } => {
-                        if let Ok(mut c) = control_for_cmd.lock() {
-                            c.center_freq_hz = hz;
-                        }
-                    }
-                    WorkerCommand::SetDemodMode { mode } => {
-                        if let Ok(mut c) = control_for_cmd.lock() {
-                            c.demod_mode = mode;
-                        }
-                    }
-                    WorkerCommand::SetSideband { sideband } => {
-                        if let Ok(mut c) = control_for_cmd.lock() {
-                            c.sideband = sideband;
-                        }
-                    }
-                    WorkerCommand::SetSsbPitch { pitch_hz } => {
-                        if let Ok(mut c) = control_for_cmd.lock() {
-                            c.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
-                        }
-                    }
-                    WorkerCommand::Stop { reason } => {
-                        set_stop_reason(&stop_reason_for_cmd, reason);
-                        stop_flag_for_cmd.store(true, Ordering::Relaxed);
-                        break;
-                    }
-                },
-                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
-                    let reason = "worker command channel closed".to_string();
-                    stop_flag_for_cmd.store(true, Ordering::Relaxed);
-                    let _ = fatal_tx_for_cmd.send(WorkerExit::Failed { reason });
-                    break;
-                }
-            }
-        }
-    });
+    let cmd_thread = spawn_command_thread(
+        cmd_rx,
+        control.clone(),
+        stop_flag.clone(),
+        stop_reason.clone(),
+        fatal_tx.clone(),
+    );
 
     // Capture thread
     let descriptor_for_capture = descriptor.clone();
@@ -725,4 +683,58 @@ fn run_iq_worker_threads(
     }
 
     exit
+}
+
+fn spawn_command_thread(
+    cmd_rx: std_mpsc::Receiver<WorkerCommand>,
+    control: Arc<Mutex<SharedControlState>>,
+    stop_flag: Arc<AtomicBool>,
+    stop_reason: Arc<Mutex<StopReason>>,
+    fatal_tx: std_mpsc::Sender<WorkerExit>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !stop_requested(&stop_flag) {
+            match cmd_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(cmd) => match cmd {
+                    WorkerCommand::SetTargetFrequency { hz } => {
+                        if let Ok(mut c) = control.lock() {
+                            c.target_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetCenterFrequency { hz } => {
+                        if let Ok(mut c) = control.lock() {
+                            c.center_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetDemodMode { mode } => {
+                        if let Ok(mut c) = control.lock() {
+                            c.demod_mode = mode;
+                        }
+                    }
+                    WorkerCommand::SetSideband { sideband } => {
+                        if let Ok(mut c) = control.lock() {
+                            c.sideband = sideband;
+                        }
+                    }
+                    WorkerCommand::SetSsbPitch { pitch_hz } => {
+                        if let Ok(mut c) = control.lock() {
+                            c.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
+                        }
+                    }
+                    WorkerCommand::Stop { reason } => {
+                        set_stop_reason(&stop_reason, reason);
+                        stop_flag.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                },
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    let reason = "worker command channel closed".to_string();
+                    stop_flag.store(true, Ordering::Relaxed);
+                    let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                    break;
+                }
+            }
+        }
+    })
 }
