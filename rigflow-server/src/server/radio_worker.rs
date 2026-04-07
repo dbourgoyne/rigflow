@@ -1,33 +1,55 @@
-use std::time::Duration;
 use std::collections::VecDeque;
-use num_complex::Complex32;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc as std_mpsc,
+    Arc, Mutex,
+};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use rigflow_core::dsp::demod::{DemodMode, Sideband};
 use rigflow_core::radio::RadioDescriptor;
 
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::server::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
+    WATERFALL_FRAME_RATE_HZ,
 };
 use crate::server::radio_types::{
     AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
-    WorkerStartResult, WorkerStatus,
+    WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
-use crate::source::fake_iq::FakeIqSource;
+use crate::source::factory::{create_source, SourceConfig};
 use crate::source::IqSource;
 use crate::streaming::udp_audio::UdpAudioSender;
 use crate::streaming::udp_waterfall::UdpWaterfallSender;
 use crate::waterfall::simple::WaterfallGenerator;
-use crate::server::radio_types::WorkerRuntimeState;
+
+#[derive(Debug, Clone)]
+struct SharedControlState {
+    center_freq_hz: u64,
+    target_freq_hz: u64,
+    demod_mode: DemodMode,
+    sideband: Sideband,
+    ssb_pitch_hz: f32,
+}
+
+#[derive(Debug, Clone)]
+struct StartupInfo {
+    input_sample_rate_hz: f32,
+    runtime: WorkerRuntimeState,
+}
 
 pub async fn run_radio_worker(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
     server_cfg: ServerConfig,
-    worker_rx: mpsc::Receiver<WorkerCommand>,
+    mut worker_rx: mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
-    stop_rx: oneshot::Receiver<()>,
+    mut stop_rx: oneshot::Receiver<()>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
 ) -> WorkerExit {
     println!(
@@ -35,38 +57,126 @@ pub async fn run_radio_worker(
         descriptor.id.0, request.center_freq_hz, request.target_freq_hz
     );
 
-    if descriptor.id.0.starts_with("fake:") {
-        run_fake_worker(
-            descriptor,
-            request,
-            server_cfg,
-            worker_rx,
-            status_tx,
-            stop_rx,
+    let (cmd_tx_std, cmd_rx_std) = std_mpsc::channel::<WorkerCommand>();
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_reason = Arc::new(Mutex::new(StopReason::InternalFault));
+    let (exit_tx, exit_rx) = oneshot::channel::<WorkerExit>();
+
+    let stop_flag_for_forwarder = stop_flag.clone();
+    tokio::spawn(async move {
+        while let Some(cmd) = worker_rx.recv().await {
+            if cmd_tx_std.send(cmd).is_err() {
+                break;
+            }
+            if stop_flag_for_forwarder.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+    });
+
+    let descriptor_for_thread = descriptor.clone();
+    let request_for_thread = request.clone();
+    let server_cfg_for_thread = server_cfg.clone();
+    let status_tx_for_thread = status_tx.clone();
+    let stop_flag_for_thread = stop_flag.clone();
+    let stop_reason_for_thread = stop_reason.clone();
+
+    thread::spawn(move || {
+        let exit = run_iq_worker_threads(
+            descriptor_for_thread,
+            request_for_thread,
+            server_cfg_for_thread,
+            cmd_rx_std,
+            status_tx_for_thread,
             startup_tx,
-        )
-        .await
-    } else {
-        let reason = format!(
-            "source for {} not implemented yet; fake is the first migrated path",
-            descriptor.id.0
+            stop_flag_for_thread,
+            stop_reason_for_thread,
         );
-        let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
-        WorkerExit::Failed { reason }
+        let _ = exit_tx.send(exit);
+    });
+
+
+    tokio::select! {
+	_ = &mut stop_rx => {
+            stop_flag.store(true, Ordering::Relaxed);
+            if let Ok(mut reason) = stop_reason.lock() {
+		*reason = StopReason::InternalFault;
+            }
+
+            WorkerExit::Clean {
+		reason: StopReason::InternalFault,
+            }
+	}
+
+	result = exit_rx => {
+            match result {
+		Ok(exit) => exit,
+		Err(_) => WorkerExit::Failed {
+                    reason: "worker thread exit channel closed".to_string(),
+		},
+            }
+	}
+    }
+
+    
+}
+
+fn source_kind_for_descriptor(descriptor: &RadioDescriptor) -> Result<SourceKind, String> {
+    if descriptor.id.0.starts_with("fake:") {
+        Ok(SourceKind::Fake)
+    } else if descriptor.id.0.starts_with("rtl:") {
+        Ok(SourceKind::RtlSdr)
+    } else if descriptor.id.0.starts_with("wav:") {
+        Ok(SourceKind::Wav)
+    } else {
+        Err(format!("unsupported radio id '{}'", descriptor.id.0))
     }
 }
 
-fn pipeline_cfg_for_fake(
+fn create_worker_source(
+    descriptor: &RadioDescriptor,
     server_cfg: &ServerConfig,
+    block_size: usize,
+    initial_center_freq_hz: u64,
+) -> Result<Box<dyn IqSource>, String> {
+    let config = if descriptor.id.0.starts_with("fake:") {
+        SourceConfig::Fake {
+            sample_rate_hz: server_cfg.fake_sample_rate_hz,
+            tone_hz: server_cfg.fake_tone_hz,
+        }
+    } else if descriptor.id.0.starts_with("rtl:") {
+        SourceConfig::RtlSdr {
+            device_index: server_cfg.rtlsdr_device_index,
+            sample_rate_hz: server_cfg.rtlsdr_sample_rate_hz,
+            center_freq_hz: initial_center_freq_hz as u32,
+            gain_tenths_db: server_cfg.rtlsdr_gain_tenths_db,
+            ppm_correction: server_cfg.rtlsdr_ppm_correction,
+            direct_sampling: server_cfg.rtlsdr_direct_sampling,
+            block_complex_samples: block_size,
+        }
+    } else if descriptor.id.0.starts_with("wav:") {
+        SourceConfig::WavFile {
+            path: server_cfg.wav_file.clone(),
+        }
+    } else {
+        return Err(format!("source for {} not implemented", descriptor.id.0));
+    };
+
+    create_source(config)
+}
+
+fn pipeline_cfg_for_source(
+    server_cfg: &ServerConfig,
+    source_kind: &SourceKind,
     center_freq_hz: u64,
     target_freq_hz: u64,
     input_sample_rate_hz: f32,
 ) -> DspPipelineConfig {
     let (channel_cutoff_hz, audio_cutoff_hz) = match server_cfg.demod {
-        rigflow_core::dsp::demod::DemodMode::Wfm => (100_000.0, 15_000.0),
-        rigflow_core::dsp::demod::DemodMode::Nfm => (12_500.0, 5_000.0),
-        rigflow_core::dsp::demod::DemodMode::Usb => (4_000.0, 3_000.0),
-        rigflow_core::dsp::demod::DemodMode::Lsb => (4_000.0, 3_000.0),
+        DemodMode::Wfm => (100_000.0, 15_000.0),
+        DemodMode::Nfm => (12_500.0, 5_000.0),
+        DemodMode::Usb => (4_000.0, 3_000.0),
+        DemodMode::Lsb => (4_000.0, 3_000.0),
     };
 
     DspPipelineConfig {
@@ -76,7 +186,7 @@ fn pipeline_cfg_for_fake(
 
         channel_cutoff_hz,
         fir_taps: 129,
-        decimation_factor: choose_decimation(&SourceKind::Fake),
+        decimation_factor: choose_decimation(source_kind),
 
         audio_cutoff_hz,
         audio_fir_taps: 129,
@@ -86,318 +196,533 @@ fn pipeline_cfg_for_fake(
     }
 }
 
-async fn run_fake_worker(
+fn build_runtime_state(
+    control: &SharedControlState,
+    input_sample_rate_hz: f32,
+) -> WorkerRuntimeState {
+    WorkerRuntimeState {
+        center_freq_hz: control.center_freq_hz,
+        target_freq_hz: control.target_freq_hz,
+        demod_mode: control.demod_mode,
+        sideband: control.sideband,
+        ssb_pitch_hz: control.ssb_pitch_hz,
+
+        input_sample_rate_hz,
+        audio_sample_rate_hz: 48_000,
+        audio_format: "i16".to_string(),
+        waterfall_bins: WATERFALL_BINS as u32,
+        waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
+    }
+}
+
+fn current_control(control: &Arc<Mutex<SharedControlState>>) -> SharedControlState {
+    control.lock().unwrap().clone()
+}
+
+fn set_stop_reason(stop_reason: &Arc<Mutex<StopReason>>, reason: StopReason) {
+    if let Ok(mut r) = stop_reason.lock() {
+        *r = reason;
+    }
+}
+
+fn stop_requested(stop_flag: &Arc<AtomicBool>) -> bool {
+    stop_flag.load(Ordering::Relaxed)
+}
+
+fn run_iq_worker_threads(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
     server_cfg: ServerConfig,
-    mut worker_rx: mpsc::Receiver<WorkerCommand>,
+    cmd_rx: std_mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
-    mut stop_rx: oneshot::Receiver<()>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
+    stop_flag: Arc<AtomicBool>,
+    stop_reason: Arc<Mutex<StopReason>>,
 ) -> WorkerExit {
-    if !matches!(server_cfg.source, SourceKind::Fake) {
-        println!(
-            "[radio-worker {}] warning: acquired fake radio while global source config is {:?}; using fake source anyway",
-            descriptor.id.0,
-            server_cfg.source
-        );
-    }
+    let source_kind = match source_kind_for_descriptor(&descriptor) {
+        Ok(kind) => kind,
+        Err(reason) => {
+            let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
+            return WorkerExit::Failed { reason };
+        }
+    };
 
-    let block_size = choose_block_size(&SourceKind::Fake);
-
-    let mut source = FakeIqSource::new(server_cfg.fake_sample_rate_hz, server_cfg.fake_tone_hz);
+    let block_size = choose_block_size(&source_kind);
 
     let initial_center_freq_hz = if request.center_freq_hz == 0 {
-	server_cfg.center_freq_hz as u64
+        server_cfg.center_freq_hz as u64
     } else {
-	request.center_freq_hz
+        request.center_freq_hz
     };
 
     let initial_target_freq_hz = if request.target_freq_hz == 0 {
-	if request.center_freq_hz == 0 {
+        if request.center_freq_hz == 0 {
             server_cfg.target_freq_hz as u64
-	} else {
+        } else {
             request.target_freq_hz
-	}
+        }
     } else {
-	request.target_freq_hz
+        request.target_freq_hz
     };
 
-    if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
-	let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
-	return WorkerExit::Failed { reason };
-    }
+    let control = Arc::new(Mutex::new(SharedControlState {
+        center_freq_hz: initial_center_freq_hz,
+        target_freq_hz: initial_target_freq_hz,
+        demod_mode: server_cfg.demod,
+        sideband: Sideband::Lsb,
+        ssb_pitch_hz: 0.0,
+    }));
 
-    let mut runtime = WorkerRuntimeState {
-	center_freq_hz: initial_center_freq_hz,
-	target_freq_hz: initial_target_freq_hz,
+    let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+    let (iq_wf_tx, iq_wf_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+    let (startup_info_tx, startup_info_rx) = std_mpsc::sync_channel::<Result<StartupInfo, String>>(1);
+    let (capture_start_tx, capture_start_rx) = std_mpsc::sync_channel::<()>(1);
+    let (fatal_tx, fatal_rx) = std_mpsc::channel::<WorkerExit>();
 
-	demod_mode: server_cfg.demod,
-	sideband: rigflow_core::dsp::demod::Sideband::Lsb,
-	ssb_pitch_hz: 0.0,
-
-	input_sample_rate_hz: source.sample_rate(),
-	audio_sample_rate_hz: 48_000,
-	audio_format: "i16".to_string(),
-	waterfall_bins: WATERFALL_BINS as u32,
-	waterfall_frame_rate_hz: 30.0,
-    };
-
-    let waterfall_frame_rate_hz = runtime.waterfall_frame_rate_hz.max(1.0);
-    let mut waterfall_tick =
-	tokio::time::interval(Duration::from_secs_f32(1.0 / waterfall_frame_rate_hz));
-
-    let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
-    let waterfall_window_len = runtime.waterfall_bins as usize;
-    let waterfall_max_len = waterfall_window_len * 8;
-
-
-
-
-    let mut pipeline = DspPipeline::new(pipeline_cfg_for_fake(
-	&server_cfg,
-	runtime.center_freq_hz,
-	runtime.target_freq_hz,
-	runtime.input_sample_rate_hz,
-    ));
-
-    let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
-
-    println!(
-    "[radio-worker {}] pipeline mode={:?} input_sr={} output_sr={} client_sr={}",
-    descriptor.id.0,
-    server_cfg.demod,
-    source.sample_rate(),
-    pipeline.output_sample_rate(),
-    pipeline.client_output_sample_rate(),
-);
-
-    let mut audio = match UdpAudioSender::new(480) {
-        Ok(s) => s,
-        Err(e) => {
-            let reason = format!("failed to create UDP audio sender: {e}");
-            let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
-            return WorkerExit::Failed { reason };
+    // Command thread
+    let control_for_cmd = control.clone();
+    let stop_flag_for_cmd = stop_flag.clone();
+    let stop_reason_for_cmd = stop_reason.clone();
+    let fatal_tx_for_cmd = fatal_tx.clone();
+    let cmd_thread = thread::spawn(move || {
+        while !stop_requested(&stop_flag_for_cmd) {
+            match cmd_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(cmd) => match cmd {
+                    WorkerCommand::SetTargetFrequency { hz } => {
+                        if let Ok(mut c) = control_for_cmd.lock() {
+                            c.target_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetCenterFrequency { hz } => {
+                        if let Ok(mut c) = control_for_cmd.lock() {
+                            c.center_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetDemodMode { mode } => {
+                        if let Ok(mut c) = control_for_cmd.lock() {
+                            c.demod_mode = mode;
+                        }
+                    }
+                    WorkerCommand::SetSideband { sideband } => {
+                        if let Ok(mut c) = control_for_cmd.lock() {
+                            c.sideband = sideband;
+                        }
+                    }
+                    WorkerCommand::SetSsbPitch { pitch_hz } => {
+                        if let Ok(mut c) = control_for_cmd.lock() {
+                            c.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
+                        }
+                    }
+                    WorkerCommand::Stop { reason } => {
+                        set_stop_reason(&stop_reason_for_cmd, reason);
+                        stop_flag_for_cmd.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                },
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    let reason = "worker command channel closed".to_string();
+                    stop_flag_for_cmd.store(true, Ordering::Relaxed);
+                    let _ = fatal_tx_for_cmd.send(WorkerExit::Failed { reason });
+                    break;
+                }
+            }
         }
-    };
-
-    let mut waterfall = match UdpWaterfallSender::new() {
-        Ok(s) => s,
-        Err(e) => {
-            let reason = format!("failed to create UDP waterfall sender: {e}");
-            let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
-            return WorkerExit::Failed { reason };
-        }
-    };
-
-    let audio_target = request.audio_udp_peer;
-    let wf_target = request.waterfall_udp_peer;
-
-    let ready = WorkerReadyInfo {
-	runtime: runtime.clone(),
-    };
-
-    if startup_tx.send(WorkerStartResult::Ready(ready.clone())).is_err() {
-        return WorkerExit::Failed {
-            reason: "manager dropped startup receiver".to_string(),
-        };
-    }
-
-    let _ = status_tx.send(WorkerStatus::Running {
-	runtime: runtime.clone(),
     });
 
-    let block_period =
-        Duration::from_secs_f32((block_size as f32 / source.sample_rate()).max(0.001));
-    let mut source_tick = tokio::time::interval(block_period);
-    let mut blocks_read: u64 = 0;
+    // Capture thread
+    let descriptor_for_capture = descriptor.clone();
+    let server_cfg_for_capture = server_cfg.clone();
+    let control_for_capture = control.clone();
+    let stop_flag_for_capture = stop_flag.clone();
+    let stop_reason_for_capture = stop_reason.clone();
+    let fatal_tx_for_capture = fatal_tx.clone();
+    let capture_thread = thread::spawn(move || {
+        let mut source = match create_worker_source(
+            &descriptor_for_capture,
+            &server_cfg_for_capture,
+            block_size,
+            initial_center_freq_hz,
+        ) {
+            Ok(source) => source,
+            Err(reason) => {
+                let _ = startup_info_tx.send(Err(reason.clone()));
+                let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
+                return;
+            }
+        };
 
-    println!(
-        "[radio-worker {}] fake source running: sample_rate={} block_size={} audio_peer={} waterfall_peer={}",
-        descriptor.id.0,
-        source.sample_rate(),
-        block_size,
-        audio_target,
-        wf_target,
-    );
+        if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
+            let _ = startup_info_tx.send(Err(reason.clone()));
+            let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
+            return;
+        }
 
-    loop {
-        tokio::select! {
-	    _ = waterfall_tick.tick() => {
-		if waterfall_iq_buffer.len() < waterfall_window_len {
-		    continue;
-		}
+        let startup_runtime = build_runtime_state(
+            &current_control(&control_for_capture),
+            source.sample_rate(),
+        );
 
-		let start = waterfall_iq_buffer.len() - waterfall_window_len;
-		let mut fft_input = Vec::with_capacity(waterfall_window_len);
-		
-		for sample in waterfall_iq_buffer.iter().skip(start) {
-		    fft_input.push(*sample);
-		}
+        let _ = startup_info_tx.send(Ok(StartupInfo {
+            input_sample_rate_hz: source.sample_rate(),
+            runtime: startup_runtime,
+        }));
 
-		let row = waterfall_gen.generate_row(&fft_input);
-		if !row.is_empty() {
-		    waterfall.send_row_to(wf_target, &row);
-		}
-	    }
-	    
-            _ = &mut stop_rx => {
-                let reason = StopReason::InternalFault;
-                let _ = status_tx.send(WorkerStatus::Stopping { reason: reason.clone() });
-                let _ = status_tx.send(WorkerStatus::Stopped { reason: reason.clone() });
-                return WorkerExit::Clean { reason };
+        // Wait until coordinator has spawned the other threads and published startup state.
+        let _ = capture_start_rx.recv();
+
+        let realtime = source.is_realtime();
+        let source_block_period =
+            Duration::from_secs_f32((block_size as f32 / source.sample_rate()).max(0.001));
+        let mut next_source_tick = Instant::now();
+        let mut last_center_freq_hz = initial_center_freq_hz;
+        let mut blocks_read: u64 = 0;
+
+        println!(
+            "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
+            descriptor_for_capture.id.0,
+            source.sample_rate(),
+            block_size,
+            realtime,
+        );
+
+        loop {
+            if stop_requested(&stop_flag_for_capture) {
+                break;
             }
 
-            _ = source_tick.tick() => {
-                let iq = match source.read_block(block_size) {
-                    Ok(v) => v,
-                    Err(reason) => return WorkerExit::Failed { reason },
-                };
+            let control_snapshot = current_control(&control_for_capture);
+            if control_snapshot.center_freq_hz != last_center_freq_hz {
+                if let Err(reason) = source.set_center_frequency(control_snapshot.center_freq_hz as f32) {
+                    stop_flag_for_capture.store(true, Ordering::Relaxed);
+                    let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
+                    break;
+                }
+                last_center_freq_hz = control_snapshot.center_freq_hz;
+            }
 
-                if iq.is_empty() {
+            if !realtime {
+                let now = Instant::now();
+                if now < next_source_tick {
+                    thread::sleep(next_source_tick - now);
+                }
+                next_source_tick += source_block_period;
+            }
+
+            let iq = match source.read_block(block_size) {
+                Ok(v) => v,
+                Err(reason) => {
+                    stop_flag_for_capture.store(true, Ordering::Relaxed);
+                    let _ = fatal_tx_for_capture.send(WorkerExit::Failed { reason });
+                    break;
+                }
+            };
+
+            if iq.is_empty() {
+                if realtime {
                     continue;
-                }
-
-                blocks_read += 1;
-
-                if blocks_read % 20 == 0 {
-                    println!(
-                        "[radio-worker {}] fake source alive: blocks={} iq_samples={} center={} target={}",
-                        descriptor.id.0,
-                        blocks_read,
-                        iq.len(),
-                        runtime.center_freq_hz,
-                        runtime.target_freq_hz,
-                    );
-                }
-
-                // Waterfall from tuned/channelized IQ.
-                //let wf_iq = pipeline.process_iq(&iq);
-                //let row = waterfall_gen.generate_row(&wf_iq);
-		// Going back to:
-		// Waterfall/spectrum from raw IQ, matching old StreamConfig semantics.
-		for &sample in &iq {
-		    waterfall_iq_buffer.push_back(sample);
-		}
-
-		while waterfall_iq_buffer.len() > waterfall_max_len {
-		    waterfall_iq_buffer.pop_front();
-		}
-
-                // Audio from the full DSP pipeline.
-                let audio_f32 = pipeline.process_audio(&iq);
-
-                let mut audio_i16 = Vec::with_capacity(audio_f32.len());
-                for s in audio_f32 {
-                    let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                    audio_i16.push(v);
-                }
-
-                if !audio_i16.is_empty() {
-                    audio.send_audio_to(audio_target, &audio_i16);
+                } else {
+                    // WAV EOF or similar: clean stop.
+                    set_stop_reason(&stop_reason_for_capture, StopReason::UserRequested);
+                    stop_flag_for_capture.store(true, Ordering::Relaxed);
+                    break;
                 }
             }
 
-            cmd = worker_rx.recv() => {
-                match cmd {
-                    Some(WorkerCommand::SetTargetFrequency { hz }) => {
+            blocks_read += 1;
+            if blocks_read % 20 == 0 {
+                println!(
+                    "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
+                    descriptor_for_capture.id.0,
+                    blocks_read,
+                    iq.len(),
+                    control_snapshot.center_freq_hz,
+                    control_snapshot.target_freq_hz,
+                );
+            }
 
-			runtime.target_freq_hz = hz;
-			pipeline.set_target_frequency(runtime.target_freq_hz as f32);
+            if iq_audio_tx.send(iq.clone()).is_err() {
+                stop_flag_for_capture.store(true, Ordering::Relaxed);
+                break;
+            }
 
-			let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-			});
-			
-                        println!(
-                            "[radio-worker {}] SetTargetFrequency {}",
-                            descriptor.id.0,
-                            runtime.target_freq_hz
-                        );
-
-                        let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-                        });
-                    }
-
-                    Some(WorkerCommand::SetCenterFrequency { hz }) => {
-
-			let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-			});
-
-                        println!(
-                            "[radio-worker {}] SetCenterFrequency {}",
-                            descriptor.id.0,
-                            runtime.center_freq_hz
-                        );
-
-                        if let Err(reason) = source.set_center_frequency(runtime.center_freq_hz as f32) {
-                            return WorkerExit::Failed { reason };
-                        }
-
-                        let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-                        });
-                    }
-
-                    Some(WorkerCommand::Stop { reason }) => {
-                        let _ = status_tx.send(WorkerStatus::Stopping { reason: reason.clone() });
-                        let _ = status_tx.send(WorkerStatus::Stopped { reason: reason.clone() });
-                        return WorkerExit::Clean { reason };
-                    }
-
-		    Some(WorkerCommand::SetDemodMode { mode }) => {
-			runtime.demod_mode = mode;
-
-			pipeline = DspPipeline::new(pipeline_cfg_for_fake(
-			    &ServerConfig {
-				demod: runtime.demod_mode,
-				..server_cfg.clone()
-			    },
-			    runtime.center_freq_hz,
-			    runtime.target_freq_hz,
-			    runtime.input_sample_rate_hz,
-			));
-
-			if matches!(runtime.demod_mode,
-				    rigflow_core::dsp::demod::DemodMode::Usb |
-				    rigflow_core::dsp::demod::DemodMode::Lsb
-			) {
-			    pipeline.set_sideband(runtime.sideband);
-			    pipeline.set_ssb_pitch_hz(runtime.ssb_pitch_hz);
-			}
-
-			let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-			});
-		    }
-
-		    Some(WorkerCommand::SetSideband { sideband }) => {
-			runtime.sideband = sideband;
-			pipeline.set_sideband(runtime.sideband);
-
-			let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-			});
-		    }
-
-		    Some(WorkerCommand::SetSsbPitch { pitch_hz }) => {
-			runtime.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
-			pipeline.set_ssb_pitch_hz(runtime.ssb_pitch_hz);
-
-			let _ = status_tx.send(WorkerStatus::Running {
-			    runtime: runtime.clone(),
-			});
-		    }
-
-                    None => {
-                        return WorkerExit::Failed {
-                            reason: "worker command channel closed".to_string(),
-                        };
-                    }
+            match iq_wf_tx.try_send(iq) {
+                Ok(_) => {}
+                Err(std_mpsc::TrySendError::Full(_)) => {}
+                Err(std_mpsc::TrySendError::Disconnected(_)) => {
+                    stop_flag_for_capture.store(true, Ordering::Relaxed);
+                    break;
                 }
             }
         }
+    });
+
+    let startup_info = match startup_info_rx.recv() {
+        Ok(Ok(info)) => info,
+        Ok(Err(reason)) => {
+            let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
+            let _ = cmd_thread.join();
+            let _ = capture_thread.join();
+            return WorkerExit::Failed { reason };
+        }
+        Err(_) => {
+            let reason = "capture thread failed before startup".to_string();
+            let _ = startup_tx.send(WorkerStartResult::Failed(reason.clone()));
+            let _ = cmd_thread.join();
+            let _ = capture_thread.join();
+            return WorkerExit::Failed { reason };
+        }
+    };
+
+    let _ = startup_tx.send(WorkerStartResult::Ready(WorkerReadyInfo {
+        runtime: startup_info.runtime.clone(),
+    }));
+
+    let _ = status_tx.send(WorkerStatus::Running {
+        runtime: startup_info.runtime.clone(),
+    });
+
+    let _ = capture_start_tx.send(());
+
+    // DSP/audio thread
+    let descriptor_for_dsp = descriptor.clone();
+    let control_for_dsp = control.clone();
+    let stop_flag_for_dsp = stop_flag.clone();
+    let fatal_tx_for_dsp = fatal_tx.clone();
+    let status_tx_for_dsp = status_tx.clone();
+    let server_cfg_for_dsp = server_cfg.clone();
+    let audio_target = request.audio_udp_peer;
+    let dsp_thread = thread::spawn(move || {
+        let mut pipeline = DspPipeline::new(pipeline_cfg_for_source(
+            &server_cfg_for_dsp,
+            &source_kind,
+            startup_info.runtime.center_freq_hz,
+            startup_info.runtime.target_freq_hz,
+            startup_info.input_sample_rate_hz,
+        ));
+
+        if matches!(
+            startup_info.runtime.demod_mode,
+            DemodMode::Usb | DemodMode::Lsb
+        ) {
+            pipeline.set_sideband(startup_info.runtime.sideband);
+            pipeline.set_ssb_pitch_hz(startup_info.runtime.ssb_pitch_hz);
+        }
+
+        println!(
+            "[radio-worker {}] pipeline mode={:?} input_sr={} output_sr={} client_sr={}",
+            descriptor_for_dsp.id.0,
+            startup_info.runtime.demod_mode,
+            startup_info.input_sample_rate_hz,
+            pipeline.output_sample_rate(),
+            pipeline.client_output_sample_rate(),
+        );
+
+        let mut audio = match UdpAudioSender::new(480) {
+            Ok(s) => s,
+            Err(e) => {
+                let reason = format!("failed to create UDP audio sender: {e}");
+                stop_flag_for_dsp.store(true, Ordering::Relaxed);
+                let _ = fatal_tx_for_dsp.send(WorkerExit::Failed { reason });
+                return;
+            }
+        };
+
+        let mut applied = current_control(&control_for_dsp);
+
+        loop {
+            if stop_requested(&stop_flag_for_dsp) {
+                break;
+            }
+
+            let current = current_control(&control_for_dsp);
+
+            let mut changed = false;
+
+            if current.center_freq_hz != applied.center_freq_hz {
+                pipeline.set_center_frequency(current.center_freq_hz as f32);
+                applied.center_freq_hz = current.center_freq_hz;
+                changed = true;
+            }
+
+            if current.target_freq_hz != applied.target_freq_hz {
+                pipeline.set_target_frequency(current.target_freq_hz as f32);
+                applied.target_freq_hz = current.target_freq_hz;
+                changed = true;
+            }
+
+            if current.demod_mode != applied.demod_mode {
+                let cfg = ServerConfig {
+                    demod: current.demod_mode,
+                    ..server_cfg_for_dsp.clone()
+                };
+
+                pipeline = DspPipeline::new(pipeline_cfg_for_source(
+                    &cfg,
+                    &source_kind,
+                    current.center_freq_hz,
+                    current.target_freq_hz,
+                    startup_info.input_sample_rate_hz,
+                ));
+
+                if matches!(current.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
+                    pipeline.set_sideband(current.sideband);
+                    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+                }
+
+                applied.demod_mode = current.demod_mode;
+                applied.sideband = current.sideband;
+                applied.ssb_pitch_hz = current.ssb_pitch_hz;
+                applied.center_freq_hz = current.center_freq_hz;
+                applied.target_freq_hz = current.target_freq_hz;
+                changed = true;
+            } else {
+                if current.sideband != applied.sideband {
+                    pipeline.set_sideband(current.sideband);
+                    applied.sideband = current.sideband;
+                    changed = true;
+                }
+
+                if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
+                    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+                    applied.ssb_pitch_hz = current.ssb_pitch_hz;
+                    changed = true;
+                }
+            }
+
+            if changed {
+                let runtime = build_runtime_state(&current, startup_info.input_sample_rate_hz);
+                let _ = status_tx_for_dsp.send(WorkerStatus::Running { runtime });
+            }
+
+            match iq_audio_rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(iq) => {
+                    let audio_f32 = pipeline.process_audio(&iq);
+
+                    let mut audio_i16 = Vec::with_capacity(audio_f32.len());
+                    for s in audio_f32 {
+                        let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                        audio_i16.push(v);
+                    }
+
+                    if !audio_i16.is_empty() {
+                        audio.send_audio_to(audio_target, &audio_i16);
+                    }
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    stop_flag_for_dsp.store(true, Ordering::Relaxed);
+                    break;
+                }
+            }
+        }
+    });
+
+    // Waterfall thread
+    let descriptor_for_wf = descriptor.clone();
+    let stop_flag_for_wf = stop_flag.clone();
+    let fatal_tx_for_wf = fatal_tx.clone();
+    let wf_target = request.waterfall_udp_peer;
+    let waterfall_thread = thread::spawn(move || {
+        let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
+        let mut waterfall = match UdpWaterfallSender::new() {
+            Ok(s) => s,
+            Err(e) => {
+                let reason = format!("failed to create UDP waterfall sender: {e}");
+                stop_flag_for_wf.store(true, Ordering::Relaxed);
+                let _ = fatal_tx_for_wf.send(WorkerExit::Failed { reason });
+                return;
+            }
+        };
+
+        let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
+        let waterfall_window_len = startup_info.runtime.waterfall_bins as usize;
+        let waterfall_max_len = waterfall_window_len * 8;
+        let waterfall_period = Duration::from_secs_f32(
+            (1.0 / startup_info.runtime.waterfall_frame_rate_hz.max(1.0)).max(0.001),
+        );
+        let mut next_waterfall_tick = Instant::now();
+
+        loop {
+            if stop_requested(&stop_flag_for_wf) {
+                break;
+            }
+
+            while let Ok(iq) = iq_wf_rx.try_recv() {
+                for sample in iq {
+                    waterfall_iq_buffer.push_back(sample);
+                }
+                while waterfall_iq_buffer.len() > waterfall_max_len {
+                    waterfall_iq_buffer.pop_front();
+                }
+            }
+
+            let now = Instant::now();
+            if now >= next_waterfall_tick {
+                if waterfall_iq_buffer.len() >= waterfall_window_len {
+                    let start = waterfall_iq_buffer.len() - waterfall_window_len;
+                    let mut fft_input = Vec::with_capacity(waterfall_window_len);
+                    for sample in waterfall_iq_buffer.iter().skip(start) {
+                        fft_input.push(*sample);
+                    }
+
+                    let row = waterfall_gen.generate_row(&fft_input);
+                    if !row.is_empty() {
+                        waterfall.send_row_to(wf_target, &row);
+                    }
+                }
+
+                next_waterfall_tick += waterfall_period;
+            } else {
+                thread::sleep((next_waterfall_tick - now).min(Duration::from_millis(5)));
+            }
+        }
+
+        println!("[radio-worker {}] waterfall thread exiting", descriptor_for_wf.id.0);
+    });
+
+    // Wait for stop or fatal error.
+    let exit = loop {
+        if stop_requested(&stop_flag) {
+            break WorkerExit::Clean {
+                reason: stop_reason.lock().unwrap().clone(),
+            };
+        }
+
+        match fatal_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(exit) => {
+                stop_flag.store(true, Ordering::Relaxed);
+                break exit;
+            }
+            Err(std_mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                break WorkerExit::Failed {
+                    reason: "fatal error channel disconnected".to_string(),
+                };
+            }
+        }
+    };
+
+    let _ = cmd_thread.join();
+    let _ = capture_thread.join();
+    let _ = dsp_thread.join();
+    let _ = waterfall_thread.join();
+
+    match &exit {
+        WorkerExit::Clean { reason } => {
+            let _ = status_tx.send(WorkerStatus::Stopping {
+                reason: reason.clone(),
+            });
+            let _ = status_tx.send(WorkerStatus::Stopped {
+                reason: reason.clone(),
+            });
+        }
+        WorkerExit::Failed { reason } => {
+            let _ = status_tx.send(WorkerStatus::Faulted {
+                reason: reason.clone(),
+            });
+        }
     }
+
+    exit
 }
