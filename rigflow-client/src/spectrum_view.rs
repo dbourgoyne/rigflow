@@ -276,6 +276,8 @@ fn draw_frequency_markers(
             Color32::from_rgb(255, 220, 80),
         );
 
+	// Comment out the arrow for now
+	/*
         let tri = vec![
             Pos2::new(target_x, plot_rect.bottom() - 2.0),
             Pos2::new(target_x - 5.0, plot_rect.bottom() - 10.0),
@@ -287,6 +289,7 @@ fn draw_frequency_markers(
             Color32::from_rgb(255, 220, 80),
             Stroke::NONE,
         ));
+	*/
     }
 }
 
