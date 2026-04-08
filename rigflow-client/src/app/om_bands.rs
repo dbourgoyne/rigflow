@@ -1,3 +1,10 @@
+pub const COLOR_OM_RTTY_DATA: u32 = 0x00c00000;               // red
+pub const COLOR_OM_PHONE_IMAGE: u32 = 0x0000a000;             // green
+pub const COLOR_OM_CW_ONLY: u32 = 0x00f0f0f0;                 // white
+pub const COLOR_OM_SSB_PHONE: u32 = 0x00d0c000;               // yellow
+pub const COLOR_OM_USB_PHONE_CW_RTTY_DATA: u32 = 0x0040b0ff;  // light blue
+pub const COLOR_OM_FIXED_DIGITAL: u32 = 0x00ff9000;           // orange
+
 const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
     // 10 meters
     OmSegment {

@@ -7,6 +7,16 @@ use crate::app::{
     state::UiState,
 };
 
+use crate::app::om_bands::{
+    visible_om_segments, OmKind,
+    COLOR_OM_RTTY_DATA,
+    COLOR_OM_PHONE_IMAGE,
+    COLOR_OM_CW_ONLY,
+    COLOR_OM_SSB_PHONE,
+    COLOR_OM_USB_PHONE_CW_RTTY_DATA,
+    COLOR_OM_FIXED_DIGITAL,
+};
+
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
     size: egui::Vec2,
@@ -36,6 +46,7 @@ pub fn draw_spectrum_plot(
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, state);
     draw_band_overlays(&painter, plot_rect, state);
+    draw_om_overlays(&painter, plot_rect, state);
     draw_passband_overlay(&painter, plot_rect, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
     draw_frequency_markers(&painter, plot_rect, state);
@@ -418,4 +429,90 @@ fn color32_from_u32_with_alpha(rgb: u32, alpha: u8) -> Color32 {
     let g = ((rgb >> 8) & 0xff) as u8;
     let b = (rgb & 0xff) as u8;
     Color32::from_rgba_premultiplied(r, g, b, alpha)
+}
+
+fn om_kind_color(kind: OmKind) -> u32 {
+    match kind {
+        OmKind::RttyData => COLOR_OM_RTTY_DATA,
+        OmKind::PhoneImage => COLOR_OM_PHONE_IMAGE,
+        OmKind::CwOnly => COLOR_OM_CW_ONLY,
+        OmKind::SsbPhone => COLOR_OM_SSB_PHONE,
+        OmKind::UsbPhoneCwRttyData => COLOR_OM_USB_PHONE_CW_RTTY_DATA,
+        OmKind::FixedDigitalMessages => COLOR_OM_FIXED_DIGITAL,
+    }
+}
+
+fn om_kind_label(kind: OmKind) -> &'static str {
+    match kind {
+        OmKind::RttyData => "RTTY/DATA",
+        OmKind::PhoneImage => "PHONE",
+        OmKind::CwOnly => "CW",
+        OmKind::SsbPhone => "SSB",
+        OmKind::UsbPhoneCwRttyData => "USB/CW/DATA",
+        OmKind::FixedDigitalMessages => "DIGITAL",
+    }
+}
+
+fn draw_om_overlays(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    state: &UiState,
+) {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz {
+        return;
+    }
+
+    let visible_segments = visible_om_segments(left_hz, right_hz, state.selected_license);
+    if visible_segments.is_empty() {
+        return;
+    }
+
+    // Must sit immediately above the band strip and be ~1/3 its height.
+    let band_strip_height = 14.0;
+    let om_strip_height = band_strip_height / 3.0;
+    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let om_y1 = band_y0 - 1.0;
+    let om_y0 = om_y1 - om_strip_height;
+
+    for seg in visible_segments {
+        let Some(x0) = freq_to_plot_x_egui(seg.start_hz, plot_rect, state) else {
+            continue;
+        };
+        let Some(x1) = freq_to_plot_x_egui(seg.end_hz, plot_rect, state) else {
+            continue;
+        };
+
+        if x1 <= x0 {
+            continue;
+        }
+
+        let color = color32_from_u32_with_alpha(om_kind_color(seg.kind), 150);
+
+        let seg_rect = Rect::from_min_max(
+            Pos2::new(x0, om_y0),
+            Pos2::new(x1, om_y1),
+        );
+
+        painter.rect_filled(seg_rect, 0.0, color);
+
+        painter.rect_stroke(
+            seg_rect,
+            0.0,
+            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 32)),
+            egui::StrokeKind::Inside,
+        );
+
+        if (x1 - x0) >= 40.0 {
+            painter.text(
+                Pos2::new((x0 + x1) * 0.5, om_y0 - 1.0),
+                Align2::CENTER_BOTTOM,
+                om_kind_label(seg.kind),
+                FontId::monospace(9.0),
+                Color32::from_rgba_premultiplied(235, 235, 235, 170),
+            );
+        }
+    }
 }
