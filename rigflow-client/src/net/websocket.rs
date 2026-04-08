@@ -306,19 +306,18 @@ pub fn apply_radio_server_message(
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
-            audio_sample_rate_hz,
-            audio_format,
             waterfall_bins,
             waterfall_frame_rate_hz,
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
             state.input_sample_rate_hz = input_sample_rate_hz;
-            state.audio_sample_rate_hz = audio_sample_rate_hz as f32;
-            state.audio_format = audio_format;
+//            state.audio_sample_rate_hz = audio_sample_rate_hz as f32;
+//            state.audio_format = audio_format;
             state.waterfall_bins = waterfall_bins as usize;
             state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
             state.demod_mode = demod_mode;
