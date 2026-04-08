@@ -27,10 +27,14 @@ pub fn draw_om_band_strip(
         return;
     }
 
+    let Some(license) = state.selected_license else {
+	return;
+    };
+
     let left_hz = visible_left_hz(state);
     let right_hz = visible_right_hz(state);
 
-    let segments = om_segments_for_license(state.selected_license);
+    let segments = om_segments_for_license(license);
 
     let mut any_visible = false;
 
@@ -87,7 +91,7 @@ pub fn draw_om_band_strip(
     }
 
     if any_visible {
-        draw_license_label(buffer, fb_width, state.selected_license);
+        draw_license_label(buffer, fb_width, license);
     }
 }
 

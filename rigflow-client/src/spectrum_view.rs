@@ -458,6 +458,10 @@ fn draw_om_overlays(
     plot_rect: Rect,
     state: &UiState,
 ) {
+    let Some(license) = state.selected_license else {
+	return;
+    };
+    
     let left_hz = visible_left_hz(state);
     let right_hz = visible_right_hz(state);
 
@@ -465,7 +469,7 @@ fn draw_om_overlays(
         return;
     }
 
-    let visible_segments = visible_om_segments(left_hz, right_hz, state.selected_license);
+    let visible_segments = visible_om_segments(left_hz, right_hz, license);
     if visible_segments.is_empty() {
         return;
     }

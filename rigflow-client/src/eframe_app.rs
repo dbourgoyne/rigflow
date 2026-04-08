@@ -7,6 +7,7 @@ use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
 use crate::spectrum_view::{draw_spectrum_plot, x_frac_to_frequency_hz};
 use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, LEFT_GUTTER, RIGHT_GUTTER};
+use crate::app::om_bands::LicenseClass;
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -110,6 +111,39 @@ impl eframe::App for RigflowApp {
                 ui.heading("rigflow");
                 ui.separator();
 
+		// Radio Operator Menu
+		ui.collapsing("Radio Operator", |ui| {
+		    let mut selected = snapshot.selected_license;
+
+		    ui.radio_value(
+			&mut selected,
+			Some(LicenseClass::AmateurExtra),
+			"Amateur Extra",
+		    );
+		    ui.radio_value(
+			&mut selected,
+			Some(LicenseClass::Advanced),
+			"Advanced",
+		    );
+		    ui.radio_value(
+			&mut selected,
+			Some(LicenseClass::General),
+			"General",
+		    );
+		    ui.radio_value(
+			&mut selected,
+			Some(LicenseClass::Technician),
+			"Technician",
+		    );
+		    ui.radio_value(
+			&mut selected,
+			None,
+			"None",
+		    );
+
+		});
+
+		// Rigflow Server Menu
                 egui::CollapsingHeader::new("Rigflow Server")
                     .default_open(false)
                     .show(ui, |ui| {
@@ -154,6 +188,7 @@ impl eframe::App for RigflowApp {
 
                 ui.separator();
 
+		// Radios Menu
 		egui::CollapsingHeader::new("Radios")
 		    .default_open(true)
 		    .show(ui, |ui| {
@@ -207,6 +242,7 @@ impl eframe::App for RigflowApp {
 			}
 		    });
 
+		// Radio Control Menu
 		if snapshot.radio_acquired {
 		    egui::CollapsingHeader::new("Radio Control")
 			.default_open(true)
