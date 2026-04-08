@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
-use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, LEFT_GUTTER, RIGHT_GUTTER};
+use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_WIDTH, WATERFALL_IMAGE_HEIGHT};
 use crate::app::om_bands::LicenseClass;
 use crate::spectrum_view::{draw_spectrum_plot, x_frac_to_frequency_hz, SpectrumInteraction};
 
@@ -393,8 +393,8 @@ impl eframe::App for RigflowApp {
 		    ui.separator();
 		    self.update_waterfall_texture(
 			ctx,
-			WIDTH,
-			HEIGHT,
+			WATERFALL_IMAGE_WIDTH,
+			WATERFALL_IMAGE_HEIGHT,
 		    );
 
 		    if let Some(tex) = &self.waterfall_texture {
