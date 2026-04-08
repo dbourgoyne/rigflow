@@ -35,7 +35,7 @@ impl Default for UiState {
             demod_mode: "wfm".to_string(),
             ssb_pitch_hz: 0.0,
             input_sample_rate_hz: 0.0,
-            runtime_status: "starting".to_string(),
+            runtime_status: String::new(),
             hovered_center_freq_digit: None,
             selected_license: LicenseClass::General,
             spectrum_zoom_x: 1.0,

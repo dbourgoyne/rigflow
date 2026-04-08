@@ -298,7 +298,7 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::LeaseRenewed { .. } => {
-            state.runtime_status = "lease renewed".to_string();
+
         }
 
         ServerRadioMessage::RuntimeSnapshot {
