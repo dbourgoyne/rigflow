@@ -58,12 +58,18 @@ impl RigflowApp {
 	    egui::Color32::BLACK,
 	);
 
-	for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
-            let rgb = *src;
-            let r = ((rgb >> 16) & 0xff) as u8;
-            let g = ((rgb >> 8) & 0xff) as u8;
-            let b = (rgb & 0xff) as u8;
-            *dst = egui::Color32::from_rgb(r, g, b);
+	for y in 0..wf_height {
+	    let src_y = wf_height - 1 - y; // flip vertically
+	    let src_row_start = src_y * wf_width;
+	    let dst_row_start = y * wf_width;
+
+	    for x in 0..wf_width {
+		let rgb = pixels[src_row_start + x];
+		let r = ((rgb >> 16) & 0xff) as u8;
+		let g = ((rgb >> 8) & 0xff) as u8;
+		let b = (rgb & 0xff) as u8;
+		image.pixels[dst_row_start + x] = egui::Color32::from_rgb(r, g, b);
+	    }
 	}
 
 	match &mut self.waterfall_texture {

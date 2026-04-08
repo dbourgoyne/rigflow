@@ -20,17 +20,15 @@ pub fn draw_row(
         return;
     }
 
-    // Scroll existing image up by one row.
+    // Move existing rows DOWN by one row.
     if wf_height > 1 {
-        buffer.copy_within(wf_width.., 0);
+        buffer.copy_within(0..((wf_height - 1) * wf_width), wf_width);
     }
 
-    // Draw new row into the final row.
-    let last_row_start = (wf_height - 1) * wf_width;
-
+    // Write newest row at the TOP.
     for x in 0..wf_width {
         let src_idx = x * row.len() / wf_width;
         let intensity = row[src_idx];
-        buffer[last_row_start + x] = color_map(intensity);
+        buffer[x] = color_map(intensity);
     }
 }
