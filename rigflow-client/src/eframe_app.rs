@@ -141,6 +141,12 @@ impl eframe::App for RigflowApp {
 			"None",
 		    );
 
+		    if selected != snapshot.selected_license {
+			if let Ok(mut state) = self.state.lock() {
+			    state.selected_license = selected;
+			}
+		    }
+
 		});
 
 		// Rigflow Server Menu
