@@ -11,11 +11,7 @@ use crate::{
         state::UiState,
     },
     input::keyboard::UiAction,
-    widgets::frequency_widget::{
-        apply_digit_wheel_delta, hit_test_digit, FrequencyWidgetLayout,
-    },
 };
-use crate::render::left_panel::compute_left_pane_layout;
 use crate::app::frequency_view::plot_x_to_freq_hz;
 
 const WATERFALL_TUNE_STEP_HZ: f32 = 1_000.0;
@@ -67,47 +63,6 @@ fn mouse_over_waterfall(mx: f32, my: f32) -> bool {
         && x < WIDTH as isize
         && y >= WATERFALL_TOP as isize
         && y < HEIGHT as isize
-}
-
-pub fn update_center_freq_widget_hover(window: &Window, state: &mut UiState) {
-    let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) else {
-        state.hovered_center_freq_digit = None;
-        return;
-    };
-
-    state.hovered_center_freq_digit = hit_test_digit(
-        mx,
-        my,
-        FrequencyWidgetLayout {
-            x: FREQ_WIDGET_X,
-            y: FREQ_WIDGET_Y,
-        },
-    );
-}
-
-pub fn collect_center_freq_widget_actions(
-    window: &Window,
-    state: &UiState,
-) -> Vec<UiAction> {
-    let mut actions = Vec::new();
-
-    let Some(digit_idx) = state.hovered_center_freq_digit else {
-        return actions;
-    };
-
-    let (_, wheel_y) = window.get_scroll_wheel().unwrap_or((0.0, 0.0));
-    if wheel_y == 0.0 {
-        return actions;
-    }
-
-    let next = apply_digit_wheel_delta(
-        state.center_freq_hz.max(0.0) as u64,
-        digit_idx,
-        wheel_y,
-    );
-
-    actions.push(UiAction::SetCenterFrequency(next as f32));
-    actions
 }
 
 pub fn collect_mouse_actions(
@@ -169,56 +124,6 @@ fn zoom_from_slider_y(mouse_y: f32) -> f32 {
     let y = mouse_y.clamp(ZOOM_SLIDER_Y0 as f32, ZOOM_SLIDER_Y1 as f32);
     let t = (ZOOM_SLIDER_Y1 as f32 - y) / (ZOOM_SLIDER_Y1 - ZOOM_SLIDER_Y0) as f32;
     1.0 + t * 9.0
-}
-
-pub fn collect_left_panel_actions(
-    window: &Window,
-    state: &UiState,
-    click_state: &mut MouseClickState,
-) -> Vec<UiAction> {
-    let mut actions = Vec::new();
-
-    if !poll_left_click(window, click_state) {
-        return actions;
-    }
-
-    let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) else {
-        return actions;
-    };
-
-    let x = mx as usize;
-    let y = my as usize;
-
-    let layout = crate::render::left_panel::compute_left_pane_layout(state);
-
-    if layout.rigflow_header.contains(x, y) {
-        actions.push(UiAction::ToggleRigflowServerMenu);
-        return actions;
-    }
-
-    if !state.rigflow_server_menu_expanded {
-        return actions;
-    }
-
-    if let Some(ip_rect) = layout.server_ip_field {
-        if ip_rect.contains(x, y) {
-            actions.push(UiAction::FocusRigflowServerIpField);
-            return actions;
-        }
-    }
-
-    if let Some(button_rect) = layout.connect_button {
-        if button_rect.contains(x, y) {
-            if state.server_connected {
-                actions.push(UiAction::DisconnectFromRigflowServer);
-            } else {
-                actions.push(UiAction::ConnectToRigflowServer);
-            }
-            return actions;
-        }
-    }
-
-    actions
 }
 
 pub fn poll_left_click(window: &Window, click_state: &mut MouseClickState) -> bool {
