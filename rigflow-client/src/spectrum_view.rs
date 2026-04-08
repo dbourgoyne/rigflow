@@ -1,4 +1,5 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
+use crate::app::bands::visible_radio_bands;
 
 use crate::app::{
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
@@ -34,6 +35,7 @@ pub fn draw_spectrum_plot(
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, state);
+    draw_band_overlays(&painter, plot_rect, state);
     draw_passband_overlay(&painter, plot_rect, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
     draw_frequency_markers(&painter, plot_rect, state);
@@ -345,4 +347,75 @@ pub fn x_frac_to_frequency_hz(frac: f32, state: &UiState) -> f32 {
     let frac = frac.clamp(0.0, 1.0);
     let left_hz = visible_left_hz(state);
     left_hz + frac * visible_span_hz(state)
+}
+
+fn draw_band_overlays(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    state: &UiState,
+) {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz {
+        return;
+    }
+
+    let visible_bands = visible_radio_bands(left_hz, right_hz);
+    if visible_bands.is_empty() {
+        return;
+    }
+
+    // Draw as a shallow strip just above the x-axis.
+    let band_strip_height = 14.0;
+    let y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let y1 = plot_rect.bottom() - 2.0;
+
+    for band in visible_bands {
+        let Some(x0) = freq_to_plot_x_egui(band.start_hz, plot_rect, state) else {
+            continue;
+        };
+        let Some(x1) = freq_to_plot_x_egui(band.end_hz, plot_rect, state) else {
+            continue;
+        };
+
+        if x1 <= x0 {
+            continue;
+        }
+
+        let color = color32_from_u32_with_alpha(band.color, 72);
+
+        let band_rect = Rect::from_min_max(
+            Pos2::new(x0, y0),
+            Pos2::new(x1, y1),
+        );
+
+        painter.rect_filled(band_rect, 0.0, color);
+
+        // Optional subtle border for definition.
+        painter.rect_stroke(
+            band_rect,
+            0.0,
+            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 24)),
+            egui::StrokeKind::Inside,
+        );
+
+        // Only draw label if there is enough room.
+        if (x1 - x0) >= 48.0 {
+            painter.text(
+                Pos2::new((x0 + x1) * 0.5, y0 + 1.0),
+                Align2::CENTER_TOP,
+                band.name,
+                FontId::monospace(10.0),
+                Color32::from_rgba_premultiplied(235, 235, 235, 180),
+            );
+        }
+    }
+}
+
+fn color32_from_u32_with_alpha(rgb: u32, alpha: u8) -> Color32 {
+    let r = ((rgb >> 16) & 0xff) as u8;
+    let g = ((rgb >> 8) & 0xff) as u8;
+    let b = (rgb & 0xff) as u8;
+    Color32::from_rgba_premultiplied(r, g, b, alpha)
 }
