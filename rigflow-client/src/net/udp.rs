@@ -10,8 +10,8 @@ use rigflow_core::{
 
 use crate::{
     app::state::UiState,
-    render::spectrum_utils::update_spectrum_db,
-    render::waterfall::draw_row,
+    app::spectrum_utils::update_spectrum_db,
+    app::waterfall::draw_row,
 };
 
 #[derive(Debug, Default)]

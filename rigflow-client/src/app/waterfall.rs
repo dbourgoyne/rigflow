@@ -3,7 +3,7 @@ use crate::{
         layout::{SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1},
         state::UiState,
     },
-    render::spectrum_utils::color_map,
+    app::spectrum_utils::color_map,
 };
 
 pub fn draw_row(
