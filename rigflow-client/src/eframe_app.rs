@@ -47,7 +47,28 @@ impl RigflowApp {
             guard.clone()
 	};
 
+	println!(
+	    "pixels={} expected={} width={} height={} waterfall_top={} x0={} x1={}",
+	    pixels.len(),
+	    width * height,
+	    width,
+	    height,
+	    waterfall_top,
+	    x0,
+	    x1
+	);
+
 	if pixels.len() != width * height || waterfall_top >= height || x0 >= x1 || x1 > width {
+	    println!(
+		"pixels={} expected={} width={} height={} waterfall_top={} x0={} x1={}",
+		pixels.len(),
+		width * height,
+		width,
+		height,
+		waterfall_top,
+		x0,
+		x1
+	    );
             return;
 	}
 
@@ -411,7 +432,7 @@ impl eframe::App for RigflowApp {
 			ctx,
 			WIDTH,
 			HEIGHT,
-			WATERFALL_TOP + 220,
+			WATERFALL_TOP,
 			SPECTRUM_PLOT_X0,
 			SPECTRUM_PLOT_X1,
 		    );
