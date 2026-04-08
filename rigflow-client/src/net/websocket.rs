@@ -223,7 +223,7 @@ pub async fn websocket_control_task(
 			    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
 				if let ServerMessage::Error { message } = server_msg {
 				    let mut state = ui_state.lock().unwrap();
-				    state.runtime_status = format!("error: {}", message);
+				    state.runtime_error = format!("error: {}", message);
 				}
 			    }
 			} else {
@@ -345,7 +345,7 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::RadioError { message, .. } => {
-            state.runtime_status = format!("radio error: {}", message);
+            state.runtime_error = format!("radio error: {}", message);
         }
     }
 
