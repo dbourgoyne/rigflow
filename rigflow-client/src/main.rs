@@ -1,7 +1,6 @@
 mod app;
 mod client_runtime;
 mod eframe_app;
-mod input;
 mod net;
 mod spectrum_view;
 
