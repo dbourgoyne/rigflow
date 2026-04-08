@@ -202,12 +202,15 @@ pub fn draw_digit_wheel_widget(
         );
     }
 
+    // Commented out to remove the white-ish box outline
+    /*
     painter.rect_stroke(
         total_rect.expand(2.0),
         4.0,
         Stroke::new(1.0, color32_from_u32_with_alpha(0xffffff, 24)),
         egui::StrokeKind::Inside,
     );
+    */
 
     if let Some(idx) = hovered_digit {
         let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
