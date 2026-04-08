@@ -13,7 +13,7 @@ use rigflow_core::{
 
 use crate::{
     app::{
-        layout::{HEIGHT, SPECTRUM_DB_MIN, WATERFALL_TOP, WIDTH},
+        layout::{HEIGHT, SPECTRUM_DB_MIN, WATERFALL_TOP, WIDTH, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1},
         state::UiState,
     },
     net::udp::{handle_media_packet, MediaPacketStats},
@@ -73,7 +73,10 @@ pub fn start_media_runtime(
     let audio_stream = build_output_stream(&device, &config, Arc::clone(&jitter))?;
     audio_stream.play()?;
 
-    let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; WIDTH * HEIGHT]));
+    let waterfall_width = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
+    let waterfall_height = HEIGHT - WATERFALL_TOP;
+    let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; waterfall_width * waterfall_height]));
+    
     let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
     let media_stats = Arc::new(Mutex::new(MediaPacketStats::new()));
 

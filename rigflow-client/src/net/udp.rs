@@ -14,6 +14,8 @@ use crate::{
     app::waterfall::draw_row,
 };
 
+use crate::app::layout::{WATERFALL_IMAGE_WIDTH, WATERFALL_IMAGE_HEIGHT};
+
 #[derive(Debug, Default)]
 pub struct MediaPacketStats {
     pub incoming_packets: u64,
@@ -176,14 +178,12 @@ fn handle_waterfall_packet(
     };
 
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        draw_row(
-            &mut fb,
-            row,
-            width,
-            height,
-            waterfall_top,
-            &state_snapshot,
-        );
+	draw_row(
+	    &mut fb,
+	    WATERFALL_IMAGE_WIDTH,
+	    WATERFALL_IMAGE_HEIGHT,
+	    &row,
+	);
     }
 }
 
