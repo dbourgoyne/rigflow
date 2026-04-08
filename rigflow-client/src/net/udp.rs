@@ -175,10 +175,6 @@ fn handle_waterfall_packet(
         Err(_) => return,
     };
 
-    if state_snapshot.waterfall_bins == 0 {
-        return;
-    }
-
     if let Ok(mut fb) = waterfall_buffer.lock() {
         draw_row(
             &mut fb,
