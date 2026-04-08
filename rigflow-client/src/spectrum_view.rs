@@ -20,8 +20,6 @@ use crate::app::om_bands::{
 
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
-    pub new_center_freq_hz: Option<f32>,
-    pub new_target_freq_hz: Option<f32>,
 }
 
 pub fn draw_spectrum_plot(
@@ -48,33 +46,6 @@ pub fn draw_spectrum_plot(
 
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
 	return empty_interaction();
-    }
-
-    let lo_pos = Pos2::new(
-	plot_rect.left() + 12.0,
-	plot_rect.top() + 8.0,
-    );
-
-    let lo_offset_pos = Pos2::new(
-	plot_rect.right() - 12.0,
-	plot_rect.top() + 8.0,
-    );
-
-    let mut new_center_freq_hz = None;
-    let mut new_target_freq_hz = None;
-
-    if let Some(new_center_hz) = draw_lo_widget(
-	ui,
-	lo_pos,
-	state.center_freq_hz.max(0.0) as u64,
-    ) {
-	new_center_freq_hz = Some(new_center_hz as f32);
-    }
-
-    let lo_offset_hz = (state.target_freq_hz - state.center_freq_hz).round() as i64;
-    if let Some(new_offset_hz) = draw_lo_offset_widget(ui, lo_offset_pos, lo_offset_hz) {
-	let new_target = (state.center_freq_hz.round() as i64 + new_offset_hz).max(0) as f32;
-	new_target_freq_hz = Some(new_target);
     }
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
@@ -107,8 +78,6 @@ pub fn draw_spectrum_plot(
 
     SpectrumInteraction {
 	clicked_target_freq_hz: clicked_freq_hz,
-	new_center_freq_hz,
-	new_target_freq_hz,
     }
 }
 
@@ -562,7 +531,5 @@ fn draw_om_overlays(
 fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
         clicked_target_freq_hz: None,
-        new_center_freq_hz: None,
-        new_target_freq_hz: None,
     }
 }

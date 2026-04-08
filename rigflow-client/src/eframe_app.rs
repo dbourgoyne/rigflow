@@ -326,6 +326,7 @@ impl eframe::App for RigflowApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::NONE
+		.fill(egui::Color32::BLACK)
                 .inner_margin(egui::Margin {
                     left: 12,
                     right: 12,
@@ -333,10 +334,89 @@ impl eframe::App for RigflowApp {
                     bottom: 4,
                 })
                 .show(ui, |ui| {
+
+		    let lo_strip_height = 34.0;
+		    let spectrum_height = 220.0;
+		    let gap = 6.0;
+		    let waterfall_height = (ui.available_height()
+					    - lo_strip_height
+					    - spectrum_height
+					    - gap
+					    - gap
+					    - 2.0)
+			.max(120.0);
+		    
                     let spectrum_height = 220.0;
                     let gap = 8.0;
                     let waterfall_height = (ui.available_height() - spectrum_height - gap - gap - 2.0)
                         .max(120.0);
+
+		    // LO Frequency Widget Region
+		    ui.allocate_ui_with_layout(
+			egui::vec2(ui.available_width(), lo_strip_height),
+			egui::Layout::top_down(egui::Align::Min),
+			|ui| {
+			    let state_snapshot = {
+				let state = self.state.lock().unwrap();
+				state.clone()
+			    };
+
+			    let lo_pos = egui::Pos2::new(12.0, 2.0);
+			    let lo_offset_pos = egui::Pos2::new(ui.available_width() - 12.0, 2.0);
+
+			    let mut new_center_freq_hz = None;
+			    let mut new_target_freq_hz = None;
+
+			    if let Some(new_center_hz) = crate::widgets::lo_frequency_widget::draw_lo_widget(
+				ui,
+				lo_pos,
+				state_snapshot.center_freq_hz.max(0.0) as u64,
+			    ) {
+				new_center_freq_hz = Some(new_center_hz as f32);
+			    }
+
+			    let lo_offset_hz =
+				(state_snapshot.target_freq_hz - state_snapshot.center_freq_hz).round() as i64;
+
+			    if let Some(new_offset_hz) = crate::widgets::lo_frequency_widget::draw_lo_offset_widget(
+				ui,
+				lo_offset_pos,
+				lo_offset_hz,
+			    ) {
+				let new_target =
+				    (state_snapshot.center_freq_hz.round() as i64 + new_offset_hz).max(0) as f32;
+				new_target_freq_hz = Some(new_target);
+			    }
+
+			    if let Some(new_center_hz) = new_center_freq_hz {
+				if let Ok(mut state) = self.state.lock() {
+				    state.center_freq_hz = new_center_hz;
+				}
+
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetCenterFrequency {
+					    center_freq_hz: new_center_hz,
+					},
+				    ),
+				);
+			    }
+
+			    if let Some(new_target_hz) = new_target_freq_hz {
+				if let Ok(mut state) = self.state.lock() {
+				    state.target_freq_hz = new_target_hz;
+				}
+
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetFrequency {
+					    target_freq_hz: new_target_hz,
+					},
+				    ),
+				);
+			    }
+			},
+		    );
 
                     // Spectrum region
                     ui.allocate_ui_with_layout(
@@ -361,34 +441,6 @@ impl eframe::App for RigflowApp {
                                 0.0,
                                 &state_snapshot,
                             );
-
-                            if let Some(new_center_hz) = interaction.new_center_freq_hz {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.center_freq_hz = new_center_hz;
-                                }
-
-                                let _ = self.ws_cmd_tx.send(
-                                    ControlCommand::LegacyClientMessage(
-                                        rigflow_protocol::ClientMessage::SetCenterFrequency {
-                                            center_freq_hz: new_center_hz,
-                                        },
-                                    ),
-                                );
-                            }
-
-                            if let Some(new_target_hz) = interaction.new_target_freq_hz {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.target_freq_hz = new_target_hz;
-                                }
-
-                                let _ = self.ws_cmd_tx.send(
-                                    ControlCommand::LegacyClientMessage(
-                                        rigflow_protocol::ClientMessage::SetFrequency {
-                                            target_freq_hz: new_target_hz,
-                                        },
-                                    ),
-                                );
-                            }
 
                             if let Some(clicked_freq_hz) = interaction.clicked_target_freq_hz {
                                 let _ = self.ws_cmd_tx.send(
