@@ -8,23 +8,29 @@ use crate::{
 
 pub fn draw_row(
     buffer: &mut [u32],
-    waterfall_width: usize,
-    waterfall_height: usize,
+    wf_width: usize,
+    wf_height: usize,
     row: &[u8],
 ) {
-    if buffer.len() != waterfall_width * waterfall_height || waterfall_width == 0 || waterfall_height == 0 {
+    if wf_width == 0 || wf_height == 0 || row.is_empty() {
         return;
     }
 
-    // scroll everything up by one row
-    buffer.copy_within(waterfall_width.., 0);
+    if buffer.len() != wf_width * wf_height {
+        return;
+    }
 
-    // clear/write the last row
-    let last_row_start = (waterfall_height - 1) * waterfall_width;
+    // Scroll existing image up by one row.
+    if wf_height > 1 {
+        buffer.copy_within(wf_width.., 0);
+    }
 
-    for x in 0..waterfall_width {
-        let src_idx = x * row.len() / waterfall_width;
-        let color = color_map(row[src_idx]);
-        buffer[last_row_start + x] = color;
+    // Draw new row into the final row.
+    let last_row_start = (wf_height - 1) * wf_width;
+
+    for x in 0..wf_width {
+        let src_idx = x * row.len() / wf_width;
+        let intensity = row[src_idx];
+        buffer[last_row_start + x] = color_map(intensity);
     }
 }
