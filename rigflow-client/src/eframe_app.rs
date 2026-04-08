@@ -54,8 +54,8 @@ impl RigflowApp {
 	}
 
 	let mut image = egui::ColorImage::new(
-            [wf_width, wf_height],
-            egui::Color32::BLACK,
+	    [wf_width, wf_height],
+	    egui::Color32::BLACK,
 	);
 
 	for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
@@ -67,15 +67,16 @@ impl RigflowApp {
 	}
 
 	match &mut self.waterfall_texture {
-            Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+            Some(tex) => {
+		tex.set(image, egui::TextureOptions::NEAREST);
+            }
             None => {
-		self.waterfall_texture = Some(
-                    ctx.load_texture(
-			"waterfall_texture",
-			image,
-			egui::TextureOptions::NEAREST,
-                    )
+		let tex = ctx.load_texture(
+                    "waterfall_texture",
+                    image,
+                    egui::TextureOptions::NEAREST,
 		);
+		self.waterfall_texture = Some(tex);
             }
 	}
     }
