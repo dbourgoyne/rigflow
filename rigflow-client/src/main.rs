@@ -3,6 +3,7 @@ mod client_runtime;
 mod eframe_app;
 mod net;
 mod spectrum_view;
+mod widgets;
 
 use std::sync::{Arc, Mutex};
 

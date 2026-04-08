@@ -5,9 +5,9 @@ use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
-use crate::spectrum_view::{draw_spectrum_plot, x_frac_to_frequency_hz};
 use crate::app::layout::{HEIGHT, WIDTH, WATERFALL_TOP, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, LEFT_GUTTER, RIGHT_GUTTER};
 use crate::app::om_bands::LicenseClass;
+use crate::spectrum_view::{draw_spectrum_plot, x_frac_to_frequency_hz, SpectrumInteraction};
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -356,14 +356,44 @@ impl eframe::App for RigflowApp {
 			state.clone()
 		    };
 
-		    if let Some(clicked_freq_hz) = draw_spectrum_plot(
+		    let interaction: SpectrumInteraction = draw_spectrum_plot(
 			ui,
 			egui::vec2(ui.available_width(), 220.0),
 			&spectrum_snapshot,
 			-120.0,
 			0.0,
-			&state_snapshot
-		    ) {
+			&state_snapshot,
+		    );
+
+		    if let Some(new_center_hz) = interaction.new_center_freq_hz {
+			if let Ok(mut state) = self.state.lock() {
+			    state.center_freq_hz = new_center_hz;
+			}
+
+			let _ = self.ws_cmd_tx.send(
+			    crate::net::control::ControlCommand::LegacyClientMessage(
+				rigflow_protocol::ClientMessage::SetCenterFrequency {
+				    center_freq_hz: new_center_hz,
+				},
+			    ),
+			);
+		    }
+
+		    if let Some(new_target_hz) = interaction.new_target_freq_hz {
+			if let Ok(mut state) = self.state.lock() {
+			    state.target_freq_hz = new_target_hz;
+			}
+
+			let _ = self.ws_cmd_tx.send(
+			    crate::net::control::ControlCommand::LegacyClientMessage(
+				rigflow_protocol::ClientMessage::SetFrequency {
+				    target_freq_hz: new_target_hz,
+				},
+			    ),
+			);
+		    }
+
+		    if let Some(clicked_freq_hz) = interaction.clicked_target_freq_hz {
 			println!("UI clicked spectrum at {}", clicked_freq_hz);
 			let _ = self.ws_cmd_tx.send(
 			    crate::net::control::ControlCommand::LegacyClientMessage(
@@ -373,6 +403,7 @@ impl eframe::App for RigflowApp {
 			    ),
 			);
 		    }
+
 		    
 		    ui.add_space(4.0);
 		    ui.separator();
