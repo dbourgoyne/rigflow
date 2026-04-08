@@ -432,7 +432,7 @@ impl eframe::App for RigflowApp {
 			ctx,
 			WIDTH,
 			HEIGHT,
-			WATERFALL_TOP,
+			WATERFALL_TOP + 220,
 			SPECTRUM_PLOT_X0,
 			SPECTRUM_PLOT_X1,
 		    );
