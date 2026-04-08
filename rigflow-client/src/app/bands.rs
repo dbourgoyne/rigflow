@@ -73,3 +73,38 @@ pub fn band_for_frequency(freq_hz: f32) -> Option<&'static RadioBand> {
         .find(|band| freq_hz >= band.start_hz && freq_hz <= band.end_hz)
 }
 */
+
+#[derive(Debug, Clone, Copy)]
+pub struct VisibleRadioBand {
+    pub name: &'static str,
+    pub preferred_demod: &'static str,
+    pub start_hz: f32,
+    pub end_hz: f32,
+    pub color: u32,
+}
+
+pub fn visible_radio_bands(left_hz: f32, right_hz: f32) -> Vec<VisibleRadioBand> {
+    if right_hz <= left_hz {
+        return Vec::new();
+    }
+
+    RADIO_BANDS
+        .iter()
+        .filter_map(|band| {
+            let start_hz = band.start_hz.max(left_hz);
+            let end_hz = band.end_hz.min(right_hz);
+
+            if end_hz <= start_hz {
+                None
+            } else {
+                Some(VisibleRadioBand {
+                    name: band.name,
+                    preferred_demod: band.preferred_demod,
+                    start_hz,
+                    end_hz,
+                    color: band.color,
+                })
+            }
+        })
+        .collect()
+}

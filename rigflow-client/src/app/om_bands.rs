@@ -257,3 +257,38 @@ pub fn om_segments_for_license(license: LicenseClass) -> &'static [OmSegment] {
         LicenseClass::Novice => NOVICE_SEGMENTS,
     }
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct VisibleOmSegment {
+    pub start_hz: f32,
+    pub end_hz: f32,
+    pub kind: OmKind,
+}
+
+pub fn visible_om_segments(
+    left_hz: f32,
+    right_hz: f32,
+    license: LicenseClass,
+) -> Vec<VisibleOmSegment> {
+    if right_hz <= left_hz {
+        return Vec::new();
+    }
+
+    om_segments_for_license(license)
+        .iter()
+        .filter_map(|seg| {
+            let start_hz = seg.start_hz.max(left_hz);
+            let end_hz = seg.end_hz.min(right_hz);
+
+            if end_hz <= start_hz {
+                None
+            } else {
+                Some(VisibleOmSegment {
+                    start_hz,
+                    end_hz,
+                    kind: seg.kind,
+                })
+            }
+        })
+        .collect()
+}
