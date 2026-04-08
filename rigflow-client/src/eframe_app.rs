@@ -346,11 +346,6 @@ impl eframe::App for RigflowApp {
 					    - 2.0)
 			.max(120.0);
 		    
-                    let spectrum_height = 220.0;
-                    let gap = 8.0;
-                    let waterfall_height = (ui.available_height() - spectrum_height - gap - gap - 2.0)
-                        .max(120.0);
-
 		    // LO Frequency Widget Region
 		    ui.allocate_ui_with_layout(
 			egui::vec2(ui.available_width(), lo_strip_height),
@@ -361,8 +356,11 @@ impl eframe::App for RigflowApp {
 				state.clone()
 			    };
 
-			    let lo_pos = egui::Pos2::new(12.0, 2.0);
-			    let lo_offset_pos = egui::Pos2::new(ui.available_width() - 12.0, 2.0);
+			    let strip_rect = ui.max_rect();
+			    let lo_y = strip_rect.top() + 2.0;
+
+			    let lo_pos = egui::Pos2::new(strip_rect.left() + 12.0, lo_y);
+			    let lo_offset_pos = egui::Pos2::new(strip_rect.right() - 12.0, lo_y);
 
 			    let mut new_center_freq_hz = None;
 			    let mut new_target_freq_hz = None;

@@ -1,6 +1,5 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
 use crate::app::bands::visible_radio_bands;
-use crate::widgets::lo_frequency_widget::{draw_lo_offset_widget, draw_lo_widget};
 
 use crate::app::{
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
