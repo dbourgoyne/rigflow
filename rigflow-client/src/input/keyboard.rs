@@ -1,23 +1,7 @@
 use minifb::{Key, KeyRepeat, Window};
 
 use crate::app::state::UiState;
-
-#[derive(Debug, Clone)]
-pub enum UiAction {
-    SetTargetFrequency(f32),
-    SetCenterFrequency(f32),
-    SetDemodMode(&'static str),
-    SetSideband(&'static str),
-    SetSsbPitch(f32),
-
-    ToggleRigflowServerMenu,
-    FocusRigflowServerIpField,
-    ConnectToRigflowServer,
-    DisconnectFromRigflowServer,
-
-    CycleLicenseForward,
-    CycleLicenseBackward,
-}
+use crate::app::ui_action::UiAction;
 
 const DEFAULT_TUNE_STEP_HZ: f32 = 1_000.0;
 const FAST_TUNE_STEP_HZ: f32 = 10_000.0;

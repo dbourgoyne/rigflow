@@ -1,7 +1,7 @@
 use rigflow_protocol::ClientMessage;
 
 use crate::{
-    input::keyboard::UiAction,
+    app::ui_action::UiAction,
     net::control::ControlCommand,
 };
 

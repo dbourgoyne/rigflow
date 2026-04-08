@@ -9,8 +9,8 @@ use crate::{
 	    ZOOM_SLIDER_X0, ZOOM_SLIDER_X1, ZOOM_SLIDER_Y0, ZOOM_SLIDER_Y1,
 	},
         state::UiState,
+	ui_action::UiAction,
     },
-    input::keyboard::UiAction,
 };
 use crate::app::frequency_view::plot_x_to_freq_hz;
 
