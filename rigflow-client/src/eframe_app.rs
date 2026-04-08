@@ -36,83 +36,46 @@ impl RigflowApp {
     fn update_waterfall_texture(
 	&mut self,
 	ctx: &egui::Context,
-	width: usize,
-	height: usize,
-	waterfall_top: usize,
-	x0: usize,
-	x1: usize,
+	wf_width: usize,
+	wf_height: usize,
     ) {
 	let pixels = {
             let guard = self.waterfall_buffer.lock().unwrap();
             guard.clone()
 	};
 
-	println!(
-	    "pixels={} expected={} width={} height={} waterfall_top={} x0={} x1={}",
-	    pixels.len(),
-	    width * height,
-	    width,
-	    height,
-	    waterfall_top,
-	    x0,
-	    x1
-	);
-
-	if pixels.len() != width * height || waterfall_top >= height || x0 >= x1 || x1 > width {
-	    println!(
-		"pixels={} expected={} width={} height={} waterfall_top={} x0={} x1={}",
+	if pixels.len() != wf_width * wf_height {
+            println!(
+		"waterfall texture size mismatch: pixels={} expected={}",
 		pixels.len(),
-		width * height,
-		width,
-		height,
-		waterfall_top,
-		x0,
-		x1
-	    );
+		wf_width * wf_height
+            );
             return;
 	}
-
-	let wf_height = height - waterfall_top;
-	let wf_width = x1 - x0;
 
 	let mut image = egui::ColorImage::new(
             [wf_width, wf_height],
             egui::Color32::BLACK,
 	);
 
-	for y in 0..wf_height {
-            let src_row = waterfall_top + y;
-            let src_start = src_row * width + x0;
-            let src_end = src_row * width + x1;
-
-            let dst_start = y * wf_width;
-            let dst_end = dst_start + wf_width;
-
-            for (dst, src) in image.pixels[dst_start..dst_end]
-		.iter_mut()
-		.zip(pixels[src_start..src_end].iter())
-            {
-		let rgb = *src;
-
-		let r = ((rgb >> 16) & 0xff) as u8;
-		let g = ((rgb >> 8) & 0xff) as u8;
-		let b = (rgb & 0xff) as u8;
-
-		*dst = egui::Color32::from_rgb(r, g, b);
-            }
+	for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
+            let rgb = *src;
+            let r = ((rgb >> 16) & 0xff) as u8;
+            let g = ((rgb >> 8) & 0xff) as u8;
+            let b = (rgb & 0xff) as u8;
+            *dst = egui::Color32::from_rgb(r, g, b);
 	}
 
 	match &mut self.waterfall_texture {
-            Some(tex) => {
-		tex.set(image, egui::TextureOptions::NEAREST);
-            }
+            Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
             None => {
-		let tex = ctx.load_texture(
-                    "waterfall_texture",
-                    image,
-                    egui::TextureOptions::NEAREST,
+		self.waterfall_texture = Some(
+                    ctx.load_texture(
+			"waterfall_texture",
+			image,
+			egui::TextureOptions::NEAREST,
+                    )
 		);
-		self.waterfall_texture = Some(tex);
             }
 	}
     }
@@ -432,9 +395,6 @@ impl eframe::App for RigflowApp {
 			ctx,
 			WIDTH,
 			HEIGHT,
-			WATERFALL_TOP + 220,
-			SPECTRUM_PLOT_X0,
-			SPECTRUM_PLOT_X1,
 		    );
 
 		    if let Some(tex) = &self.waterfall_texture {
