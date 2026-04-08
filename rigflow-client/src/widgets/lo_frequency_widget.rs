@@ -76,8 +76,8 @@ pub fn draw_digit_wheel_widget(
     spec: &DigitWheelSpec<'_>,
     value: i64,
 ) -> Option<i64> {
-    let font = FontId::proportional(28.0);
-    let label_font = FontId::proportional(20.0);
+    let font = FontId::proportional(17.0);
+    let label_font = FontId::proportional(12.0);
 
     let active_color = Color32::from_rgb(235, 235, 235);
     let inactive_color = Color32::from_rgb(90, 90, 90);
@@ -85,17 +85,17 @@ pub fn draw_digit_wheel_widget(
     let label_color = Color32::from_rgb(180, 180, 180);
     let sign_color = Color32::from_rgb(210, 210, 210);
 
-    let digit_w = 20.0;
-    let digit_h = 40.0;
-    let digit_gap = 2.0;
-    let sep_w = 10.0;
-    let sign_w = 16.0;
-    let label_gap = 10.0;
+    let digit_w = 13.0;
+    let digit_h = 24.0;
+    let digit_gap = 1.0;
+    let sep_w = 7.0;
+    let sign_w = 12.0;
+    let label_gap = 8.0;
 
     let label_w = match spec.label {
-        "LO" => 28.0,
-        "LO Offset" => 82.0,
-        _ => 70.0,
+	"LO" => 18.0,
+	"LO Offset" => 54.0,
+	_ => 46.0,
     };
 
     let widget_w = total_widget_width(
@@ -213,7 +213,7 @@ pub fn draw_digit_wheel_widget(
         let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
         if scroll_y.abs() > 0.0 {
             let step = digit_step(spec.digit_count, idx);
-            let delta = if scroll_y > 0.0 { step } else { -step };
+            let delta = if scroll_y > 0.0 { -step } else { step };
 
             let next = if spec.signed {
                 value.saturating_add(delta)

@@ -417,8 +417,7 @@ impl eframe::App for RigflowApp {
 		    );
 
 		    if let Some(tex) = &self.waterfall_texture {
-			let wf_height = (HEIGHT - WATERFALL_TOP) as f32;
-			//let image_width = (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER).max(100.0);
+			let wf_height = ui.available_height().max(100.0);
 			let image_width = ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER;
 
 			let mut clicked_freq_hz = None;
