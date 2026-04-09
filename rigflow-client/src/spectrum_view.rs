@@ -273,7 +273,6 @@ fn draw_frequency_markers(
 
 	let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
 
-	/*
 	painter.text(
 	    Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
 	    Align2::LEFT_TOP,
@@ -281,23 +280,6 @@ fn draw_frequency_markers(
 	    FontId::monospace(10.0),
 	    Color32::from_rgb(255, 220, 80),
         );
-	*/
-
-	let text_pos = Pos2::new(target_x + 4.0, plot_rect.top() + 18.0);
-	let galley = painter.layout_no_wrap(
-	    label.clone(),
-	    FontId::monospace(10.0),
-	    Color32::from_rgb(255, 220, 80),
-	);
-
-	let bg_rect = Rect::from_min_size(text_pos, galley.size());
-	painter.rect_filled(
-	    bg_rect.expand(2.0),
-	    2.0,
-	    Color32::from_rgba_premultiplied(0, 0, 0, 180),
-	);
-
-	painter.galley(text_pos, galley, Color32::from_rgb(255, 220, 80));
 
 	// Comment out the arrow for now
 	/*
