@@ -241,6 +241,8 @@ fn draw_frequency_markers(
         return;
     }
 
+    // Comment out center marker, really adds nothing to UI usability
+    /*
     if let Some(center_x) = freq_to_plot_x_egui(state.center_freq_hz, plot_rect, state) {
         painter.line_segment(
             [
@@ -258,6 +260,7 @@ fn draw_frequency_markers(
             Color32::from_rgb(120, 160, 255),
         );
     }
+    */
 
     if let Some(target_x) = freq_to_plot_x_egui(state.target_freq_hz, plot_rect, state) {
         painter.line_segment(
