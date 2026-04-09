@@ -275,7 +275,7 @@ fn draw_frequency_markers(
 
 	let plot_center_x = plot_rect.center().x;
 
-	let (label_pos, label_align) = if target_x >= plot_center_x {
+	let (label_pos, label_align) = if target_x = plot_center_x {
 	    (
 		Pos2::new(target_x - 4.0, plot_rect.top() + 18.0),
 		Align2::RIGHT_TOP,
