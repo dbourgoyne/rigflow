@@ -268,13 +268,15 @@ fn draw_frequency_markers(
             Stroke::new(1.5, Color32::from_rgb(255, 220, 80)),
         );
 
-        painter.text(
-            Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
-            Align2::LEFT_TOP,
-            "T",
-            FontId::monospace(10.0),
-            Color32::from_rgb(255, 220, 80),
-        );
+	let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
+
+	painter.text(
+	    Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
+	    Align2::LEFT_TOP,
+	    label,
+	    FontId::monospace(10.0),
+	    Color32::from_rgb(255, 220, 80),
+	);
 
 	// Comment out the arrow for now
 	/*
@@ -534,4 +536,9 @@ fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
         clicked_target_freq_hz: None,
     }
+}
+
+fn format_mhz(freq_hz: f32) -> String {
+    let mhz = freq_hz / 1_000_000.0;
+    format!("{:.3}", mhz)
 }
