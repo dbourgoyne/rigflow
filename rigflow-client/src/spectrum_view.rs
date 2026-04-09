@@ -273,13 +273,27 @@ fn draw_frequency_markers(
 
 	let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
 
+	let plot_center_x = plot_rect.center().x;
+
+	let (label_pos, label_align) = if target_x < plot_center_x {
+	    (
+		Pos2::new(target_x - 4.0, plot_rect.top() + 18.0),
+		Align2::RIGHT_TOP,
+	    )
+	} else {
+	    (
+		Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
+		Align2::LEFT_TOP,
+	    )
+	};
+
 	painter.text(
-	    Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
-	    Align2::LEFT_TOP,
-	    &label,
+	    label_pos,
+	    label_align,
+	    label,
 	    FontId::monospace(10.0),
 	    Color32::from_rgb(255, 220, 80),
-        );
+	);
 
 	// Comment out the arrow for now
 	/*
