@@ -135,194 +135,200 @@ impl eframe::App for RigflowApp {
             .resizable(true)
             .default_width(260.0)
             .show(ctx, |ui| {
-                ui.heading("rigflow");
-                ui.separator();
+		ui.heading("rigflow");
+		ui.separator();
 
-                // Radio Operator Menu
-                ui.collapsing("Radio Operator", |ui| {
-                    let mut selected = snapshot.selected_license;
+		egui::ScrollArea::vertical()
+		    .auto_shrink([false, false])
+		    .show(ui, |ui| {
 
-                    ui.radio_value(
-                        &mut selected,
-                        Some(LicenseClass::AmateurExtra),
-                        "Amateur Extra",
-                    );
-                    ui.radio_value(
-                        &mut selected,
-                        Some(LicenseClass::Advanced),
-                        "Advanced",
-                    );
-                    ui.radio_value(
-                        &mut selected,
-                        Some(LicenseClass::General),
-                        "General",
-                    );
-                    ui.radio_value(
-                        &mut selected,
-                        Some(LicenseClass::Technician),
-                        "Technician",
-                    );
-                    ui.radio_value(
-                        &mut selected,
-                        None,
-                        "None",
-                    );
 
-                    if selected != snapshot.selected_license {
-                        if let Ok(mut state) = self.state.lock() {
-                            state.selected_license = selected;
-                        }
-                    }
-                });
+			// Radio Operator Menu
+			ui.collapsing("Radio Operator", |ui| {
+			    let mut selected = snapshot.selected_license;
 
-                // Rigflow Server Menu
-                egui::CollapsingHeader::new("Rigflow Server")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.label("rigflow server IP:");
+			    ui.radio_value(
+				&mut selected,
+				Some(LicenseClass::AmateurExtra),
+				"Amateur Extra",
+			    );
+			    ui.radio_value(
+				&mut selected,
+				Some(LicenseClass::Advanced),
+				"Advanced",
+			    );
+			    ui.radio_value(
+				&mut selected,
+				Some(LicenseClass::General),
+				"General",
+			    );
+			    ui.radio_value(
+				&mut selected,
+				Some(LicenseClass::Technician),
+				"Technician",
+			    );
+			    ui.radio_value(
+				&mut selected,
+				None,
+				"None",
+			    );
 
-                        let mut ip = snapshot.rigflow_server_ip.clone();
-                        if ui.text_edit_singleline(&mut ip).changed() {
-                            if let Ok(mut state) = self.state.lock() {
-                                state.rigflow_server_ip = ip;
-                            }
-                        }
+			    if selected != snapshot.selected_license {
+				if let Ok(mut state) = self.state.lock() {
+				    state.selected_license = selected;
+				}
+			    }
+			});
 
-                        ui.add_space(8.0);
+			// Rigflow Server Menu
+			egui::CollapsingHeader::new("Rigflow Server")
+			    .default_open(false)
+			    .show(ui, |ui| {
+				ui.label("rigflow server IP:");
 
-                        let button_text = if snapshot.server_connected {
-                            "Disconnect"
-                        } else {
-                            "Connect"
-                        };
+				let mut ip = snapshot.rigflow_server_ip.clone();
+				if ui.text_edit_singleline(&mut ip).changed() {
+				    if let Ok(mut state) = self.state.lock() {
+					state.rigflow_server_ip = ip;
+				    }
+				}
 
-                        if ui.button(button_text).clicked() {
-                            let ip = snapshot.rigflow_server_ip.trim().to_string();
+				ui.add_space(8.0);
 
-                            if snapshot.server_connected {
-                                let _ = self.ws_cmd_tx.send(ControlCommand::Disconnect);
-                            } else if ip.is_empty() {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.server_status =
-                                        "connect failed: missing server IP".to_string();
-                                }
-                            } else {
-                                let _ = self.ws_cmd_tx.send(ControlCommand::Connect {
-                                    server_ip: ip,
-                                });
-                            }
-                        }
+				let button_text = if snapshot.server_connected {
+				    "Disconnect"
+				} else {
+				    "Connect"
+				};
 
-                        ui.add_space(8.0);
-                        ui.label("Status:");
-                        ui.monospace(&snapshot.server_status);
-                    });
+				if ui.button(button_text).clicked() {
+				    let ip = snapshot.rigflow_server_ip.trim().to_string();
 
-                ui.separator();
+				    if snapshot.server_connected {
+					let _ = self.ws_cmd_tx.send(ControlCommand::Disconnect);
+				    } else if ip.is_empty() {
+					if let Ok(mut state) = self.state.lock() {
+					    state.server_status =
+						"connect failed: missing server IP".to_string();
+					}
+				    } else {
+					let _ = self.ws_cmd_tx.send(ControlCommand::Connect {
+					    server_ip: ip,
+					});
+				    }
+				}
 
-                // Radios Menu
-                egui::CollapsingHeader::new("Radios")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if snapshot.available_radios.is_empty() {
-                            ui.label("no radios");
-                        } else {
-                            let mut selected = snapshot.selected_radio_id.clone();
+				ui.add_space(8.0);
+				ui.label("Status:");
+				ui.monospace(&snapshot.server_status);
+			    });
 
-                            for radio in &snapshot.available_radios {
-                                let label = if radio.is_leased {
-                                    format!("{} (busy)", radio.display_name)
-                                } else {
-                                    radio.display_name.clone()
-                                };
+			ui.separator();
 
-                                let is_selected = selected.as_deref() == Some(&radio.id.0);
+			// Radios Menu
+			egui::CollapsingHeader::new("Radios")
+			    .default_open(true)
+			    .show(ui, |ui| {
+				if snapshot.available_radios.is_empty() {
+				    ui.label("no radios");
+				} else {
+				    let mut selected = snapshot.selected_radio_id.clone();
 
-                                if ui.selectable_label(is_selected, label).clicked() {
-                                    selected = Some(radio.id.0.clone());
-                                }
-                            }
+				    for radio in &snapshot.available_radios {
+					let label = if radio.is_leased {
+					    format!("{} (busy)", radio.display_name)
+					} else {
+					    radio.display_name.clone()
+					};
 
-                            if selected != snapshot.selected_radio_id {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.selected_radio_id = selected.clone();
-                                }
-                            }
+					let is_selected = selected.as_deref() == Some(&radio.id.0);
 
-                            ui.add_space(8.0);
+					if ui.selectable_label(is_selected, label).clicked() {
+					    selected = Some(radio.id.0.clone());
+					}
+				    }
 
-                            let can_acquire = selected.is_some() && !snapshot.radio_acquired;
-                            let can_release = snapshot.radio_acquired;
+				    if selected != snapshot.selected_radio_id {
+					if let Ok(mut state) = self.state.lock() {
+					    state.selected_radio_id = selected.clone();
+					}
+				    }
 
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add_enabled(can_acquire, egui::Button::new("Acquire"))
-                                    .clicked()
-                                {
-                                    if let Some(radio_id) = selected.clone() {
-                                        let _ = self.ws_cmd_tx.send(ControlCommand::AcquireRadio {
-                                            radio_id,
-                                        });
-                                    }
-                                }
+				    ui.add_space(8.0);
 
-                                if ui
-                                    .add_enabled(can_release, egui::Button::new("Release"))
-                                    .clicked()
-                                {
-                                    let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
-                                }
-                            });
-                        }
-                    });
+				    let can_acquire = selected.is_some() && !snapshot.radio_acquired;
+				    let can_release = snapshot.radio_acquired;
 
-                // Radio Control Menu
-                if snapshot.radio_acquired {
-                    egui::CollapsingHeader::new("Radio Control")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            ui.label("Demod");
+				    ui.horizontal(|ui| {
+					if ui
+					    .add_enabled(can_acquire, egui::Button::new("Acquire"))
+					    .clicked()
+					{
+					    if let Some(radio_id) = selected.clone() {
+						let _ = self.ws_cmd_tx.send(ControlCommand::AcquireRadio {
+						    radio_id,
+						});
+					    }
+					}
 
-                            let mut selected_demod = snapshot.demod_mode.clone();
+					if ui
+					    .add_enabled(can_release, egui::Button::new("Release"))
+					    .clicked()
+					{
+					    let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
+					}
+				    });
+				}
+			    });
 
-                            ui.horizontal(|ui| {
-                                ui.radio_value(&mut selected_demod, "wfm".to_string(), "wfm");
-                                ui.radio_value(&mut selected_demod, "nfm".to_string(), "nfm");
-                                ui.radio_value(&mut selected_demod, "lsb".to_string(), "lsb");
-                                ui.radio_value(&mut selected_demod, "usb".to_string(), "usb");
-                            });
+			// Radio Control Menu
+			if snapshot.radio_acquired {
+			    egui::CollapsingHeader::new("Radio Control")
+				.default_open(true)
+				.show(ui, |ui| {
+				    ui.label("Demod");
 
-                            if selected_demod != snapshot.demod_mode {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.demod_mode = selected_demod.clone();
-                                    state.sideband = match selected_demod.as_str() {
-                                        "lsb" => "lsb".to_string(),
-                                        "usb" => "usb".to_string(),
-                                        _ => state.sideband.clone(),
-                                    };
-                                }
+				    let mut selected_demod = snapshot.demod_mode.clone();
 
-                                let _ = self.ws_cmd_tx.send(
-                                    ControlCommand::LegacyClientMessage(
-                                        rigflow_protocol::ClientMessage::SetDemodMode {
-                                            mode: selected_demod.clone(),
-                                        },
-                                    ),
-                                );
+				    ui.horizontal(|ui| {
+					ui.radio_value(&mut selected_demod, "wfm".to_string(), "wfm");
+					ui.radio_value(&mut selected_demod, "nfm".to_string(), "nfm");
+					ui.radio_value(&mut selected_demod, "lsb".to_string(), "lsb");
+					ui.radio_value(&mut selected_demod, "usb".to_string(), "usb");
+				    });
 
-                                if selected_demod == "lsb" || selected_demod == "usb" {
-                                    let _ = self.ws_cmd_tx.send(
-                                        ControlCommand::LegacyClientMessage(
-                                            rigflow_protocol::ClientMessage::SetSideband {
-                                                sideband: selected_demod,
-                                            },
-                                        ),
-                                    );
-                                }
-                            }
-                        });
-                }
-            });
+				    if selected_demod != snapshot.demod_mode {
+					if let Ok(mut state) = self.state.lock() {
+					    state.demod_mode = selected_demod.clone();
+					    state.sideband = match selected_demod.as_str() {
+						"lsb" => "lsb".to_string(),
+						"usb" => "usb".to_string(),
+						_ => state.sideband.clone(),
+					    };
+					}
+
+					let _ = self.ws_cmd_tx.send(
+					    ControlCommand::LegacyClientMessage(
+						rigflow_protocol::ClientMessage::SetDemodMode {
+						    mode: selected_demod.clone(),
+						},
+					    ),
+					);
+
+					if selected_demod == "lsb" || selected_demod == "usb" {
+					    let _ = self.ws_cmd_tx.send(
+						ControlCommand::LegacyClientMessage(
+						    rigflow_protocol::ClientMessage::SetSideband {
+							sideband: selected_demod,
+						    },
+						),
+					    );
+					}
+				    }
+				});
+			}
+		    });
+	    });
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::NONE
