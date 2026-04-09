@@ -273,13 +273,15 @@ fn draw_frequency_markers(
 
 	let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
 
+	/*
 	painter.text(
 	    Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
 	    Align2::LEFT_TOP,
 	    &label,
 	    FontId::monospace(10.0),
 	    Color32::from_rgb(255, 220, 80),
-	);
+        );
+	*/
 
 	let text_pos = Pos2::new(target_x + 4.0, plot_rect.top() + 18.0);
 	let galley = painter.layout_no_wrap(
