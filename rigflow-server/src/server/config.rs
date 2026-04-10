@@ -23,6 +23,8 @@ pub struct ServerConfig {
 
     pub fake_sample_rate_hz: f32,
     pub fake_tone_hz: f32,
+    pub fake_center_freq_hz: f32,
+    pub fake_target_freq_hz: f32,
 
     pub rtlsdr_device_index: usize,
     pub rtlsdr_sample_rate_hz: u32,
@@ -46,6 +48,8 @@ impl Default for ServerConfig {
 
             fake_sample_rate_hz: 48_000.0,
             fake_tone_hz: 1_500.0,
+	    fake_center_freq_hz: 101_100_000.0,
+            fake_target_freq_hz: 101_100_000.0,
 
             rtlsdr_device_index: 0,
             rtlsdr_sample_rate_hz: 2_048_000,

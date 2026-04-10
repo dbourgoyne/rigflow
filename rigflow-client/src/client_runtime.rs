@@ -1,8 +1,9 @@
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Instant, Duration};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
 
@@ -22,6 +23,7 @@ use crate::{
 const LISTEN_ADDR: &str = "0.0.0.0:50000";
 
 const PACKET_SAMPLES: usize = 480;
+// Sets jitter buffer latency, eqn: 4,800 samples / 48,000 samples/sec = 0.1 sec = 100 ms
 const TARGET_BUFFER_SAMPLES: usize = 4_800;
 const MAX_BUFFER_SAMPLES: usize = 24_000;
 
@@ -41,6 +43,7 @@ pub struct MediaRuntimeHandles {
     pub waterfall_buffer: Arc<Mutex<Vec<u32>>>,
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
     pub _audio_stream: cpal::Stream,
+    pub audio_session_generation: Arc<AtomicU64>,
 }
 
 pub fn start_media_runtime(
@@ -88,10 +91,51 @@ pub fn start_media_runtime(
     let spectrum_for_thread = Arc::clone(&spectrum_db);
     let stats_for_thread = Arc::clone(&media_stats);
 
+    let audio_session_generation = Arc::new(AtomicU64::new(0));
+    let audio_session_generation_for_thread = Arc::clone(&audio_session_generation);
+
     thread::spawn(move || {
         let mut udp_buf = [0u8; 65536];
+	let mut last_audio_session_generation = audio_session_generation_for_thread.load(Ordering::Relaxed);
 
+	let mut last_stats_log = Instant::now();
+	
         loop {
+	    let current = audio_session_generation_for_thread.load(Ordering::Relaxed);
+	    if current != last_audio_session_generation {
+		if let Ok(mut jb) = jitter.lock() {
+		    jb.reset();
+		}
+		last_audio_session_generation = current;
+		println!("[client] jitter buffer reset for new radio session");
+	    }
+
+
+	    if last_stats_log.elapsed() >= Duration::from_secs(2) {
+		if let Ok(jb) = jitter.lock() {
+		    let current_samples = jb.buffered_samples();
+		    let max_samples = jb.max_buffered_samples();
+
+		    let sr = 48_000.0; // or use actual client sample rate
+
+		    let current_ms = current_samples as f32 / sr * 1000.0;
+		    let max_ms = max_samples as f32 / sr * 1000.0;
+
+		    println!(
+			"[client-audio] jitter: current={:.1} ms max={:.1} ms started={} rx={} inserted={} late={} overflow={}",
+			current_ms,
+			max_ms,
+			jb.started(),
+			jb.packets_received,
+			jb.packets_inserted,
+			jb.packets_dropped_late,
+			jb.packets_dropped_overflow,
+		    );
+		}
+
+		last_stats_log = Instant::now();
+	    }
+	    
             while let Ok(cmd) = media_cmd_rx.try_recv() {
                 match cmd {
                     MediaCommand::RegisterUdp {
@@ -159,6 +203,7 @@ pub fn start_media_runtime(
         waterfall_buffer,
         spectrum_db,
 	_audio_stream: audio_stream,
+	audio_session_generation,
     })
 }
 

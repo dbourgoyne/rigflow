@@ -437,9 +437,11 @@ impl RadioManager {
             })
             .await;
 
+	println!("[radio-manager] stopping runtime for radio, reason={:?}", reason);
         if let Some(stop_tx) = runtime.stop_tx.take() {
             let _ = stop_tx.send(());
         }
+	println!("[radio-manager] worker join completed cleanly");
 
         match tokio::time::timeout(shutdown_timeout, runtime.join_handle).await {
             Ok(Ok(WorkerExit::Clean { .. })) => Ok(()),
@@ -451,5 +453,7 @@ impl RadioManager {
             ))),
             Err(_) => Err(RadioManagerError::ShutdownTimedOut),
         }
+
+
     }
 }

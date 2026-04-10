@@ -6,6 +6,8 @@ use std::sync::{
 };
 use std::thread;
 use std::time::{Duration, Instant};
+use std::path::Path;
+use log::debug;
 
 use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -27,6 +29,8 @@ use crate::source::IqSource;
 use crate::streaming::udp_audio::UdpAudioSender;
 use crate::streaming::udp_waterfall::UdpWaterfallSender;
 use crate::waterfall::simple::WaterfallGenerator;
+use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
+use rigflow_core::radio::HardwareKind;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -92,6 +96,7 @@ pub async fn run_radio_worker(
             stop_flag_for_thread,
             stop_reason_for_thread,
         );
+	println!("[radio-worker {}] async wrapper exiting with {:?}", descriptor.id.0, exit );
         let _ = exit_tx.send(exit);
     });
 
@@ -118,7 +123,6 @@ pub async fn run_radio_worker(
 	}
     }
 
-    
 }
 
 fn source_kind_for_descriptor(descriptor: &RadioDescriptor) -> Result<SourceKind, String> {
@@ -155,9 +159,14 @@ fn create_worker_source(
             block_complex_samples: block_size,
         }
     } else if descriptor.id.0.starts_with("wav:") {
-        SourceConfig::WavFile {
-            path: server_cfg.wav_file.clone(),
-        }
+	let wav_path = descriptor
+	    .serial
+	    .as_ref()
+	    .ok_or_else(|| "wav radio missing file path".to_string())?
+	    .clone();
+	SourceConfig::WavFile {
+	    path: wav_path,
+	}
     } else {
         return Err(format!("source for {} not implemented", descriptor.id.0));
     };
@@ -247,10 +256,23 @@ fn run_iq_worker_threads(
         }
     };
 
+    debug!("descriptor = {:?}", descriptor);
+
     let block_size = choose_block_size(&source_kind);
 
+    let wav_center_freq_hz = if descriptor.id.0.starts_with("wav:") {
+	descriptor
+	    .serial
+	    .as_ref()
+	    .and_then(|p| parse_center_freq_hz_from_filename(std::path::Path::new(p)))
+    } else {
+	None
+    };
+
+    let kind = descriptor.hardware_kind;
+
     let (initial_center_freq_hz, initial_target_freq_hz) =
-	normalize_initial_frequencies(&request, &server_cfg);
+	normalize_initial_frequencies(&request, &server_cfg, kind, wav_center_freq_hz);
 
     let control = Arc::new(Mutex::new(SharedControlState {
         center_freq_hz: initial_center_freq_hz,
@@ -386,6 +408,10 @@ fn run_iq_worker_threads(
         }
     }
 
+    println!(
+    "[radio-worker {}] worker threads exiting with {:?}",
+    descriptor.id.0, exit
+);
     exit
 }
 
@@ -765,6 +791,17 @@ fn spawn_dsp_thread(
                 Ok(iq) => {
                     let audio_f32 = pipeline.process_audio(&iq);
 
+		    // DWB: tmp debug
+		    /*
+		    println!(
+			"[wav-dsp] iq_in={} pipeline_out_sr={} client_sr={} audio_out_samples={}",
+			iq.len(),
+			pipeline.output_sample_rate(),
+			pipeline.client_output_sample_rate(),
+			audio_f32.len(),
+		    );
+		     */
+		    
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
                     for s in audio_f32 {
                         let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
@@ -788,22 +825,58 @@ fn spawn_dsp_thread(
 fn normalize_initial_frequencies(
     request: &AcquireRequest,
     server_cfg: &ServerConfig,
+    src_kind: HardwareKind,
+    wav_center_freq_hz: Option<u64>,
 ) -> (u64, u64) {
-    let initial_center_freq_hz = if request.center_freq_hz == 0 {
-        server_cfg.center_freq_hz as u64
-    } else {
+
+    debug!("reguest = {:?}", request);
+    debug!("server_cfg = {:?}", server_cfg);
+    debug!("wav_center_freq_hz = {:?}", wav_center_freq_hz);
+
+    let mut initial_center_freq_hz = server_cfg.center_freq_hz;
+    let mut initial_target_freq_hz = server_cfg.target_freq_hz;
+
+    if src_kind == HardwareKind::FakeTone {
+	debug!("In FakeTone");
+	initial_center_freq_hz = server_cfg.fake_center_freq_hz;
+	initial_target_freq_hz = server_cfg.fake_target_freq_hz;
+    }
+
+    if src_kind == HardwareKind::WavFile {
+	debug!("In WavFile");
+	initial_center_freq_hz =
+	    if let Some(wav_center) = wav_center_freq_hz {
+		wav_center as f32
+	    } else if request.center_freq_hz != 0 {
+		request.center_freq_hz as f32
+	    } else {
+		server_cfg.center_freq_hz as f32
+	    }
+    }
+
+    let initial_target_freq_hz = initial_center_freq_hz;
+
+    debug!("init_cf = {:?}, init_tf = {:?}", initial_center_freq_hz, initial_target_freq_hz);
+    (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
+	
+
+    /*
+    let initial_center_freq_hz = if request.center_freq_hz != 0 {
         request.center_freq_hz
-    };
-
-    let initial_target_freq_hz = if request.target_freq_hz == 0 {
-        if request.center_freq_hz == 0 {
-            server_cfg.target_freq_hz as u64
-        } else {
-            request.target_freq_hz
-        }
+    } else if let Some(wav_center) = wav_center_freq_hz {
+        wav_center
     } else {
-        request.target_freq_hz
+        server_cfg.center_freq_hz as u64
     };
 
-    (initial_center_freq_hz, initial_target_freq_hz)
+
+    let initial_target_freq_hz = if request.target_freq_hz != 0 {
+        request.target_freq_hz
+    } else {
+        // For WAV: default target = center
+        initial_center_freq_hz
+};
+    */
+
+
 }

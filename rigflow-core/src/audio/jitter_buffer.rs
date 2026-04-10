@@ -5,6 +5,7 @@ pub struct JitterBuffer {
     packet_samples: usize,
     target_buffer_samples: usize,
     max_buffer_samples: usize,
+    max_observed_buffered_samples: usize,
 
     started: bool,
     start_sequence: Option<u32>,
@@ -34,6 +35,7 @@ impl JitterBuffer {
             packet_samples,
             target_buffer_samples,
             max_buffer_samples,
+	    max_observed_buffered_samples: 0,
             started: false,
             start_sequence: None,
             next_sequence: None,
@@ -99,6 +101,22 @@ impl JitterBuffer {
         }
 
         self.fill_playout();
+
+	let buffered = self.buffered_samples();
+	self.max_observed_buffered_samples =
+	    self.max_observed_buffered_samples.max(buffered);
+    }
+
+    pub fn max_buffered_samples(&self) -> usize {
+	self.max_observed_buffered_samples
+    }
+
+    pub fn max_buffered_ms(&self, sample_rate_hz: f32) -> f32 {
+	if sample_rate_hz <= 0.0 {
+            0.0
+	} else {
+            self.max_observed_buffered_samples as f32 / sample_rate_hz * 1000.0
+	}
     }
 
     pub fn pop_samples(&mut self, out: &mut [f32]) {
@@ -163,6 +181,50 @@ impl JitterBuffer {
     }
 
     fn apply_drift_correction(&mut self) {
+	let len = self.playout.len();
+	let target = self.target_buffer_samples;
+	let packet = self.packet_samples;
+	let max = self.max_buffer_samples;
+
+	if len <= target {
+            return;
+	}
+
+	let excess = len - target;
+
+	// Mildly above target: trim a tiny amount.
+	if excess >= packet / 4 && excess < packet {
+            let drop_count = 16.min(self.playout.len());
+            for _ in 0..drop_count {
+		self.playout.pop_front();
+            }
+            return;
+	}
+
+	// Clearly above target: trim more aggressively.
+	if excess >= packet && excess < packet * 4 {
+            let drop_count = (packet / 4).max(16).min(self.playout.len());
+            for _ in 0..drop_count {
+		self.playout.pop_front();
+            }
+            return;
+	}
+
+	// Far above target: pull latency down quickly.
+	if excess >= packet * 4 || len >= max.saturating_sub(packet) {
+            let desired = target + packet / 2;
+            let drop_count = len.saturating_sub(desired).min(self.playout.len());
+
+            for _ in 0..drop_count {
+		self.playout.pop_front();
+            }
+	}
+    }
+
+    /*
+     * Old function
+     *
+    fn apply_drift_correction(&mut self) {
         let len = self.playout.len();
 
         if len > self.target_buffer_samples + self.packet_samples {
@@ -172,4 +234,5 @@ impl JitterBuffer {
             }
         }
     }
+    */
 }

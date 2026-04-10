@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use futures_util::{SinkExt, StreamExt};
 use futures_util::stream::{SplitSink, SplitStream};
 use tokio::sync::mpsc;
@@ -24,6 +26,7 @@ pub async fn websocket_control_task(
     mut rx: mpsc::UnboundedReceiver<ControlCommand>,
     ui_state: Arc<Mutex<UiState>>,
     media_cmd_tx: mpsc::UnboundedSender<MediaCommand>,
+    audio_session_generation: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut write_opt: Option<WsWrite> = None;
@@ -210,7 +213,7 @@ pub async fn websocket_control_task(
 			if let Ok(radio_msg) = serde_json::from_str::<ServerRadioMessage>(&text) {
                             println!("CLIENT got radio message: {:?}", radio_msg);
 
-                            if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state) {
+                            if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state, &audio_session_generation) {
 				let text = serde_json::to_string(&outgoing)?;
 				println!("CLIENT sending radio message: {}", text);
 				if let Some(write) = write_opt.as_mut() {
@@ -272,6 +275,7 @@ pub async fn websocket_control_task(
 pub fn apply_radio_server_message(
     msg: ServerRadioMessage,
     ui_state: &Arc<Mutex<UiState>>,
+    audio_session_generation: &Arc<AtomicU64>,
 ) -> Option<ClientRadioMessage> {
     let mut state = ui_state.lock().unwrap();
 
@@ -290,11 +294,13 @@ pub fn apply_radio_server_message(
             state.radio_acquired = true;
             state.selected_radio_id = Some(radio_id.0.clone());
             state.server_status = format!("radio acquired: {}", radio_id.0);
+	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
 
         ServerRadioMessage::RadioReleased { .. } => {
             state.radio_acquired = false;
             state.server_status = "radio released".to_string();
+	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
 
         ServerRadioMessage::LeaseRenewed { .. } => {

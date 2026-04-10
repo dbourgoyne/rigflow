@@ -40,6 +40,7 @@ fn main() -> Result<(), eframe::Error> {
                 ws_cmd_rx,
                 ui_state_for_ws,
                 media_cmd_tx_for_ws,
+		media_handles.audio_session_generation,
             )
             .await
             {
