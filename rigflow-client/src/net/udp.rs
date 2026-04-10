@@ -10,9 +10,11 @@ use rigflow_core::{
 
 use crate::{
     app::state::UiState,
-    render::spectrum::update_spectrum_db,
-    render::waterfall::draw_row,
+    app::spectrum_utils::update_spectrum_db,
+    app::waterfall::draw_row,
 };
+
+use crate::app::layout::{WATERFALL_IMAGE_WIDTH, WATERFALL_IMAGE_HEIGHT};
 
 #[derive(Debug, Default)]
 pub struct MediaPacketStats {
@@ -175,19 +177,13 @@ fn handle_waterfall_packet(
         Err(_) => return,
     };
 
-    if state_snapshot.waterfall_bins == 0 {
-        return;
-    }
-
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        draw_row(
-            &mut fb,
-            row,
-            width,
-            height,
-            waterfall_top,
-            &state_snapshot,
-        );
+	draw_row(
+	    &mut fb,
+	    WATERFALL_IMAGE_WIDTH,
+	    WATERFALL_IMAGE_HEIGHT,
+	    &row,
+	);
     }
 }
 

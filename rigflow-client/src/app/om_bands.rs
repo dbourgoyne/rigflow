@@ -1,3 +1,10 @@
+pub const COLOR_OM_RTTY_DATA: u32 = 0x00c00000;               // red
+pub const COLOR_OM_PHONE_IMAGE: u32 = 0x0000a000;             // green
+pub const COLOR_OM_CW_ONLY: u32 = 0x00f0f0f0;                 // white
+pub const COLOR_OM_SSB_PHONE: u32 = 0x00d0c000;               // yellow
+pub const COLOR_OM_USB_PHONE_CW_RTTY_DATA: u32 = 0x0040b0ff;  // light blue
+pub const COLOR_OM_FIXED_DIGITAL: u32 = 0x00ff9000;           // orange
+
 const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
     // 10 meters
     OmSegment {
@@ -256,4 +263,39 @@ pub fn om_segments_for_license(license: LicenseClass) -> &'static [OmSegment] {
         LicenseClass::Technician => TECHNICIAN_SEGMENTS,
         LicenseClass::Novice => NOVICE_SEGMENTS,
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VisibleOmSegment {
+    pub start_hz: f32,
+    pub end_hz: f32,
+    pub kind: OmKind,
+}
+
+pub fn visible_om_segments(
+    left_hz: f32,
+    right_hz: f32,
+    license: LicenseClass,
+) -> Vec<VisibleOmSegment> {
+    if right_hz <= left_hz {
+        return Vec::new();
+    }
+
+    om_segments_for_license(license)
+        .iter()
+        .filter_map(|seg| {
+            let start_hz = seg.start_hz.max(left_hz);
+            let end_hz = seg.end_hz.min(right_hz);
+
+            if end_hz <= start_hz {
+                None
+            } else {
+                Some(VisibleOmSegment {
+                    start_hz,
+                    end_hz,
+                    kind: seg.kind,
+                })
+            }
+        })
+        .collect()
 }

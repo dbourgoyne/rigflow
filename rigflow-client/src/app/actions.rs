@@ -1,7 +1,7 @@
 use rigflow_protocol::ClientMessage;
 
 use crate::{
-    input::keyboard::UiAction,
+    app::ui_action::UiAction,
     net::control::ControlCommand,
 };
 
@@ -42,10 +42,6 @@ pub fn ui_action_to_control_command(
             Some(ControlCommand::LegacyClientMessage(
                 ClientMessage::SetSsbPitch { pitch_hz },
             ))
-        }
-
-        UiAction::Ping => {
-            Some(ControlCommand::LegacyClientMessage(ClientMessage::Ping))
         }
 
         UiAction::ConnectToRigflowServer => {

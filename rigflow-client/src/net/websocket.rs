@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use futures_util::{SinkExt, StreamExt};
 use futures_util::stream::{SplitSink, SplitStream};
 use tokio::sync::mpsc;
@@ -24,6 +26,7 @@ pub async fn websocket_control_task(
     mut rx: mpsc::UnboundedReceiver<ControlCommand>,
     ui_state: Arc<Mutex<UiState>>,
     media_cmd_tx: mpsc::UnboundedSender<MediaCommand>,
+    audio_session_generation: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut write_opt: Option<WsWrite> = None;
@@ -80,11 +83,6 @@ pub async fn websocket_control_task(
 				continue;
 			    }
 			};
-
-			{
-			    let mut state = ui_state.lock().unwrap();
-			    state.advertised_udp_peer = udp_peer_addr.clone();
-			}
 
 			if let Some(write) = write_opt.as_mut() {
 			    let acquire = ClientRadioMessage::AcquireRadio {
@@ -215,7 +213,7 @@ pub async fn websocket_control_task(
 			if let Ok(radio_msg) = serde_json::from_str::<ServerRadioMessage>(&text) {
                             println!("CLIENT got radio message: {:?}", radio_msg);
 
-                            if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state) {
+                            if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state, &audio_session_generation) {
 				let text = serde_json::to_string(&outgoing)?;
 				println!("CLIENT sending radio message: {}", text);
 				if let Some(write) = write_opt.as_mut() {
@@ -225,7 +223,12 @@ pub async fn websocket_control_task(
 				}
                             }
 			} else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                            apply_server_message(server_msg, &ui_state);
+			    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+				if let ServerMessage::Error { message } = server_msg {
+				    let mut state = ui_state.lock().unwrap();
+				    state.runtime_error = format!("error: {}", message);
+				}
+			    }
 			} else {
                             println!("CLIENT unknown message: {}", text);
 			}
@@ -269,43 +272,10 @@ pub async fn websocket_control_task(
     Ok(())
 }
 
-pub fn apply_server_message(msg: ServerMessage, ui_state: &Arc<Mutex<UiState>>) {
-    let mut state = ui_state.lock().unwrap();
-
-    match msg {
-        ServerMessage::Ready => {
-            state.status = "ready".to_string();
-        }
-        ServerMessage::Pong => {
-            state.status = "pong".to_string();
-        }
-        ServerMessage::SidebandChanged { sideband } => {
-            // Optional during transition; can be removed later.
-            state.sideband = sideband;
-        }
-        ServerMessage::DemodModeChanged { mode } => {
-            // Optional during transition; can be removed later.
-            state.demod_mode = mode;
-        }
-        ServerMessage::SsbPitchChanged { pitch_hz } => {
-            // Optional during transition; can be removed later.
-            state.ssb_pitch_hz = pitch_hz;
-        }
-        ServerMessage::UdpAudioOffer { server_udp_port } => {
-            state.status = format!("udp audio offered on {}", server_udp_port);
-        }
-        ServerMessage::Info { message } => {
-            state.status = message;
-        }
-        ServerMessage::Error { message } => {
-            state.status = format!("error: {}", message);
-        }
-    }
-}
-
 pub fn apply_radio_server_message(
     msg: ServerRadioMessage,
     ui_state: &Arc<Mutex<UiState>>,
+    audio_session_generation: &Arc<AtomicU64>,
 ) -> Option<ClientRadioMessage> {
     let mut state = ui_state.lock().unwrap();
 
@@ -324,15 +294,17 @@ pub fn apply_radio_server_message(
             state.radio_acquired = true;
             state.selected_radio_id = Some(radio_id.0.clone());
             state.server_status = format!("radio acquired: {}", radio_id.0);
+	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
 
         ServerRadioMessage::RadioReleased { .. } => {
             state.radio_acquired = false;
             state.server_status = "radio released".to_string();
+	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
 
         ServerRadioMessage::LeaseRenewed { .. } => {
-            state.status = "lease renewed".to_string();
+
         }
 
         ServerRadioMessage::RuntimeSnapshot {
@@ -340,25 +312,17 @@ pub fn apply_radio_server_message(
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
-            audio_sample_rate_hz,
-            audio_format,
-            waterfall_bins,
-            waterfall_frame_rate_hz,
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
             state.input_sample_rate_hz = input_sample_rate_hz;
-            state.audio_sample_rate_hz = audio_sample_rate_hz as f32;
-            state.audio_format = audio_format;
-            state.waterfall_bins = waterfall_bins as usize;
-            state.waterfall_frame_rate_hz = waterfall_frame_rate_hz;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.ssb_pitch_hz = ssb_pitch_hz;
-            state.status = "runtime snapshot received".to_string();
         }
 
         ServerRadioMessage::RuntimeChanged {
@@ -387,7 +351,7 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::RadioError { message, .. } => {
-            state.status = format!("radio error: {}", message);
+            state.runtime_error = format!("radio error: {}", message);
         }
     }
 

@@ -5,4 +5,6 @@ pub mod layout;
 pub mod om_bands;
 pub mod state;
 pub mod stats;
-pub mod title;
+pub mod spectrum_utils;
+pub mod waterfall;
+pub mod ui_action;

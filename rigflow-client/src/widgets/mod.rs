@@ -1,1 +1,1 @@
-pub mod frequency_widget;
+pub mod lo_frequency_widget;

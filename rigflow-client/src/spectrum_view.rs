@@ -1,5 +1,25 @@
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
-use crate::app::layout::{LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER, BOTTOM_GUTTER};
+use crate::app::bands::visible_radio_bands;
+
+use crate::app::{
+    frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
+    layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
+    state::UiState,
+};
+
+use crate::app::om_bands::{
+    visible_om_segments, OmKind,
+    COLOR_OM_RTTY_DATA,
+    COLOR_OM_PHONE_IMAGE,
+    COLOR_OM_CW_ONLY,
+    COLOR_OM_SSB_PHONE,
+    COLOR_OM_USB_PHONE_CW_RTTY_DATA,
+    COLOR_OM_FIXED_DIGITAL,
+};
+
+pub struct SpectrumInteraction {
+    pub clicked_target_freq_hz: Option<f32>,
+}
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -7,43 +27,34 @@ pub fn draw_spectrum_plot(
     spectrum_db: &[f32],
     db_min: f32,
     db_max: f32,
-    center_freq_hz: f32,
-    target_freq_hz: f32,
-    sample_rate_hz: f32,
-    demod_mode: &str,
-    sideband: &str,
-) -> Option<f32> {
+    state: &UiState,
+) -> SpectrumInteraction {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
     let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter_at(outer_rect);
 
-    // Background
     painter.rect_filled(outer_rect, 4.0, Color32::from_rgb(20, 20, 24));
 
     let plot_rect = Rect::from_min_max(
         Pos2::new(outer_rect.left() + LEFT_GUTTER, outer_rect.top() + TOP_GUTTER),
-        Pos2::new(outer_rect.right() - RIGHT_GUTTER, outer_rect.bottom() - BOTTOM_GUTTER),
+        Pos2::new(
+            outer_rect.right() - RIGHT_GUTTER,
+            outer_rect.bottom() - BOTTOM_GUTTER,
+        ),
     );
 
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
-        return None;
+	return empty_interaction();
     }
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
-    draw_x_axis(&painter, plot_rect, outer_rect, center_freq_hz, sample_rate_hz);
-    draw_passband_overlay(
-	&painter,
-	plot_rect,
-	center_freq_hz,
-	target_freq_hz,
-	sample_rate_hz,
-	demod_mode,
-	sideband,
-    );
+    draw_x_axis(&painter, plot_rect, outer_rect, state);
+    draw_band_overlays(&painter, plot_rect, state);
+    draw_om_overlays(&painter, plot_rect, state);
+    draw_passband_overlay(&painter, plot_rect, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
-    draw_frequency_markers(&painter, plot_rect, center_freq_hz, target_freq_hz, sample_rate_hz);
+    draw_frequency_markers(&painter, plot_rect, state);
 
-    // Draw only the plot border, and draw it INSIDE so it won't clip
     painter.rect_stroke(
         plot_rect,
         0.0,
@@ -53,21 +64,20 @@ pub fn draw_spectrum_plot(
 
     let mut clicked_freq_hz = None;
 
-    if response.clicked() && sample_rate_hz > 0.0 {
-	if let Some(pointer_pos) = response.interact_pointer_pos() {
+    if response.clicked() && visible_span_hz(state) > 0.0 {
+        if let Some(pointer_pos) = response.interact_pointer_pos() {
             if plot_rect.contains(pointer_pos) {
-		let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
+                let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
                     .clamp(0.0, 1.0);
 
-		let left_hz = center_freq_hz - sample_rate_hz * 0.5;
-		let clicked_hz = left_hz + frac * sample_rate_hz;
-
-		clicked_freq_hz = Some(clicked_hz);
+                clicked_freq_hz = Some(x_frac_to_frequency_hz(frac, state));
             }
-	}
+        }
     }
-    
-    clicked_freq_hz
+
+    SpectrumInteraction {
+	clicked_target_freq_hz: clicked_freq_hz,
+    }
 }
 
 fn draw_grid_and_y_axis(
@@ -114,18 +124,18 @@ fn draw_x_axis(
     painter: &egui::Painter,
     plot_rect: Rect,
     outer_rect: Rect,
-    center_freq_hz: f32,
-    sample_rate_hz: f32,
+    state: &UiState,
 ) {
     let grid_color = Color32::from_gray(55);
     let text_color = Color32::from_gray(180);
 
-    if sample_rate_hz <= 0.0 {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+    let span_hz = right_hz - left_hz;
+
+    if span_hz <= 0.0 {
         return;
     }
-
-    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
-    let right_hz = center_freq_hz + sample_rate_hz * 0.5;
 
     let steps = 6;
     for i in 0..=steps {
@@ -207,44 +217,52 @@ fn format_freq(freq_hz: f32) -> String {
     }
 }
 
+fn freq_to_plot_x_egui(freq_hz: f32, plot_rect: Rect, state: &UiState) -> Option<f32> {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz || freq_hz < left_hz || freq_hz > right_hz {
+        return None;
+    }
+
+    let frac = (freq_hz - left_hz) / (right_hz - left_hz);
+    Some(plot_rect.left() + frac * plot_rect.width())
+}
+
 fn draw_frequency_markers(
     painter: &egui::Painter,
     plot_rect: Rect,
-    center_freq_hz: f32,
-    target_freq_hz: f32,
-    sample_rate_hz: f32,
+    state: &UiState,
 ) {
-    if sample_rate_hz <= 0.0 {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz {
         return;
     }
 
-    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
-    let right_hz = center_freq_hz + sample_rate_hz * 0.5;
+    // Comment out center marker, really adds nothing to UI usability
+    /*
+    if let Some(center_x) = freq_to_plot_x_egui(state.center_freq_hz, plot_rect, state) {
+        painter.line_segment(
+            [
+                Pos2::new(center_x, plot_rect.top()),
+                Pos2::new(center_x, plot_rect.bottom()),
+            ],
+            Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
+        );
 
-    // Center marker is exactly in the middle of the visible plot
-    let center_x = plot_rect.center().x;
+        painter.text(
+            Pos2::new(center_x + 4.0, plot_rect.top() + 4.0),
+            Align2::LEFT_TOP,
+            "CF",
+            FontId::monospace(10.0),
+            Color32::from_rgb(120, 160, 255),
+        );
+    }
+    */
 
-    painter.line_segment(
-        [
-            Pos2::new(center_x, plot_rect.top()),
-            Pos2::new(center_x, plot_rect.bottom()),
-        ],
-        Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
-    );
-
-    painter.text(
-        Pos2::new(center_x + 4.0, plot_rect.top() + 4.0),
-        Align2::LEFT_TOP,
-        "CF",
-        FontId::monospace(10.0),
-        Color32::from_rgb(120, 160, 255),
-    );
-
-    // Target marker is placed according to its frequency within visible bandwidth
-    if target_freq_hz >= left_hz && target_freq_hz <= right_hz {
-        let frac = (target_freq_hz - left_hz) / (right_hz - left_hz);
-        let target_x = plot_rect.left() + frac * plot_rect.width();
-
+    if let Some(target_x) = freq_to_plot_x_egui(state.target_freq_hz, plot_rect, state) {
         painter.line_segment(
             [
                 Pos2::new(target_x, plot_rect.top()),
@@ -253,77 +271,94 @@ fn draw_frequency_markers(
             Stroke::new(1.5, Color32::from_rgb(255, 220, 80)),
         );
 
-        painter.text(
-            Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
-            Align2::LEFT_TOP,
-            "T",
-            FontId::monospace(10.0),
-            Color32::from_rgb(255, 220, 80),
-        );
+	let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
 
-	let tri = vec![
-	    Pos2::new(target_x, plot_rect.bottom() - 2.0),
-	    Pos2::new(target_x - 5.0, plot_rect.bottom() - 10.0),
-	    Pos2::new(target_x + 5.0, plot_rect.bottom() - 10.0),
-	];
+	let plot_center_x = plot_rect.center().x;
 
-	painter.add(egui::Shape::convex_polygon(
-	    tri,
+	let (label_pos, label_align) = if target_x > plot_center_x {
+	    (
+		Pos2::new(target_x - 4.0, plot_rect.top() + 18.0),
+		Align2::RIGHT_TOP,
+	    )
+	} else {
+	    (
+		Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
+		Align2::LEFT_TOP,
+	    )
+	};
+
+	painter.text(
+	    label_pos,
+	    label_align,
+	    label,
+	    FontId::monospace(10.0),
 	    Color32::from_rgb(255, 220, 80),
-	    Stroke::NONE,
-	));
+	);
+
+	// Comment out the arrow for now
+	/*
+        let tri = vec![
+            Pos2::new(target_x, plot_rect.bottom() - 2.0),
+            Pos2::new(target_x - 5.0, plot_rect.bottom() - 10.0),
+            Pos2::new(target_x + 5.0, plot_rect.bottom() - 10.0),
+        ];
+
+        painter.add(egui::Shape::convex_polygon(
+            tri,
+            Color32::from_rgb(255, 220, 80),
+            Stroke::NONE,
+        ));
+	*/
     }
 }
 
 fn draw_passband_overlay(
     painter: &egui::Painter,
     plot_rect: Rect,
-    center_freq_hz: f32,
-    target_freq_hz: f32,
-    sample_rate_hz: f32,
-    demod_mode: &str,
-    sideband: &str,
+    state: &UiState,
 ) {
-    if sample_rate_hz <= 0.0 {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz {
         return;
     }
 
-    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
-    let right_hz = center_freq_hz + sample_rate_hz * 0.5;
-
-    let demod_mode = demod_mode.to_ascii_lowercase();
-    let sideband = sideband.to_ascii_lowercase();
+    let demod_mode = state.demod_mode.to_ascii_lowercase();
+    let sideband = state.sideband.to_ascii_lowercase();
+    let target_freq_hz = state.target_freq_hz;
 
     let (pb_left_hz, pb_right_hz) = match demod_mode.as_str() {
-	"wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
-	"nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
+        "wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
+        "nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
 
-	// legacy representation
-	"usb" => (target_freq_hz, target_freq_hz + 3_000.0),
-	"lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
+        // legacy representation
+        "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
+        "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
 
-	// cleaner future representation
-	"ssb" => match sideband.as_str() {
+        // cleaner future representation
+        "ssb" => match sideband.as_str() {
             "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
             "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
             _ => (target_freq_hz - 3_000.0, target_freq_hz + 3_000.0),
-	},
+        },
 
-	_ => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
+        _ => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
     };
 
-    let visible_left_hz = pb_left_hz.max(left_hz);
-    let visible_right_hz = pb_right_hz.min(right_hz);
+    let visible_pb_left_hz = pb_left_hz.max(left_hz);
+    let visible_pb_right_hz = pb_right_hz.min(right_hz);
 
-    if visible_right_hz <= visible_left_hz {
+    if visible_pb_right_hz <= visible_pb_left_hz {
         return;
     }
 
-    let x0_frac = (visible_left_hz - left_hz) / (right_hz - left_hz);
-    let x1_frac = (visible_right_hz - left_hz) / (right_hz - left_hz);
-
-    let x0 = plot_rect.left() + x0_frac * plot_rect.width();
-    let x1 = plot_rect.left() + x1_frac * plot_rect.width();
+    let Some(x0) = freq_to_plot_x_egui(visible_pb_left_hz, plot_rect, state) else {
+        return;
+    };
+    let Some(x1) = freq_to_plot_x_egui(visible_pb_right_hz, plot_rect, state) else {
+        return;
+    };
 
     let pb_rect = Rect::from_min_max(
         Pos2::new(x0, plot_rect.top()),
@@ -337,28 +372,190 @@ fn draw_passband_overlay(
     );
 
     painter.line_segment(
-        [
-            Pos2::new(x0, plot_rect.top()),
-            Pos2::new(x0, plot_rect.bottom()),
-        ],
+        [Pos2::new(x0, plot_rect.top()), Pos2::new(x0, plot_rect.bottom())],
         Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
     );
 
     painter.line_segment(
-        [
-            Pos2::new(x1, plot_rect.top()),
-            Pos2::new(x1, plot_rect.bottom()),
-        ],
+        [Pos2::new(x1, plot_rect.top()), Pos2::new(x1, plot_rect.bottom())],
         Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
     );
 }
 
-pub fn x_frac_to_frequency_hz(
-    frac: f32,
-    center_freq_hz: f32,
-    sample_rate_hz: f32,
-) -> f32 {
+pub fn x_frac_to_frequency_hz(frac: f32, state: &UiState) -> f32 {
     let frac = frac.clamp(0.0, 1.0);
-    let left_hz = center_freq_hz - sample_rate_hz * 0.5;
-    left_hz + frac * sample_rate_hz
+    let left_hz = visible_left_hz(state);
+    left_hz + frac * visible_span_hz(state)
+}
+
+fn draw_band_overlays(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    state: &UiState,
+) {
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz {
+        return;
+    }
+
+    let visible_bands = visible_radio_bands(left_hz, right_hz);
+    if visible_bands.is_empty() {
+        return;
+    }
+
+    // Draw as a shallow strip just above the x-axis.
+    let band_strip_height = 14.0;
+    let y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let y1 = plot_rect.bottom() - 2.0;
+
+    for band in visible_bands {
+        let Some(x0) = freq_to_plot_x_egui(band.start_hz, plot_rect, state) else {
+            continue;
+        };
+        let Some(x1) = freq_to_plot_x_egui(band.end_hz, plot_rect, state) else {
+            continue;
+        };
+
+        if x1 <= x0 {
+            continue;
+        }
+
+        let color = color32_from_u32_with_alpha(band.color, 72);
+
+        let band_rect = Rect::from_min_max(
+            Pos2::new(x0, y0),
+            Pos2::new(x1, y1),
+        );
+
+        painter.rect_filled(band_rect, 0.0, color);
+
+        // Optional subtle border for definition.
+        painter.rect_stroke(
+            band_rect,
+            0.0,
+            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 24)),
+            egui::StrokeKind::Inside,
+        );
+
+        // Only draw label if there is enough room.
+        if (x1 - x0) >= 48.0 {
+            painter.text(
+                Pos2::new((x0 + x1) * 0.5, y0 + 1.0),
+                Align2::CENTER_TOP,
+                band.name,
+                FontId::monospace(10.0),
+                Color32::from_rgba_premultiplied(235, 235, 235, 180),
+            );
+        }
+    }
+}
+
+fn color32_from_u32_with_alpha(rgb: u32, alpha: u8) -> Color32 {
+    let r = ((rgb >> 16) & 0xff) as u8;
+    let g = ((rgb >> 8) & 0xff) as u8;
+    let b = (rgb & 0xff) as u8;
+    Color32::from_rgba_premultiplied(r, g, b, alpha)
+}
+
+fn om_kind_color(kind: OmKind) -> u32 {
+    match kind {
+        OmKind::RttyData => COLOR_OM_RTTY_DATA,
+        OmKind::PhoneImage => COLOR_OM_PHONE_IMAGE,
+        OmKind::CwOnly => COLOR_OM_CW_ONLY,
+        OmKind::SsbPhone => COLOR_OM_SSB_PHONE,
+        OmKind::UsbPhoneCwRttyData => COLOR_OM_USB_PHONE_CW_RTTY_DATA,
+        OmKind::FixedDigitalMessages => COLOR_OM_FIXED_DIGITAL,
+    }
+}
+
+fn om_kind_label(kind: OmKind) -> &'static str {
+    match kind {
+        OmKind::RttyData => "RTTY/DATA",
+        OmKind::PhoneImage => "PHONE",
+        OmKind::CwOnly => "CW",
+        OmKind::SsbPhone => "SSB",
+        OmKind::UsbPhoneCwRttyData => "USB/CW/DATA",
+        OmKind::FixedDigitalMessages => "DIGITAL",
+    }
+}
+
+fn draw_om_overlays(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    state: &UiState,
+) {
+    let Some(license) = state.selected_license else {
+	return;
+    };
+    
+    let left_hz = visible_left_hz(state);
+    let right_hz = visible_right_hz(state);
+
+    if right_hz <= left_hz {
+        return;
+    }
+
+    let visible_segments = visible_om_segments(left_hz, right_hz, license);
+    if visible_segments.is_empty() {
+        return;
+    }
+
+    // Must sit immediately above the band strip and be ~1/3 its height.
+    let band_strip_height = 14.0;
+    let om_strip_height = band_strip_height / 3.0;
+    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let om_y1 = band_y0 - 1.0;
+    let om_y0 = om_y1 - om_strip_height;
+
+    for seg in visible_segments {
+        let Some(x0) = freq_to_plot_x_egui(seg.start_hz, plot_rect, state) else {
+            continue;
+        };
+        let Some(x1) = freq_to_plot_x_egui(seg.end_hz, plot_rect, state) else {
+            continue;
+        };
+
+        if x1 <= x0 {
+            continue;
+        }
+
+        let color = color32_from_u32_with_alpha(om_kind_color(seg.kind), 150);
+
+        let seg_rect = Rect::from_min_max(
+            Pos2::new(x0, om_y0),
+            Pos2::new(x1, om_y1),
+        );
+
+        painter.rect_filled(seg_rect, 0.0, color);
+
+        painter.rect_stroke(
+            seg_rect,
+            0.0,
+            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 32)),
+            egui::StrokeKind::Inside,
+        );
+
+        if (x1 - x0) >= 40.0 {
+            painter.text(
+                Pos2::new((x0 + x1) * 0.5, om_y0 - 1.0),
+                Align2::CENTER_BOTTOM,
+                om_kind_label(seg.kind),
+                FontId::monospace(9.0),
+                Color32::from_rgba_premultiplied(235, 235, 235, 170),
+            );
+        }
+    }
+}
+
+fn empty_interaction() -> SpectrumInteraction {
+    SpectrumInteraction {
+        clicked_target_freq_hz: None,
+    }
+}
+
+fn format_mhz(freq_hz: f32) -> String {
+    let mhz = freq_hz / 1_000_000.0;
+    format!("{:.3}", mhz)
 }

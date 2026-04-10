@@ -12,7 +12,6 @@ use rigflow_server::{
     server::{
         app_state::AppState,
         config::ServerConfig,
-        control::RadioCommand,
     },
     streaming::udp_registration::run_udp_registration_listener,
 };
@@ -44,8 +43,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
     let udp_registration_addr = "0.0.0.0:9001";
 
-    let (radio_cmd_tx, _radio_cmd_rx) = tokio_mpsc::unbounded_channel::<RadioCommand>();
-
     let descriptors = discover_radios(&cfg);
     debug_print_discovered_radios(&descriptors);
 
@@ -67,7 +64,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sideband,
         demod_mode,
         pitch_hz,
-        radio_cmd_tx,
         radio_manager.clone(),
     );
 

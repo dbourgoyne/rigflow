@@ -3,6 +3,7 @@ use num_complex::Complex32;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 
 pub struct IqWavReader {
     reader: WavReader<BufReader<File>>,
@@ -10,27 +11,38 @@ pub struct IqWavReader {
     bits_per_sample: u16,
     channels: u16,
     sample_rate: u32,
+    center_freq_hz: Option<u64>,
 }
 
 impl IqWavReader {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let reader = WavReader::open(path).map_err(|e| format!("failed to open wav: {e}"))?;
-        let spec = reader.spec();
+	let path_ref = path.as_ref();
 
-        if spec.channels != 2 {
+	let reader = WavReader::open(path_ref)
+            .map_err(|e| format!("failed to open wav: {e}"))?;
+	let spec = reader.spec();
+
+	if spec.channels != 2 {
             return Err(format!(
-                "expected stereo IQ WAV (2 channels), found {} channels",
-                spec.channels
+		"expected stereo IQ WAV (2 channels), found {} channels",
+		spec.channels
             ));
-        }
+	}
 
-        Ok(Self {
+	let center_freq_hz = parse_center_freq_hz_from_filename(path_ref);
+
+	Ok(Self {
             reader,
             sample_format: spec.sample_format,
             bits_per_sample: spec.bits_per_sample,
             channels: spec.channels,
             sample_rate: spec.sample_rate,
-        })
+            center_freq_hz, // <-- store it
+	})
+    }
+
+    pub fn center_frequency_hz(&self) -> Option<u64> {
+	self.center_freq_hz
     }
 
     pub fn sample_rate(&self) -> u32 {

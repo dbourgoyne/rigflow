@@ -59,3 +59,6 @@ pub const LEFT_GUTTER: f32 = 64.0;
 pub const RIGHT_GUTTER: f32 = 12.0;
 pub const TOP_GUTTER: f32 = 6.0;
 pub const BOTTOM_GUTTER: f32 = 34.0;
+
+pub const WATERFALL_IMAGE_WIDTH: usize = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
+pub const WATERFALL_IMAGE_HEIGHT: usize = HEIGHT - WATERFALL_TOP;
