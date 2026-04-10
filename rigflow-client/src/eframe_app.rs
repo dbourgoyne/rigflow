@@ -89,7 +89,7 @@ impl eframe::App for RigflowApp {
             state.clone()
         };
 
-        // --- Keyboard tuning (egui) ---
+        // --- Keyboard Center Frequency tuning (egui) ---
         let mut center_delta_hz: f32 = 0.0;
 
         ctx.input(|i| {
@@ -130,6 +130,52 @@ impl eframe::App for RigflowApp {
                 );
             }
         }
+
+	
+	
+        // --- Keyboard Center Frequency tuning (egui) ---
+        let mut target_delta_hz: f32 = 0.0;
+
+        ctx.input(|i| {
+            let step = if i.modifiers.shift {
+                1_000.0 // large step (1 KHz)
+            } else {
+                10.0 // small step (10 Hz)
+            };
+
+            if i.key_pressed(egui::Key::ArrowRight) {
+                target_delta_hz += step;
+            }
+
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                target_delta_hz -= step;
+            }
+        });
+
+        if target_delta_hz != 0.0 {
+            let mut send_target: Option<u64> = None;
+
+            if let Ok(mut state) = self.state.lock() {
+                let new_target = (state.target_freq_hz + target_delta_hz).max(0.0);
+                state.target_freq_hz = new_target;
+
+                if state.radio_acquired {
+                    send_target = Some(new_target as u64);
+                }
+            }
+
+            if let Some(hz) = send_target {
+                let _ = self.ws_cmd_tx.send(
+                    ControlCommand::LegacyClientMessage(
+                        rigflow_protocol::ClientMessage::SetFrequency {
+                            target_freq_hz: hz as f32,
+                        },
+                    ),
+                );
+            }
+        }
+
+	
 
         egui::SidePanel::left("left_panel")
             .resizable(true)
