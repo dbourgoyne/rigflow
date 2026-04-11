@@ -160,15 +160,6 @@ async fn send_connection_message(
     sender.send(Message::Text(text)).await.map_err(|_| ())
 }
 
-/// Legacy helper retained for callers that still want to send raw legacy messages directly.
-async fn send_server_message(
-    sender: &mut futures::stream::SplitSink<WebSocket, Message>,
-    msg: &ServerMessage,
-) -> Result<(), ()> {
-    let text = serde_json::to_string(msg).map_err(|_| ())?;
-    sender.send(Message::Text(text)).await.map_err(|_| ())
-}
-
 /// Parse one inbound text frame.
 ///
 /// We first try the newer radio-control protocol. If that fails, we fall back to
@@ -281,7 +272,7 @@ async fn handle_legacy_client_text(
 }
 
 /// Handle modern radio-control messages.
-pub async fn handle_radio_message(
+async fn handle_radio_message(
     app_state: &AppState,
     session: &mut SessionState,
     msg: ClientRadioMessage,
