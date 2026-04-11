@@ -1,5 +1,6 @@
-use num_complex::Complex32;
 use std::f32::consts::PI;
+
+use num_complex::Complex32;
 
 /// FIR decimator for complex IQ samples.
 ///
@@ -37,8 +38,8 @@ impl PolyphaseDecimator {
         let taps = design_lowpass(input_sample_rate_hz, cutoff_hz, num_taps);
 
         Self {
-            delay: vec![Complex32::new(0.0, 0.0); num_taps],
             taps,
+            delay: vec![Complex32::new(0.0, 0.0); num_taps],
             write_pos: 0,
             factor,
             phase: 0,
@@ -55,71 +56,46 @@ impl PolyphaseDecimator {
         self.phase = 0;
     }
 
+    /// Filter and decimate into a newly allocated output buffer.
+    ///
+    /// This is a convenience wrapper around `process_into`.
     pub fn process(&mut self, input: &[Complex32]) -> Vec<Complex32> {
         let mut output = Vec::with_capacity(input.len().div_ceil(self.factor));
-
-        let len = self.delay.len();
-
-        for &sample in input {
-            self.delay[self.write_pos] = sample;
-
-            self.write_pos += 1;
-            if self.write_pos == len {
-                self.write_pos = 0;
-            }
-
-            if self.phase == 0 {
-                let mut acc = Complex32::new(0.0, 0.0);
-
-                // Oldest/newest indexing through the circular buffer
-                let mut idx = if self.write_pos == 0 { len - 1 } else { self.write_pos - 1 };
-
-                for &tap in &self.taps {
-                    acc += self.delay[idx] * tap;
-
-                    if idx == 0 {
-                        idx = len - 1;
-                    } else {
-                        idx -= 1;
-                    }
-                }
-
-                output.push(acc);
-            }
-
-            self.phase += 1;
-            if self.phase == self.factor {
-                self.phase = 0;
-            }
-        }
-
+        self.process_into(input, &mut output);
         output
     }
 
+    /// Filter and decimate into a caller-provided output buffer so the caller
+    /// can reuse storage across blocks and avoid repeated allocations.
     pub fn process_into(&mut self, input: &[Complex32], output: &mut Vec<Complex32>) {
         output.clear();
-        output.reserve(input.len().div_ceil(self.factor));
+        output.reserve(input.len().div_ceil(self.factor).saturating_sub(output.capacity()));
 
-        let len = self.delay.len();
+        let delay_len = self.delay.len();
 
         for &sample in input {
             self.delay[self.write_pos] = sample;
 
             self.write_pos += 1;
-            if self.write_pos == len {
+            if self.write_pos == delay_len {
                 self.write_pos = 0;
             }
 
             if self.phase == 0 {
                 let mut acc = Complex32::new(0.0, 0.0);
 
-                let mut idx = if self.write_pos == 0 { len - 1 } else { self.write_pos - 1 };
+                // Walk backward through the circular delay line, newest sample first.
+                let mut idx = if self.write_pos == 0 {
+                    delay_len - 1
+                } else {
+                    self.write_pos - 1
+                };
 
                 for &tap in &self.taps {
                     acc += self.delay[idx] * tap;
 
                     if idx == 0 {
-                        idx = len - 1;
+                        idx = delay_len - 1;
                     } else {
                         idx -= 1;
                     }
@@ -153,10 +129,11 @@ fn design_lowpass(sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize) -> Vec<f
             arg.sin() / (PI * x)
         };
 
-        let w = 0.54 - 0.46 * (2.0 * PI * n as f32 / m).cos();
-        taps.push(sinc * w);
+        let window = 0.54 - 0.46 * (2.0 * PI * n as f32 / m).cos();
+        taps.push(sinc * window);
     }
 
+    // Normalize for unity DC gain.
     let sum: f32 = taps.iter().sum();
     for tap in &mut taps {
         *tap /= sum;
@@ -167,9 +144,11 @@ fn design_lowpass(sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize) -> Vec<f
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use num_complex::Complex32;
     use std::f32::consts::PI;
+
+    use num_complex::Complex32;
+
+    use super::*;
 
     #[test]
     fn factor_1_outputs_same_length() {
