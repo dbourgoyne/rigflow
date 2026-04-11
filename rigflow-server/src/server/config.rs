@@ -1,9 +1,13 @@
 use std::env;
+
 use rigflow_core::dsp::demod::DemodMode;
+
 use crate::source::factory::SourceConfig;
 
 pub const WATERFALL_BINS: usize = 1024;
 pub const WATERFALL_FRAME_RATE_HZ: f32 = 20.0;
+
+// Keep this only if it is still referenced elsewhere.
 pub const WATERFALL_EVERY_N_BLOCKS: usize = 1;
 
 #[derive(Debug, Clone)]
@@ -13,6 +17,11 @@ pub enum SourceKind {
     RtlSdr,
 }
 
+/// Server-wide startup configuration.
+///
+/// Note that in the newer multi-radio design, some of these values act more as
+/// defaults or legacy startup settings than as globally authoritative runtime
+/// state.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub demod: DemodMode,
@@ -40,15 +49,14 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             demod: DemodMode::Lsb,
-
             source: SourceKind::Fake,
 
             wav_file: "input_iq.wav".to_string(),
-	    wav_dir: "./".to_string(),
+            wav_dir: "./".to_string(),
 
             fake_sample_rate_hz: 48_000.0,
             fake_tone_hz: 1_500.0,
-	    fake_center_freq_hz: 101_100_000.0,
+            fake_center_freq_hz: 101_100_000.0,
             fake_target_freq_hz: 101_100_000.0,
 
             rtlsdr_device_index: 0,
@@ -64,6 +72,10 @@ impl Default for ServerConfig {
 }
 
 impl ServerConfig {
+    /// Parses simple command-line flags into a ServerConfig.
+    ///
+    /// This keeps the current hand-rolled CLI behavior intact rather than
+    /// introducing a parser crate during refactor.
     pub fn from_args() -> Result<Self, String> {
         let mut cfg = Self::default();
         let mut args = env::args().skip(1);
@@ -71,72 +83,51 @@ impl ServerConfig {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--demod" => {
-                    let value = args.next().ok_or("--demod requires a value")?;
-                    cfg.demod = match value.as_str() {
-                        "usb" => DemodMode::Usb,
-                        "lsb" => DemodMode::Lsb,
-                        "wfm" => DemodMode::Wfm,
-                        _ => return Err(format!("unknown demod '{value}'\n\n{}", Self::usage())),
-                    };
+                    let value = next_arg(&mut args, "--demod")?;
+                    cfg.demod = parse_demod_mode(&value)
+                        .ok_or_else(|| format!("unknown demod '{value}'\n\n{}", Self::usage()))?;
                 }
 
-		"--wav-dir" => {
-		    cfg.wav_dir = args.next().ok_or("--wav_dir requires a value")?;
-		}
+                "--wav-dir" => {
+                    cfg.wav_dir = next_arg(&mut args, "--wav-dir")?;
+                }
 
                 "--source" => {
-                    let value = args.next().ok_or("--source requires a value")?;
-                    cfg.source = match value.as_str() {
-                        "fake" => SourceKind::Fake,
-                        "wav" => SourceKind::Wav,
-                        "rtlsdr" => SourceKind::RtlSdr,
-                        _ => return Err(format!("unknown source '{value}'\n\n{}", Self::usage())),
-                    };
+                    let value = next_arg(&mut args, "--source")?;
+                    cfg.source = parse_source_kind(&value)
+                        .ok_or_else(|| format!("unknown source '{value}'\n\n{}", Self::usage()))?;
                 }
 
                 "--wav-file" => {
-                    cfg.wav_file = args.next().ok_or("--wav-file requires a value")?;
+                    cfg.wav_file = next_arg(&mut args, "--wav-file")?;
                 }
 
                 "--fake-sample-rate" => {
-                    cfg.fake_sample_rate_hz = args
-                        .next()
-                        .ok_or("--fake-sample-rate requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --fake-sample-rate".to_string())?;
+                    cfg.fake_sample_rate_hz =
+                        parse_next_arg(&mut args, "--fake-sample-rate", "invalid --fake-sample-rate")?;
                 }
 
                 "--fake-tone" => {
-                    cfg.fake_tone_hz = args
-                        .next()
-                        .ok_or("--fake-tone requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --fake-tone".to_string())?;
+                    cfg.fake_tone_hz =
+                        parse_next_arg(&mut args, "--fake-tone", "invalid --fake-tone")?;
                 }
 
                 "--rtl-device" => {
-                    cfg.rtlsdr_device_index = args
-                        .next()
-                        .ok_or("--rtl-device requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --rtl-device".to_string())?;
+                    cfg.rtlsdr_device_index =
+                        parse_next_arg(&mut args, "--rtl-device", "invalid --rtl-device")?;
                 }
 
                 "--rtl-sample-rate" => {
-                    cfg.rtlsdr_sample_rate_hz = args
-                        .next()
-                        .ok_or("--rtl-sample-rate requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --rtl-sample-rate".to_string())?;
+                    cfg.rtlsdr_sample_rate_hz =
+                        parse_next_arg(&mut args, "--rtl-sample-rate", "invalid --rtl-sample-rate")?;
                 }
 
                 "--rtl-gain" => {
-                    cfg.rtlsdr_gain_tenths_db = Some(
-                        args.next()
-                            .ok_or("--rtl-gain requires a value")?
-                            .parse()
-                            .map_err(|_| "invalid --rtl-gain".to_string())?,
-                    );
+                    cfg.rtlsdr_gain_tenths_db = Some(parse_next_arg(
+                        &mut args,
+                        "--rtl-gain",
+                        "invalid --rtl-gain",
+                    )?);
                 }
 
                 "--rtl-auto-gain" => {
@@ -144,11 +135,8 @@ impl ServerConfig {
                 }
 
                 "--rtl-ppm" => {
-                    cfg.rtlsdr_ppm_correction = args
-                        .next()
-                        .ok_or("--rtl-ppm requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --rtl-ppm".to_string())?;
+                    cfg.rtlsdr_ppm_correction =
+                        parse_next_arg(&mut args, "--rtl-ppm", "invalid --rtl-ppm")?;
                 }
 
                 "--rtl-direct-sampling" => {
@@ -156,19 +144,13 @@ impl ServerConfig {
                 }
 
                 "--center" => {
-                    cfg.center_freq_hz = args
-                        .next()
-                        .ok_or("--center requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --center".to_string())?;
+                    cfg.center_freq_hz =
+                        parse_next_arg(&mut args, "--center", "invalid --center")?;
                 }
 
                 "--target" => {
-                    cfg.target_freq_hz = args
-                        .next()
-                        .ok_or("--target requires a value")?
-                        .parse()
-                        .map_err(|_| "invalid --target".to_string())?;
+                    cfg.target_freq_hz =
+                        parse_next_arg(&mut args, "--target", "invalid --target")?;
                 }
 
                 "--help" | "-h" => {
@@ -201,6 +183,7 @@ Fake source:
 
 WAV source:
   --wav-file PATH
+  --wav-dir PATH
 
 RTL-SDR source:
   --rtl-device INDEX
@@ -214,6 +197,10 @@ RTL-SDR source:
     }
 }
 
+/// Builds a source config from the legacy server config.
+///
+/// Keep this only if something still calls it. In the newer radio worker path,
+/// source creation may already happen elsewhere.
 pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig {
     match cfg.source {
         SourceKind::Fake => SourceConfig::Fake {
@@ -237,8 +224,7 @@ pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig
 
 pub fn choose_block_size(source: &SourceKind) -> usize {
     match source {
-        SourceKind::Fake => 8192,
-        SourceKind::Wav => 8192,
+        SourceKind::Fake | SourceKind::Wav => 8192,
         SourceKind::RtlSdr => 65536,
     }
 }
@@ -247,6 +233,42 @@ pub fn choose_decimation(source: &SourceKind) -> usize {
     match source {
         SourceKind::Fake => 4,
         SourceKind::Wav => 16,
-        SourceKind::RtlSdr => 12, //8,
+        SourceKind::RtlSdr => 12,
+    }
+}
+
+fn next_arg(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
+    args.next().ok_or_else(|| format!("{flag} requires a value"))
+}
+
+fn parse_next_arg<T>(
+    args: &mut impl Iterator<Item = String>,
+    flag: &str,
+    parse_err: &str,
+) -> Result<T, String>
+where
+    T: std::str::FromStr,
+{
+    next_arg(args, flag)?
+        .parse()
+        .map_err(|_| parse_err.to_string())
+}
+
+fn parse_source_kind(value: &str) -> Option<SourceKind> {
+    match value {
+        "fake" => Some(SourceKind::Fake),
+        "wav" => Some(SourceKind::Wav),
+        "rtlsdr" => Some(SourceKind::RtlSdr),
+        _ => None,
+    }
+}
+
+fn parse_demod_mode(value: &str) -> Option<DemodMode> {
+    match value {
+        "usb" => Some(DemodMode::Usb),
+        "lsb" => Some(DemodMode::Lsb),
+        "wfm" => Some(DemodMode::Wfm),
+	"nfm" => Some(DemodMode::Nfm),
+        _ => None,
     }
 }
