@@ -1,5 +1,4 @@
 pub mod api;
-pub mod audio_output;
 pub mod dsp;
 pub mod events;
 pub mod input;
