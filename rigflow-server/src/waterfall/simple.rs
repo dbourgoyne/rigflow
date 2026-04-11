@@ -2,25 +2,52 @@ use num_complex::Complex32;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
 
+/// Generates waterfall rows from IQ samples using FFT.
+///
+/// Pipeline:
+/// 1. Apply window (Hann)
+/// 2. FFT
+/// 3. Magnitude spectrum
+/// 4. FFT shift (center DC)
+/// 5. Convert to dB
+/// 6. Normalize to 0–255 grayscale
+///
+/// Output:
+/// - One row of `u8` intensity values (0–255)
 pub struct WaterfallGenerator {
     fft_size: usize,
+
+    /// FFT plan (cached for performance)
     fft: Arc<dyn Fft<f32>>,
+
+    /// Reusable FFT buffer (complex samples)
     buffer: Vec<Complex<f32>>,
+
+    /// Window function (Hann)
     window: Vec<f32>,
 }
 
 impl WaterfallGenerator {
+    /// Create a new waterfall generator.
+    ///
+    /// `fft_size` determines:
+    /// - frequency resolution
+    /// - output row width
     pub fn new(fft_size: usize) -> Self {
         assert!(fft_size > 0, "fft_size must be > 0");
 
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
 
+        // Precompute Hann window:
+        // w[n] = 0.5 - 0.5 cos(2πn / (N-1))
         let window = (0..fft_size)
             .map(|i| {
-                // Hann window
-                0.5 - 0.5
-                    * (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32 - 1.0)).cos()
+                0.5
+                    - 0.5
+                        * (2.0 * std::f32::consts::PI * i as f32
+                            / (fft_size as f32 - 1.0))
+                            .cos()
             })
             .collect();
 
@@ -36,45 +63,56 @@ impl WaterfallGenerator {
         self.fft_size
     }
 
+    /// Generate a single waterfall row from IQ samples.
+    ///
+    /// Steps:
+    /// - window + copy into FFT buffer
+    /// - FFT
+    /// - magnitude + fftshift
+    /// - dB conversion
+    /// - normalize to 0–255
     pub fn generate_row(&mut self, iq: &[Complex32]) -> Vec<u8> {
         let n = self.fft_size.min(iq.len());
         if n == 0 {
             return Vec::new();
         }
 
-        // Zero-fill whole buffer first
+        // Clear buffer (important if iq.len() < fft_size)
         for v in &mut self.buffer {
             *v = Complex::new(0.0, 0.0);
         }
 
-        // Copy IQ into FFT buffer with windowing
-	for ((buf, iq), &w) in self.buffer.iter_mut().zip(iq.iter()).zip(self.window.iter()) {
-	    buf.re = iq.re * w;
-	    buf.im = iq.im * w;
-	}
+        // Copy + apply window
+        for ((buf, iq_sample), &w) in self
+            .buffer
+            .iter_mut()
+            .zip(iq.iter())
+            .zip(self.window.iter())
+        {
+            buf.re = iq_sample.re * w;
+            buf.im = iq_sample.im * w;
+        }
 
-        // FFT in place
+        // Perform FFT in-place
         self.fft.process(&mut self.buffer);
 
-        // Magnitude spectrum + fftshift
+        // Compute magnitude spectrum with FFT shift
         let mut mags = vec![0.0_f32; self.fft_size];
         let half = self.fft_size / 2;
 
-	// 'mag' is a mutable reference to the element in 'mags'
-	for (i, mag) in mags.iter_mut().enumerate().take(self.fft_size) {
-	    // Use *mag to modify the value directly
-	    let src = (i + half) % self.fft_size;
-	    *mag = self.buffer[src].norm();
-	}
+        for (i, mag) in mags.iter_mut().enumerate() {
+            let src = (i + half) % self.fft_size;
+            *mag = self.buffer[src].norm();
+        }
 
-        // Convert to dB
+        // Convert to dB scale
         let eps = 1e-12_f32;
         let db: Vec<f32> = mags
             .iter()
             .map(|&x| 20.0 * (x + eps).log10())
             .collect();
 
-        // Normalize to 0..255 per row
+        // Normalize to 0–255 range per row
         let min_db = db.iter().copied().fold(f32::INFINITY, f32::min);
         let max_db = db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let span = (max_db - min_db).max(1e-6);
@@ -123,7 +161,8 @@ mod tests {
             .map(|(i, _)| i)
             .unwrap();
 
-        // After fftshift, DC is centered and +6 kHz should be to the right of center.
+        // After FFT shift:
+        // DC is centered, positive frequencies to the right
         let expected_bin =
             (fft_size as f32 / 2.0 + tone_hz * fft_size as f32 / sample_rate).round() as usize;
 
