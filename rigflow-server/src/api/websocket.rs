@@ -8,28 +8,32 @@ use axum::{
 use futures::{sink::SinkExt, stream::StreamExt};
 use tokio::sync::mpsc;
 
-use rigflow_protocol::{ClientMessage, ServerMessage};
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
+use rigflow_protocol::{ClientMessage, ServerMessage};
 
 use crate::{
-    dsp::demod::{DemodMode, Sideband},
+    dsp::demod::{demod_mode_to_string, sideband_to_string, DemodMode, Sideband},
     server::{
         app_state::AppState,
         radio_api::{
             manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol,
         },
-        radio_types::{ClientId, RadioManagerError, StopReason, WorkerCommand},
+        radio_types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
         session::SessionState,
     },
 };
-use crate::server::radio_types::WorkerStatus;
-use crate::dsp::demod::{demod_mode_to_string, sideband_to_string};
 
+/// Messages that may be sent to a connected WebSocket client.
+///
+/// We currently support two logical protocols over the same socket:
+/// - legacy JSON control/status messages
+/// - radio-leasing / multi-radio control messages
 enum ConnectionMessage {
     Legacy(ServerMessage),
     Radio(ServerRadioMessage),
 }
 
+/// Axum entry point for `/ws`.
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -37,14 +41,25 @@ pub async fn ws_handler(
     ws.on_upgrade(move |socket| client_socket(socket, state))
 }
 
+/// Handle a single WebSocket client connection.
+///
+/// This function splits the socket into send/receive halves and runs:
+/// - a send task that forwards server-side events to the client
+/// - a receive task that parses inbound client messages
+///
+/// When either side exits, the connection is considered done.
 async fn client_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
+    // Each connection gets a unique logical client id used by the radio manager.
     let mut session = SessionState::new(ClientId(uuid::Uuid::new_v4().to_string()));
 
+    // Legacy broadcast channels.
     let mut msg_rx = state.tx.subscribe();
     let mut audio_rx = state.audio_tx.subscribe();
     let mut waterfall_rx = state.waterfall_tx.subscribe();
+
+    // Per-connection local channel used for targeted responses.
     let (local_tx, mut local_rx) = mpsc::unbounded_channel::<ConnectionMessage>();
 
     let send_task = tokio::spawn(async move {
@@ -64,7 +79,8 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                 msg = msg_rx.recv() => {
                     match msg {
                         Ok(msg) => {
-                            if send_connection_message(&mut sender, &ConnectionMessage::Legacy(msg)).await.is_err() {
+                            let wrapped = ConnectionMessage::Legacy(msg);
+                            if send_connection_message(&mut sender, &wrapped).await.is_err() {
                                 break;
                             }
                         }
@@ -75,6 +91,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                 audio = audio_rx.recv() => {
                     match audio {
                         Ok(mut bytes) => {
+                            // Prefix audio frames with a type byte.
                             let mut framed = Vec::with_capacity(bytes.len() + 1);
                             framed.push(b'A');
                             framed.append(&mut bytes);
@@ -90,6 +107,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                 wf = waterfall_rx.recv() => {
                     match wf {
                         Ok(mut bytes) => {
+                            // Prefix waterfall frames with a type byte.
                             let mut framed = Vec::with_capacity(bytes.len() + 1);
                             framed.push(b'W');
                             framed.append(&mut bytes);
@@ -110,30 +128,26 @@ async fn client_socket(socket: WebSocket, state: AppState) {
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(text) => {
-                    handle_incoming_text(
-                        &text,
-                        &state_for_recv,
-                        &mut session,
-                        &local_tx,
-                    )
-                    .await;
+                    handle_incoming_text(&text, &state_for_recv, &mut session, &local_tx).await;
                 }
-
                 Message::Close(_) => break,
 
-		Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
+                // We currently ignore inbound websocket ping/pong/binary frames from clients.
+                Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
             }
         }
 
+        // Best-effort cleanup: release any leased radio if the client disconnects.
         release_session_radio_on_disconnect(&state_for_recv, &mut session).await;
     });
 
     tokio::select! {
-        _ = send_task => {},
-        _ = recv_task => {},
+        _ = send_task => {}
+        _ = recv_task => {}
     }
 }
 
+/// Serialize and send a connection-scoped message to the client.
 async fn send_connection_message(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
     msg: &ConnectionMessage,
@@ -143,12 +157,10 @@ async fn send_connection_message(
         ConnectionMessage::Radio(msg) => serde_json::to_string(msg).map_err(|_| ())?,
     };
 
-    sender
-        .send(Message::Text(text))
-        .await
-        .map_err(|_| ())
+    sender.send(Message::Text(text)).await.map_err(|_| ())
 }
 
+/// Legacy helper retained for callers that still want to send raw legacy messages directly.
 async fn send_server_message(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
     msg: &ServerMessage,
@@ -157,6 +169,10 @@ async fn send_server_message(
     sender.send(Message::Text(text)).await.map_err(|_| ())
 }
 
+/// Parse one inbound text frame.
+///
+/// We first try the newer radio-control protocol. If that fails, we fall back to
+/// legacy text control messages.
 async fn handle_incoming_text(
     text: &str,
     app_state: &AppState,
@@ -181,82 +197,90 @@ async fn handle_incoming_text(
     }
 }
 
+/// Handle legacy JSON control messages.
+///
+/// These messages ultimately become worker commands routed through the radio manager
+/// for the currently acquired radio in this session.
 async fn handle_legacy_client_text(
     text: &str,
     state: &AppState,
     session: &SessionState,
 ) -> Result<Option<ServerMessage>, String> {
     let cmd: ClientMessage =
-        serde_json::from_str(text).map_err(|e| format!("invalid json: {}", e))?;
+        serde_json::from_str(text).map_err(|e| format!("invalid json: {e}"))?;
 
     match cmd {
-	ClientMessage::SetFrequency { target_freq_hz } => {
-	    send_worker_command_for_session(
-		state,
-		session,
-		WorkerCommand::SetTargetFrequency { hz: target_freq_hz as u64 },
-	    )
-		.await
-		.map_err(radio_manager_error_string)?;
+        ClientMessage::SetFrequency { target_freq_hz } => {
+            send_worker_command_for_session(
+                state,
+                session,
+                WorkerCommand::SetTargetFrequency {
+                    hz: target_freq_hz as u64,
+                },
+            )
+            .await
+            .map_err(radio_manager_error_string)?;
 
-	    Ok(None)
-	}
+            Ok(None)
+        }
 
-	ClientMessage::SetCenterFrequency { center_freq_hz } => {
-	    send_worker_command_for_session(
-		state,
-		session,
-		WorkerCommand::SetCenterFrequency { hz: center_freq_hz as u64 },
-	    )
-		.await
-		.map_err(radio_manager_error_string)?;
+        ClientMessage::SetCenterFrequency { center_freq_hz } => {
+            send_worker_command_for_session(
+                state,
+                session,
+                WorkerCommand::SetCenterFrequency {
+                    hz: center_freq_hz as u64,
+                },
+            )
+            .await
+            .map_err(radio_manager_error_string)?;
 
-	    Ok(None)
-	}
+            Ok(None)
+        }
 
-	ClientMessage::SetDemodMode { mode } => {
-	    send_worker_command_for_session(
-		state,
-		session,
-		WorkerCommand::SetDemodMode {
-		    mode: parse_demod_mode(&mode)?,
-		},
-	    )
-		.await
-		.map_err(radio_manager_error_string)?;
+        ClientMessage::SetDemodMode { mode } => {
+            send_worker_command_for_session(
+                state,
+                session,
+                WorkerCommand::SetDemodMode {
+                    mode: parse_demod_mode(&mode)?,
+                },
+            )
+            .await
+            .map_err(radio_manager_error_string)?;
 
-	    Ok(None)
-	}
+            Ok(None)
+        }
 
-	ClientMessage::SetSideband { sideband } => {
-	    send_worker_command_for_session(
-		state,
-		session,
-		WorkerCommand::SetSideband {
-		    sideband: parse_sideband(&sideband)?,
-		},
-	    )
-		.await
-		.map_err(radio_manager_error_string)?;
+        ClientMessage::SetSideband { sideband } => {
+            send_worker_command_for_session(
+                state,
+                session,
+                WorkerCommand::SetSideband {
+                    sideband: parse_sideband(&sideband)?,
+                },
+            )
+            .await
+            .map_err(radio_manager_error_string)?;
 
-	    Ok(None)
-	}
+            Ok(None)
+        }
 
-	ClientMessage::SetSsbPitch { pitch_hz } => {
-	    send_worker_command_for_session(
-		state,
-		session,
-		WorkerCommand::SetSsbPitch { pitch_hz },
-	    )
-		.await
-		.map_err(radio_manager_error_string)?;
+        ClientMessage::SetSsbPitch { pitch_hz } => {
+            send_worker_command_for_session(
+                state,
+                session,
+                WorkerCommand::SetSsbPitch { pitch_hz },
+            )
+            .await
+            .map_err(radio_manager_error_string)?;
 
-	    Ok(None)
-	}
-
+            Ok(None)
+        }
     }
 }
 
+/// Handle modern radio-control messages.
 pub async fn handle_radio_message(
     app_state: &AppState,
     session: &mut SessionState,
@@ -273,9 +297,7 @@ pub async fn handle_radio_message(
                 .map(radio_summary_to_protocol)
                 .collect();
 
-            let _ = local_tx.send(ConnectionMessage::Radio(
-                ServerRadioMessage::RadiosListed { radios }
-            ));
+            send_radio(local_tx, ServerRadioMessage::RadiosListed { radios });
         }
 
         ClientRadioMessage::AcquireRadio {
@@ -286,12 +308,11 @@ pub async fn handle_radio_message(
             waterfall_udp_peer,
         } => {
             if session.has_radio() {
-                let _ = local_tx.send(ConnectionMessage::Radio(
-                    ServerRadioMessage::RadioError {
-                        code: "radio_already_acquired".to_string(),
-                        message: "session already owns a radio; release it first".to_string(),
-                    }
-                ));
+                send_radio_error(
+                    local_tx,
+                    "radio_already_acquired",
+                    "session already owns a radio; release it first",
+                );
                 return;
             }
 
@@ -303,160 +324,106 @@ pub async fn handle_radio_message(
             ) {
                 Ok(request) => request,
                 Err(err) => {
-                    let _ = local_tx.send(ConnectionMessage::Radio(err));
+                    send_radio(local_tx, err);
                     return;
                 }
             };
 
-            match app_state
+            let acquire_result = match app_state
                 .radio_manager
                 .acquire_radio(session.client_id.clone(), &radio_id, request)
                 .await
             {
-                Ok(result) => {
-                    session.set_acquired_radio(result.radio_id.clone(), result.lease_id.clone());
+                Ok(result) => result,
+                Err(err) => {
+                    send_radio(local_tx, manager_error_to_protocol(err));
+                    return;
+                }
+            };
 
-                    let lease_ttl_ms = result
-                        .lease_expires_at
-                        .saturating_duration_since(std::time::Instant::now())
-                        .as_millis() as u64;
+            session.set_acquired_radio(
+                acquire_result.radio_id.clone(),
+                acquire_result.lease_id.clone(),
+            );
 
-                    println!(
-                        "radio acquired: client_id={:?} radio_id={:?} lease_id={:?}",
-                        session.client_id,
-                        result.radio_id,
-                        result.lease_id
-                    );
+            let lease_ttl_ms = acquire_result
+                .lease_expires_at
+                .saturating_duration_since(std::time::Instant::now())
+                .as_millis() as u64;
 
-                    // 1) Send RadioAcquired first.
-                    let _ = local_tx.send(ConnectionMessage::Radio(
-                        ServerRadioMessage::RadioAcquired {
-                            radio_id: result.radio_id.clone(),
-                            lease_id: result.lease_id.clone(),
-                            lease_ttl_ms,
-                        }
-                    ));
+            println!(
+                "radio acquired: client_id={:?} radio_id={:?} lease_id={:?}",
+                session.client_id,
+                acquire_result.radio_id,
+                acquire_result.lease_id
+            );
 
-                    // 2) Subscribe to worker runtime status.
-                    match app_state
-                        .radio_manager
-                        .subscribe_runtime_status(
-                            &session.client_id,
-                            &result.radio_id,
-                            &result.lease_id,
-                        )
-                        .await
+            // Send acquisition confirmation first.
+            send_radio(
+                local_tx,
+                ServerRadioMessage::RadioAcquired {
+                    radio_id: acquire_result.radio_id.clone(),
+                    lease_id: acquire_result.lease_id.clone(),
+                    lease_ttl_ms,
+                },
+            );
+
+            // Subscribe to worker runtime state updates for this leased radio.
+            let mut status_rx = match app_state
+                .radio_manager
+                .subscribe_runtime_status(
+                    &session.client_id,
+                    &acquire_result.radio_id,
+                    &acquire_result.lease_id,
+                )
+                .await
+            {
+                Ok(status_rx) => status_rx,
+                Err(err) => {
+                    send_radio(local_tx, manager_error_to_protocol(err));
+                    return;
+                }
+            };
+
+            // Immediately send a full snapshot based on current worker status.
+            let initial_status = status_rx.borrow().clone();
+            if let Some(snapshot) =
+                runtime_snapshot_from_status(acquire_result.radio_id.clone(), &initial_status)
+            {
+                log_runtime_snapshot(&snapshot);
+                send_radio(local_tx, snapshot);
+            }
+
+            // Forward future runtime changes asynchronously.
+            let local_tx_clone = local_tx.clone();
+            let radio_id_clone = acquire_result.radio_id.clone();
+
+            tokio::spawn(async move {
+                loop {
+                    if status_rx.changed().await.is_err() {
+                        break;
+                    }
+
+                    let status = status_rx.borrow().clone();
+                    if let Some(changed) =
+                        runtime_changed_from_status(radio_id_clone.clone(), &status)
                     {
-                        Ok(mut status_rx) => {
-                            // 3) Send immediate RuntimeSnapshot from current worker state.
-			    let initial_status = status_rx.borrow().clone();
-			    if let Some(snapshot) = runtime_snapshot_from_status(
-				result.radio_id.clone(),
-				&initial_status,
-			    ) {
-				match &snapshot {
-				    ServerRadioMessage::RuntimeSnapshot {
-					radio_id,
-					center_freq_hz,
-					target_freq_hz,
-					input_sample_rate_hz,
-					audio_sample_rate_hz,
-					audio_format,
-					waterfall_bins,
-					waterfall_frame_rate_hz,
-					demod_mode,
-					sideband,
-					ssb_pitch_hz,
-				    } => {
-					println!(
-					    "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={}",
-					    radio_id.0,
-					    center_freq_hz,
-					    target_freq_hz,
-					    input_sample_rate_hz,
-					    audio_sample_rate_hz,
-					    audio_format,
-					    waterfall_bins,
-					    waterfall_frame_rate_hz,
-					    demod_mode,
-					    sideband,
-					    ssb_pitch_hz,
-					);
-				    }
-				    _ => {}
-				}
-
-				let _ = local_tx.send(ConnectionMessage::Radio(snapshot));
-			    }
-
-                            // 4) Forward future RuntimeChanged messages.
-                            let local_tx_clone = local_tx.clone();
-                            let radio_id_clone = result.radio_id.clone();
-
-                            tokio::spawn(async move {
-                                loop {
-                                    if status_rx.changed().await.is_err() {
-                                        break;
-                                    }
-
-				    let status = status_rx.borrow().clone();
-				    if let Some(changed) =
-					runtime_changed_from_status(radio_id_clone.clone(), &status)
-				    {
-					match &changed {
-					    ServerRadioMessage::RuntimeChanged {
-						radio_id,
-						center_freq_hz,
-						target_freq_hz,
-						demod_mode,
-						sideband,
-						ssb_pitch_hz,
-					    } => {
-						println!(
-						    "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?}",
-						    radio_id.0,
-						    center_freq_hz,
-						    target_freq_hz,
-						    demod_mode,
-						    sideband,
-						    ssb_pitch_hz,
-						);
-					    }
-					    _ => {}
-					}
-
-					let _ = local_tx_clone.send(ConnectionMessage::Radio(changed));
-				    }
-
-				    
-                                }
-                            });
-                        }
-                        Err(err) => {
-                            let _ = local_tx.send(ConnectionMessage::Radio(
-                                manager_error_to_protocol(err)
-                            ));
-                        }
+                        log_runtime_changed(&changed);
+                        send_radio(&local_tx_clone, changed);
                     }
                 }
-                Err(err) => {
-                    let _ = local_tx.send(ConnectionMessage::Radio(
-                        manager_error_to_protocol(err)
-                    ));
-                }
-            }
+            });
         }
 
         ClientRadioMessage::ReleaseRadio => {
             let acquired = match session.acquired_radio().cloned() {
                 Some(acquired) => acquired,
                 None => {
-                    let _ = local_tx.send(ConnectionMessage::Radio(
-                        ServerRadioMessage::RadioError {
-                            code: "no_radio_acquired".to_string(),
-                            message: "session has no acquired radio".to_string(),
-                        }
-                    ));
+                    send_radio_error(
+                        local_tx,
+                        "no_radio_acquired",
+                        "session has no acquired radio",
+                    );
                     return;
                 }
             };
@@ -473,16 +440,15 @@ pub async fn handle_radio_message(
             {
                 Ok(()) => {
                     session.clear_acquired_radio();
-                    let _ = local_tx.send(ConnectionMessage::Radio(
+                    send_radio(
+                        local_tx,
                         ServerRadioMessage::RadioReleased {
                             radio_id: acquired.radio_id,
-                        }
-                    ));
+                        },
+                    );
                 }
                 Err(err) => {
-                    let _ = local_tx.send(ConnectionMessage::Radio(
-                        manager_error_to_protocol(err)
-                    ));
+                    send_radio(local_tx, manager_error_to_protocol(err));
                 }
             }
         }
@@ -491,12 +457,11 @@ pub async fn handle_radio_message(
             let acquired = match session.acquired_radio().cloned() {
                 Some(acquired) => acquired,
                 None => {
-                    let _ = local_tx.send(ConnectionMessage::Radio(
-                        ServerRadioMessage::RadioError {
-                            code: "no_radio_acquired".to_string(),
-                            message: "session has no acquired radio".to_string(),
-                        }
-                    ));
+                    send_radio_error(
+                        local_tx,
+                        "no_radio_acquired",
+                        "session has no acquired radio",
+                    );
                     return;
                 }
             };
@@ -516,23 +481,23 @@ pub async fn handle_radio_message(
                         .saturating_duration_since(std::time::Instant::now())
                         .as_millis() as u64;
 
-                    let _ = local_tx.send(ConnectionMessage::Radio(
+                    send_radio(
+                        local_tx,
                         ServerRadioMessage::LeaseRenewed {
                             radio_id: acquired.radio_id,
                             lease_ttl_ms,
-                        }
-                    ));
+                        },
+                    );
                 }
                 Err(err) => {
-                    let _ = local_tx.send(ConnectionMessage::Radio(
-                        manager_error_to_protocol(err)
-                    ));
+                    send_radio(local_tx, manager_error_to_protocol(err));
                 }
             }
         }
     }
 }
 
+/// Best-effort cleanup when the WebSocket disconnects.
 pub async fn release_session_radio_on_disconnect(
     app_state: &AppState,
     session: &mut SessionState,
@@ -554,6 +519,7 @@ pub async fn release_session_radio_on_disconnect(
     session.clear_acquired_radio();
 }
 
+/// Route a worker command to the leased radio owned by this session.
 pub async fn send_worker_command_for_session(
     app_state: &AppState,
     session: &SessionState,
@@ -574,6 +540,7 @@ pub async fn send_worker_command_for_session(
         .await
 }
 
+/// Extract a human-readable message from a radio-manager error.
 fn radio_manager_error_string(err: RadioManagerError) -> String {
     match manager_error_to_protocol(err) {
         ServerRadioMessage::RadioError { message, .. } => message,
@@ -581,24 +548,27 @@ fn radio_manager_error_string(err: RadioManagerError) -> String {
     }
 }
 
+/// Parse a sideband string from legacy client control messages.
 fn parse_sideband(s: &str) -> Result<Sideband, String> {
     match s.trim().to_ascii_lowercase().as_str() {
         "usb" => Ok(Sideband::Usb),
         "lsb" => Ok(Sideband::Lsb),
-        _ => Err(format!("invalid sideband: '{}'", s)),
+        _ => Err(format!("invalid sideband: '{s}'")),
     }
 }
 
+/// Parse a demod mode string from legacy client control messages.
 fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
     match s.trim().to_ascii_lowercase().as_str() {
         "wfm" | "fm" => Ok(DemodMode::Wfm),
         "nfm" => Ok(DemodMode::Nfm),
         "usb" => Ok(DemodMode::Usb),
         "lsb" => Ok(DemodMode::Lsb),
-        _ => Err(format!("invalid demod mode: '{}'", s)),
+        _ => Err(format!("invalid demod mode: '{s}'")),
     }
 }
 
+/// Convert the current worker status into a full runtime snapshot for newly acquired clients.
 fn runtime_snapshot_from_status(
     radio_id: rigflow_core::radio::RadioId,
     status: &WorkerStatus,
@@ -621,6 +591,7 @@ fn runtime_snapshot_from_status(
     }
 }
 
+/// Convert the current worker status into an incremental runtime-changed message.
 fn runtime_changed_from_status(
     radio_id: rigflow_core::radio::RadioId,
     status: &WorkerStatus,
@@ -638,3 +609,81 @@ fn runtime_changed_from_status(
     }
 }
 
+/// Send a radio-control protocol message over the local connection queue.
+fn send_radio(
+    local_tx: &mpsc::UnboundedSender<ConnectionMessage>,
+    msg: ServerRadioMessage,
+) {
+    let _ = local_tx.send(ConnectionMessage::Radio(msg));
+}
+
+/// Send a standardized radio error.
+fn send_radio_error(
+    local_tx: &mpsc::UnboundedSender<ConnectionMessage>,
+    code: &str,
+    message: &str,
+) {
+    send_radio(
+        local_tx,
+        ServerRadioMessage::RadioError {
+            code: code.to_string(),
+            message: message.to_string(),
+        },
+    );
+}
+
+/// Best-effort debug logging for a full runtime snapshot.
+fn log_runtime_snapshot(msg: &ServerRadioMessage) {
+    if let ServerRadioMessage::RuntimeSnapshot {
+        radio_id,
+        center_freq_hz,
+        target_freq_hz,
+        input_sample_rate_hz,
+        audio_sample_rate_hz,
+        audio_format,
+        waterfall_bins,
+        waterfall_frame_rate_hz,
+        demod_mode,
+        sideband,
+        ssb_pitch_hz,
+    } = msg
+    {
+        println!(
+            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={}",
+            radio_id.0,
+            center_freq_hz,
+            target_freq_hz,
+            input_sample_rate_hz,
+            audio_sample_rate_hz,
+            audio_format,
+            waterfall_bins,
+            waterfall_frame_rate_hz,
+            demod_mode,
+            sideband,
+            ssb_pitch_hz,
+        );
+    }
+}
+
+/// Best-effort debug logging for an incremental runtime update.
+fn log_runtime_changed(msg: &ServerRadioMessage) {
+    if let ServerRadioMessage::RuntimeChanged {
+        radio_id,
+        center_freq_hz,
+        target_freq_hz,
+        demod_mode,
+        sideband,
+        ssb_pitch_hz,
+    } = msg
+    {
+        println!(
+            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?}",
+            radio_id.0,
+            center_freq_hz,
+            target_freq_hz,
+            demod_mode,
+            sideband,
+            ssb_pitch_hz,
+        );
+    }
+}
