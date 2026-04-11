@@ -1,7 +1,5 @@
 pub mod app_state;
-pub mod client_manager;
 pub mod config;
-pub mod connection;
 pub mod discovery;
 pub mod radio_manager;
 pub mod radio_api;
