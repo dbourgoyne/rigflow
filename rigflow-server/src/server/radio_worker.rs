@@ -299,7 +299,7 @@ fn run_iq_worker_threads(
         ssb_pitch_hz: 0.0,
     }));
 
-    let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+    let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
     let (iq_wf_tx, iq_wf_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
     let (startup_info_tx, startup_info_rx) =
         std_mpsc::sync_channel::<Result<StartupInfo, String>>(1);

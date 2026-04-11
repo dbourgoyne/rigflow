@@ -225,7 +225,7 @@ pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig
 pub fn choose_block_size(source: &SourceKind) -> usize {
     match source {
         SourceKind::Fake | SourceKind::Wav => 8192,
-        SourceKind::RtlSdr => 65536,
+        SourceKind::RtlSdr => 16384,
     }
 }
 
