@@ -333,6 +333,36 @@ impl DspPipeline {
         self.channelizer.process(&self.iq_scratch)
     }
 
+    fn apply_selected_ssb_filter(&mut self, iq: &[Complex32]) -> Vec<Complex32> {
+        match self.sideband {
+            Sideband::Usb => self
+                .ssb_usb_fir
+                .as_mut()
+                .map(|fir| fir.process(iq))
+                .unwrap_or_else(|| iq.to_vec()),
+            Sideband::Lsb => self
+                .ssb_lsb_fir
+                .as_mut()
+                .map(|fir| fir.process(iq))
+                .unwrap_or_else(|| iq.to_vec()),
+        }
+    }
+
+    fn process_fm_audio_post(&mut self, audio: &mut [f32], gain: f32) {
+        if let Some(fir) = &mut self.audio_fir {
+            fir.process_in_place(audio);
+        }
+
+        if let Some(deemphasis) = &mut self.deemphasis {
+            deemphasis.process_in_place(audio);
+        }
+
+        for sample in audio {
+            *sample *= gain;
+            *sample = sample.tanh();
+        }
+    }
+
     /// Full DSP path:
     /// IQ -> tuning/decimation -> demod -> audio conditioning -> optional resample
     pub fn process_audio(&mut self, input: &[Complex32]) -> Vec<f32> {
@@ -341,59 +371,28 @@ impl DspPipeline {
         let mut audio = match self.mode {
             DemodMode::Usb => {
                 self.sideband = Sideband::Usb;
-                let filtered = self
-                    .ssb_usb_fir
-                    .as_mut()
-                    .map(|fir| fir.process(&iq))
-                    .unwrap_or_else(|| iq.to_vec());
+                let filtered = self.apply_selected_ssb_filter(&iq);
                 self.ssb_demod.process(&filtered)
             }
 
             DemodMode::Lsb => {
                 self.sideband = Sideband::Lsb;
-                let filtered = self
-                    .ssb_lsb_fir
-                    .as_mut()
-                    .map(|fir| fir.process(&iq))
-                    .unwrap_or_else(|| iq.to_vec());
+                let filtered = self.apply_selected_ssb_filter(&iq);
                 self.ssb_demod.process(&filtered)
             }
 
-            DemodMode::Wfm => self.fm_demod.process(&iq),
-            DemodMode::Nfm => self.fm_demod.process(&iq),
+            DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
         };
 
         self.dc_blocker.process_in_place(&mut audio);
 
         match self.mode {
             DemodMode::Wfm => {
-                if let Some(fir) = &mut self.audio_fir {
-                    fir.process_in_place(&mut audio);
-                }
-
-                if let Some(deemphasis) = &mut self.deemphasis {
-                    deemphasis.process_in_place(&mut audio);
-                }
-
-                for sample in &mut audio {
-                    *sample *= WFM_AUDIO_GAIN;
-                    *sample = sample.tanh();
-                }
+                self.process_fm_audio_post(&mut audio, WFM_AUDIO_GAIN);
             }
 
             DemodMode::Nfm => {
-                if let Some(fir) = &mut self.audio_fir {
-                    fir.process_in_place(&mut audio);
-                }
-
-                if let Some(deemphasis) = &mut self.deemphasis {
-                    deemphasis.process_in_place(&mut audio);
-                }
-
-                for sample in &mut audio {
-                    *sample *= NFM_AUDIO_GAIN;
-                    *sample = sample.tanh();
-                }
+                self.process_fm_audio_post(&mut audio, NFM_AUDIO_GAIN);
             }
 
             DemodMode::Usb | DemodMode::Lsb => {
@@ -451,8 +450,11 @@ impl DspPipeline {
     }
 
     pub fn rebuild_ssb_filters(&mut self, bandwidth_hz: f32, taps: usize) {
-        self.ssb_bandwidth_hz = bandwidth_hz.max(300.0);
-        self.ssb_fir_taps = taps.max(31) | 1;
+        let bandwidth_hz = bandwidth_hz.max(300.0);
+        let taps = taps.max(31) | 1;
+
+        self.ssb_bandwidth_hz = bandwidth_hz;
+        self.ssb_fir_taps = taps;
 
         self.ssb_usb_fir = Some(ComplexSidebandFir::new(
             self.output_sample_rate_hz,
