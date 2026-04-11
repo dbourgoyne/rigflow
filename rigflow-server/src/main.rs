@@ -5,7 +5,6 @@ use std::time::Duration;
 use axum::{routing::get, Router};
 use log::{error, info};
 
-use rigflow_core::dsp::demod::Sideband;
 use rigflow_server::{
     api::websocket::ws_handler,
     server::{
@@ -57,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(RadioManager::lease_expiry_loop(Arc::clone(&radio_manager)));
 
     // Build shared application state used by Axum handlers.
-    let app_state = build_app_state(&cfg, Arc::clone(&radio_manager));
+    let app_state = build_app_state(Arc::clone(&radio_manager));
 
     // Start UDP registration listener in the background.
     spawn_udp_registration_listener(&app_state);
@@ -92,13 +91,8 @@ fn parse_config_or_exit() -> ServerConfig {
 /// Construct the shared Axum application state.
 ///
 /// This keeps startup wiring in one place and makes `main()` easier to scan.
-fn build_app_state(cfg: &ServerConfig, radio_manager: Arc<RadioManager>) -> AppState {
+fn build_app_state(radio_manager: Arc<RadioManager>) -> AppState {
     AppState::new(
-        cfg.center_freq_hz,
-        cfg.target_freq_hz,
-        Sideband::Lsb,
-        cfg.demod,
-        0.0, // Default SSB pitch offset at startup.
         radio_manager,
     )
 }

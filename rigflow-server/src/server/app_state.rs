@@ -1,12 +1,16 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, RwLock};
+
+use tokio::sync::{broadcast, RwLock};
 
 use rigflow_protocol::ServerMessage;
-use crate::dsp::demod::{DemodMode, Sideband};
-use crate::server::config::{WATERFALL_BINS, WATERFALL_FRAME_RATE_HZ};
+
 use crate::server::radio_manager::RadioManager;
 
+/// Shared application state for the WebSocket/API layer.
+///
+/// This holds the broadcast channels used to fan out legacy messages, audio,
+/// and waterfall payloads, along with shared access to the radio manager.
 #[derive(Clone)]
 pub struct AppState {
     pub tx: broadcast::Sender<ServerMessage>,
@@ -17,14 +21,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(
-        center_freq_hz: f32,
-        target_freq_hz: f32,
-        sideband: Sideband,
-        demod_mode: DemodMode,
-        ssb_pitch_hz: f32,
-	radio_manager: Arc<RadioManager>,
-    ) -> Self {
+    pub fn new(radio_manager: Arc<RadioManager>) -> Self {
         let (tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
         let (waterfall_tx, _) = broadcast::channel(256);
@@ -34,7 +31,7 @@ impl AppState {
             audio_tx,
             waterfall_tx,
             udp_audio_target: Arc::new(RwLock::new(None)),
-	    radio_manager,
+            radio_manager,
         }
     }
 }
