@@ -188,9 +188,14 @@ pub struct DspPipeline {
 
     output_sample_rate_hz: f32,
     client_output_sample_rate_hz: f32,
+
+    // Reused scratch buffer for the tuned IQ stage.
+    //
+    // This avoids allocating a fresh Vec on every process_iq() call, which
+    // helps reduce allocator churn and real-time jitter.
+    iq_scratch: Vec<Complex32>,
 }
 
-#[allow(clippy::too_many_arguments)]
 impl DspPipeline {
     pub fn new(cfg: DspPipelineConfig) -> Self {
         let output_sample_rate_hz = cfg.input_sample_rate_hz / cfg.decimation_factor as f32;
@@ -279,6 +284,7 @@ impl DspPipeline {
             ssb_pitch_hz,
             output_sample_rate_hz,
             client_output_sample_rate_hz: cfg.client_output_sample_rate_hz,
+            iq_scratch: Vec::new(),
         }
     }
 
@@ -315,10 +321,16 @@ impl DspPipeline {
 
     /// IQ path:
     /// input IQ -> virtual tune -> decimate/channel filter
+    ///
+    /// First-pass latency improvement:
+    /// reuse an internal scratch buffer instead of allocating a new Vec for
+    /// every block before tuning.
     pub fn process_iq(&mut self, input: &[Complex32]) -> Vec<Complex32> {
-        let mut shifted = input.to_vec();
-        self.tuner.process_in_place(&mut shifted);
-        self.channelizer.process(&shifted)
+        self.iq_scratch.clear();
+        self.iq_scratch.extend_from_slice(input);
+
+        self.tuner.process_in_place(&mut self.iq_scratch);
+        self.channelizer.process(&self.iq_scratch)
     }
 
     /// Full DSP path:

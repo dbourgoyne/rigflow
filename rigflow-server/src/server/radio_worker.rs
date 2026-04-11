@@ -728,7 +728,7 @@ fn spawn_dsp_thread(
             pipeline.client_output_sample_rate(),
         );
 
-        let mut audio = match UdpAudioSender::new(480) {
+        let mut audio = match UdpAudioSender::new(240) {
             Ok(sender) => sender,
             Err(error) => {
                 let reason = format!("failed to create UDP audio sender: {error}");
