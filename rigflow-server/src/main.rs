@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{routing::get, Router};
-use log::info;
-use tokio::sync::mpsc as tokio_mpsc;
+use log::{error, info};
 
 use rigflow_core::dsp::demod::Sideband;
 use rigflow_server::{
@@ -12,81 +11,108 @@ use rigflow_server::{
     server::{
         app_state::AppState,
         config::ServerConfig,
+        discovery::{debug_print_discovered_radios, discover_radios},
+        radio_manager::RadioManager,
+        radio_types::RadioManagerConfig,
     },
     streaming::udp_registration::run_udp_registration_listener,
 };
 
-use rigflow_server::server::discovery::{debug_print_discovered_radios, discover_radios};
-use rigflow_server::server::radio_manager::RadioManager;
-use rigflow_server::server::radio_types::RadioManagerConfig;
+/// WebSocket endpoint for rigflow control.
+const WS_ADDR: &str = "0.0.0.0:9000";
+
+/// UDP listener used by clients to register their audio destination.
+const UDP_REGISTRATION_ADDR: &str = "0.0.0.0:9001";
+
+/// Default lease-management timings.
+const LEASE_TTL_SECS: u64 = 30;
+const STARTUP_TIMEOUT_SECS: u64 = 5;
+const SHUTDOWN_TIMEOUT_SECS: u64 = 3;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging first so startup failures are visible.
     env_logger::init();
 
-    let cfg = match ServerConfig::from_args() {
-        Ok(c) => c,
-        Err(msg) => {
-            eprintln!("{msg}");
-            std::process::exit(2);
-        }
-    };
-
+    // Parse command-line configuration.
+    let cfg = parse_config_or_exit();
     info!("rigflow_server config: {:?}", cfg);
 
-    let center_freq_hz = cfg.center_freq_hz;
-    let target_freq_hz = cfg.target_freq_hz;
-    let sideband = Sideband::Lsb;
-    let demod_mode = cfg.demod;
-    let pitch_hz = 0.0;
-
-    let ws_addr: SocketAddr = "0.0.0.0:9000".parse()?;
-    let udp_registration_addr = "0.0.0.0:9001";
-
+    // Discover available radios at startup.
     let descriptors = discover_radios(&cfg);
     debug_print_discovered_radios(&descriptors);
 
+    // Build the radio manager that owns worker lifecycle and leasing.
     let radio_manager = Arc::new(RadioManager::new(
         descriptors,
         RadioManagerConfig {
-            lease_ttl: Duration::from_secs(30),
-            startup_timeout: Duration::from_secs(5),
-            shutdown_timeout: Duration::from_secs(3),
+            lease_ttl: Duration::from_secs(LEASE_TTL_SECS),
+            startup_timeout: Duration::from_secs(STARTUP_TIMEOUT_SECS),
+            shutdown_timeout: Duration::from_secs(SHUTDOWN_TIMEOUT_SECS),
         },
-	cfg.clone(),
+        cfg.clone(),
     ));
 
-    tokio::spawn(RadioManager::lease_expiry_loop(radio_manager.clone()));
+    // Periodically expire stale leases.
+    tokio::spawn(RadioManager::lease_expiry_loop(Arc::clone(&radio_manager)));
 
-    let state = AppState::new(
-        center_freq_hz,
-        target_freq_hz,
-        sideband,
-        demod_mode,
-        pitch_hz,
-        radio_manager.clone(),
-    );
+    // Build shared application state used by Axum handlers.
+    let app_state = build_app_state(&cfg, Arc::clone(&radio_manager));
 
+    // Start UDP registration listener in the background.
+    spawn_udp_registration_listener(&app_state);
+
+    // Build the Axum router.
     let app = Router::new()
         .route("/ws", get(ws_handler))
-        .with_state(state.clone());
+        .with_state(app_state);
 
+    // Start the WebSocket server.
+    let ws_addr: SocketAddr = WS_ADDR.parse()?;
     info!("rigflow_server listening on ws://{ws_addr}/ws");
-    info!("UDP registration listener on {}", udp_registration_addr);
-
-    {
-        let udp_audio_target = state.udp_audio_target.clone();
-        tokio::spawn(async move {
-            if let Err(e) =
-                run_udp_registration_listener(udp_registration_addr, udp_audio_target).await
-            {
-                eprintln!("UDP registration listener failed: {e}");
-            }
-        });
-    }
+    info!("UDP registration listener on {UDP_REGISTRATION_ADDR}");
 
     let listener = tokio::net::TcpListener::bind(ws_addr).await?;
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// Parse server configuration, printing a friendly error and exiting on failure.
+fn parse_config_or_exit() -> ServerConfig {
+    match ServerConfig::from_args() {
+        Ok(cfg) => cfg,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Construct the shared Axum application state.
+///
+/// This keeps startup wiring in one place and makes `main()` easier to scan.
+fn build_app_state(cfg: &ServerConfig, radio_manager: Arc<RadioManager>) -> AppState {
+    AppState::new(
+        cfg.center_freq_hz,
+        cfg.target_freq_hz,
+        Sideband::Lsb,
+        cfg.demod,
+        0.0, // Default SSB pitch offset at startup.
+        radio_manager,
+    )
+}
+
+/// Spawn the UDP registration listener used by clients to advertise where
+/// they want audio packets delivered.
+fn spawn_udp_registration_listener(state: &AppState) {
+    let udp_audio_target = state.udp_audio_target.clone();
+
+    tokio::spawn(async move {
+        if let Err(err) =
+            run_udp_registration_listener(UDP_REGISTRATION_ADDR, udp_audio_target).await
+        {
+            error!("UDP registration listener failed: {err}");
+        }
+    });
 }
