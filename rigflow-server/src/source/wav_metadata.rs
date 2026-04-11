@@ -1,6 +1,7 @@
 use std::path::Path;
 
 /// Parse center frequency from a WAV filename.
+///
 /// Supports patterns like:
 /// - SDRuno_20200912_004142Z_3750kHz.wav
 /// - capture_3.75MHz_iq.wav
@@ -12,20 +13,33 @@ pub fn parse_center_freq_hz_from_filename(path: &Path) -> Option<u64> {
     parse_center_freq_hz_from_str(name)
 }
 
+/// Extracts a frequency from a string by scanning for:
+///   <number><unit>
+/// where unit ∈ {mhz, khz, hz}.
+///
+/// Matching is:
+/// - case-insensitive
+/// - first match wins, based on unit search order (MHz → kHz → Hz)
 pub fn parse_center_freq_hz_from_str(s: &str) -> Option<u64> {
     let lower = s.to_ascii_lowercase();
     let bytes = lower.as_bytes();
 
-    let units = [("mhz", 1_000_000.0_f64), ("khz", 1_000.0_f64), ("hz", 1.0_f64)];
+    // Order matters: prefer larger units first
+    const UNITS: [(&str, f64); 3] = [
+        ("mhz", 1_000_000.0),
+        ("khz", 1_000.0),
+        ("hz", 1.0),
+    ];
 
-    for (unit, scale) in units {
-        let mut search_start = 0usize;
+    for (unit, scale) in UNITS {
+        let mut search_start = 0;
 
         while let Some(rel_pos) = lower[search_start..].find(unit) {
             let unit_pos = search_start + rel_pos;
 
-            // Walk backward from the unit to find the numeric token.
+            // Walk backward to capture the numeric token preceding the unit.
             let mut start = unit_pos;
+
             while start > 0 {
                 let c = bytes[start - 1] as char;
                 if c.is_ascii_digit() || c == '.' {
@@ -35,6 +49,7 @@ pub fn parse_center_freq_hz_from_str(s: &str) -> Option<u64> {
                 }
             }
 
+            // No numeric prefix → skip
             if start == unit_pos {
                 search_start = unit_pos + unit.len();
                 continue;
@@ -42,7 +57,7 @@ pub fn parse_center_freq_hz_from_str(s: &str) -> Option<u64> {
 
             let num_str = &lower[start..unit_pos];
 
-            // Reject malformed numbers like just "."
+            // Reject malformed cases like "."
             if num_str == "." {
                 search_start = unit_pos + unit.len();
                 continue;
@@ -50,6 +65,8 @@ pub fn parse_center_freq_hz_from_str(s: &str) -> Option<u64> {
 
             if let Ok(value) = num_str.parse::<f64>() {
                 let hz = (value * scale).round();
+
+                // Ensure finite and non-negative
                 if hz.is_finite() && hz >= 0.0 {
                     return Some(hz as u64);
                 }
