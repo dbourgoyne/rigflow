@@ -9,25 +9,18 @@ use crate::server::radio_types::{
     AcquireRequest, RadioManagerError, RadioState, RadioSummary,
 };
 
+/// Parse an acquire request from protocol fields.
+///
+/// Converts string socket addresses into `SocketAddr` and maps
+/// parsing failures into protocol-level `RadioError` messages.
 pub fn parse_acquire_request(
     center_freq_hz: u64,
     target_freq_hz: u64,
     audio_udp_peer: String,
     waterfall_udp_peer: String,
 ) -> Result<AcquireRequest, ServerRadioMessage> {
-    let audio_udp_peer = SocketAddr::from_str(&audio_udp_peer).map_err(|e| {
-        ServerRadioMessage::RadioError {
-            code: "invalid_audio_udp_peer".to_string(),
-            message: format!("invalid audio_udp_peer: {e}"),
-        }
-    })?;
-
-    let waterfall_udp_peer = SocketAddr::from_str(&waterfall_udp_peer).map_err(|e| {
-        ServerRadioMessage::RadioError {
-            code: "invalid_waterfall_udp_peer".to_string(),
-            message: format!("invalid waterfall_udp_peer: {e}"),
-        }
-    })?;
+    let audio_udp_peer = parse_socket_addr(&audio_udp_peer, "audio_udp_peer")?;
+    let waterfall_udp_peer = parse_socket_addr(&waterfall_udp_peer, "waterfall_udp_peer")?;
 
     Ok(AcquireRequest {
         center_freq_hz,
@@ -37,19 +30,27 @@ pub fn parse_acquire_request(
     })
 }
 
+/// Convert internal `RadioSummary` into protocol `RadioInfo`.
 pub fn radio_summary_to_protocol(summary: RadioSummary) -> RadioInfo {
+    let RadioSummary {
+        descriptor,
+        state,
+        is_leased,
+    } = summary;
+
     RadioInfo {
-        id: summary.descriptor.id,
-        display_name: summary.descriptor.display_name,
-        hardware_kind: summary.descriptor.hardware_kind,
-        index: summary.descriptor.index,
-        serial: summary.descriptor.serial,
-        capabilities: summary.descriptor.capabilities,
-        state: radio_state_to_protocol(&summary.state),
-        is_leased: summary.is_leased,
+        id: descriptor.id,
+        display_name: descriptor.display_name,
+        hardware_kind: descriptor.hardware_kind,
+        index: descriptor.index,
+        serial: descriptor.serial,
+        capabilities: descriptor.capabilities,
+        state: radio_state_to_protocol(&state),
+        is_leased,
     }
 }
 
+/// Convert internal radio state into protocol availability.
 pub fn radio_state_to_protocol(state: &RadioState) -> RadioAvailability {
     match state {
         RadioState::Available => RadioAvailability::Available,
@@ -60,51 +61,50 @@ pub fn radio_state_to_protocol(state: &RadioState) -> RadioAvailability {
     }
 }
 
+/// Convert `RadioManagerError` into protocol-level error messages.
 pub fn manager_error_to_protocol(err: RadioManagerError) -> ServerRadioMessage {
+    use RadioManagerError::*;
+
     match err {
-        RadioManagerError::RadioNotFound => ServerRadioMessage::RadioError {
-            code: "radio_not_found".to_string(),
-            message: "radio not found".to_string(),
-        },
-        RadioManagerError::RadioBusy => ServerRadioMessage::RadioError {
-            code: "radio_busy".to_string(),
-            message: "radio is already leased".to_string(),
-        },
-        RadioManagerError::NotLeaseOwner => ServerRadioMessage::RadioError {
-            code: "not_lease_owner".to_string(),
-            message: "session does not own this lease".to_string(),
-        },
-        RadioManagerError::NoActiveLease => ServerRadioMessage::RadioError {
-            code: "no_active_lease".to_string(),
-            message: "session has no active radio lease".to_string(),
-        },
-        RadioManagerError::InvalidLease => ServerRadioMessage::RadioError {
-            code: "invalid_lease".to_string(),
-            message: "lease id is invalid".to_string(),
-        },
-        RadioManagerError::RadioNotRunning => ServerRadioMessage::RadioError {
-            code: "radio_not_running".to_string(),
-            message: "radio is not running".to_string(),
-        },
-        RadioManagerError::StartupFailed(reason) => ServerRadioMessage::RadioError {
-            code: "startup_failed".to_string(),
-            message: reason,
-        },
-        RadioManagerError::StartupTimedOut => ServerRadioMessage::RadioError {
-            code: "startup_timed_out".to_string(),
-            message: "radio startup timed out".to_string(),
-        },
-        RadioManagerError::ShutdownTimedOut => ServerRadioMessage::RadioError {
-            code: "shutdown_timed_out".to_string(),
-            message: "radio shutdown timed out".to_string(),
-        },
-        RadioManagerError::WorkerChannelClosed => ServerRadioMessage::RadioError {
-            code: "worker_channel_closed".to_string(),
-            message: "radio worker channel closed".to_string(),
-        },
-        RadioManagerError::Internal(reason) => ServerRadioMessage::RadioError {
-            code: "internal_error".to_string(),
-            message: reason,
-        },
+        RadioNotFound => error("radio_not_found", "radio not found"),
+        RadioBusy => error("radio_busy", "radio is already leased"),
+        NotLeaseOwner => error("not_lease_owner", "session does not own this lease"),
+        NoActiveLease => error("no_active_lease", "session has no active radio lease"),
+        InvalidLease => error("invalid_lease", "lease id is invalid"),
+        RadioNotRunning => error("radio_not_running", "radio is not running"),
+
+        StartupFailed(reason) => error_owned("startup_failed", reason),
+        StartupTimedOut => error("startup_timed_out", "radio startup timed out"),
+        ShutdownTimedOut => error("shutdown_timed_out", "radio shutdown timed out"),
+        WorkerChannelClosed => error("worker_channel_closed", "radio worker channel closed"),
+
+        Internal(reason) => error_owned("internal_error", reason),
+    }
+}
+
+//
+// ============================
+// Helpers
+// ============================
+//
+
+fn parse_socket_addr(value: &str, field: &str) -> Result<SocketAddr, ServerRadioMessage> {
+    SocketAddr::from_str(value).map_err(|e| ServerRadioMessage::RadioError {
+        code: format!("invalid_{field}"),
+        message: format!("invalid {field}: {e}"),
+    })
+}
+
+fn error(code: &str, message: &str) -> ServerRadioMessage {
+    ServerRadioMessage::RadioError {
+        code: code.to_string(),
+        message: message.to_string(),
+    }
+}
+
+fn error_owned(code: &str, message: String) -> ServerRadioMessage {
+    ServerRadioMessage::RadioError {
+        code: code.to_string(),
+        message,
     }
 }
