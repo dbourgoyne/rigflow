@@ -77,8 +77,6 @@ impl ComplexSidebandFir {
         self.pos = 0;
     }
 
-    /// Filter into a caller-provided output buffer so the pipeline can reuse
-    /// storage across blocks instead of allocating a fresh Vec every call.
     fn process_into(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
         out.clear();
         out.reserve(input.len().saturating_sub(out.capacity()));
@@ -188,8 +186,11 @@ pub struct DspPipeline {
     output_sample_rate_hz: f32,
     client_output_sample_rate_hz: f32,
 
-    // Reused scratch buffer for tuned IQ.
-    iq_scratch: Vec<Complex32>,
+    // Reused scratch buffer for tuner output.
+    tuned_iq_scratch: Vec<Complex32>,
+
+    // Reused scratch buffer for channelized/decimated IQ.
+    channelized_iq_scratch: Vec<Complex32>,
 
     // Reused scratch buffer for SSB sideband filtering.
     ssb_filtered_scratch: Vec<Complex32>,
@@ -279,7 +280,8 @@ impl DspPipeline {
             ssb_pitch_hz,
             output_sample_rate_hz,
             client_output_sample_rate_hz: cfg.client_output_sample_rate_hz,
-            iq_scratch: Vec::new(),
+            tuned_iq_scratch: Vec::new(),
+            channelized_iq_scratch: Vec::new(),
             ssb_filtered_scratch: Vec::new(),
         }
     }
@@ -315,12 +317,21 @@ impl DspPipeline {
         self.tuner.set_center_frequency(center_freq_hz);
     }
 
-    pub fn process_iq(&mut self, input: &[Complex32]) -> Vec<Complex32> {
-        self.iq_scratch.clear();
-        self.iq_scratch.extend_from_slice(input);
+    pub fn process_iq_into(&mut self, input: &[Complex32], output: &mut Vec<Complex32>) {
+	self.tuned_iq_scratch.clear();
+	self.tuned_iq_scratch
+            .reserve(input.len().saturating_sub(self.tuned_iq_scratch.capacity()));
 
-        self.tuner.process_in_place(&mut self.iq_scratch);
-        self.channelizer.process(&self.iq_scratch)
+	self.tuner.process_into(input, &mut self.tuned_iq_scratch);
+	self.channelizer.process_into(&self.tuned_iq_scratch, output);
+    }
+
+    pub fn process_iq(&mut self, input: &[Complex32]) -> Vec<Complex32> {
+	let mut output = std::mem::take(&mut self.channelized_iq_scratch);
+	self.process_iq_into(input, &mut output);
+	let result = output.clone();
+	self.channelized_iq_scratch = output;
+	result
     }
 
     fn process_selected_ssb_filter(&mut self, iq: &[Complex32]) -> Vec<Complex32> {
@@ -366,33 +377,36 @@ impl DspPipeline {
     }
 
     pub fn process_audio(&mut self, input: &[Complex32]) -> Vec<f32> {
-        let iq = self.process_iq(input);
+	let mut iq = std::mem::take(&mut self.channelized_iq_scratch);
+	self.process_iq_into(input, &mut iq);
 
-        let mut audio = match self.mode {
+	let mut audio = match self.mode {
             DemodMode::Usb => self.demod_ssb(&iq, Sideband::Usb),
             DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
             DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
-        };
+	};
 
-        self.dc_blocker.process_in_place(&mut audio);
+	self.dc_blocker.process_in_place(&mut audio);
 
-        match self.mode {
+	match self.mode {
             DemodMode::Wfm => self.process_fm_audio_post(&mut audio, WFM_AUDIO_GAIN),
             DemodMode::Nfm => self.process_fm_audio_post(&mut audio, NFM_AUDIO_GAIN),
             DemodMode::Usb | DemodMode::Lsb => {
-                self.agc.process_in_place(&mut audio);
+		self.agc.process_in_place(&mut audio);
 
-                if let Some(fir) = &mut self.audio_fir {
+		if let Some(fir) = &mut self.audio_fir {
                     fir.process_in_place(&mut audio);
-                }
+		}
             }
-        }
+	}
 
-        if let Some(resampler) = &mut self.resampler {
+	self.channelized_iq_scratch = iq;
+
+	if let Some(resampler) = &mut self.resampler {
             resampler.process(&audio)
-        } else {
+	} else {
             audio
-        }
+	}
     }
 
     pub fn reset_audio_state(&mut self) {
@@ -420,7 +434,8 @@ impl DspPipeline {
             fir.reset();
         }
 
-        self.iq_scratch.clear();
+        self.tuned_iq_scratch.clear();
+        self.channelized_iq_scratch.clear();
         self.ssb_filtered_scratch.clear();
     }
 
