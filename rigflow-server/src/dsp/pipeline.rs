@@ -77,8 +77,12 @@ impl ComplexSidebandFir {
         self.pos = 0;
     }
 
-    fn process(&mut self, input: &[Complex32]) -> Vec<Complex32> {
-        let mut out = Vec::with_capacity(input.len());
+    /// Filter into a caller-provided output buffer so the pipeline can reuse
+    /// storage across blocks instead of allocating a fresh Vec every call.
+    fn process_into(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
+        out.clear();
+        out.reserve(input.len().saturating_sub(out.capacity()));
+
         let tap_count = self.taps.len();
 
         for &sample in input {
@@ -104,8 +108,6 @@ impl ComplexSidebandFir {
                 self.pos = 0;
             }
         }
-
-        out
     }
 }
 
@@ -143,18 +145,15 @@ fn design_sideband_taps(
     for i in 0..taps_len {
         let n = i as f32 - mid;
 
-        // Windowed low-pass prototype.
         let h_lp = 2.0 * fc * sinc(2.0 * fc * n);
         let window = 0.5 - 0.5 * (2.0 * PI * i as f32 / (taps_len as f32 - 1.0)).cos();
 
-        // Shift the prototype up or down to isolate USB/LSB.
         let phase = 2.0 * PI * fshift * n;
         let osc = Complex32::new(phase.cos(), phase.sin());
 
         taps.push(osc * (h_lp * window));
     }
 
-    // Normalize roughly by total magnitude so filter gain stays reasonable.
     let sum_mag: f32 = taps.iter().map(|tap| tap.norm()).sum();
     if sum_mag > 0.0 {
         for tap in &mut taps {
@@ -189,19 +188,17 @@ pub struct DspPipeline {
     output_sample_rate_hz: f32,
     client_output_sample_rate_hz: f32,
 
-    // Reused scratch buffer for the tuned IQ stage.
-    //
-    // This avoids allocating a fresh Vec on every process_iq() call, which
-    // helps reduce allocator churn and real-time jitter.
+    // Reused scratch buffer for tuned IQ.
     iq_scratch: Vec<Complex32>,
+
+    // Reused scratch buffer for SSB sideband filtering.
+    ssb_filtered_scratch: Vec<Complex32>,
 }
 
 impl DspPipeline {
     pub fn new(cfg: DspPipelineConfig) -> Self {
         let output_sample_rate_hz = cfg.input_sample_rate_hz / cfg.decimation_factor as f32;
 
-        // Only resample when the pipeline output rate differs materially from
-        // the client playback rate.
         let resampler =
             if (output_sample_rate_hz - cfg.client_output_sample_rate_hz).abs() > 1.0 {
                 Some(AudioResampler::new(
@@ -234,8 +231,6 @@ impl DspPipeline {
             None
         };
 
-        // For now, reuse the audio cutoff as SSB bandwidth.
-        // If needed later, SSB bandwidth can become a separate config field.
         let ssb_bandwidth_hz = cfg.audio_cutoff_hz.max(300.0);
         let ssb_fir_taps = cfg.audio_fir_taps.max(31) | 1;
         let ssb_pitch_hz = 0.0;
@@ -285,6 +280,7 @@ impl DspPipeline {
             output_sample_rate_hz,
             client_output_sample_rate_hz: cfg.client_output_sample_rate_hz,
             iq_scratch: Vec::new(),
+            ssb_filtered_scratch: Vec::new(),
         }
     }
 
@@ -319,12 +315,6 @@ impl DspPipeline {
         self.tuner.set_center_frequency(center_freq_hz);
     }
 
-    /// IQ path:
-    /// input IQ -> virtual tune -> decimate/channel filter
-    ///
-    /// First-pass latency improvement:
-    /// reuse an internal scratch buffer instead of allocating a new Vec for
-    /// every block before tuning.
     pub fn process_iq(&mut self, input: &[Complex32]) -> Vec<Complex32> {
         self.iq_scratch.clear();
         self.iq_scratch.extend_from_slice(input);
@@ -333,19 +323,31 @@ impl DspPipeline {
         self.channelizer.process(&self.iq_scratch)
     }
 
-    fn apply_selected_ssb_filter(&mut self, iq: &[Complex32]) -> Vec<Complex32> {
+    fn process_selected_ssb_filter(&mut self, iq: &[Complex32]) -> Vec<Complex32> {
         match self.sideband {
-            Sideband::Usb => self
-                .ssb_usb_fir
-                .as_mut()
-                .map(|fir| fir.process(iq))
-                .unwrap_or_else(|| iq.to_vec()),
-            Sideband::Lsb => self
-                .ssb_lsb_fir
-                .as_mut()
-                .map(|fir| fir.process(iq))
-                .unwrap_or_else(|| iq.to_vec()),
+            Sideband::Usb => {
+                if let Some(fir) = &mut self.ssb_usb_fir {
+                    fir.process_into(iq, &mut self.ssb_filtered_scratch);
+                    self.ssb_filtered_scratch.clone()
+                } else {
+                    iq.to_vec()
+                }
+            }
+            Sideband::Lsb => {
+                if let Some(fir) = &mut self.ssb_lsb_fir {
+                    fir.process_into(iq, &mut self.ssb_filtered_scratch);
+                    self.ssb_filtered_scratch.clone()
+                } else {
+                    iq.to_vec()
+                }
+            }
         }
+    }
+
+    fn demod_ssb(&mut self, iq: &[Complex32], sideband: Sideband) -> Vec<f32> {
+        self.sideband = sideband;
+        let filtered = self.process_selected_ssb_filter(iq);
+        self.ssb_demod.process(&filtered)
     }
 
     fn process_fm_audio_post(&mut self, audio: &mut [f32], gain: f32) {
@@ -363,38 +365,20 @@ impl DspPipeline {
         }
     }
 
-    /// Full DSP path:
-    /// IQ -> tuning/decimation -> demod -> audio conditioning -> optional resample
     pub fn process_audio(&mut self, input: &[Complex32]) -> Vec<f32> {
         let iq = self.process_iq(input);
 
         let mut audio = match self.mode {
-            DemodMode::Usb => {
-                self.sideband = Sideband::Usb;
-                let filtered = self.apply_selected_ssb_filter(&iq);
-                self.ssb_demod.process(&filtered)
-            }
-
-            DemodMode::Lsb => {
-                self.sideband = Sideband::Lsb;
-                let filtered = self.apply_selected_ssb_filter(&iq);
-                self.ssb_demod.process(&filtered)
-            }
-
+            DemodMode::Usb => self.demod_ssb(&iq, Sideband::Usb),
+            DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
             DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
         };
 
         self.dc_blocker.process_in_place(&mut audio);
 
         match self.mode {
-            DemodMode::Wfm => {
-                self.process_fm_audio_post(&mut audio, WFM_AUDIO_GAIN);
-            }
-
-            DemodMode::Nfm => {
-                self.process_fm_audio_post(&mut audio, NFM_AUDIO_GAIN);
-            }
-
+            DemodMode::Wfm => self.process_fm_audio_post(&mut audio, WFM_AUDIO_GAIN),
+            DemodMode::Nfm => self.process_fm_audio_post(&mut audio, NFM_AUDIO_GAIN),
             DemodMode::Usb | DemodMode::Lsb => {
                 self.agc.process_in_place(&mut audio);
 
@@ -435,6 +419,9 @@ impl DspPipeline {
         if let Some(fir) = &mut self.ssb_lsb_fir {
             fir.reset();
         }
+
+        self.iq_scratch.clear();
+        self.ssb_filtered_scratch.clear();
     }
 
     pub fn output_sample_rate(&self) -> f32 {
