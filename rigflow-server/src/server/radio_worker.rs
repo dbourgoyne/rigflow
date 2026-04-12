@@ -19,7 +19,7 @@ use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ,
 };
-use crate::server::radio_types::{
+use crate::radio::types::{
     AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
     WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };

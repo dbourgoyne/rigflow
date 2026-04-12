@@ -9,10 +9,10 @@ use rigflow_server::{
     app_state::AppState,
     config::ServerConfig,
     net::websocket::ws_handler,
+    radio::types::RadioManagerConfig,
     server::{
         discovery::{debug_print_discovered_radios, discover_radios},
         radio_manager::RadioManager,
-        radio_types::RadioManagerConfig,
     },
     net::udp::udp_registration::run_udp_registration_listener,
 };

@@ -1,6 +1,6 @@
 use rigflow_core::radio::{LeaseId, RadioId};
 
-use crate::server::radio_types::ClientId;
+use crate::radio::types::ClientId;
 
 /// Represents a radio currently acquired by a session.
 #[derive(Debug, Clone)]

@@ -8,7 +8,7 @@ use tokio::task::JoinHandle;
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 
 use crate::config::ServerConfig;
-use crate::server::radio_types::{
+use crate::radio::types::{
     AcquireRadioResult, AcquireRequest, ClientId, LeaseRecord, RadioManagerConfig,
     RadioManagerError, RadioState, RadioSummary, StopReason, WorkerCommand, WorkerExit,
     WorkerStartResult, WorkerStatus,

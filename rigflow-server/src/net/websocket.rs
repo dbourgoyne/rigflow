@@ -14,11 +14,11 @@ use rigflow_protocol::{ClientMessage, ServerMessage};
 use crate::{
     app_state::AppState,
     dsp::demod::{demod_mode_to_string, sideband_to_string, DemodMode, Sideband},
+    radio::types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
     server::{
         radio_api::{
             manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol,
         },
-        radio_types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
         session::SessionState,
     },
 };

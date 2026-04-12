@@ -5,7 +5,7 @@ use rigflow_protocol::radio_control::{
     RadioAvailability, RadioInfo, ServerRadioMessage,
 };
 
-use crate::server::radio_types::{
+use crate::radio::types::{
     AcquireRequest, RadioManagerError, RadioState, RadioSummary,
 };
 
