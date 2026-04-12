@@ -1,5 +1,5 @@
-pub mod types;
+pub mod model;
 
-pub use types::{
+pub use model::{
     HardwareKind, LeaseId, RadioCapabilities, RadioDescriptor, RadioId,
 };

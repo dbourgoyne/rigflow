@@ -1,6 +1,6 @@
 use std::env;
 
-use rigflow_core::dsp::demod::DemodMode;
+use rigflow_core::dsp::modes::DemodMode;
 
 use crate::source::factory::SourceConfig;
 

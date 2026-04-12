@@ -11,7 +11,7 @@ use log::debug;
 use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use rigflow_core::dsp::demod::{DemodMode, Sideband};
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};

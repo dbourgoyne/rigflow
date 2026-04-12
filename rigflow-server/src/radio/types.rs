@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use rigflow_core::dsp::demod::{DemodMode, Sideband};
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 
 /// Unique identifier for a connected client/session.
