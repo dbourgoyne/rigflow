@@ -13,7 +13,7 @@ use crate::radio::types::{
     RadioManagerError, RadioState, RadioSummary, StopReason, WorkerCommand, WorkerExit,
     WorkerStartResult, WorkerStatus,
 };
-use crate::server::radio_worker::run_radio_worker;
+use crate::radio::worker::run_radio_worker;
 
 /// Runtime state for a radio that currently has an active worker task.
 ///
