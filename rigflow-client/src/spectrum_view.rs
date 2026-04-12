@@ -1,26 +1,35 @@
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
-use crate::app::bands::visible_radio_bands;
+use eframe::egui::{
+    self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke,
+};
 
+use crate::app::bands::visible_radio_bands;
 use crate::app::{
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
     layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
     state::UiState,
 };
-
 use crate::app::om_bands::{
-    visible_om_segments, OmKind,
-    COLOR_OM_RTTY_DATA,
-    COLOR_OM_PHONE_IMAGE,
-    COLOR_OM_CW_ONLY,
-    COLOR_OM_SSB_PHONE,
+    visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
+    COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
     COLOR_OM_USB_PHONE_CW_RTTY_DATA,
-    COLOR_OM_FIXED_DIGITAL,
 };
 
+/// Result of user interaction with the spectrum plot.
+///
+/// Currently only supports click-to-tune.
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
 }
 
+/// Draw the full spectrum plot.
+///
+/// Responsibilities:
+/// - layout and background
+/// - axes and grid
+/// - overlays (bands, OM segments, passband)
+/// - spectrum trace
+/// - frequency markers
+/// - click interaction → frequency
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
     size: egui::Vec2,
@@ -29,12 +38,16 @@ pub fn draw_spectrum_plot(
     db_max: f32,
     state: &UiState,
 ) -> SpectrumInteraction {
+    // Enforce minimum size so layout never collapses visually.
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
+
     let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter_at(outer_rect);
 
+    // Plot background.
     painter.rect_filled(outer_rect, 4.0, Color32::from_rgb(20, 20, 24));
 
+    // Inner plotting region after gutters are reserved for axis labels.
     let plot_rect = Rect::from_min_max(
         Pos2::new(outer_rect.left() + LEFT_GUTTER, outer_rect.top() + TOP_GUTTER),
         Pos2::new(
@@ -43,10 +56,12 @@ pub fn draw_spectrum_plot(
         ),
     );
 
+    // Guard against degenerate layout.
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
-	return empty_interaction();
+        return empty_interaction();
     }
 
+    // Render back → front.
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, state);
     draw_band_overlays(&painter, plot_rect, state);
@@ -55,6 +70,7 @@ pub fn draw_spectrum_plot(
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
     draw_frequency_markers(&painter, plot_rect, state);
 
+    // Plot border.
     painter.rect_stroke(
         plot_rect,
         0.0,
@@ -62,6 +78,7 @@ pub fn draw_spectrum_plot(
         egui::StrokeKind::Inside,
     );
 
+    // Click-to-tune interaction.
     let mut clicked_freq_hz = None;
 
     if response.clicked() && visible_span_hz(state) > 0.0 {
@@ -76,7 +93,7 @@ pub fn draw_spectrum_plot(
     }
 
     SpectrumInteraction {
-	clicked_target_freq_hz: clicked_freq_hz,
+        clicked_target_freq_hz: clicked_freq_hz,
     }
 }
 
@@ -241,7 +258,7 @@ fn draw_frequency_markers(
         return;
     }
 
-    // Comment out center marker, really adds nothing to UI usability
+    // Center-frequency marker intentionally left disabled.
     /*
     if let Some(center_x) = freq_to_plot_x_egui(state.center_freq_hz, plot_rect, state) {
         painter.line_segment(
@@ -271,32 +288,31 @@ fn draw_frequency_markers(
             Stroke::new(1.5, Color32::from_rgb(255, 220, 80)),
         );
 
-	let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
+        let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
+        let plot_center_x = plot_rect.center().x;
 
-	let plot_center_x = plot_rect.center().x;
+        let (label_pos, label_align) = if target_x > plot_center_x {
+            (
+                Pos2::new(target_x - 4.0, plot_rect.top() + 18.0),
+                Align2::RIGHT_TOP,
+            )
+        } else {
+            (
+                Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
+                Align2::LEFT_TOP,
+            )
+        };
 
-	let (label_pos, label_align) = if target_x > plot_center_x {
-	    (
-		Pos2::new(target_x - 4.0, plot_rect.top() + 18.0),
-		Align2::RIGHT_TOP,
-	    )
-	} else {
-	    (
-		Pos2::new(target_x + 4.0, plot_rect.top() + 18.0),
-		Align2::LEFT_TOP,
-	    )
-	};
+        painter.text(
+            label_pos,
+            label_align,
+            label,
+            FontId::monospace(10.0),
+            Color32::from_rgb(255, 220, 80),
+        );
 
-	painter.text(
-	    label_pos,
-	    label_align,
-	    label,
-	    FontId::monospace(10.0),
-	    Color32::from_rgb(255, 220, 80),
-	);
-
-	// Comment out the arrow for now
-	/*
+        // Bottom arrow intentionally left disabled.
+        /*
         let tri = vec![
             Pos2::new(target_x, plot_rect.bottom() - 2.0),
             Pos2::new(target_x - 5.0, plot_rect.bottom() - 10.0),
@@ -308,7 +324,7 @@ fn draw_frequency_markers(
             Color32::from_rgb(255, 220, 80),
             Stroke::NONE,
         ));
-	*/
+        */
     }
 }
 
@@ -332,11 +348,11 @@ fn draw_passband_overlay(
         "wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
         "nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
 
-        // legacy representation
+        // Legacy representation where mode already encodes sideband.
         "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
         "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
 
-        // cleaner future representation
+        // Future cleaner representation: mode + separate sideband.
         "ssb" => match sideband.as_str() {
             "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
             "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
@@ -405,7 +421,7 @@ fn draw_band_overlays(
         return;
     }
 
-    // Draw as a shallow strip just above the x-axis.
+    // Draw a shallow strip just above the x-axis labels.
     let band_strip_height = 14.0;
     let y0 = plot_rect.bottom() - band_strip_height - 2.0;
     let y1 = plot_rect.bottom() - 2.0;
@@ -424,22 +440,21 @@ fn draw_band_overlays(
 
         let color = color32_from_u32_with_alpha(band.color, 72);
 
-        let band_rect = Rect::from_min_max(
-            Pos2::new(x0, y0),
-            Pos2::new(x1, y1),
-        );
+        let band_rect = Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1));
 
         painter.rect_filled(band_rect, 0.0, color);
 
-        // Optional subtle border for definition.
         painter.rect_stroke(
             band_rect,
             0.0,
-            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 24)),
+            Stroke::new(
+                1.0,
+                Color32::from_rgba_premultiplied(255, 255, 255, 24),
+            ),
             egui::StrokeKind::Inside,
         );
 
-        // Only draw label if there is enough room.
+        // Only draw the label if there is enough horizontal room.
         if (x1 - x0) >= 48.0 {
             painter.text(
                 Pos2::new((x0 + x1) * 0.5, y0 + 1.0),
@@ -487,9 +502,9 @@ fn draw_om_overlays(
     state: &UiState,
 ) {
     let Some(license) = state.selected_license else {
-	return;
+        return;
     };
-    
+
     let left_hz = visible_left_hz(state);
     let right_hz = visible_right_hz(state);
 
@@ -502,7 +517,7 @@ fn draw_om_overlays(
         return;
     }
 
-    // Must sit immediately above the band strip and be ~1/3 its height.
+    // Draw immediately above the general band strip at roughly one-third height.
     let band_strip_height = 14.0;
     let om_strip_height = band_strip_height / 3.0;
     let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
@@ -523,17 +538,17 @@ fn draw_om_overlays(
 
         let color = color32_from_u32_with_alpha(om_kind_color(seg.kind), 150);
 
-        let seg_rect = Rect::from_min_max(
-            Pos2::new(x0, om_y0),
-            Pos2::new(x1, om_y1),
-        );
+        let seg_rect = Rect::from_min_max(Pos2::new(x0, om_y0), Pos2::new(x1, om_y1));
 
         painter.rect_filled(seg_rect, 0.0, color);
 
         painter.rect_stroke(
             seg_rect,
             0.0,
-            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 32)),
+            Stroke::new(
+                1.0,
+                Color32::from_rgba_premultiplied(255, 255, 255, 32),
+            ),
             egui::StrokeKind::Inside,
         );
 
@@ -557,5 +572,5 @@ fn empty_interaction() -> SpectrumInteraction {
 
 fn format_mhz(freq_hz: f32) -> String {
     let mhz = freq_hz / 1_000_000.0;
-    format!("{:.3}", mhz)
+    format!("{mhz:.3}")
 }
