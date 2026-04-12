@@ -15,10 +15,10 @@ use crate::{
     app_state::AppState,
     dsp::demod::{demod_mode_to_string, sideband_to_string, DemodMode, Sideband},
     radio::{
+	api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
 	types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
 	session::SessionState,
     },
-    server::radio_api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
 };
 
 /// Messages that may be sent to a connected WebSocket client.
