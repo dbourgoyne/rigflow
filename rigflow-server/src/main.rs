@@ -6,10 +6,10 @@ use axum::{routing::get, Router};
 use log::{error, info};
 
 use rigflow_server::{
+    app_state::AppState,
     config::ServerConfig,
     api::websocket::ws_handler,
     server::{
-        app_state::AppState,
         discovery::{debug_print_discovered_radios, discover_radios},
         radio_manager::RadioManager,
         radio_types::RadioManagerConfig,

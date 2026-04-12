@@ -12,9 +12,9 @@ use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
 use rigflow_protocol::{ClientMessage, ServerMessage};
 
 use crate::{
+    app_state::AppState,
     dsp::demod::{demod_mode_to_string, sideband_to_string, DemodMode, Sideband},
     server::{
-        app_state::AppState,
         radio_api::{
             manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol,
         },
