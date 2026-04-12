@@ -12,7 +12,6 @@ use rigflow_core::{
 use crate::{
     app::layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
     app::spectrum_utils::update_spectrum_db,
-    app::state::UiState,
     app::waterfall::draw_row,
 };
 
@@ -65,11 +64,7 @@ pub fn handle_media_packet(
     jitter: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
-    ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
-    width: usize,
-    height: usize,
-    waterfall_top: usize,
 ) {
     // --- Header parsing ---------------------------------------------------
 
@@ -120,10 +115,6 @@ pub fn handle_media_packet(
                 payload,
                 waterfall_buffer,
                 spectrum_db,
-                ui_state,
-                width,
-                height,
-                waterfall_top,
             );
         }
 
@@ -213,10 +204,6 @@ fn handle_waterfall_packet(
     payload: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
-    ui_state: &Arc<Mutex<UiState>>,
-    width: usize,
-    height: usize,
-    waterfall_top: usize,
 ) {
     if payload.is_empty() {
         return;
@@ -230,13 +217,6 @@ fn handle_waterfall_packet(
         update_spectrum_db(&mut spectrum, row);
     }
 
-    // --- Snapshot UI state -----------------------------------------------
-
-    let state_snapshot = match ui_state.lock() {
-        Ok(state) => state.clone(),
-        Err(_) => return,
-    };
-
     // --- Update waterfall buffer -----------------------------------------
 
     if let Ok(mut fb) = waterfall_buffer.lock() {
@@ -247,41 +227,4 @@ fn handle_waterfall_packet(
             row,
         );
     }
-}
-
-/// Compute the UDP endpoint that should be advertised to the server.
-///
-/// This determines the correct local IP by:
-/// - creating a temporary socket
-/// - "connecting" it to the server (route probe)
-/// - reading the OS-selected local IP
-///
-/// Returns a string in "ip:port" format.
-pub fn compute_advertised_udp_peer(
-    udp_socket: &UdpSocket,
-    server_ip: &str,
-    server_port_for_route_probe: u16,
-) -> Result<String, String> {
-    let udp_port = udp_socket
-        .local_addr()
-        .map_err(|e| format!("failed to get udp local addr: {e}"))?
-        .port();
-
-    let probe = UdpSocket::bind("0.0.0.0:0")
-        .map_err(|e| format!("failed to bind UDP probe socket: {e}"))?;
-
-    probe
-        .connect((server_ip, server_port_for_route_probe))
-        .map_err(|e| {
-            format!(
-                "failed to probe route to server {server_ip}:{server_port_for_route_probe}: {e}"
-            )
-        })?;
-
-    let local_ip = probe
-        .local_addr()
-        .map_err(|e| format!("failed to get probe local addr: {e}"))?
-        .ip();
-
-    Ok(format!("{local_ip}:{udp_port}"))
 }

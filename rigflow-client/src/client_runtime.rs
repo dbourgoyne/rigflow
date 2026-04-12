@@ -130,7 +130,6 @@ pub fn start_media_runtime(
 
     // --- Shared state clones for thread -----------------------------------
 
-    let ui_state_for_thread = Arc::clone(&ui_state);
     let jitter_for_thread = Arc::clone(&jitter);
     let waterfall_for_thread = Arc::clone(&waterfall_buffer);
     let spectrum_for_thread = Arc::clone(&spectrum_db);
@@ -249,11 +248,7 @@ pub fn start_media_runtime(
                             &jitter_for_thread,
                             &waterfall_for_thread,
                             &spectrum_for_thread,
-                            &ui_state_for_thread,
                             &stats_for_thread,
-                            WIDTH,
-                            HEIGHT,
-                            WATERFALL_TOP,
                         );
                     }
                 }
