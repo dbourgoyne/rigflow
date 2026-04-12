@@ -2,7 +2,8 @@ use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
+//use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::mpsc;
@@ -157,7 +158,7 @@ pub fn start_media_runtime(
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
 
-        let mut last_stats_log = Instant::now();
+        // let mut last_stats_log = Instant::now();  // Needed for periodic jitter logging
 
         loop {
             // --- Session change detection (radio switch) -------------------
@@ -176,6 +177,7 @@ pub fn start_media_runtime(
 
             // --- Existing ad hoc jitter diagnostics -----------------------
 
+	    /*
             if last_stats_log.elapsed() >= Duration::from_secs(2) {
                 if let Ok(jb) = jitter.lock() {
                     let current_samples = jb.buffered_samples();
@@ -201,6 +203,7 @@ pub fn start_media_runtime(
 
                 last_stats_log = Instant::now();
             }
+	    */
 
             // --- Additional interval-based stats logger -------------------
 
