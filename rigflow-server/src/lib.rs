@@ -2,7 +2,6 @@ pub mod app_state;
 pub mod config;
 pub mod dsp;
 pub mod events;
-pub mod input;
 pub mod net;
 pub mod plugin_api;
 pub mod plugins;
