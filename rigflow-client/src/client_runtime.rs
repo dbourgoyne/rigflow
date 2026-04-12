@@ -1,11 +1,10 @@
 use std::net::UdpSocket;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use tokio::sync::mpsc;
 
 use rigflow_core::{
@@ -16,10 +15,11 @@ use rigflow_core::{
 use crate::{
     app::{
         layout::{
-            HEIGHT, SPECTRUM_DB_MIN, WATERFALL_TOP, WIDTH,
-            SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
+            HEIGHT, SPECTRUM_DB_MIN, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
+            WATERFALL_TOP, WIDTH,
         },
         state::UiState,
+        stats::ClientStatsLogger,
     },
     net::udp::{handle_media_packet, MediaPacketStats},
 };
@@ -98,6 +98,10 @@ pub fn start_media_runtime(
         MAX_BUFFER_SAMPLES,
     )));
 
+    // --- Periodic client stats logger -------------------------------------
+
+    let stats_logger = Arc::new(Mutex::new(ClientStatsLogger::new()));
+
     // --- Audio output (CPAL) ----------------------------------------------
 
     let host = cpal::default_host();
@@ -107,7 +111,12 @@ pub fn start_media_runtime(
 
     let config = device.default_output_config()?.config();
 
-    let audio_stream = build_output_stream(&device, &config, Arc::clone(&jitter))?;
+    let audio_stream = build_output_stream(
+        &device,
+        &config,
+        Arc::clone(&jitter),
+        Arc::clone(&stats_logger),
+    )?;
     audio_stream.play()?;
 
     // --- UI buffers --------------------------------------------------------
@@ -118,9 +127,7 @@ pub fn start_media_runtime(
     let waterfall_buffer =
         Arc::new(Mutex::new(vec![0u32; waterfall_width * waterfall_height]));
 
-    let spectrum_db =
-        Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
-
+    let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
     let media_stats = Arc::new(Mutex::new(MediaPacketStats::new()));
 
     // --- Control channel ---------------------------------------------------
@@ -134,6 +141,7 @@ pub fn start_media_runtime(
     let waterfall_for_thread = Arc::clone(&waterfall_buffer);
     let spectrum_for_thread = Arc::clone(&spectrum_db);
     let stats_for_thread = Arc::clone(&media_stats);
+    let stats_logger_for_thread = Arc::clone(&stats_logger);
 
     // --- Audio session generation (for radio switching) -------------------
 
@@ -166,7 +174,7 @@ pub fn start_media_runtime(
                 println!("[client] jitter buffer reset for new radio session");
             }
 
-            // --- Periodic jitter diagnostics ------------------------------
+            // --- Existing ad hoc jitter diagnostics -----------------------
 
             if last_stats_log.elapsed() >= Duration::from_secs(2) {
                 if let Ok(jb) = jitter.lock() {
@@ -192,6 +200,20 @@ pub fn start_media_runtime(
                 }
 
                 last_stats_log = Instant::now();
+            }
+
+            // --- Additional interval-based stats logger -------------------
+
+            if let (Ok(mut logger), Ok(mut media_stats), Ok(jb)) = (
+                stats_logger_for_thread.lock(),
+                stats_for_thread.lock(),
+                jitter_for_thread.lock(),
+            ) {
+                logger.maybe_log(
+                    &mut media_stats,
+                    jb.buffered_samples(),
+                    OUTPUT_SAMPLE_RATE as f32,
+                );
             }
 
             // --- Handle control commands ----------------------------------
@@ -283,10 +305,12 @@ pub fn start_media_runtime(
 /// - selects a compatible output config
 /// - pulls audio from the jitter buffer
 /// - fills silence on lock failure or underflow
+/// - feeds audio sample counts into the periodic stats logger
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     jitter: Arc<Mutex<JitterBuffer>>,
+    stats_logger: Arc<Mutex<ClientStatsLogger>>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
     let supported_configs = device.supported_output_configs()?;
 
@@ -327,6 +351,7 @@ fn build_output_stream(
     };
 
     let jitter_for_audio = Arc::clone(&jitter);
+    let stats_logger_for_audio = Arc::clone(&stats_logger);
 
     let stream = device.build_output_stream(
         &selected_config,
@@ -338,6 +363,10 @@ fn build_output_stream(
                 for sample in data.iter_mut() {
                     *sample = 0.0;
                 }
+            }
+
+            if let Ok(mut logger) = stats_logger_for_audio.lock() {
+                logger.add_audio_samples(data.len());
             }
         },
         err_fn,
