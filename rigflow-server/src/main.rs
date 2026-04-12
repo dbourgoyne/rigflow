@@ -8,7 +8,7 @@ use log::{error, info};
 use rigflow_server::{
     app_state::AppState,
     config::ServerConfig,
-    api::websocket::ws_handler,
+    net::websocket::ws_handler,
     server::{
         discovery::{debug_print_discovered_radios, discover_radios},
         radio_manager::RadioManager,
