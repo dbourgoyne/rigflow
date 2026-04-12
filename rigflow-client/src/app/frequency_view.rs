@@ -1,6 +1,5 @@
 use crate::{
     app::{
-        layout::{SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1},
         state::UiState,
     },
 };

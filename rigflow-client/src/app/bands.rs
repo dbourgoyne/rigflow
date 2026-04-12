@@ -5,6 +5,7 @@
 /// - suggesting a preferred demod mode (UI hint only)
 use rigflow_core::dsp::modes::DemodMode;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct RadioBand {
     /// Display name (e.g. "40m Amateur")
@@ -158,6 +159,7 @@ pub const RADIO_BANDS: &[RadioBand] = &[
 ];
 
 /// A clipped version of a band that is currently visible on screen.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct VisibleRadioBand {
     pub name: &'static str,
