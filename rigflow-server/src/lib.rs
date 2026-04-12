@@ -6,6 +6,5 @@ pub mod net;
 pub mod plugin_api;
 pub mod plugins;
 pub mod radio;
-pub mod server;
 pub mod waterfall;
 pub mod source;
