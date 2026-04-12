@@ -1,212 +1,12 @@
-pub const COLOR_OM_RTTY_DATA: u32 = 0x00c00000;               // red
-pub const COLOR_OM_PHONE_IMAGE: u32 = 0x0000a000;             // green
-pub const COLOR_OM_CW_ONLY: u32 = 0x00f0f0f0;                 // white
-pub const COLOR_OM_SSB_PHONE: u32 = 0x00d0c000;               // yellow
-pub const COLOR_OM_USB_PHONE_CW_RTTY_DATA: u32 = 0x0040b0ff;  // light blue
-pub const COLOR_OM_FIXED_DIGITAL: u32 = 0x00ff9000;           // orange
+/// Color constants for OM segment visualization (0xRRGGBB).
+pub const COLOR_OM_RTTY_DATA: u32 = 0x00c00000;              // red
+pub const COLOR_OM_PHONE_IMAGE: u32 = 0x0000a000;            // green
+pub const COLOR_OM_CW_ONLY: u32 = 0x00f0f0f0;                // white
+pub const COLOR_OM_SSB_PHONE: u32 = 0x00d0c000;              // yellow
+pub const COLOR_OM_USB_PHONE_CW_RTTY_DATA: u32 = 0x0040b0ff; // light blue
+pub const COLOR_OM_FIXED_DIGITAL: u32 = 0x00ff9000;          // orange
 
-const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
-    // 10 meters
-    OmSegment {
-        start_hz: 28_000_000.0,
-        end_hz: 28_300_000.0,
-        kind: OmKind::RttyData,
-        //amateur_band_name: "10m",
-    },
-    OmSegment {
-        start_hz: 28_300_000.0,
-        end_hz: 29_700_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "10m",
-    },
-
-    // 6 meters
-    OmSegment {
-        start_hz: 50_000_000.0,
-        end_hz: 54_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "6m",
-    },
-
-    // 2 meters
-    OmSegment {
-        start_hz: 144_000_000.0,
-        end_hz: 148_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "2m",
-    },
-
-    // 1.25 meters
-    OmSegment {
-        start_hz: 222_000_000.0,
-        end_hz: 225_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "1.25m",
-    },
-
-    // 70 cm
-    OmSegment {
-        start_hz: 420_000_000.0,
-        end_hz: 450_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "70cm",
-    },
-];
-
-const ADVANCED_SEGMENTS: &[OmSegment] = &[
-    // Same starter VHF/UHF treatment as Extra
-    OmSegment {
-        start_hz: 28_000_000.0,
-        end_hz: 28_300_000.0,
-        kind: OmKind::RttyData,
-        //amateur_band_name: "10m",
-    },
-    OmSegment {
-        start_hz: 28_300_000.0,
-        end_hz: 29_700_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "10m",
-    },
-    OmSegment {
-        start_hz: 50_000_000.0,
-        end_hz: 54_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "6m",
-    },
-    OmSegment {
-        start_hz: 144_000_000.0,
-        end_hz: 148_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "2m",
-    },
-    OmSegment {
-        start_hz: 222_000_000.0,
-        end_hz: 225_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "1.25m",
-    },
-    OmSegment {
-        start_hz: 420_000_000.0,
-        end_hz: 450_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "70cm",
-    },
-];
-
-const GENERAL_SEGMENTS: &[OmSegment] = &[
-    // 10 meters
-    OmSegment {
-        start_hz: 28_000_000.0,
-        end_hz: 28_300_000.0,
-        kind: OmKind::RttyData,
-        //amateur_band_name: "10m",
-    },
-    OmSegment {
-        start_hz: 28_300_000.0,
-        end_hz: 29_700_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "10m",
-    },
-
-    // 6 meters
-    OmSegment {
-        start_hz: 50_000_000.0,
-        end_hz: 54_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "6m",
-    },
-
-    // 2 meters
-    OmSegment {
-        start_hz: 144_000_000.0,
-        end_hz: 148_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "2m",
-    },
-
-    // 1.25 meters
-    OmSegment {
-        start_hz: 222_000_000.0,
-        end_hz: 225_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "1.25m",
-    },
-
-    // 70 cm
-    OmSegment {
-        start_hz: 420_000_000.0,
-        end_hz: 450_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "70cm",
-    },
-];
-
-const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
-    // 10 meters: Novice/Technician privileges
-    OmSegment {
-        start_hz: 28_000_000.0,
-        end_hz: 28_300_000.0,
-        kind: OmKind::RttyData,
-        //amateur_band_name: "10m",
-    },
-    OmSegment {
-        start_hz: 28_300_000.0,
-        end_hz: 28_500_000.0,
-        kind: OmKind::SsbPhone,
-        //amateur_band_name: "10m",
-    },
-
-    // 6 meters
-    OmSegment {
-        start_hz: 50_000_000.0,
-        end_hz: 54_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "6m",
-    },
-
-    // 2 meters
-    OmSegment {
-        start_hz: 144_000_000.0,
-        end_hz: 148_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "2m",
-    },
-
-    // 1.25 meters
-    OmSegment {
-        start_hz: 222_000_000.0,
-        end_hz: 225_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "1.25m",
-    },
-
-    // 70 cm
-    OmSegment {
-        start_hz: 420_000_000.0,
-        end_hz: 450_000_000.0,
-        kind: OmKind::PhoneImage,
-        //amateur_band_name: "70cm",
-    },
-];
-
-const NOVICE_SEGMENTS: &[OmSegment] = &[
-    // 10 meters: Novice privileges
-    OmSegment {
-        start_hz: 28_000_000.0,
-        end_hz: 28_300_000.0,
-        kind: OmKind::RttyData,
-        //amateur_band_name: "10m",
-    },
-    OmSegment {
-        start_hz: 28_300_000.0,
-        end_hz: 28_500_000.0,
-        kind: OmKind::SsbPhone,
-        //amateur_band_name: "10m",
-    },
-
-    // 23 cm / 1.25 m differences exist for Novice, but as a starter we keep this conservative.
-];
-
+/// Classification of operator privileges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LicenseClass {
     AmateurExtra,
@@ -216,6 +16,7 @@ pub enum LicenseClass {
     Novice,
 }
 
+/// Cycle forward through license classes (used for UI toggling).
 pub fn next_license(license: LicenseClass) -> LicenseClass {
     match license {
         LicenseClass::AmateurExtra => LicenseClass::Advanced,
@@ -226,6 +27,7 @@ pub fn next_license(license: LicenseClass) -> LicenseClass {
     }
 }
 
+/// Cycle backward through license classes.
 pub fn prev_license(license: LicenseClass) -> LicenseClass {
     match license {
         LicenseClass::AmateurExtra => LicenseClass::Novice,
@@ -236,6 +38,7 @@ pub fn prev_license(license: LicenseClass) -> LicenseClass {
     }
 }
 
+/// OM segment type (used for coloring + meaning).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OmKind {
@@ -247,14 +50,72 @@ pub enum OmKind {
     FixedDigitalMessages,
 }
 
+/// Raw segment definition (full band allocation).
 #[derive(Debug, Clone, Copy)]
 pub struct OmSegment {
     pub start_hz: f32,
     pub end_hz: f32,
     pub kind: OmKind,
-//    pub amateur_band_name: &'static str,
 }
 
+/// Visible (clipped) segment for rendering.
+#[derive(Debug, Clone, Copy)]
+pub struct VisibleOmSegment {
+    pub start_hz: f32,
+    pub end_hz: f32,
+    pub kind: OmKind,
+}
+
+/// Amateur Extra privileges.
+const AMATEUR_EXTRA_SEGMENTS: &[OmSegment] = &[
+    // 10 meters
+    OmSegment { start_hz: 28_000_000.0, end_hz: 28_300_000.0, kind: OmKind::RttyData },
+    OmSegment { start_hz: 28_300_000.0, end_hz: 29_700_000.0, kind: OmKind::PhoneImage },
+
+    // VHF/UHF
+    OmSegment { start_hz: 50_000_000.0, end_hz: 54_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 144_000_000.0, end_hz: 148_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 222_000_000.0, end_hz: 225_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 420_000_000.0, end_hz: 450_000_000.0, kind: OmKind::PhoneImage },
+];
+
+/// Advanced privileges (currently same as Extra for implemented bands).
+const ADVANCED_SEGMENTS: &[OmSegment] = &[
+    OmSegment { start_hz: 28_000_000.0, end_hz: 28_300_000.0, kind: OmKind::RttyData },
+    OmSegment { start_hz: 28_300_000.0, end_hz: 29_700_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 50_000_000.0, end_hz: 54_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 144_000_000.0, end_hz: 148_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 222_000_000.0, end_hz: 225_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 420_000_000.0, end_hz: 450_000_000.0, kind: OmKind::PhoneImage },
+];
+
+/// General privileges (currently same as Advanced in this simplified model).
+const GENERAL_SEGMENTS: &[OmSegment] = &[
+    OmSegment { start_hz: 28_000_000.0, end_hz: 28_300_000.0, kind: OmKind::RttyData },
+    OmSegment { start_hz: 28_300_000.0, end_hz: 29_700_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 50_000_000.0, end_hz: 54_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 144_000_000.0, end_hz: 148_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 222_000_000.0, end_hz: 225_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 420_000_000.0, end_hz: 450_000_000.0, kind: OmKind::PhoneImage },
+];
+
+/// Technician privileges (10m limited).
+const TECHNICIAN_SEGMENTS: &[OmSegment] = &[
+    OmSegment { start_hz: 28_000_000.0, end_hz: 28_300_000.0, kind: OmKind::RttyData },
+    OmSegment { start_hz: 28_300_000.0, end_hz: 28_500_000.0, kind: OmKind::SsbPhone },
+    OmSegment { start_hz: 50_000_000.0, end_hz: 54_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 144_000_000.0, end_hz: 148_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 222_000_000.0, end_hz: 225_000_000.0, kind: OmKind::PhoneImage },
+    OmSegment { start_hz: 420_000_000.0, end_hz: 450_000_000.0, kind: OmKind::PhoneImage },
+];
+
+/// Novice privileges (very limited HF).
+const NOVICE_SEGMENTS: &[OmSegment] = &[
+    OmSegment { start_hz: 28_000_000.0, end_hz: 28_300_000.0, kind: OmKind::RttyData },
+    OmSegment { start_hz: 28_300_000.0, end_hz: 28_500_000.0, kind: OmKind::SsbPhone },
+];
+
+/// Get all segments for a given license class.
 pub fn om_segments_for_license(license: LicenseClass) -> &'static [OmSegment] {
     match license {
         LicenseClass::AmateurExtra => AMATEUR_EXTRA_SEGMENTS,
@@ -265,13 +126,7 @@ pub fn om_segments_for_license(license: LicenseClass) -> &'static [OmSegment] {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct VisibleOmSegment {
-    pub start_hz: f32,
-    pub end_hz: f32,
-    pub kind: OmKind,
-}
-
+/// Compute visible OM segments clipped to the current spectrum view.
 pub fn visible_om_segments(
     left_hz: f32,
     right_hz: f32,
