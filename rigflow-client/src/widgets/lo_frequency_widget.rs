@@ -1,26 +1,49 @@
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
+use eframe::egui::{
+    self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2,
+};
 
+/// Controls how the digit widget is anchored relative to the provided origin.
 #[derive(Debug, Clone, Copy)]
 pub enum DigitWheelAnchor {
     Left,
     Right,
 }
 
+/// Specification for a digit-wheel widget.
+///
+/// This allows the same rendering logic to be reused for:
+/// - LO frequency (unsigned, large number)
+/// - LO offset (signed, smaller number)
 #[derive(Debug, Clone)]
 pub struct DigitWheelSpec<'a> {
     pub label: &'a str,
+
+    /// Total number of digits rendered (zero-padded)
     pub digit_count: usize,
+
+    /// Whether the value is signed (+ / -)
     pub signed: bool,
-    pub groups: &'a [usize], // e.g. &[1,3,3,3] or &[3,3]
+
+    /// Digit grouping for visual separators (e.g. MHz formatting)
+    /// Example: &[1,3,3,3] → 1.234.567.890
+    pub groups: &'a [usize],
+
+    /// Anchor direction (left or right aligned)
     pub anchor: DigitWheelAnchor,
 }
 
+/// A single digit cell on screen.
 #[derive(Debug, Clone, Copy)]
 struct DigitCell {
     rect: Rect,
-    digit_index: usize, // 0 = most significant digit
+
+    /// Index in the digit string (0 = most significant)
+    digit_index: usize,
 }
 
+/// Compute 10^exp as u64.
+///
+/// Used to determine step size for digit increments.
 fn pow10_u64(exp: usize) -> u64 {
     let mut v = 1u64;
     for _ in 0..exp {
@@ -29,27 +52,28 @@ fn pow10_u64(exp: usize) -> u64 {
     v
 }
 
+/// Format value into fixed-width zero-padded digit array.
 fn format_abs_digits(value: u64, digit_count: usize) -> Vec<u8> {
     let s = format!("{value:0width$}", width = digit_count);
     s.into_bytes()
 }
 
+/// Find first non-zero digit (for dimming leading zeros).
 fn first_nonzero_digit(digits: &[u8]) -> Option<usize> {
     digits.iter().position(|d| *d != b'0')
 }
 
-fn color32_from_u32_with_alpha(rgb: u32, alpha: u8) -> Color32 {
-    let r = ((rgb >> 16) & 0xff) as u8;
-    let g = ((rgb >> 8) & 0xff) as u8;
-    let b = (rgb & 0xff) as u8;
-    Color32::from_rgba_premultiplied(r, g, b, alpha)
-}
-
+/// Compute step size for a given digit.
+///
+/// Example:
+/// - digit 0 (MSD) → 10^9
+/// - last digit → 1
 fn digit_step(digit_count: usize, digit_index: usize) -> i64 {
     let place_from_right = digit_count - 1 - digit_index;
     pow10_u64(place_from_right) as i64
 }
 
+/// Compute total widget width (used for anchoring and layout).
 fn total_widget_width(
     label_w: f32,
     label_gap: f32,
@@ -63,19 +87,33 @@ fn total_widget_width(
         + digit_gap * (spec.digit_count.saturating_sub(1)) as f32
         + sep_w * spec.groups.len().saturating_sub(1) as f32;
 
-    let sign_area = if spec.signed { sign_w + digit_gap } else { 0.0 };
+    let sign_area = if spec.signed {
+        sign_w + digit_gap
+    } else {
+        0.0
+    };
 
     label_w + label_gap + sign_area + digit_area
 }
 
 /// Draw a reusable digit-wheel widget.
-/// Returns Some(new_value) when mouse wheel changes the hovered digit.
+///
+/// Behavior:
+/// - Each digit is individually scrollable via mouse wheel
+/// - Step size depends on digit position
+/// - Leading zeros are dimmed for readability
+///
+/// Returns:
+/// - `Some(new_value)` if a digit was changed
+/// - `None` if no interaction occurred
 pub fn draw_digit_wheel_widget(
     ui: &mut egui::Ui,
     origin: Pos2,
     spec: &DigitWheelSpec<'_>,
     value: i64,
 ) -> Option<i64> {
+    // --- Styling ----------------------------------------------------------
+
     let font = FontId::proportional(17.0);
     let label_font = FontId::proportional(12.0);
 
@@ -85,6 +123,8 @@ pub fn draw_digit_wheel_widget(
     let label_color = Color32::from_rgb(180, 180, 180);
     let sign_color = Color32::from_rgb(210, 210, 210);
 
+    // --- Layout constants -------------------------------------------------
+
     let digit_w = 13.0;
     let digit_h = 24.0;
     let digit_gap = 1.0;
@@ -92,10 +132,11 @@ pub fn draw_digit_wheel_widget(
     let sign_w = 12.0;
     let label_gap = 8.0;
 
+    // Label width is fixed per label for alignment consistency
     let label_w = match spec.label {
-	"LO" => 18.0,
-	"LO Offset" => 54.0,
-	_ => 46.0,
+        "LO" => 18.0,
+        "LO Offset" => 54.0,
+        _ => 46.0,
     };
 
     let widget_w = total_widget_width(
@@ -107,8 +148,10 @@ pub fn draw_digit_wheel_widget(
         sign_w,
         spec,
     );
+
     let widget_h = digit_h;
 
+    // Anchor determines left or right alignment
     let top_left = match spec.anchor {
         DigitWheelAnchor::Left => origin,
         DigitWheelAnchor::Right => Pos2::new(origin.x - widget_w, origin.y),
@@ -118,9 +161,16 @@ pub fn draw_digit_wheel_widget(
     let response = ui.allocate_rect(total_rect, Sense::hover());
     let painter = ui.painter();
 
+    // --- Value → digit conversion ----------------------------------------
+
     let abs_value = value.unsigned_abs();
     let digits = format_abs_digits(abs_value, spec.digit_count);
-    let first_nonzero = first_nonzero_digit(&digits).unwrap_or(spec.digit_count - 1);
+
+    // Used to dim leading zeros
+    let first_nonzero = first_nonzero_digit(&digits)
+        .unwrap_or(spec.digit_count - 1);
+
+    // --- Draw label -------------------------------------------------------
 
     painter.text(
         Pos2::new(top_left.x, top_left.y + digit_h * 0.5),
@@ -132,8 +182,11 @@ pub fn draw_digit_wheel_widget(
 
     let mut x = top_left.x + label_w + label_gap;
 
+    // --- Draw sign (if applicable) ---------------------------------------
+
     if spec.signed {
         let sign_text = if value < 0 { "-" } else { "+" };
+
         painter.text(
             Pos2::new(x + sign_w * 0.5, top_left.y + digit_h * 0.5),
             Align2::CENTER_CENTER,
@@ -141,27 +194,37 @@ pub fn draw_digit_wheel_widget(
             font.clone(),
             sign_color,
         );
+
         x += sign_w + digit_gap;
     }
 
+    // --- Layout digit cells ----------------------------------------------
+
     let mut digit_cells = Vec::with_capacity(spec.digit_count);
-    let mut digit_i = 0usize;
+    let mut digit_i = 0;
 
     for (group_idx, group_len) in spec.groups.iter().enumerate() {
         for _ in 0..*group_len {
-            let rect = Rect::from_min_size(Pos2::new(x, top_left.y), Vec2::new(digit_w, digit_h));
+            let rect = Rect::from_min_size(
+                Pos2::new(x, top_left.y),
+                Vec2::new(digit_w, digit_h),
+            );
+
             digit_cells.push(DigitCell {
                 rect,
                 digit_index: digit_i,
             });
 
             x += digit_w;
+
             if digit_i < spec.digit_count - 1 {
                 x += digit_gap;
             }
+
             digit_i += 1;
         }
 
+        // Draw group separator (".")
         if group_idx < spec.groups.len() - 1 {
             painter.text(
                 Pos2::new(x + sep_w * 0.5, top_left.y + digit_h * 0.52),
@@ -174,6 +237,8 @@ pub fn draw_digit_wheel_widget(
         }
     }
 
+    // --- Hover detection --------------------------------------------------
+
     let hovered_digit = response.hover_pos().and_then(|pos| {
         digit_cells
             .iter()
@@ -181,20 +246,23 @@ pub fn draw_digit_wheel_widget(
             .map(|c| c.digit_index)
     });
 
+    // --- Draw digits ------------------------------------------------------
+
     for cell in &digit_cells {
         if hovered_digit == Some(cell.digit_index) {
             painter.rect_filled(cell.rect, 3.0, hover_bg);
         }
 
         let d = digits[cell.digit_index] as char;
+
         let color = if cell.digit_index < first_nonzero {
-            inactive_color
+            inactive_color // leading zeros dimmed
         } else {
             active_color
         };
 
         painter.text(
-            Pos2::new(cell.rect.center().x, cell.rect.center().y),
+            cell.rect.center(),
             Align2::CENTER_CENTER,
             d,
             font.clone(),
@@ -202,20 +270,14 @@ pub fn draw_digit_wheel_widget(
         );
     }
 
-    // Commented out to remove the white-ish box outline
-    /*
-    painter.rect_stroke(
-        total_rect.expand(2.0),
-        4.0,
-        Stroke::new(1.0, color32_from_u32_with_alpha(0xffffff, 24)),
-        egui::StrokeKind::Inside,
-    );
-    */
+    // --- Mouse wheel interaction -----------------------------------------
 
     if let Some(idx) = hovered_digit {
         let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
+
         if scroll_y.abs() > 0.0 {
             let step = digit_step(spec.digit_count, idx);
+
             let delta = if scroll_y > 0.0 { -step } else { step };
 
             let next = if spec.signed {
@@ -231,6 +293,7 @@ pub fn draw_digit_wheel_widget(
     None
 }
 
+/// LO frequency widget (center frequency).
 pub fn draw_lo_widget(
     ui: &mut egui::Ui,
     top_left: Pos2,
@@ -248,6 +311,7 @@ pub fn draw_lo_widget(
         .map(|v| v.max(0) as u64)
 }
 
+/// LO offset widget (relative tuning offset).
 pub fn draw_lo_offset_widget(
     ui: &mut egui::Ui,
     top_right: Pos2,
