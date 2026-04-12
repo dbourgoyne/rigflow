@@ -12,8 +12,8 @@ use rigflow_server::{
     radio::{
 	types::RadioManagerConfig,
 	discovery::{debug_print_discovered_radios, discover_radios},
+	manager::RadioManager,
     },
-    server::radio_manager::RadioManager,
     net::udp::udp_registration::run_udp_registration_listener,
 };
 

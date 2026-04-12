@@ -5,7 +5,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use rigflow_protocol::ServerMessage;
 
-use crate::server::radio_manager::RadioManager;
+use crate::radio::manager::RadioManager;
 
 /// Shared application state for the WebSocket/API layer.
 ///
