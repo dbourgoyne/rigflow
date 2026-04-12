@@ -1,89 +1,180 @@
 use rigflow_core::radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// Messages sent from client → server over WebSocket.
+///
+/// These drive:
+/// - radio discovery
+/// - lease lifecycle
+/// - initial stream configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientRadioMessage {
+    /// Request a list of available radios.
     ListRadios,
+
+    /// Acquire a lease on a radio and start streaming.
+    ///
+    /// Includes initial tuning parameters and UDP endpoints.
     AcquireRadio {
         radio_id: RadioId,
+
+        /// Initial center frequency (Hz)
         center_freq_hz: u64,
+
+        /// Initial tuned frequency (Hz)
         target_freq_hz: u64,
+
+        /// UDP endpoint for audio (e.g. "ip:port")
         audio_udp_peer: String,
+
+        /// UDP endpoint for waterfall (e.g. "ip:port")
         waterfall_udp_peer: String,
     },
+
+    /// Release the currently held radio lease.
     ReleaseRadio,
+
+    /// Renew the current lease before expiration.
     RenewLease,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// Messages sent from server → client over WebSocket.
+///
+/// These cover:
+/// - discovery results
+/// - lease lifecycle
+/// - runtime state updates
+/// - error reporting
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerRadioMessage {
+    /// Response to `ListRadios`.
     RadiosListed {
         radios: Vec<RadioInfo>,
     },
+
+    /// Lease successfully acquired.
     RadioAcquired {
         radio_id: RadioId,
         lease_id: LeaseId,
-        lease_ttl_ms: u64,
-    },
-    RadioReleased {
-        radio_id: RadioId,
-    },
-    LeaseRenewed {
-        radio_id: RadioId,
+
+        /// Lease time-to-live in milliseconds
         lease_ttl_ms: u64,
     },
 
+    /// Lease released (either by client or server).
+    RadioReleased {
+        radio_id: RadioId,
+    },
+
+    /// Lease successfully renewed.
+    LeaseRenewed {
+        radio_id: RadioId,
+
+        /// Updated lease TTL in milliseconds
+        lease_ttl_ms: u64,
+    },
+
+    /// Full runtime state snapshot.
+    ///
+    /// Sent:
+    /// - immediately after acquiring a radio
+    /// - when a client reconnects or needs full state
     RuntimeSnapshot {
         radio_id: RadioId,
+
         center_freq_hz: u64,
         target_freq_hz: u64,
+
         input_sample_rate_hz: f32,
+
+        /// Audio output configuration
         audio_sample_rate_hz: u32,
         audio_format: String,
+
+        /// Waterfall configuration
         waterfall_bins: u32,
         waterfall_frame_rate_hz: f32,
+
+        /// Current demodulation state
         demod_mode: String,
         sideband: String,
         ssb_pitch_hz: f32,
     },
 
+    /// Incremental runtime update.
+    ///
+    /// Only fields that changed are populated.
     RuntimeChanged {
         radio_id: RadioId,
+
         center_freq_hz: Option<u64>,
         target_freq_hz: Option<u64>,
+
         demod_mode: Option<String>,
         sideband: Option<String>,
         ssb_pitch_hz: Option<f32>,
     },
 
+    /// Error message related to radio control or streaming.
     RadioError {
+        /// Machine-readable error code
         code: String,
+
+        /// Human-readable description
         message: String,
     },
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// Information about a radio exposed to clients.
+///
+/// This extends the core `RadioDescriptor` with runtime state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadioInfo {
+    /// Unique identifier
     pub id: RadioId,
+
+    /// Display name for UI
     pub display_name: String,
+
+    /// Hardware/source type
     pub hardware_kind: HardwareKind,
+
+    /// Device index (e.g., RTL device index)
     pub index: u32,
+
+    /// Optional hardware serial number
     pub serial: Option<String>,
+
+    /// Static capabilities
     pub capabilities: RadioCapabilities,
+
+    /// Current availability state
     pub state: RadioAvailability,
+
+    /// Whether this radio is currently leased by any client
     pub is_leased: bool,
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+/// Runtime availability state of a radio.
+///
+/// This represents the lifecycle of a radio worker.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RadioAvailability {
+    /// Ready for acquisition
     Available,
+
+    /// Worker is starting up
     Starting,
+
+    /// Actively running and streaming
     Running,
+
+    /// Worker is shutting down
     Stopping,
+
+    /// Error state (requires recovery or restart)
     Faulted,
 }
-
-
-

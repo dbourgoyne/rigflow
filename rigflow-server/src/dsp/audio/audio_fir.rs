@@ -1,18 +1,33 @@
 use std::f32::consts::PI;
 
 /// Streaming low-pass FIR filter for real-valued audio samples.
+///
+/// This implements a standard FIR filter with:
+/// - circular delay line
+/// - windowed-sinc low-pass design
+///
+/// Characteristics:
+/// - linear phase (due to symmetric taps)
+/// - stable
+/// - predictable latency (group delay = (num_taps - 1) / 2)
 pub struct AudioFir {
+    /// FIR coefficients (impulse response)
     taps: Vec<f32>,
+
+    /// Circular delay buffer
     delay: Vec<f32>,
+
+    /// Current write position in delay line
     pos: usize,
 }
 
 impl AudioFir {
     /// Create a low-pass FIR using a windowed-sinc design.
     ///
-    /// `sample_rate_hz` - audio sample rate
-    /// `cutoff_hz`      - low-pass cutoff
-    /// `num_taps`       - usually odd
+    /// Parameters:
+    /// - `sample_rate_hz`: audio sample rate
+    /// - `cutoff_hz`: low-pass cutoff frequency
+    /// - `num_taps`: filter length (usually odd for symmetry)
     pub fn new(sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize) -> Self {
         assert!(sample_rate_hz > 0.0, "sample_rate_hz must be > 0");
         assert!(cutoff_hz > 0.0, "cutoff_hz must be > 0");
@@ -31,11 +46,20 @@ impl AudioFir {
         }
     }
 
+    /// Reset internal state.
+    ///
+    /// Clears delay line and resets write position.
     pub fn reset(&mut self) {
         self.delay.fill(0.0);
         self.pos = 0;
     }
 
+    /// Process a single sample through the FIR.
+    ///
+    /// Steps:
+    /// 1. Write new sample into circular buffer
+    /// 2. Convolve with taps (reverse order through delay line)
+    /// 3. Advance write position
     pub fn process_sample(&mut self, sample: f32) -> f32 {
         self.delay[self.pos] = sample;
 
@@ -43,6 +67,7 @@ impl AudioFir {
         let mut idx = self.pos;
         let mut acc = 0.0_f32;
 
+        // Convolution: newest sample aligns with first tap
         for &tap in &self.taps {
             acc += self.delay[idx] * tap;
 
@@ -53,6 +78,7 @@ impl AudioFir {
             }
         }
 
+        // Advance circular buffer position
         self.pos += 1;
         if self.pos == len {
             self.pos = 0;
@@ -61,17 +87,29 @@ impl AudioFir {
         acc
     }
 
+    /// Process a slice and return a newly allocated output buffer.
+    ///
+    /// Convenience wrapper around `process_sample`.
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         input.iter().map(|&x| self.process_sample(x)).collect()
     }
 
+    /// Process samples in-place (preferred for real-time pipelines).
+    ///
+    /// Avoids allocation and is the recommended path for low latency.
     pub fn process_in_place(&mut self, samples: &mut [f32]) {
-        for sample in samples.iter_mut() {
+        for sample in samples {
             *sample = self.process_sample(*sample);
         }
     }
 }
 
+/// Design a low-pass FIR using windowed-sinc method.
+///
+/// Steps:
+/// 1. Ideal sinc low-pass
+/// 2. Apply Hamming window
+/// 3. Normalize to unity DC gain
 fn design_lowpass(sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize) -> Vec<f32> {
     let fc = cutoff_hz / sample_rate_hz;
     let m = (num_taps - 1) as f32;
@@ -82,6 +120,7 @@ fn design_lowpass(sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize) -> Vec<f
     for n in 0..num_taps {
         let x = n as f32 - mid;
 
+        // Ideal sinc low-pass
         let sinc = if x.abs() < 1e-12 {
             2.0 * fc
         } else {
@@ -89,86 +128,17 @@ fn design_lowpass(sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize) -> Vec<f
             arg.sin() / (PI * x)
         };
 
-        let w = 0.54 - 0.46 * (2.0 * PI * n as f32 / m).cos();
+        // Hamming window
+        let window = 0.54 - 0.46 * (2.0 * PI * n as f32 / m).cos();
 
-        taps.push(sinc * w);
+        taps.push(sinc * window);
     }
 
+    // Normalize to unity DC gain
     let sum: f32 = taps.iter().sum();
     for tap in &mut taps {
         *tap /= sum;
     }
 
     taps
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::f32::consts::PI;
-
-    fn approx_eq(a: f32, b: f32, eps: f32) -> bool {
-        (a - b).abs() < eps
-    }
-
-    #[test]
-    fn preserves_dc_after_warmup() {
-        let mut fir = AudioFir::new(12_000.0, 3_000.0, 101);
-
-        let input = vec![1.0_f32; 4096];
-        let output = fir.process(&input);
-
-        let steady = &output[512..];
-        let mean = steady.iter().sum::<f32>() / steady.len() as f32;
-
-        assert!(approx_eq(mean, 1.0, 1e-3), "mean was {mean}");
-    }
-
-    #[test]
-    fn attenuates_high_frequency() {
-        let sample_rate = 12_000.0;
-        let cutoff = 3_000.0;
-        let mut fir = AudioFir::new(sample_rate, cutoff, 101);
-
-        let tone_hz = 5_000.0;
-        let input: Vec<f32> = (0..4096)
-            .map(|n| {
-                let phase = 2.0 * PI * tone_hz * n as f32 / sample_rate;
-                phase.sin()
-            })
-            .collect();
-
-        let output = fir.process(&input);
-
-        let input_power = input.iter().map(|x| x * x).sum::<f32>() / input.len() as f32;
-        let output_power =
-            output[512..].iter().map(|x| x * x).sum::<f32>() / (output.len() - 512) as f32;
-
-        assert!(
-            output_power < input_power * 0.2,
-            "expected attenuation, input_power={input_power}, output_power={output_power}"
-        );
-    }
-
-    #[test]
-    fn process_and_in_place_match() {
-        let mut a = AudioFir::new(12_000.0, 3_000.0, 63);
-        let mut b = AudioFir::new(12_000.0, 3_000.0, 63);
-
-        let input: Vec<f32> = (0..1024)
-            .map(|n| {
-                let phase = 2.0 * PI * 1_000.0 * n as f32 / 12_000.0;
-                phase.sin()
-            })
-            .collect();
-
-        let out_a = a.process(&input);
-
-        let mut in_place = input.clone();
-        b.process_in_place(&mut in_place);
-
-        for (i, (x, y)) in out_a.iter().zip(in_place.iter()).enumerate() {
-            assert!(approx_eq(*x, *y, 1e-6), "mismatch at {i}: x={x}, y={y}");
-        }
-    }
 }

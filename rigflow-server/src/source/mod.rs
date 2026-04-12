@@ -1,8 +1,9 @@
 use num_complex::Complex32;
 
-pub mod fake_iq;
+pub mod fake;
 pub mod factory;
 pub mod rtlsdr;
+pub mod wav;
 pub mod wav_metadata;
 
 pub trait IqSource {

@@ -1,12 +1,14 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use rigflow_core::dsp::demod::{DemodMode, Sideband};
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 
+/// Unique identifier for a connected client/session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClientId(pub String);
 
+/// Lifecycle state of a radio within the manager.
 #[derive(Debug, Clone)]
 pub enum RadioState {
     Available,
@@ -16,6 +18,7 @@ pub enum RadioState {
     Faulted { reason: String },
 }
 
+/// Active lease for a radio.
 #[derive(Debug, Clone)]
 pub struct LeaseRecord {
     pub lease_id: LeaseId,
@@ -25,6 +28,7 @@ pub struct LeaseRecord {
     pub expires_at: Instant,
 }
 
+/// Request to acquire and start a radio worker.
 #[derive(Debug, Clone)]
 pub struct AcquireRequest {
     pub center_freq_hz: u64,
@@ -33,6 +37,7 @@ pub struct AcquireRequest {
     pub waterfall_udp_peer: SocketAddr,
 }
 
+/// Result returned when a radio is successfully acquired.
 #[derive(Debug, Clone)]
 pub struct AcquireRadioResult {
     pub radio_id: RadioId,
@@ -40,6 +45,7 @@ pub struct AcquireRadioResult {
     pub lease_expires_at: Instant,
 }
 
+/// Summary of a radio for listing APIs.
 #[derive(Debug, Clone)]
 pub struct RadioSummary {
     pub descriptor: RadioDescriptor,
@@ -47,6 +53,7 @@ pub struct RadioSummary {
     pub is_leased: bool,
 }
 
+/// Reason a worker is being stopped.
 #[derive(Debug, Clone)]
 pub enum StopReason {
     ClientRelease,
@@ -58,6 +65,9 @@ pub enum StopReason {
     UserRequested,
 }
 
+/// Runtime state snapshot of a worker.
+///
+/// This is sent to clients via RuntimeSnapshot / RuntimeChanged.
 #[derive(Debug, Clone)]
 pub struct WorkerRuntimeState {
     pub center_freq_hz: u64,
@@ -73,6 +83,7 @@ pub struct WorkerRuntimeState {
     pub waterfall_frame_rate_hz: f32,
 }
 
+/// Commands sent from server/session → worker.
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
     SetTargetFrequency { hz: u64 },
@@ -83,40 +94,49 @@ pub enum WorkerCommand {
     Stop { reason: StopReason },
 }
 
+/// Worker lifecycle/status updates.
 #[derive(Debug, Clone)]
 pub enum WorkerStatus {
     Starting,
+
     Running {
         runtime: WorkerRuntimeState,
     },
+
     Stopping {
         reason: StopReason,
     },
+
     Stopped {
         reason: StopReason,
     },
+
     Faulted {
         reason: String,
     },
 }
 
+/// Initial readiness payload returned during worker startup.
 #[derive(Debug, Clone)]
 pub struct WorkerReadyInfo {
     pub runtime: WorkerRuntimeState,
 }
 
+/// Result of worker startup handshake.
 #[derive(Debug)]
 pub enum WorkerStartResult {
     Ready(WorkerReadyInfo),
     Failed(String),
 }
 
+/// Final exit state of a worker.
 #[derive(Debug)]
 pub enum WorkerExit {
     Clean { reason: StopReason },
     Failed { reason: String },
 }
 
+/// Configuration for RadioManager timing behavior.
 #[derive(Debug, Clone)]
 pub struct RadioManagerConfig {
     pub lease_ttl: Duration,
@@ -124,6 +144,7 @@ pub struct RadioManagerConfig {
     pub shutdown_timeout: Duration,
 }
 
+/// Errors returned by RadioManager operations.
 #[derive(Debug)]
 pub enum RadioManagerError {
     RadioNotFound,

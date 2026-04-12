@@ -7,14 +7,18 @@ use tokio::task::JoinHandle;
 
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 
-use crate::server::radio_types::{
+use crate::config::ServerConfig;
+use crate::radio::types::{
     AcquireRadioResult, AcquireRequest, ClientId, LeaseRecord, RadioManagerConfig,
     RadioManagerError, RadioState, RadioSummary, StopReason, WorkerCommand, WorkerExit,
     WorkerStartResult, WorkerStatus,
 };
-use crate::server::radio_worker::run_radio_worker;
-use crate::server::config::ServerConfig;
+use crate::radio::worker::run_radio_worker;
 
+/// Runtime state for a radio that currently has an active worker task.
+///
+/// This is kept separate from the static radio descriptor so the manager can
+/// cleanly represent radios that exist but are not currently running.
 pub struct RadioRuntime {
     pub worker_tx: mpsc::Sender<WorkerCommand>,
     pub status_rx: watch::Receiver<WorkerStatus>,
@@ -23,6 +27,11 @@ pub struct RadioRuntime {
     pub started_at: Instant,
 }
 
+/// Full manager-owned state for a radio.
+///
+/// A radio always has a descriptor, and may also have:
+/// - a lease, if a client currently owns it
+/// - a runtime, if its worker task is active
 pub struct ManagedRadio {
     pub descriptor: RadioDescriptor,
     pub state: RadioState,
@@ -30,6 +39,12 @@ pub struct ManagedRadio {
     pub runtime: Option<RadioRuntime>,
 }
 
+/// Central authority for radio discovery, leasing, and worker lifecycle.
+///
+/// This owns the global map of radios and enforces:
+/// - one active lease per radio
+/// - only the lease owner may send commands
+/// - worker startup/shutdown tied to acquire/release
 pub struct RadioManager {
     radios: RwLock<HashMap<RadioId, ManagedRadio>>,
     config: RadioManagerConfig,
@@ -37,73 +52,80 @@ pub struct RadioManager {
 }
 
 impl RadioManager {
-
     pub fn new(
-	descriptors: Vec<RadioDescriptor>,
-	config: RadioManagerConfig,
-	server_cfg: ServerConfig,
+        descriptors: Vec<RadioDescriptor>,
+        config: RadioManagerConfig,
+        server_cfg: ServerConfig,
     ) -> Self {
-	let radios = descriptors
+        let radios = descriptors
             .into_iter()
             .map(|descriptor| {
-		let id = descriptor.id.clone();
-		(
-                    id,
-                    ManagedRadio {
-			descriptor,
-			state: RadioState::Available,
-			lease: None,
-			runtime: None,
-                    },
-		)
+                let id = descriptor.id.clone();
+                let managed = ManagedRadio {
+                    descriptor,
+                    state: RadioState::Available,
+                    lease: None,
+                    runtime: None,
+                };
+
+                (id, managed)
             })
             .collect();
 
-	Self {
+        Self {
             radios: RwLock::new(radios),
             config,
             server_cfg,
-	}
+        }
     }
 
+    /// Returns a cloned runtime status receiver for the current lease owner.
+    ///
+    /// This is used by connection/session code that wants to observe worker
+    /// status transitions after a radio has been acquired.
     pub async fn subscribe_runtime_status(
-	&self,
-	client_id: &ClientId,
-	radio_id: &RadioId,
-	lease_id: &LeaseId,
+        &self,
+        client_id: &ClientId,
+        radio_id: &RadioId,
+        lease_id: &LeaseId,
     ) -> Result<watch::Receiver<WorkerStatus>, RadioManagerError> {
-	let radios = self.radios.read().await;
-	let radio = radios
+        let radios = self.radios.read().await;
+        let radio = radios
             .get(radio_id)
             .ok_or(RadioManagerError::RadioNotFound)?;
 
-	let lease = radio
+        let lease = radio
             .lease
             .as_ref()
             .ok_or(RadioManagerError::NoActiveLease)?;
 
-	if &lease.client_id != client_id {
+        if &lease.client_id != client_id {
             return Err(RadioManagerError::NotLeaseOwner);
-	}
-	if &lease.lease_id != lease_id {
-            return Err(RadioManagerError::InvalidLease);
-	}
+        }
 
-	match radio.state {
+        if &lease.lease_id != lease_id {
+            return Err(RadioManagerError::InvalidLease);
+        }
+
+        match radio.state {
             RadioState::Running | RadioState::Starting => {}
             _ => return Err(RadioManagerError::RadioNotRunning),
-	}
+        }
 
-	let status_rx = radio
+        let status_rx = radio
             .runtime
             .as_ref()
             .ok_or(RadioManagerError::RadioNotRunning)?
             .status_rx
             .clone();
 
-	Ok(status_rx)
+        Ok(status_rx)
     }
-    
+
+    /// Periodically scans for expired leases and releases them.
+    ///
+    /// The scan itself is done under a read lock; actual release work happens
+    /// afterward so we do not hold the lock across async shutdown paths.
     pub async fn lease_expiry_loop(manager: Arc<RadioManager>) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
@@ -118,6 +140,7 @@ impl RadioManager {
                     .iter()
                     .filter_map(|(radio_id, radio)| {
                         let lease = radio.lease.as_ref()?;
+
                         if lease.expires_at <= now {
                             Some((
                                 radio_id.clone(),
@@ -146,6 +169,7 @@ impl RadioManager {
 
     pub async fn list_radios(&self) -> Vec<RadioSummary> {
         let radios = self.radios.read().await;
+
         radios
             .values()
             .map(|radio| RadioSummary {
@@ -156,6 +180,13 @@ impl RadioManager {
             .collect()
     }
 
+    /// Acquires a lease for a radio and starts its worker.
+    ///
+    /// Behavior is intentionally:
+    /// 1. reserve the lease first
+    /// 2. spawn the worker
+    /// 3. wait for startup readiness
+    /// 4. mark the radio running or clean up on failure
     pub async fn acquire_radio(
         &self,
         client_id: ClientId,
@@ -198,7 +229,7 @@ impl RadioManager {
         let join_handle = tokio::spawn(run_radio_worker(
             descriptor,
             request,
-	    self.server_cfg.clone(),
+            self.server_cfg.clone(),
             worker_rx,
             status_tx,
             stop_rx,
@@ -251,19 +282,23 @@ impl RadioManager {
             }
             Ok(Err(_)) => {
                 let reason = "worker exited before startup completed".to_string();
+
                 println!(
                     "[radio-manager] worker exited before READY for {}",
                     radio_id.0
                 );
+
                 self.cleanup_failed_start(radio_id, reason.clone()).await;
                 Err(RadioManagerError::StartupFailed(reason))
             }
             Err(_) => {
                 let reason = "startup timed out".to_string();
+
                 println!(
                     "[radio-manager] worker startup TIMED OUT for {}",
                     radio_id.0
                 );
+
                 self.cleanup_failed_start(radio_id, reason.clone()).await;
                 Err(RadioManagerError::StartupTimedOut)
             }
@@ -291,6 +326,7 @@ impl RadioManager {
         if &lease.client_id != client_id {
             return Err(RadioManagerError::NotLeaseOwner);
         }
+
         if &lease.lease_id != lease_id {
             return Err(RadioManagerError::InvalidLease);
         }
@@ -306,6 +342,7 @@ impl RadioManager {
         Ok(lease.clone())
     }
 
+    /// Sends a worker command after verifying lease ownership and runtime state.
     pub async fn send_command(
         &self,
         client_id: &ClientId,
@@ -327,6 +364,7 @@ impl RadioManager {
             if &lease.client_id != client_id {
                 return Err(RadioManagerError::NotLeaseOwner);
             }
+
             if &lease.lease_id != lease_id {
                 return Err(RadioManagerError::InvalidLease);
             }
@@ -349,6 +387,7 @@ impl RadioManager {
             .map_err(|_| RadioManagerError::WorkerChannelClosed)
     }
 
+    /// Releases a radio lease and shuts down the associated worker.
     pub async fn release_radio(
         &self,
         client_id: &ClientId,
@@ -370,6 +409,7 @@ impl RadioManager {
             if &lease.client_id != client_id {
                 return Err(RadioManagerError::NotLeaseOwner);
             }
+
             if &lease.lease_id != lease_id {
                 return Err(RadioManagerError::InvalidLease);
             }
@@ -394,6 +434,8 @@ impl RadioManager {
         Ok(())
     }
 
+    /// Handles startup failure by stopping any partially started runtime and
+    /// returning the radio to the available state.
     async fn cleanup_failed_start(&self, radio_id: &RadioId, reason: String) {
         let runtime = {
             let mut radios = self.radios.write().await;
@@ -425,6 +467,13 @@ impl RadioManager {
         }
     }
 
+    /// Stops a running worker and waits for its task to exit.
+    ///
+    /// The stop path uses both:
+    /// - a structured worker command
+    /// - a one-shot stop signal
+    ///
+    /// That may look redundant, but it preserves the current shutdown behavior.
     pub async fn stop_runtime(
         mut runtime: RadioRuntime,
         reason: StopReason,
@@ -437,11 +486,16 @@ impl RadioManager {
             })
             .await;
 
-	println!("[radio-manager] stopping runtime for radio, reason={:?}", reason);
+        println!(
+            "[radio-manager] stopping runtime for radio, reason={:?}",
+            reason
+        );
+
         if let Some(stop_tx) = runtime.stop_tx.take() {
             let _ = stop_tx.send(());
         }
-	println!("[radio-manager] worker join completed cleanly");
+
+        println!("[radio-manager] worker join completed cleanly");
 
         match tokio::time::timeout(shutdown_timeout, runtime.join_handle).await {
             Ok(Ok(WorkerExit::Clean { .. })) => Ok(()),
@@ -453,7 +507,5 @@ impl RadioManager {
             ))),
             Err(_) => Err(RadioManagerError::ShutdownTimedOut),
         }
-
-
     }
 }

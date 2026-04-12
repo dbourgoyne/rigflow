@@ -1,12 +1,37 @@
+/// Simple streaming linear interpolation resampler.
+///
+/// Converts audio from `input_rate_hz` to `output_rate_hz` using
+/// first-order (linear) interpolation.
+///
+/// Characteristics:
+/// - very low CPU cost
+/// - minimal latency
+/// - moderate frequency response quality (good enough for voice/FM audio)
+///
+/// This is a **stateful streaming resampler**:
+/// - maintains fractional position between calls
+/// - preserves continuity across blocks via `prev_input`
 pub struct AudioResampler {
     input_rate_hz: f32,
     output_rate_hz: f32,
+
+    /// Step size in input-sample units per output sample
+    /// (input_rate / output_rate)
     step: f32,
+
+    /// Current fractional position in input sample space
     position: f32,
+
+    /// Last input sample from previous block (for continuity)
     prev_input: Option<f32>,
 }
 
 impl AudioResampler {
+    /// Create a new resampler.
+    ///
+    /// Parameters:
+    /// - `input_rate_hz`: source sample rate
+    /// - `output_rate_hz`: desired output sample rate
     pub fn new(input_rate_hz: f32, output_rate_hz: f32) -> Self {
         assert!(input_rate_hz > 0.0, "input_rate_hz must be > 0");
         assert!(output_rate_hz > 0.0, "output_rate_hz must be > 0");
@@ -28,23 +53,36 @@ impl AudioResampler {
         self.output_rate_hz
     }
 
+    /// Reset internal state.
+    ///
+    /// Should be called when:
+    /// - switching radios
+    /// - stream discontinuities occur
     pub fn reset(&mut self) {
         self.position = 0.0;
         self.prev_input = None;
     }
 
+    /// Resample input audio and return a new output buffer.
+    ///
+    /// Algorithm:
+    /// 1. Build a working buffer including previous sample (for continuity)
+    /// 2. Step through input space using fractional position
+    /// 3. Linearly interpolate between adjacent samples
+    /// 4. Carry fractional position forward for next call
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         if input.is_empty() {
             return Vec::new();
         }
 
-        // Build a temporary working buffer that starts with the previous
-        // sample from the last block so interpolation stays continuous.
+        // Build working buffer:
+        // prepend last sample from previous block to ensure continuity
         let mut work = Vec::with_capacity(input.len() + 1);
 
         if let Some(prev) = self.prev_input {
             work.push(prev);
         } else {
+            // First call: duplicate first sample to bootstrap interpolation
             work.push(input[0]);
         }
 
@@ -52,7 +90,7 @@ impl AudioResampler {
 
         let mut output = Vec::new();
 
-        // position is in units of input samples within `work`
+        // position is expressed in input-sample space (within `work`)
         while self.position + 1.0 < work.len() as f32 {
             let i0 = self.position.floor() as usize;
             let frac = self.position - i0 as f32;
@@ -60,16 +98,17 @@ impl AudioResampler {
             let s0 = work[i0];
             let s1 = work[i0 + 1];
 
+            // Linear interpolation
             let y = s0 + frac * (s1 - s0);
             output.push(y);
 
             self.position += self.step;
         }
 
-        // Shift position so next block continues correctly.
+        // Shift position so it remains relative to the next block
         self.position -= (work.len() - 1) as f32;
 
-        // Keep last real input sample for continuity.
+        // Save last input sample for continuity across blocks
         self.prev_input = input.last().copied();
 
         output
@@ -129,6 +168,9 @@ mod tests {
         let output = r.process(&input);
         let out_rms = rms(&output[400..]);
 
-        assert!((in_rms - out_rms).abs() < 0.1, "in_rms={in_rms}, out_rms={out_rms}");
+        assert!(
+            (in_rms - out_rms).abs() < 0.1,
+            "in_rms={in_rms}, out_rms={out_rms}"
+        );
     }
 }

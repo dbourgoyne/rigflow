@@ -1,7 +1,7 @@
 pub mod fm;
 pub mod ssb;
 
-pub use rigflow_core::dsp::demod::{
+pub use rigflow_core::dsp::modes::{
     DemodMode,
     Sideband,
     demod_mode_to_string,

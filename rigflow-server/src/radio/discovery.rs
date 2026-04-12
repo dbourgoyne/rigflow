@@ -4,32 +4,32 @@ use std::path::{Path, PathBuf};
 use rigflow_core::radio::{
     HardwareKind, RadioCapabilities, RadioDescriptor, RadioId,
 };
-use crate::server::config::{ServerConfig};
 
+use crate::config::ServerConfig;
+
+/// Discover all radios available to the server.
+///
+/// Includes:
+/// - RTL-SDR devices
+/// - WAV file sources (from configured directory)
+/// - Fake tone generator
 pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
-    let path_option = Some(Path::new(&config.wav_dir));
 
     radios.extend(discover_rtl_radios());
-    radios.extend(discover_wav_radios(path_option));
+    radios.extend(discover_wav_radios(Path::new(&config.wav_dir)));
     radios.push(build_fake_tone_radio());
 
     radios
 }
 
-fn discover_rtl_radios() -> Vec<RadioDescriptor> {
-    // TODO: adapt this to your actual RTL enumeration API.
-    //
-    // The goal for this baby step is:
-    // - if one RTL-SDR is plugged in, return exactly one descriptor
-    // - if none are plugged in, return none
-    //
-    // Replace the placeholder block below with your real enumeration.
-    //
-    // Example shape:
-    // let devices = crate::hardware::rtl_sdr::list_devices().unwrap_or_default();
-    // devices.into_iter().enumerate().map(|(idx, dev)| { ... }).collect()
+//
+// ============================
+// RTL Discovery
+// ============================
+//
 
+fn discover_rtl_radios() -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
 
     match try_discover_rtl_count() {
@@ -53,31 +53,26 @@ fn discover_rtl_radios() -> Vec<RadioDescriptor> {
     radios
 }
 
+/// Placeholder RTL enumeration.
+///
+/// Replace this with actual hardware enumeration logic.
 fn try_discover_rtl_count() -> Result<usize, String> {
-    // ----- REPLACE THIS WITH YOUR REAL RTL ENUMERATION -----
-    //
-    // If you already have something in:
-    //   - src/hardware/rtl_sdr.rs
-    //   - src/bin/rtlsdr_list.rs
-    //
-    // hook that in here.
-    //
-    // Temporary placeholder:
+    // TODO: hook into real RTL-SDR enumeration
     Ok(1)
 }
 
-fn discover_wav_radios(wav_dir: Option<&Path>) -> Vec<RadioDescriptor> {
-    let Some(dir) = wav_dir else {
-        return Vec::new();
-    };
+//
+// ============================
+// WAV Discovery
+// ============================
+//
 
-    let mut radios = Vec::new();
-
+fn discover_wav_radios(dir: &Path) -> Vec<RadioDescriptor> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) => {
             eprintln!("Failed to read wav dir '{}': {err}", dir.display());
-            return radios;
+            return Vec::new();
         }
     };
 
@@ -86,27 +81,44 @@ fn discover_wav_radios(wav_dir: Option<&Path>) -> Vec<RadioDescriptor> {
         .filter(|path| is_wav_file(path))
         .collect();
 
+    // Stable ordering ensures deterministic radio IDs (wav:0, wav:1, ...)
     wav_paths.sort();
 
-    for (idx, path) in wav_paths.into_iter().enumerate() {
-        let file_name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("unknown.wav")
-            .to_string();
+    wav_paths
+        .into_iter()
+        .enumerate()
+        .map(|(idx, path)| {
+            let file_name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown.wav");
 
-        radios.push(RadioDescriptor {
-            id: RadioId(format!("wav:{idx}")),
-            display_name: format!("WAV {}", file_name),
-            hardware_kind: HardwareKind::WavFile,
-            index: idx as u32,
-            serial: Some(path.display().to_string()),
-            capabilities: default_radio_capabilities(),
-        });
-    }
-
-    radios
+            RadioDescriptor {
+                id: RadioId(format!("wav:{idx}")),
+                display_name: format!("WAV {}", file_name),
+                hardware_kind: HardwareKind::WavFile,
+                index: idx as u32,
+                serial: Some(path.display().to_string()),
+                capabilities: default_radio_capabilities(),
+            }
+        })
+        .collect()
 }
+
+fn is_wav_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("wav"))
+            .unwrap_or(false)
+}
+
+//
+// ============================
+// Fake Radio
+// ============================
+//
 
 fn build_fake_tone_radio() -> RadioDescriptor {
     RadioDescriptor {
@@ -119,14 +131,11 @@ fn build_fake_tone_radio() -> RadioDescriptor {
     }
 }
 
-fn is_wav_file(path: &Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("wav"))
-            .unwrap_or(false)
-}
+//
+// ============================
+// Capabilities
+// ============================
+//
 
 fn default_radio_capabilities() -> RadioCapabilities {
     RadioCapabilities {
@@ -140,8 +149,15 @@ fn default_radio_capabilities() -> RadioCapabilities {
     }
 }
 
+//
+// ============================
+// Debug
+// ============================
+//
+
 pub fn debug_print_discovered_radios(radios: &[RadioDescriptor]) {
     println!("Discovered {} radios:", radios.len());
+
     for radio in radios {
         println!(
             "  id={} kind={:?} name='{}' serial={:?}",

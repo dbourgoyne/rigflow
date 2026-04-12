@@ -1,16 +1,27 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
+
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 
-use std::sync::Arc;
-
 use log::info;
+
 use rigflow_core::net::udp_framing::{
     MAGIC,
     VERSION,
     STREAM_TYPE_REGISTER_AUDIO,
 };
 
+/// Listens for UDP registration packets from clients.
+///
+/// Expected packet format:
+/// - u16 magic
+/// - u8  version
+/// - u8  stream_type (REGISTER_AUDIO)
+///
+/// On valid packet:
+/// - stores sender as current UDP audio target
+/// - sends 4-byte ACK (echo header)
 pub async fn run_udp_registration_listener(
     bind_addr: &str,
     udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
@@ -21,26 +32,33 @@ pub async fn run_udp_registration_listener(
     loop {
         let (len, src) = socket.recv_from(&mut buf).await?;
 
+        // Minimum header size
         if len < 4 {
             continue;
         }
 
-        let magic = u16::from_be_bytes([buf[0], buf[1]]);
-        let version = buf[2];
-        let stream_type = buf[3];
+        let header = &buf[..4];
 
-        if magic != MAGIC || version != VERSION || stream_type != STREAM_TYPE_REGISTER_AUDIO {
+        let magic = u16::from_be_bytes([header[0], header[1]]);
+        let version = header[2];
+        let stream_type = header[3];
+
+        // Validate registration packet
+        if magic != MAGIC
+            || version != VERSION
+            || stream_type != STREAM_TYPE_REGISTER_AUDIO
+        {
             continue;
         }
 
+        // Update shared target
         {
             let mut target = udp_audio_target.write().await;
             *target = Some(src);
         }
 
-        // Optional ACK: same 4-byte header echoed back
-        let ack = [buf[0], buf[1], buf[2], buf[3]];
-        let _ = socket.send_to(&ack, src).await;
+        // Send ACK (echo header)
+        let _ = socket.send_to(header, src).await;
 
         info!("Registered UDP audio client: {}", src);
     }

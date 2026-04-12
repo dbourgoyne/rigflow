@@ -1,1 +1,1 @@
-pub mod demod;
+pub mod modes;

@@ -6,31 +6,29 @@ use std::sync::{
 };
 use std::thread;
 use std::time::{Duration, Instant};
-use std::path::Path;
-use log::debug;
 
+use log::debug;
 use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use rigflow_core::dsp::demod::{DemodMode, Sideband};
-use rigflow_core::radio::RadioDescriptor;
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
-use crate::server::config::{
+use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ,
 };
-use crate::server::radio_types::{
+use crate::radio::types::{
     AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
     WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
-use crate::source::IqSource;
-use crate::streaming::udp_audio::UdpAudioSender;
-use crate::streaming::udp_waterfall::UdpWaterfallSender;
-use crate::waterfall::simple::WaterfallGenerator;
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
-use rigflow_core::radio::HardwareKind;
+use crate::source::IqSource;
+use crate::net::udp::udp_audio::UdpAudioSender;
+use crate::net::udp::udp_waterfall::UdpWaterfallSender;
+use crate::waterfall::generator::WaterfallGenerator;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -47,6 +45,11 @@ struct StartupInfo {
     runtime: WorkerRuntimeState,
 }
 
+/// Async entry point that bridges the Tokio-facing server code into the
+/// blocking multi-threaded radio worker implementation.
+///
+/// The rest of this worker is intentionally thread-based because the SDR
+/// capture/DSP/waterfall pipeline is mostly blocking, CPU-oriented work.
 pub async fn run_radio_worker(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
@@ -66,63 +69,77 @@ pub async fn run_radio_worker(
     let stop_reason = Arc::new(Mutex::new(StopReason::InternalFault));
     let (exit_tx, exit_rx) = oneshot::channel::<WorkerExit>();
 
-    let stop_flag_for_forwarder = stop_flag.clone();
-    tokio::spawn(async move {
-        while let Some(cmd) = worker_rx.recv().await {
-            if cmd_tx_std.send(cmd).is_err() {
-                break;
+    // Forward commands from the async WebSocket/control world into the
+    // blocking worker thread world.
+    {
+        let stop_flag = stop_flag.clone();
+
+        tokio::spawn(async move {
+            while let Some(cmd) = worker_rx.recv().await {
+                if cmd_tx_std.send(cmd).is_err() {
+                    break;
+                }
+
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
             }
-            if stop_flag_for_forwarder.load(Ordering::Relaxed) {
-                break;
-            }
-        }
-    });
+        });
+    }
 
-    let descriptor_for_thread = descriptor.clone();
-    let request_for_thread = request.clone();
-    let server_cfg_for_thread = server_cfg.clone();
-    let status_tx_for_thread = status_tx.clone();
-    let stop_flag_for_thread = stop_flag.clone();
-    let stop_reason_for_thread = stop_reason.clone();
+    {
+        let thread_descriptor = descriptor.clone();
+        let thread_request = request.clone();
+        let thread_server_cfg = server_cfg.clone();
+        let thread_status_tx = status_tx.clone();
+        let thread_stop_flag = stop_flag.clone();
+        let thread_stop_reason = stop_reason.clone();
 
-    thread::spawn(move || {
-        let exit = run_iq_worker_threads(
-            descriptor_for_thread,
-            request_for_thread,
-            server_cfg_for_thread,
-            cmd_rx_std,
-            status_tx_for_thread,
-            startup_tx,
-            stop_flag_for_thread,
-            stop_reason_for_thread,
-        );
-	println!("[radio-worker {}] async wrapper exiting with {:?}", descriptor.id.0, exit );
-        let _ = exit_tx.send(exit);
-    });
+        thread::spawn(move || {
+            let worker_name = thread_descriptor.id.0.clone();
 
+            let exit = run_iq_worker_threads(
+                thread_descriptor,
+                thread_request,
+                thread_server_cfg,
+                cmd_rx_std,
+                thread_status_tx,
+                startup_tx,
+                thread_stop_flag,
+                thread_stop_reason,
+            );
+
+            println!(
+                "[radio-worker {}] async wrapper exiting with {:?}",
+                worker_name, exit
+            );
+
+            let _ = exit_tx.send(exit);
+        });
+    }
 
     tokio::select! {
-	_ = &mut stop_rx => {
+        _ = &mut stop_rx => {
             stop_flag.store(true, Ordering::Relaxed);
+
             if let Ok(mut reason) = stop_reason.lock() {
-		*reason = StopReason::InternalFault;
+                *reason = StopReason::InternalFault;
             }
 
             WorkerExit::Clean {
-		reason: StopReason::InternalFault,
+                reason: StopReason::InternalFault,
             }
-	}
+        }
 
-	result = exit_rx => {
+        result = exit_rx => {
             match result {
-		Ok(exit) => exit,
-		Err(_) => WorkerExit::Failed {
+                Ok(exit) => exit,
+                Err(_) => WorkerExit::Failed {
                     reason: "worker thread exit channel closed".to_string(),
-		},
+                },
             }
-	}
+        }
     }
-
 }
 
 fn source_kind_for_descriptor(descriptor: &RadioDescriptor) -> Result<SourceKind, String> {
@@ -159,14 +176,13 @@ fn create_worker_source(
             block_complex_samples: block_size,
         }
     } else if descriptor.id.0.starts_with("wav:") {
-	let wav_path = descriptor
-	    .serial
-	    .as_ref()
-	    .ok_or_else(|| "wav radio missing file path".to_string())?
-	    .clone();
-	SourceConfig::WavFile {
-	    path: wav_path,
-	}
+        let wav_path = descriptor
+            .serial
+            .as_ref()
+            .ok_or_else(|| "wav radio missing file path".to_string())?
+            .clone();
+
+        SourceConfig::WavFile { path: wav_path }
     } else {
         return Err(format!("source for {} not implemented", descriptor.id.0));
     };
@@ -229,8 +245,8 @@ fn current_control(control: &Arc<Mutex<SharedControlState>>) -> SharedControlSta
 }
 
 fn set_stop_reason(stop_reason: &Arc<Mutex<StopReason>>, reason: StopReason) {
-    if let Ok(mut r) = stop_reason.lock() {
-        *r = reason;
+    if let Ok(mut current_reason) = stop_reason.lock() {
+        *current_reason = reason;
     }
 }
 
@@ -238,6 +254,7 @@ fn stop_requested(stop_flag: &Arc<AtomicBool>) -> bool {
     stop_flag.load(Ordering::Relaxed)
 }
 
+/// Coordinates the worker subthreads and owns the overall worker lifecycle.
 fn run_iq_worker_threads(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
@@ -261,18 +278,18 @@ fn run_iq_worker_threads(
     let block_size = choose_block_size(&source_kind);
 
     let wav_center_freq_hz = if descriptor.id.0.starts_with("wav:") {
-	descriptor
-	    .serial
-	    .as_ref()
-	    .and_then(|p| parse_center_freq_hz_from_filename(std::path::Path::new(p)))
+        descriptor
+            .serial
+            .as_ref()
+            .and_then(|p| parse_center_freq_hz_from_filename(std::path::Path::new(p)))
     } else {
-	None
+        None
     };
 
     let kind = descriptor.hardware_kind;
 
     let (initial_center_freq_hz, initial_target_freq_hz) =
-	normalize_initial_frequencies(&request, &server_cfg, kind, wav_center_freq_hz);
+        normalize_initial_frequencies(&request, &server_cfg, kind, wav_center_freq_hz);
 
     let control = Arc::new(Mutex::new(SharedControlState {
         center_freq_hz: initial_center_freq_hz,
@@ -282,13 +299,13 @@ fn run_iq_worker_threads(
         ssb_pitch_hz: 0.0,
     }));
 
-    let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+    let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
     let (iq_wf_tx, iq_wf_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
-    let (startup_info_tx, startup_info_rx) = std_mpsc::sync_channel::<Result<StartupInfo, String>>(1);
+    let (startup_info_tx, startup_info_rx) =
+        std_mpsc::sync_channel::<Result<StartupInfo, String>>(1);
     let (capture_start_tx, capture_start_rx) = std_mpsc::sync_channel::<()>(1);
     let (fatal_tx, fatal_rx) = std_mpsc::channel::<WorkerExit>();
 
-    // Command thread
     let cmd_thread = spawn_command_thread(
         cmd_rx,
         control.clone(),
@@ -297,22 +314,21 @@ fn run_iq_worker_threads(
         fatal_tx.clone(),
     );
 
-    // Capture thread
     let capture_thread = spawn_capture_thread(
-	descriptor.clone(),
-	server_cfg.clone(),
-	control.clone(),
-	stop_flag.clone(),
-	stop_reason.clone(),
-	fatal_tx.clone(),
-	startup_info_tx,
-	capture_start_rx,
-	iq_audio_tx,
-	iq_wf_tx,
-	block_size,
-	initial_center_freq_hz,
+        descriptor.clone(),
+        server_cfg.clone(),
+        control.clone(),
+        stop_flag.clone(),
+        stop_reason.clone(),
+        fatal_tx.clone(),
+        startup_info_tx,
+        capture_start_rx,
+        iq_audio_tx,
+        iq_wf_tx,
+        block_size,
+        initial_center_freq_hz,
     );
-    
+
     let startup_info = match startup_info_rx.recv() {
         Ok(Ok(info)) => info,
         Ok(Err(reason)) => {
@@ -340,21 +356,19 @@ fn run_iq_worker_threads(
 
     let _ = capture_start_tx.send(());
 
-    // DSP/audio thread
     let dsp_thread = spawn_dsp_thread(
-	descriptor.clone(),
-	server_cfg.clone(),
-	source_kind.clone(),
-	control.clone(),
-	stop_flag.clone(),
-	fatal_tx.clone(),
-	status_tx.clone(),
-	iq_audio_rx,
-	request.audio_udp_peer,
-	startup_info.clone(),
+        descriptor.clone(),
+        server_cfg.clone(),
+        source_kind.clone(),
+        control.clone(),
+        stop_flag.clone(),
+        fatal_tx.clone(),
+        status_tx.clone(),
+        iq_audio_rx,
+        request.audio_udp_peer,
+        startup_info.clone(),
     );
 
-    // Waterfall thread
     let waterfall_thread = spawn_waterfall_thread(
         descriptor.clone(),
         iq_wf_rx,
@@ -364,8 +378,7 @@ fn run_iq_worker_threads(
         startup_info.runtime.waterfall_bins as usize,
         startup_info.runtime.waterfall_frame_rate_hz,
     );
-    
-    // Wait for stop or fatal error.
+
     let exit = loop {
         if stop_requested(&stop_flag) {
             break WorkerExit::Clean {
@@ -409,9 +422,10 @@ fn run_iq_worker_threads(
     }
 
     println!(
-    "[radio-worker {}] worker threads exiting with {:?}",
-    descriptor.id.0, exit
-);
+        "[radio-worker {}] worker threads exiting with {:?}",
+        descriptor.id.0, exit
+    );
+
     exit
 }
 
@@ -427,28 +441,28 @@ fn spawn_command_thread(
             match cmd_rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(cmd) => match cmd {
                     WorkerCommand::SetTargetFrequency { hz } => {
-                        if let Ok(mut c) = control.lock() {
-                            c.target_freq_hz = hz;
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.target_freq_hz = hz;
                         }
                     }
                     WorkerCommand::SetCenterFrequency { hz } => {
-                        if let Ok(mut c) = control.lock() {
-                            c.center_freq_hz = hz;
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.center_freq_hz = hz;
                         }
                     }
                     WorkerCommand::SetDemodMode { mode } => {
-                        if let Ok(mut c) = control.lock() {
-                            c.demod_mode = mode;
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.demod_mode = mode;
                         }
                     }
                     WorkerCommand::SetSideband { sideband } => {
-                        if let Ok(mut c) = control.lock() {
-                            c.sideband = sideband;
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.sideband = sideband;
                         }
                     }
                     WorkerCommand::SetSsbPitch { pitch_hz } => {
-                        if let Ok(mut c) = control.lock() {
-                            c.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
                         }
                     }
                     WorkerCommand::Stop { reason } => {
@@ -469,7 +483,6 @@ fn spawn_command_thread(
     })
 }
 
-
 fn spawn_waterfall_thread(
     descriptor: RadioDescriptor,
     iq_wf_rx: std_mpsc::Receiver<Vec<Complex32>>,
@@ -481,10 +494,11 @@ fn spawn_waterfall_thread(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
+
         let mut waterfall = match UdpWaterfallSender::new() {
-            Ok(s) => s,
-            Err(e) => {
-                let reason = format!("failed to create UDP waterfall sender: {e}");
+            Ok(sender) => sender,
+            Err(error) => {
+                let reason = format!("failed to create UDP waterfall sender: {error}");
                 stop_flag.store(true, Ordering::Relaxed);
                 let _ = fatal_tx.send(WorkerExit::Failed { reason });
                 return;
@@ -493,9 +507,8 @@ fn spawn_waterfall_thread(
 
         let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
         let waterfall_max_len = waterfall_window_len * 8;
-        let waterfall_period = Duration::from_secs_f32(
-            (1.0 / waterfall_frame_rate_hz.max(1.0)).max(0.001),
-        );
+        let waterfall_period =
+            Duration::from_secs_f32((1.0 / waterfall_frame_rate_hz.max(1.0)).max(0.001));
         let mut next_waterfall_tick = Instant::now();
 
         loop {
@@ -507,12 +520,14 @@ fn spawn_waterfall_thread(
                 for sample in iq {
                     waterfall_iq_buffer.push_back(sample);
                 }
+
                 while waterfall_iq_buffer.len() > waterfall_max_len {
                     waterfall_iq_buffer.pop_front();
                 }
             }
 
             let now = Instant::now();
+
             if now >= next_waterfall_tick {
                 if waterfall_iq_buffer.len() >= waterfall_window_len {
                     let start = waterfall_iq_buffer.len() - waterfall_window_len;
@@ -573,17 +588,15 @@ fn spawn_capture_thread(
             return;
         }
 
-        let startup_runtime = build_runtime_state(
-            &current_control(&control),
-            source.sample_rate(),
-        );
+        let startup_runtime = build_runtime_state(&current_control(&control), source.sample_rate());
 
         let _ = startup_info_tx.send(Ok(StartupInfo {
             input_sample_rate_hz: source.sample_rate(),
             runtime: startup_runtime,
         }));
 
-        // Wait until coordinator has spawned the other threads and published startup state.
+        // Wait until the coordinator has published startup state and spun up
+        // the downstream threads before capture begins feeding data.
         let _ = capture_start_rx.recv();
 
         let realtime = source.is_realtime();
@@ -607,12 +620,16 @@ fn spawn_capture_thread(
             }
 
             let control_snapshot = current_control(&control);
+
             if control_snapshot.center_freq_hz != last_center_freq_hz {
-                if let Err(reason) = source.set_center_frequency(control_snapshot.center_freq_hz as f32) {
+                if let Err(reason) =
+                    source.set_center_frequency(control_snapshot.center_freq_hz as f32)
+                {
                     stop_flag.store(true, Ordering::Relaxed);
                     let _ = fatal_tx.send(WorkerExit::Failed { reason });
                     break;
                 }
+
                 last_center_freq_hz = control_snapshot.center_freq_hz;
             }
 
@@ -625,7 +642,7 @@ fn spawn_capture_thread(
             }
 
             let iq = match source.read_block(block_size) {
-                Ok(v) => v,
+                Ok(samples) => samples,
                 Err(reason) => {
                     stop_flag.store(true, Ordering::Relaxed);
                     let _ = fatal_tx.send(WorkerExit::Failed { reason });
@@ -637,7 +654,7 @@ fn spawn_capture_thread(
                 if realtime {
                     continue;
                 } else {
-                    // WAV EOF or similar: clean stop.
+                    // WAV EOF or similar: treat as a clean stop.
                     set_stop_reason(&stop_reason, StopReason::UserRequested);
                     stop_flag.store(true, Ordering::Relaxed);
                     break;
@@ -711,10 +728,10 @@ fn spawn_dsp_thread(
             pipeline.client_output_sample_rate(),
         );
 
-        let mut audio = match UdpAudioSender::new(480) {
-            Ok(s) => s,
-            Err(e) => {
-                let reason = format!("failed to create UDP audio sender: {e}");
+        let mut audio = match UdpAudioSender::new(240) {
+            Ok(sender) => sender,
+            Err(error) => {
+                let reason = format!("failed to create UDP audio sender: {error}");
                 stop_flag.store(true, Ordering::Relaxed);
                 let _ = fatal_tx.send(WorkerExit::Failed { reason });
                 return;
@@ -791,21 +808,11 @@ fn spawn_dsp_thread(
                 Ok(iq) => {
                     let audio_f32 = pipeline.process_audio(&iq);
 
-		    // DWB: tmp debug
-		    /*
-		    println!(
-			"[wav-dsp] iq_in={} pipeline_out_sr={} client_sr={} audio_out_samples={}",
-			iq.len(),
-			pipeline.output_sample_rate(),
-			pipeline.client_output_sample_rate(),
-			audio_f32.len(),
-		    );
-		     */
-		    
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
-                    for s in audio_f32 {
-                        let v = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                        audio_i16.push(v);
+                    for sample in audio_f32 {
+                        let value =
+                            (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                        audio_i16.push(value);
                     }
 
                     if !audio_i16.is_empty() {
@@ -828,55 +835,37 @@ fn normalize_initial_frequencies(
     src_kind: HardwareKind,
     wav_center_freq_hz: Option<u64>,
 ) -> (u64, u64) {
-
-    debug!("reguest = {:?}", request);
+    debug!("request = {:?}", request);
     debug!("server_cfg = {:?}", server_cfg);
     debug!("wav_center_freq_hz = {:?}", wav_center_freq_hz);
 
     let mut initial_center_freq_hz = server_cfg.center_freq_hz;
-    let mut initial_target_freq_hz = server_cfg.target_freq_hz;
-
+    
     if src_kind == HardwareKind::FakeTone {
-	debug!("In FakeTone");
-	initial_center_freq_hz = server_cfg.fake_center_freq_hz;
-	initial_target_freq_hz = server_cfg.fake_target_freq_hz;
+        debug!("In FakeTone");
+        initial_center_freq_hz = server_cfg.fake_center_freq_hz;
     }
 
     if src_kind == HardwareKind::WavFile {
-	debug!("In WavFile");
-	initial_center_freq_hz =
-	    if let Some(wav_center) = wav_center_freq_hz {
-		wav_center as f32
-	    } else if request.center_freq_hz != 0 {
-		request.center_freq_hz as f32
-	    } else {
-		server_cfg.center_freq_hz as f32
-	    }
+        debug!("In WavFile");
+        initial_center_freq_hz = if let Some(wav_center) = wav_center_freq_hz {
+            wav_center as f32
+        } else if request.center_freq_hz != 0 {
+            request.center_freq_hz as f32
+        } else {
+            server_cfg.center_freq_hz as f32
+        };
     }
 
     let initial_target_freq_hz = initial_center_freq_hz;
 
-    debug!("init_cf = {:?}, init_tf = {:?}", initial_center_freq_hz, initial_target_freq_hz);
-    (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
-	
+    debug!(
+        "init_cf = {:?}, init_tf = {:?}",
+        initial_center_freq_hz, initial_target_freq_hz
+    );
 
-    /*
-    let initial_center_freq_hz = if request.center_freq_hz != 0 {
-        request.center_freq_hz
-    } else if let Some(wav_center) = wav_center_freq_hz {
-        wav_center
-    } else {
-        server_cfg.center_freq_hz as u64
-    };
-
-
-    let initial_target_freq_hz = if request.target_freq_hz != 0 {
-        request.target_freq_hz
-    } else {
-        // For WAV: default target = center
-        initial_center_freq_hz
-};
-    */
-
-
+    (
+        initial_center_freq_hz as u64,
+        initial_target_freq_hz as u64,
+    )
 }

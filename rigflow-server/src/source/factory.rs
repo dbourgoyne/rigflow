@@ -1,11 +1,17 @@
-use crate::input::iq_wav_reader::IqWavReader;
-use crate::source::fake_iq::FakeIqSource;
+use crate::source::wav::IqWavReader;
+use crate::source::fake::FakeIqSource;
 use crate::source::rtlsdr::RtlSdrSource;
 use crate::source::IqSource;
 
+/// Configuration used to construct a concrete IQ source.
 pub enum SourceConfig {
-    WavFile { path: String },
-    Fake { sample_rate_hz: f32, tone_hz: f32 },
+    WavFile {
+        path: String,
+    },
+    Fake {
+        sample_rate_hz: f32,
+        tone_hz: f32,
+    },
     RtlSdr {
         device_index: usize,
         sample_rate_hz: u32,
@@ -17,13 +23,22 @@ pub enum SourceConfig {
     },
 }
 
+/// Create a concrete IQ source from the provided configuration.
 pub fn create_source(config: SourceConfig) -> Result<Box<dyn IqSource>, String> {
     match config {
-        SourceConfig::WavFile { path } => Ok(Box::new(IqWavReader::open(path)?)),
+        SourceConfig::WavFile { path } => {
+            let source = IqWavReader::open(path)?;
+            Ok(Box::new(source))
+        }
+
         SourceConfig::Fake {
             sample_rate_hz,
             tone_hz,
-        } => Ok(Box::new(FakeIqSource::new(sample_rate_hz, tone_hz))),
+        } => {
+            let source = FakeIqSource::new(sample_rate_hz, tone_hz);
+            Ok(Box::new(source))
+        }
+
         SourceConfig::RtlSdr {
             device_index,
             sample_rate_hz,
@@ -32,14 +47,18 @@ pub fn create_source(config: SourceConfig) -> Result<Box<dyn IqSource>, String> 
             ppm_correction,
             direct_sampling,
             block_complex_samples,
-        } => Ok(Box::new(RtlSdrSource::open(
-            device_index,
-            sample_rate_hz,
-            center_freq_hz,
-            gain_tenths_db,
-            ppm_correction,
-            direct_sampling,
-            block_complex_samples,
-        )?)),
+        } => {
+            let source = RtlSdrSource::open(
+                device_index,
+                sample_rate_hz,
+                center_freq_hz,
+                gain_tenths_db,
+                ppm_correction,
+                direct_sampling,
+                block_complex_samples,
+            )?;
+
+            Ok(Box::new(source))
+        }
     }
 }
