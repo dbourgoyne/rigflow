@@ -20,10 +20,10 @@ pub struct UiState {
     /// Target tuned frequency, in Hz
     pub target_freq_hz: f32,
 
-    /// Current sideband ("lsb", "usb", etc.)
+    /// Current sideband
     pub sideband: Sideband,
 
-    /// Current demodulation mode ("wfm", "nfm", "lsb", "usb", etc.)
+    /// Current demodulation mode
     pub demod_mode: DemodMode,
 
     /// SSB pitch offset (Hz)

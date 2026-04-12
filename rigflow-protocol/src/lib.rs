@@ -22,12 +22,12 @@ pub enum ClientMessage {
         center_freq_hz: f32,
     },
 
-    /// Set the active sideband ("usb" or "lsb")
+    /// Set the active sideband
     SetSideband {
         sideband: Sideband,
     },
 
-    /// Set the demodulation mode ("wfm", "nfm", etc.)
+    /// Set the demodulation mode
     SetDemodMode {
         mode: DemodMode,
     },
