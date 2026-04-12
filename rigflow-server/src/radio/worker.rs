@@ -28,7 +28,7 @@ use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
-use crate::waterfall::simple::WaterfallGenerator;
+use crate::waterfall::generator::WaterfallGenerator;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
