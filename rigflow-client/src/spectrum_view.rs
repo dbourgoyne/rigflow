@@ -13,7 +13,7 @@ use crate::app::om_bands::{
     COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
     COLOR_OM_USB_PHONE_CW_RTTY_DATA,
 };
-use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::dsp::modes::DemodMode;
 
 /// Result of user interaction with the spectrum plot.
 ///
