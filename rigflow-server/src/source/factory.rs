@@ -1,5 +1,5 @@
 use crate::source::wav::IqWavReader;
-use crate::source::fake_iq::FakeIqSource;
+use crate::source::fake::FakeIqSource;
 use crate::source::rtlsdr::RtlSdrSource;
 use crate::source::IqSource;
 
