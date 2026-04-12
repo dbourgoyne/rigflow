@@ -5,7 +5,7 @@ use rigflow_core::radio::{
     HardwareKind, RadioCapabilities, RadioDescriptor, RadioId,
 };
 
-use crate::server::config::ServerConfig;
+use crate::config::ServerConfig;
 
 /// Discover all radios available to the server.
 ///

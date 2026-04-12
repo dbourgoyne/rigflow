@@ -15,7 +15,7 @@ use rigflow_core::dsp::demod::{DemodMode, Sideband};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
-use crate::server::config::{
+use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ,
 };
