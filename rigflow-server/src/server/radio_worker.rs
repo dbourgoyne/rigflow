@@ -26,8 +26,8 @@ use crate::server::radio_types::{
 use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
-use crate::streaming::udp_audio::UdpAudioSender;
-use crate::streaming::udp_waterfall::UdpWaterfallSender;
+use crate::net::udp::udp_audio::UdpAudioSender;
+use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::waterfall::simple::WaterfallGenerator;
 
 #[derive(Debug, Clone)]

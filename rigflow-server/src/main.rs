@@ -14,7 +14,7 @@ use rigflow_server::{
         radio_manager::RadioManager,
         radio_types::RadioManagerConfig,
     },
-    streaming::udp_registration::run_udp_registration_listener,
+    net::udp::udp_registration::run_udp_registration_listener,
 };
 
 /// WebSocket endpoint for rigflow control.

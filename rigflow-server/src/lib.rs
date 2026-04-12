@@ -7,6 +7,5 @@ pub mod net;
 pub mod plugin_api;
 pub mod plugins;
 pub mod server;
-pub mod streaming;
 pub mod waterfall;
 pub mod source;
