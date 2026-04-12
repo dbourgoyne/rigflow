@@ -384,6 +384,7 @@ impl DspPipeline {
             DemodMode::Usb => self.demod_ssb(&iq, Sideband::Usb),
             DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
             DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
+	    DemodMode::Am => todo!(),
 	};
 
 	self.dc_blocker.process_in_place(&mut audio);
@@ -391,6 +392,7 @@ impl DspPipeline {
 	match self.mode {
             DemodMode::Wfm => self.process_fm_audio_post(&mut audio, WFM_AUDIO_GAIN),
             DemodMode::Nfm => self.process_fm_audio_post(&mut audio, NFM_AUDIO_GAIN),
+	    DemodMode::Am => todo!(),
             DemodMode::Usb | DemodMode::Lsb => {
 		self.agc.process_in_place(&mut audio);
 

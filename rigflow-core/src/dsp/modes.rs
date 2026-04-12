@@ -21,6 +21,9 @@ pub enum DemodMode {
 
     /// Lower Sideband
     Lsb,
+
+    /// AM
+    Am,
 }
 
 impl fmt::Display for DemodMode {
@@ -30,6 +33,7 @@ impl fmt::Display for DemodMode {
 	    DemodMode::Nfm => "nfm",
 	    DemodMode::Usb => "usb",
 	    DemodMode::Lsb => "lsb",
+	    DemodMode::Am  => "am",
         };
         write!(f, "{}", s)
     }
@@ -46,6 +50,7 @@ impl FromStr for DemodMode {
             "nfm" => Ok(DemodMode::Nfm),
             "usb" => Ok(DemodMode::Usb),
             "lsb" => Ok(DemodMode::Lsb),
+	    "am" => Ok(DemodMode::Am),
             _ => Err(format!("invalid demod mode: {}", s)),
         }
     }
