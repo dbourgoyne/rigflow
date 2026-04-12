@@ -232,7 +232,7 @@ async fn handle_legacy_client_text(
                 state,
                 session,
                 WorkerCommand::SetDemodMode {
-                    mode: parse_demod_mode(&mode)?,
+                    mode,
                 },
             )
             .await
@@ -246,7 +246,7 @@ async fn handle_legacy_client_text(
                 state,
                 session,
                 WorkerCommand::SetSideband {
-                    sideband: parse_sideband(&sideband)?,
+                    sideband,
                 },
             )
             .await
@@ -572,8 +572,8 @@ fn runtime_snapshot_from_status(
             audio_format: runtime.audio_format.clone(),
             waterfall_bins: runtime.waterfall_bins,
             waterfall_frame_rate_hz: runtime.waterfall_frame_rate_hz,
-            demod_mode: demod_mode_to_string(runtime.demod_mode),
-            sideband: sideband_to_string(runtime.sideband),
+            demod_mode: runtime.demod_mode,
+            sideband: runtime.sideband,
             ssb_pitch_hz: runtime.ssb_pitch_hz,
         }),
         _ => None,
@@ -590,8 +590,8 @@ fn runtime_changed_from_status(
             radio_id,
             center_freq_hz: Some(runtime.center_freq_hz),
             target_freq_hz: Some(runtime.target_freq_hz),
-            demod_mode: Some(demod_mode_to_string(runtime.demod_mode)),
-            sideband: Some(sideband_to_string(runtime.sideband)),
+            demod_mode: Some(runtime.demod_mode),
+            sideband: Some(runtime.sideband),
             ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
         }),
         _ => None,

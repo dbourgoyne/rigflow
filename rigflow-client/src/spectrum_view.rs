@@ -13,6 +13,7 @@ use crate::app::om_bands::{
     COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
     COLOR_OM_USB_PHONE_CW_RTTY_DATA,
 };
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 /// Result of user interaction with the spectrum plot.
 ///
@@ -340,26 +341,13 @@ fn draw_passband_overlay(
         return;
     }
 
-    let demod_mode = state.demod_mode.to_ascii_lowercase();
-    let sideband = state.sideband.to_ascii_lowercase();
     let target_freq_hz = state.target_freq_hz;
 
-    let (pb_left_hz, pb_right_hz) = match demod_mode.as_str() {
-        "wfm" => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
-        "nfm" => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
-
-        // Legacy representation where mode already encodes sideband.
-        "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
-        "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
-
-        // Future cleaner representation: mode + separate sideband.
-        "ssb" => match sideband.as_str() {
-            "usb" => (target_freq_hz, target_freq_hz + 3_000.0),
-            "lsb" => (target_freq_hz - 3_000.0, target_freq_hz),
-            _ => (target_freq_hz - 3_000.0, target_freq_hz + 3_000.0),
-        },
-
-        _ => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
+    let (pb_left_hz, pb_right_hz) = match state.demod_mode {
+	DemodMode::Wfm => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
+	DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
+	DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
+	DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
     };
 
     let visible_pb_left_hz = pb_left_hz.max(left_hz);

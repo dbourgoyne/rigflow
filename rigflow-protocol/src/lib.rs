@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 /// General client → server control messages.
 ///
@@ -23,12 +24,12 @@ pub enum ClientMessage {
 
     /// Set the active sideband ("usb" or "lsb")
     SetSideband {
-        sideband: String,
+        sideband: Sideband,
     },
 
     /// Set the demodulation mode ("wfm", "nfm", etc.)
     SetDemodMode {
-        mode: String,
+        mode: DemodMode,
     },
 
     /// Adjust SSB pitch offset (Hz)

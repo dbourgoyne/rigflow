@@ -1,5 +1,8 @@
-use rigflow_core::radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId};
 use serde::{Deserialize, Serialize};
+use rigflow_core::{
+    radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId},
+    dsp::modes::{DemodMode, Sideband},
+};
 
 /// Messages sent from client → server over WebSocket.
 ///
@@ -98,8 +101,8 @@ pub enum ServerRadioMessage {
         waterfall_frame_rate_hz: f32,
 
         /// Current demodulation state
-        demod_mode: String,
-        sideband: String,
+        demod_mode: DemodMode,
+        sideband: Sideband,
         ssb_pitch_hz: f32,
     },
 
@@ -112,8 +115,8 @@ pub enum ServerRadioMessage {
         center_freq_hz: Option<u64>,
         target_freq_hz: Option<u64>,
 
-        demod_mode: Option<String>,
-        sideband: Option<String>,
+        demod_mode: Option<DemodMode>,
+        sideband: Option<Sideband>,
         ssb_pitch_hz: Option<f32>,
     },
 

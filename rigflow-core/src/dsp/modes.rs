@@ -8,6 +8,7 @@ use std::fmt;
 /// - server DSP pipeline
 /// - protocol layer
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DemodMode {
     /// Wideband FM (broadcast FM)
     Wfm,

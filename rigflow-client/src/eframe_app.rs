@@ -20,6 +20,7 @@ pub struct RigflowApp {
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
     pub waterfall_texture: Option<egui::TextureHandle>,
 }
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 impl RigflowApp {
     pub fn new(
@@ -366,22 +367,22 @@ impl eframe::App for RigflowApp {
                                     ui.horizontal(|ui| {
                                         ui.radio_value(
                                             &mut selected_demod,
-                                            "wfm".to_string(),
+                                            DemodMode::Wfm,
                                             "wfm",
                                         );
                                         ui.radio_value(
                                             &mut selected_demod,
-                                            "nfm".to_string(),
+                                            DemodMode::Nfm,
                                             "nfm",
                                         );
                                         ui.radio_value(
                                             &mut selected_demod,
-                                            "lsb".to_string(),
+                                            DemodMode::Lsb,
                                             "lsb",
                                         );
                                         ui.radio_value(
                                             &mut selected_demod,
-                                            "usb".to_string(),
+                                            DemodMode::Usb,
                                             "usb",
                                         );
                                     });
@@ -390,29 +391,32 @@ impl eframe::App for RigflowApp {
                                         if let Ok(mut state) = self.state.lock() {
                                             state.demod_mode =
                                                 selected_demod.clone();
-                                            state.sideband =
-                                                match selected_demod.as_str() {
-                                                    "lsb" => "lsb".to_string(),
-                                                    "usb" => "usb".to_string(),
-                                                    _ => state.sideband.clone(),
-                                                };
+					    state.sideband = match selected_demod {
+						DemodMode::Lsb => Sideband::Lsb,
+						DemodMode::Usb => Sideband::Usb,
+						_ => state.sideband,
+					    };
                                         }
 
                                         let _ = self.ws_cmd_tx.send(
                                             ControlCommand::LegacyClientMessage(
                                                 rigflow_protocol::ClientMessage::SetDemodMode {
-                                                    mode: selected_demod.clone(),
+                                                    mode: selected_demod,
                                                 },
                                             ),
                                         );
 
-                                        if selected_demod == "lsb"
-                                            || selected_demod == "usb"
+                                        if selected_demod == DemodMode::Lsb
+                                            || selected_demod == DemodMode::Usb
                                         {
                                             let _ = self.ws_cmd_tx.send(
                                                 ControlCommand::LegacyClientMessage(
                                                     rigflow_protocol::ClientMessage::SetSideband {
-                                                        sideband: selected_demod,
+							sideband: match selected_demod {
+							    DemodMode::Lsb => Sideband::Lsb,
+							    DemodMode::Usb => Sideband::Usb,
+							    _ => unreachable!("sideband only sent for USB/LSB"),
+							},
                                                     },
                                                 ),
                                             );

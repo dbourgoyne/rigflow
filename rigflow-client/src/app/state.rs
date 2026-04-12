@@ -1,4 +1,5 @@
 use crate::app::om_bands::LicenseClass;
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 /// Central UI state shared between:
 /// - egui rendering thread
@@ -20,10 +21,10 @@ pub struct UiState {
     pub target_freq_hz: f32,
 
     /// Current sideband ("lsb", "usb", etc.)
-    pub sideband: String,
+    pub sideband: Sideband,
 
     /// Current demodulation mode ("wfm", "nfm", "lsb", "usb", etc.)
-    pub demod_mode: String,
+    pub demod_mode: DemodMode,
 
     /// SSB pitch offset (Hz)
     pub ssb_pitch_hz: f32,
@@ -95,8 +96,8 @@ impl Default for UiState {
 
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
-            sideband: "lsb".to_string(),
-            demod_mode: "wfm".to_string(),
+            sideband: Sideband::Lsb,
+            demod_mode: DemodMode::Wfm,
             ssb_pitch_hz: 0.0,
             input_sample_rate_hz: 0.0,
 
