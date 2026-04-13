@@ -1,4 +1,4 @@
-use crate::app::spectrum_utils::color_map;
+use crate::ui::spectrum_utils::color_map;
 
 /// Draw a new waterfall row into the buffer.
 ///

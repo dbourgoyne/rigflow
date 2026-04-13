@@ -1,11 +1,7 @@
 use eframe::egui::{
     self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke,
 };
-
 use crate::app::bands::visible_radio_bands;
-use crate::app::{
-    frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
-};
 use crate::app::om_bands::{
     visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
     COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
@@ -13,6 +9,7 @@ use crate::app::om_bands::{
 };
 use rigflow_core::dsp::modes::DemodMode;
 use crate::ui::{
+    frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
     layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
     state::UiState,
 };
