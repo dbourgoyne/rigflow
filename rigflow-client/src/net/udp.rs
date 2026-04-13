@@ -168,36 +168,69 @@ fn decode_waterfall_row_db(payload: &[u8]) -> Option<Vec<f32>> {
     } else {
         None
     }
-}
+
 
 fn handle_waterfall_packet(
-    payload: &[u8],
+    payload_with_len: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
-    ui_state: &Arc<Mutex<UiState>>,
 ) {
-    let Some(row_db) = decode_waterfall_row_db(payload) else {
+    if payload_with_len.len() < 2 {
         return;
-    };
+    }
 
+    // --- Extract payload length (big-endian u16)
+    let payload_len =
+        u16::from_be_bytes([payload_with_len[0], payload_with_len[1]]) as usize;
+
+    let payload = &payload_with_len[2..];
+
+    if payload.len() != payload_len {
+        return;
+    }
+
+    // --- Decode f32 row
+    if !payload.len().is_multiple_of(4) {
+        return;
+    }
+
+    let mut row_db = Vec::with_capacity(payload.len() / 4);
+
+    for chunk in payload.chunks_exact(4) {
+        row_db.push(f32::from_le_bytes([
+            chunk[0],
+            chunk[1],
+            chunk[2],
+            chunk[3],
+        ]));
+    }
+
+    if !row_db.iter().all(|v| v.is_finite()) {
+        return;
+    }
+
+    // --- DEBUG (temporary — very useful)
+    let min_db = row_db.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+
+    println!("WF row: min={:.1} max={:.1}", min_db, max_db);
+
+    // --- Update spectrum (now correct type)
     if let Ok(mut spectrum) = spectrum_db.lock() {
         update_spectrum_db(&mut spectrum, &row_db);
     }
 
-    let (top_db, range_db) = if let Ok(state) = ui_state.lock() {
-        (state.display_top_db, state.display_range_db)
-    } else {
-        (-20.0, 80.0)
-    };
-
+    // --- TEMP: crude visualization (just to verify)
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        draw_row_db(
-            &mut fb,
-            WATERFALL_IMAGE_WIDTH,
-            WATERFALL_IMAGE_HEIGHT,
-            &row_db,
-            top_db,
-            range_db,
-        );
+        // Map dB to simple grayscale for now
+        for x in 0..WATERFALL_IMAGE_WIDTH {
+            let idx = x * row_db.len() / WATERFALL_IMAGE_WIDTH;
+            let db = row_db[idx];
+
+            let val = ((db + 100.0) * 2.0).clamp(0.0, 255.0) as u8;
+            let rgb = ((val as u32) << 16) | ((val as u32) << 8) | val;
+
+            fb[x] = rgb;
+        }
     }
-}
+}}
