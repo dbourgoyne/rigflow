@@ -2,18 +2,24 @@ use num_complex::Complex32;
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use std::sync::Arc;
 
+/// Lowest dB value emitted by the generator.
+///
+/// This floor avoids `-inf` values when a bin magnitude is extremely small.
+const DB_FLOOR: f32 = -140.0;
+
 /// Generates waterfall rows from IQ samples using FFT.
 ///
 /// Pipeline:
-/// 1. Apply window (Hann)
+/// 1. Apply Hann window
 /// 2. FFT
 /// 3. Magnitude spectrum
 /// 4. FFT shift (center DC)
-/// 5. Convert to dB
-/// 6. Normalize to 0–255 grayscale
+/// 5. Normalize magnitude by window gain
+/// 6. Convert to dB
 ///
-/// Output:
-/// - One row of `u8` intensity values (0–255)
+/// Important:
+/// - This type now returns raw spectral dB values.
+/// - It does **not** perform display normalization or grayscale mapping.
 pub struct WaterfallGenerator {
     fft_size: usize,
 
@@ -25,6 +31,13 @@ pub struct WaterfallGenerator {
 
     /// Window function (Hann)
     window: Vec<f32>,
+
+    /// Sum of window coefficients.
+    ///
+    /// This is used as a simple amplitude normalization factor so that
+    /// a constant signal does not wildly change apparent dB level just
+    /// because FFT size or windowing changes.
+    window_sum: f32,
 }
 
 impl WaterfallGenerator {
@@ -41,21 +54,23 @@ impl WaterfallGenerator {
 
         // Precompute Hann window:
         // w[n] = 0.5 - 0.5 cos(2πn / (N-1))
-        let window = (0..fft_size)
+        let window: Vec<f32> = (0..fft_size)
             .map(|i| {
                 0.5
                     - 0.5
-                        * (2.0 * std::f32::consts::PI * i as f32
-                            / (fft_size as f32 - 1.0))
+                        * (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32 - 1.0))
                             .cos()
             })
             .collect();
+
+        let window_sum = window.iter().copied().sum::<f32>();
 
         Self {
             fft_size,
             fft,
             buffer: vec![Complex::new(0.0, 0.0); fft_size],
             window,
+            window_sum,
         }
     }
 
@@ -63,62 +78,61 @@ impl WaterfallGenerator {
         self.fft_size
     }
 
-    /// Generate a single waterfall row from IQ samples.
+    /// Generate a single waterfall row of spectral dB values from IQ samples.
     ///
     /// Steps:
     /// - window + copy into FFT buffer
     /// - FFT
     /// - magnitude + fftshift
+    /// - normalize magnitude by window gain
     /// - dB conversion
-    /// - normalize to 0–255
-    pub fn generate_row(&mut self, iq: &[Complex32]) -> Vec<u8> {
+    pub fn generate_row_db(&mut self, iq: &[Complex32]) -> Vec<f32> {
         let n = self.fft_size.min(iq.len());
         if n == 0 {
             return Vec::new();
         }
 
-        // Clear buffer (important if iq.len() < fft_size)
-        for v in &mut self.buffer {
-            *v = Complex::new(0.0, 0.0);
+        // Clear buffer (important if iq.len() < fft_size).
+        for value in &mut self.buffer {
+            *value = Complex::new(0.0, 0.0);
         }
 
-        // Copy + apply window
+        // Copy + apply window.
         for ((buf, iq_sample), &w) in self
             .buffer
             .iter_mut()
             .zip(iq.iter())
             .zip(self.window.iter())
+            .take(n)
         {
             buf.re = iq_sample.re * w;
             buf.im = iq_sample.im * w;
         }
 
-        // Perform FFT in-place
+        // Perform FFT in-place.
         self.fft.process(&mut self.buffer);
 
-        // Compute magnitude spectrum with FFT shift
+        // Compute magnitude spectrum with FFT shift.
+        //
+        // Normalize by window sum so the dB scale is much more stable across
+        // rows and across different signal types.
         let mut mags = vec![0.0_f32; self.fft_size];
         let half = self.fft_size / 2;
+        let norm = self.window_sum.max(1e-12);
 
         for (i, mag) in mags.iter_mut().enumerate() {
             let src = (i + half) % self.fft_size;
-            *mag = self.buffer[src].norm();
+            *mag = self.buffer[src].norm() / norm;
         }
 
-        // Convert to dB scale
-        let eps = 1e-12_f32;
-        let db: Vec<f32> = mags
-            .iter()
-            .map(|&x| 20.0 * (x + eps).log10())
-            .collect();
+        // Convert to dB and clamp to a finite floor.
+        let mag_floor = 10.0_f32.powf(DB_FLOOR / 20.0);
 
-        // Normalize to 0–255 range per row
-        let min_db = db.iter().copied().fold(f32::INFINITY, f32::min);
-        let max_db = db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let span = (max_db - min_db).max(1e-6);
-
-        db.iter()
-            .map(|&x| (((x - min_db) / span) * 255.0).clamp(0.0, 255.0) as u8)
+        mags.into_iter()
+            .map(|mag| {
+                let mag = mag.max(mag_floor);
+                20.0 * mag.log10()
+            })
             .collect()
     }
 }
@@ -133,7 +147,7 @@ mod tests {
         let mut wf = WaterfallGenerator::new(512);
         let iq = vec![Complex32::new(0.0, 0.0); 512];
 
-        let row = wf.generate_row(&iq);
+        let row = wf.generate_row_db(&iq);
         assert_eq!(row.len(), 512);
     }
 
@@ -152,17 +166,17 @@ mod tests {
             })
             .collect();
 
-        let row = wf.generate_row(&iq);
+        let row = wf.generate_row_db(&iq);
 
         let peak_idx = row
             .iter()
             .enumerate()
-            .max_by_key(|(_, v)| **v)
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .map(|(i, _)| i)
             .unwrap();
 
         // After FFT shift:
-        // DC is centered, positive frequencies to the right
+        // DC is centered, positive frequencies to the right.
         let expected_bin =
             (fft_size as f32 / 2.0 + tone_hz * fft_size as f32 / sample_rate).round() as usize;
 
@@ -170,5 +184,15 @@ mod tests {
             peak_idx.abs_diff(expected_bin) <= 3,
             "peak_idx={peak_idx}, expected_bin={expected_bin}"
         );
+    }
+
+    #[test]
+    fn row_values_are_finite() {
+        let mut wf = WaterfallGenerator::new(512);
+        let iq = vec![Complex32::new(0.0, 0.0); 512];
+
+        let row = wf.generate_row_db(&iq);
+        assert!(row.iter().all(|value| value.is_finite()));
+        assert!(row.iter().all(|value| *value >= DB_FLOOR));
     }
 }

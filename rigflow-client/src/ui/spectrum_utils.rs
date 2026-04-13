@@ -1,13 +1,11 @@
-use crate::ui::layout::{
-    SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_SMOOTHING_ALPHA,
-};
+use crate::ui::layout::SPECTRUM_SMOOTHING_ALPHA;
 
 /// Map an 8-bit waterfall/spectrum intensity value to packed RGB.
 ///
-/// The output format is:
+/// Output format:
 /// - 0xRRGGBB
 ///
-/// The gradient is:
+/// Gradient:
 /// - black   → blue
 /// - blue    → cyan
 /// - cyan    → yellow
@@ -32,38 +30,37 @@ pub fn color_map(v: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
 
-/// Update the smoothed spectrum dB trace from an incoming 8-bit row.
+/// Convert a dB value into 8-bit display intensity.
 ///
-/// Behavior:
-/// - if the row length changes, rebuild the spectrum buffer immediately
-/// - otherwise, apply exponential smoothing per bin
-pub fn update_spectrum_db(spectrum: &mut Vec<f32>, row: &[u8]) {
-    if row.is_empty() {
-        return;
-    }
+/// Mapping:
+/// - `top_db` is the brightest visible level
+/// - `range_db` is the visible dynamic range below `top_db`
+pub fn db_to_u8(db: f32, top_db: f32, range_db: f32) -> u8 {
+    let range_db = range_db.max(1.0);
+    let bottom_db = top_db - range_db;
 
-    // Reinitialize if the incoming row width changed.
-    if spectrum.len() != row.len() {
-        spectrum.clear();
-        spectrum.reserve(row.len());
-
-        for &value in row {
-            spectrum.push(byte_to_relative_db(value));
-        }
-
-        return;
-    }
-
-    // Apply simple exponential smoothing to reduce frame-to-frame flicker.
-    for (dst, &src) in spectrum.iter_mut().zip(row.iter()) {
-        let new_db = byte_to_relative_db(src);
-        *dst = (1.0 - SPECTRUM_SMOOTHING_ALPHA) * *dst
-            + SPECTRUM_SMOOTHING_ALPHA * new_db;
-    }
+    let normalized = ((db - bottom_db) / range_db).clamp(0.0, 1.0);
+    (normalized * 255.0).round() as u8
 }
 
-/// Convert an 8-bit normalized magnitude value into the display dB range.
-fn byte_to_relative_db(v: u8) -> f32 {
-    SPECTRUM_DB_MIN
-        + (v as f32 / 255.0) * (SPECTRUM_DB_MAX - SPECTRUM_DB_MIN)
+/// Update the smoothed spectrum trace from an incoming dB row.
+///
+/// Behavior:
+/// - if width changed, replace immediately
+/// - otherwise, apply exponential smoothing per bin
+pub fn update_spectrum_db(spectrum: &mut Vec<f32>, row_db: &[f32]) {
+    if row_db.is_empty() {
+        return;
+    }
+
+    if spectrum.len() != row_db.len() {
+        spectrum.clear();
+        spectrum.extend_from_slice(row_db);
+        return;
+    }
+
+    for (dst, &src) in spectrum.iter_mut().zip(row_db.iter()) {
+        *dst = (1.0 - SPECTRUM_SMOOTHING_ALPHA) * *dst
+            + SPECTRUM_SMOOTHING_ALPHA * src;
+    }
 }

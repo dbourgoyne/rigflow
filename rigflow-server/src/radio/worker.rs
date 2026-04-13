@@ -538,10 +538,23 @@ fn spawn_waterfall_thread(
                         fft_input.push(*sample);
                     }
 
-                    let row = waterfall_gen.generate_row(&fft_input);
-                    if !row.is_empty() {
-                        waterfall.send_row_to(wf_target, &row);
-                    }
+		    let row_db = waterfall_gen.generate_row_db(&fft_input);
+		    if !row_db.is_empty() {
+			let min_db = row_db.iter().copied().fold(f32::INFINITY, f32::min);
+			let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+			let avg_db = row_db.iter().copied().sum::<f32>() / row_db.len() as f32;
+
+			println!(
+			    "[radio-worker {}] waterfall row: bins={} min={:.1} max={:.1} avg={:.1}",
+			    descriptor.id.0,
+			    row_db.len(),
+			    min_db,
+			    max_db,
+			    avg_db
+			);
+
+			waterfall.send_row_db_to(wf_target, &row_db);
+		    }
                 }
 
                 next_waterfall_tick += waterfall_period;

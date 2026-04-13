@@ -9,30 +9,24 @@ use rigflow_core::{
 };
 
 use crate::{
-    ui::layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
-    ui::spectrum_utils::update_spectrum_db,
-    ui::waterfall::draw_row,
+    ui::{
+        layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
+        spectrum_utils::update_spectrum_db,
+        state::UiState,
+        waterfall::draw_row_db,
+    },
 };
 
 /// Runtime statistics for incoming media packets.
-///
-/// Used for:
-/// - debugging packet loss / reordering
-/// - understanding network behavior
 #[derive(Debug, Default)]
 pub struct MediaPacketStats {
     pub incoming_packets: u64,
-
     pub audio_packets: u64,
     pub waterfall_packets: u64,
-
     pub dropped_audio_packets: u64,
     pub dropped_waterfall_packets: u64,
-
     pub late_audio_packets: u64,
     pub late_waterfall_packets: u64,
-
-    /// Last seen sequence number for each stream
     last_audio_sequence: Option<u32>,
     last_waterfall_sequence: Option<u32>,
 }
@@ -43,30 +37,20 @@ impl MediaPacketStats {
     }
 }
 
-/// Internal stream discriminator used for stats tracking.
 enum StreamKind {
     Audio,
     Waterfall,
 }
 
-/// Entry point for handling a single UDP media packet.
-///
-/// Responsibilities:
-/// - parse and validate header
-/// - update packet statistics
-/// - dispatch to audio or waterfall pipeline
-///
-/// This function is on the hot path—keep it simple and predictable.
 #[allow(clippy::too_many_arguments)]
 pub fn handle_media_packet(
     packet: &[u8],
     jitter: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
+    ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
 ) {
-    // --- Header parsing ---------------------------------------------------
-
     let Some(header) = parse_media_header(packet) else {
         return;
     };
@@ -75,26 +59,17 @@ pub fn handle_media_packet(
         return;
     }
 
-    // Payload begins after fixed header (16 bytes)
     let payload = &packet[16..];
-
-    // --- Stats: total packet count ---------------------------------------
 
     if let Ok(mut s) = stats.lock() {
         s.incoming_packets += 1;
     }
 
-    // --- Dispatch by stream type -----------------------------------------
-
     match header.stream_type {
         STREAM_TYPE_AUDIO => {
             if let Ok(mut s) = stats.lock() {
                 s.audio_packets += 1;
-                update_sequence_stats(
-                    &mut s,
-                    StreamKind::Audio,
-                    header.sequence,
-                );
+                update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
             handle_audio_packet(payload, header.sequence, jitter);
@@ -103,30 +78,21 @@ pub fn handle_media_packet(
         STREAM_TYPE_WATERFALL => {
             if let Ok(mut s) = stats.lock() {
                 s.waterfall_packets += 1;
-                update_sequence_stats(
-                    &mut s,
-                    StreamKind::Waterfall,
-                    header.sequence,
-                );
+                update_sequence_stats(&mut s, StreamKind::Waterfall, header.sequence);
             }
 
             handle_waterfall_packet(
                 payload,
                 waterfall_buffer,
                 spectrum_db,
+                ui_state,
             );
         }
 
-        // Unknown stream type → ignore
         _ => {}
     }
 }
 
-/// Update packet sequence tracking and loss statistics.
-///
-/// Detects:
-/// - dropped packets (sequence gaps)
-/// - late/out-of-order packets
 fn update_sequence_stats(
     stats: &mut MediaPacketStats,
     kind: StreamKind,
@@ -164,22 +130,15 @@ fn update_sequence_stats(
     }
 }
 
-/// Handle an audio packet.
-///
-/// Responsibilities:
-/// - decode i16 PCM → f32
-/// - push into jitter buffer
 fn handle_audio_packet(
     payload: &[u8],
     sequence: u32,
     jitter: &Arc<Mutex<JitterBuffer>>,
 ) {
-    // Must be 16-bit samples
     if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
     }
 
-    // Convert LE i16 → normalized f32
     let mut samples = Vec::with_capacity(payload.len() / 2);
 
     for chunk in payload.chunks_exact(2) {
@@ -192,38 +151,53 @@ fn handle_audio_packet(
     }
 }
 
-/// Handle a waterfall packet.
-///
-/// Responsibilities:
-/// - update spectrum plot
-/// - append row to waterfall buffer
-///
-/// Note: UI state is cloned once to avoid holding lock during rendering work.
+/// Decode a waterfall payload consisting of packed little-endian `f32` dB values.
+fn decode_waterfall_row_db(payload: &[u8]) -> Option<Vec<f32>> {
+    if payload.is_empty() || !payload.len().is_multiple_of(4) {
+        return None;
+    }
+
+    let mut row_db = Vec::with_capacity(payload.len() / 4);
+
+    for chunk in payload.chunks_exact(4) {
+        row_db.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    }
+
+    if row_db.iter().all(|v| v.is_finite()) {
+        Some(row_db)
+    } else {
+        None
+    }
+}
+
 fn handle_waterfall_packet(
     payload: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
+    ui_state: &Arc<Mutex<UiState>>,
 ) {
-    if payload.is_empty() {
+    let Some(row_db) = decode_waterfall_row_db(payload) else {
         return;
-    }
-
-    let row = payload;
-
-    // --- Update spectrum --------------------------------------------------
+    };
 
     if let Ok(mut spectrum) = spectrum_db.lock() {
-        update_spectrum_db(&mut spectrum, row);
+        update_spectrum_db(&mut spectrum, &row_db);
     }
 
-    // --- Update waterfall buffer -----------------------------------------
+    let (top_db, range_db) = if let Ok(state) = ui_state.lock() {
+        (state.display_top_db, state.display_range_db)
+    } else {
+        (-20.0, 80.0)
+    };
 
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        draw_row(
+        draw_row_db(
             &mut fb,
             WATERFALL_IMAGE_WIDTH,
             WATERFALL_IMAGE_HEIGHT,
-            row,
+            &row_db,
+            top_db,
+            range_db,
         );
     }
 }

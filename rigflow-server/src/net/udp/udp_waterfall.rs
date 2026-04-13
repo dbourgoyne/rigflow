@@ -1,5 +1,7 @@
 use std::net::{SocketAddr, UdpSocket};
 
+use rigflow_core::net::udp_framing::{MAGIC, STREAM_TYPE_WATERFALL, VERSION};
+
 /// Sends waterfall rows over UDP using a simple custom packet format.
 ///
 /// Packet layout:
@@ -8,8 +10,8 @@ use std::net::{SocketAddr, UdpSocket};
 /// - u8  stream_type (2 = waterfall)
 /// - u32 sequence
 /// - u64 timestamp (row counter)
-/// - u16 payload length
-/// - payload: raw waterfall row bytes
+/// - u16 payload length in bytes
+/// - payload: little-endian f32 dB values, one per FFT bin
 pub struct UdpWaterfallSender {
     socket: UdpSocket,
     sequence: u32,
@@ -28,27 +30,27 @@ impl UdpWaterfallSender {
         })
     }
 
-    /// Send a single waterfall row to the target.
-    pub fn send_row_to(&mut self, target: SocketAddr, row: &[u8]) {
-        // Ensure payload length fits in u16
-        if row.len() > u16::MAX as usize {
-            return;
-        }
-
-        let payload_len = row.len() as u16;
+    /// Send a single waterfall row of dB values to the target.
+    pub fn send_row_db_to(&mut self, target: SocketAddr, row_db: &[f32]) {
+        let payload_len = match row_db.len().checked_mul(std::mem::size_of::<f32>()) {
+            Some(len) if len <= u16::MAX as usize => len as u16,
+            _ => return,
+        };
 
         let mut buf = Vec::with_capacity(16 + 2 + payload_len as usize);
 
         // Header
-        buf.extend_from_slice(&0x5253u16.to_be_bytes()); // "RS"
-        buf.push(1); // version
-        buf.push(2); // stream_type = waterfall
+        buf.extend_from_slice(&MAGIC.to_be_bytes());
+        buf.push(VERSION);
+        buf.push(STREAM_TYPE_WATERFALL);
         buf.extend_from_slice(&self.sequence.to_be_bytes());
         buf.extend_from_slice(&self.timestamp.to_be_bytes());
 
         // Payload
         buf.extend_from_slice(&payload_len.to_be_bytes());
-        buf.extend_from_slice(row);
+        for value in row_db {
+            buf.extend_from_slice(&value.to_le_bytes());
+        }
 
         let _ = self.socket.send_to(&buf, target);
 
