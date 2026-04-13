@@ -33,7 +33,9 @@ const PACKET_SAMPLES: usize = 480;
 
 /// Target jitter buffer size (latency control)
 /// 4800 samples @ 48kHz ≈ 100 ms
-const TARGET_BUFFER_SAMPLES: usize = 4_800;
+/// To improve latency, tried reducing to 3,360, and then 2,800
+/// 2,800 @ 48kHz = 60 ms
+const TARGET_BUFFER_SAMPLES: usize = 2_880; //3_360; //4_800;
 
 /// Maximum jitter buffer size (latency ceiling)
 const MAX_BUFFER_SAMPLES: usize = 24_000;
