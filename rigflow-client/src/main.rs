@@ -1,4 +1,3 @@
-mod app;
 mod client_runtime;
 mod net;
 mod ui;
