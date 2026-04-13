@@ -31,7 +31,7 @@ pub fn draw_row_db(
     for x in 0..wf_width {
         let src_idx = x * row_db.len() / wf_width;
         let db = row_db[src_idx];
-        let intensity = db_to_u8(db, top_db, range_db);
-        buffer[x] = color_map(intensity);
+        let value = db_to_u8(db, top_db, range_db);
+        buffer[x] = color_map(value);
     }
 }

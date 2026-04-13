@@ -10,8 +10,10 @@ use rigflow_core::{
 
 use crate::{
     ui::{
-        layout::WATERFALL_IMAGE_WIDTH,
-        spectrum_utils::{color_map, update_spectrum_db},
+        layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
+        spectrum_utils::update_spectrum_db,
+        state::UiState,
+        waterfall::draw_row_db,
     },
 };
 
@@ -46,6 +48,7 @@ pub fn handle_media_packet(
     jitter: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
+    ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
 ) {
     let Some(header) = parse_media_header(packet) else {
@@ -82,6 +85,7 @@ pub fn handle_media_packet(
                 payload,
                 waterfall_buffer,
                 spectrum_db,
+		ui_state,
             );
         }
 
@@ -170,6 +174,7 @@ fn handle_waterfall_packet(
     payload_with_len: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
+    ui_state: &Arc<Mutex<UiState>>,
 ) {
     if payload_with_len.len() < 2 {
         return;
@@ -205,34 +210,27 @@ fn handle_waterfall_packet(
         return;
     }
 
-    let min_db = row_db.iter().copied().fold(f32::INFINITY, f32::min);
-    let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-
-    println!(
-        "WF row: bins={} min={:.1} max={:.1}",
-        row_db.len(),
-        min_db,
-        max_db
-    );
-
+    // Update smoothed spectrum trace.
     if let Ok(mut spectrum) = spectrum_db.lock() {
         update_spectrum_db(&mut spectrum, &row_db);
     }
 
+    // Read current display mapping controls.
+    let (top_db, range_db) = if let Ok(state) = ui_state.lock() {
+        (state.display_top_db, state.display_range_db)
+    } else {
+        (-35.0, 70.0)
+    };
+
+    // Update waterfall image buffer using client-side dB mapping.
     if let Ok(mut fb) = waterfall_buffer.lock() {
-	if !fb.is_empty() {
-            let len = fb.len();
-            let copy_len = len.saturating_sub(WATERFALL_IMAGE_WIDTH);
-            fb.copy_within(0..copy_len, WATERFALL_IMAGE_WIDTH);
-
-            for x in 0..WATERFALL_IMAGE_WIDTH {
-		let idx = x * row_db.len() / WATERFALL_IMAGE_WIDTH;
-		let db = row_db[idx];
-
-		// Temporary fixed dB mapping, but with your normal colormap.
-		let val = ((db + 100.0) * 2.0).clamp(0.0, 255.0) as u8;
-		fb[x] = color_map(val);
-            }
-	}
+        draw_row_db(
+            &mut fb,
+            WATERFALL_IMAGE_WIDTH,
+            WATERFALL_IMAGE_HEIGHT,
+            &row_db,
+            top_db,
+            range_db,
+        );
     }
 }

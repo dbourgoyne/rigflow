@@ -270,13 +270,15 @@ pub fn start_media_runtime(
                     }
                     // Media packet (audio or waterfall)
                     else if len >= 16 {
+			let ui_state_for_thread = Arc::clone(&ui_state);
 			handle_media_packet(
-                            &udp_buf[..len],
-                            &jitter_for_thread,
-                            &waterfall_for_thread,
-                            &spectrum_for_thread,
-                            &stats_for_thread,
-                        );
+			    &udp_buf[..len],
+			    &jitter_for_thread,
+			    &waterfall_for_thread,
+			    &spectrum_for_thread,
+			    &ui_state_for_thread,
+			    &stats_for_thread,
+			);
                     }
                 }
 

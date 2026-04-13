@@ -426,6 +426,44 @@ impl eframe::App for RigflowApp {
                                     }
                                 });
                         }
+
+
+			// --- Waterfall Control menu -------------------------------
+			ui.collapsing("Waterfall Control", |ui| {
+			    if let Ok(mut state) = self.state.lock() {
+				ui.add(
+				    egui::Slider::new(&mut state.display_zoom, 1.0..=4.0)
+					.text("Zoom"),
+				);
+
+				ui.checkbox(
+				    &mut state.adaptive_waterfall_normalization,
+				    "Adaptive normalization",
+				);
+
+				let manual_enabled = !state.adaptive_waterfall_normalization;
+
+				ui.add_enabled_ui(manual_enabled, |ui| {
+				    ui.add(
+					egui::Slider::new(
+					    &mut state.display_top_db,
+					    -120.0..=20.0,
+					)
+					    .text("Top dB"),
+				    );
+
+				    ui.add(
+					egui::Slider::new(
+					    &mut state.display_range_db,
+					    10.0..=120.0,
+					)
+					    .text("Range dB"),
+				    );
+				});
+			    } else {
+				ui.label("Waterfall controls unavailable");
+			    }
+			});
                     });
             });
 

@@ -30,11 +30,10 @@ pub fn color_map(v: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
 
-/// Convert a dB value into 8-bit display intensity.
+/// Convert a dB value into an 8-bit display intensity.
 ///
-/// Mapping:
-/// - `top_db` is the brightest visible level
-/// - `range_db` is the visible dynamic range below `top_db`
+/// `top_db` is the brightest visible level.
+/// `range_db` is the visible dynamic range below `top_db`.
 pub fn db_to_u8(db: f32, top_db: f32, range_db: f32) -> u8 {
     let range_db = range_db.max(1.0);
     let bottom_db = top_db - range_db;

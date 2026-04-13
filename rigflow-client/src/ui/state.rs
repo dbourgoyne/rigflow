@@ -100,6 +100,9 @@ pub struct UiState {
 
     /// Whether display scaling is controlled automatically.
     pub adaptive_waterfall_normalization: bool,
+
+    /// Waterfall/spectrum display zoom
+    pub display_zoom: f32,
 }
 
 impl Default for UiState {
@@ -140,9 +143,10 @@ impl Default for UiState {
             radio_acquired: false,
 
 	    // --- Waterfall Display defaults ------------------------------
-	    display_top_db: -20.0,
-            display_range_db: 80.0,
-            adaptive_waterfall_normalization: true,
+	    display_top_db: -35.0,
+            display_range_db: 70.0,
+            adaptive_waterfall_normalization: false,
+	    display_zoom: 1.0,
         }
     }
 }
