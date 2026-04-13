@@ -27,7 +27,7 @@ pub const SPECTRUM_PLOT_X1: usize = CONTROL_PANEL_X0 - SPECTRUM_RIGHT_PAD;
 
 /// Spectrum display scale.
 pub const SPECTRUM_DB_MIN: f32 = -120.0;
-pub const SPECTRUM_DB_MAX: f32 = 0.0;
+//pub const SPECTRUM_DB_MAX: f32 = 0.0;
 pub const SPECTRUM_SMOOTHING_ALPHA: f32 = 0.25;
 
 /// Egui spectrum gutters used by the current spectrum renderer.

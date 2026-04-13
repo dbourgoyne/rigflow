@@ -3,6 +3,8 @@ mod net;
 mod ui;
 mod widgets;
 
+use log::error;
+
 use std::sync::{Arc, Mutex};
 
 use eframe::NativeOptions;
@@ -49,7 +51,7 @@ fn main() -> Result<(), eframe::Error> {
             )
             .await
             {
-                eprintln!("WebSocket control task failed: {error}");
+                error!("WebSocket control task failed: {error}");
             }
         });
     }

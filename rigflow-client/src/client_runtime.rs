@@ -5,6 +5,8 @@ use std::thread;
 //use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
 use std::time::Duration;
 
+use log::{error, info};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::mpsc;
 
@@ -91,7 +93,7 @@ pub fn start_media_runtime(
         state.udp_listen_port = udp_listen_port;
     }
 
-    println!("Media runtime listening on {}", socket.local_addr()?);
+    info!("Media runtime listening on {}", socket.local_addr()?);
 
     // --- Jitter buffer -----------------------------------------------------
 
@@ -174,7 +176,7 @@ pub fn start_media_runtime(
                 }
 
                 last_audio_session_generation = current;
-                println!("[client] jitter buffer reset for new radio session");
+                info!("[client] jitter buffer reset for new radio session");
             }
 
             // --- Existing ad hoc jitter diagnostics -----------------------
@@ -237,8 +239,8 @@ pub fn start_media_runtime(
                         let addr = format!("{}:{}", server_ip, server_udp_port);
 
                         match socket.send_to(&reg, &addr) {
-                            Ok(_) => println!("Sent UDP registration to {}", addr),
-                            Err(e) => eprintln!(
+                            Ok(_) => info!("Sent UDP registration to {}", addr),
+                            Err(e) => error!(
                                 "UDP registration failed to {}: {}",
                                 addr, e
                             ),
@@ -262,7 +264,7 @@ pub fn start_media_runtime(
                             && version == VERSION
                             && stream_type == STREAM_TYPE_REGISTER_AUDIO
                         {
-                            println!(
+                            info!(
                                 "Received UDP registration ACK from {}",
                                 src
                             );
@@ -289,7 +291,7 @@ pub fn start_media_runtime(
 
                 // Unexpected error
                 Err(e) => {
-                    eprintln!("UDP receive error: {}", e);
+                    error!("UDP receive error: {}", e);
                 }
             }
         }

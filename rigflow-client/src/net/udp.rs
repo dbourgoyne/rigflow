@@ -164,25 +164,6 @@ fn handle_audio_packet(
     }
 }
 
-/// Decode a waterfall payload consisting of packed little-endian `f32` dB values.
-fn decode_waterfall_row_db(payload: &[u8]) -> Option<Vec<f32>> {
-    if payload.is_empty() || !payload.len().is_multiple_of(4) {
-        return None;
-    }
-
-    let mut row_db = Vec::with_capacity(payload.len() / 4);
-
-    for chunk in payload.chunks_exact(4) {
-        row_db.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
-    }
-
-    if row_db.iter().all(|v| v.is_finite()) {
-        Some(row_db)
-    } else {
-        None
-    }
-}
-
 fn update_adaptive_waterfall_display(
     row_db: &[f32],
     ui_state: &Arc<Mutex<UiState>>,

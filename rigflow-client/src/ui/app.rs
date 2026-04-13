@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use log::warn;
 use eframe::egui;
 use tokio::sync::mpsc;
 
@@ -53,7 +54,7 @@ impl RigflowApp {
         };
 
         if pixels.len() != wf_width * wf_height {
-            println!(
+            warn!(
                 "waterfall texture size mismatch: pixels={} expected={}",
                 pixels.len(),
                 wf_width * wf_height
