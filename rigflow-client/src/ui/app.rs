@@ -9,7 +9,7 @@ use crate::app::layout::{
 use crate::app::om_bands::LicenseClass;
 use crate::app::state::UiState;
 use crate::net::control::ControlCommand;
-use crate::spectrum_view::{
+use crate::ui::spectrum_view::{
     draw_spectrum_plot, x_frac_to_frequency_hz, SpectrumInteraction,
 };
 

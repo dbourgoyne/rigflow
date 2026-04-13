@@ -1,7 +1,6 @@
 mod app;
 mod client_runtime;
 mod net;
-mod spectrum_view;
 mod ui;
 mod widgets;
 

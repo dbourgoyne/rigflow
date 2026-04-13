@@ -7,4 +7,4 @@ pub mod app;
 //pub mod state;
 //pub mod stats;
 //pub mod waterfall;
-//pub mod spectrum_view;
+pub mod spectrum_view;
