@@ -562,3 +562,38 @@ fn format_mhz(freq_hz: f32) -> String {
     let mhz = freq_hz / 1_000_000.0;
     format!("{mhz:.3}")
 }
+
+/// Estimate a robust spectral floor and top from a row of dB values.
+///
+/// Returns:
+/// - floor estimate from a low percentile
+/// - top estimate from a high percentile
+///
+/// This is more stable than using raw min/max because it ignores
+/// single-bin outliers and impulsive spikes.
+pub fn estimate_row_floor_and_top_db(row_db: &[f32]) -> Option<(f32, f32)> {
+    if row_db.is_empty() {
+        return None;
+    }
+
+    let mut values: Vec<f32> = row_db
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .collect();
+
+    if values.is_empty() {
+        return None;
+    }
+
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let n = values.len();
+    let floor_idx = ((n as f32) * 0.20) as usize;
+    let top_idx = ((n as f32) * 0.98) as usize;
+
+    let floor = values[floor_idx.min(n - 1)];
+    let top = values[top_idx.min(n - 1)];
+
+    Some((floor, top))
+}

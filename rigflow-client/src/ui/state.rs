@@ -101,6 +101,12 @@ pub struct UiState {
     /// Whether display scaling is controlled automatically.
     pub adaptive_waterfall_normalization: bool,
 
+    /// Smoothed estimate of the current spectral top level in dB.
+    pub adaptive_top_db_estimate: f32,
+
+    /// Smoothed estimate of the current spectral floor level in dB.
+    pub adaptive_floor_db_estimate: f32,
+
     /// Waterfall/spectrum display zoom
     pub display_zoom: f32,
 }
@@ -146,6 +152,8 @@ impl Default for UiState {
 	    display_top_db: -35.0,
             display_range_db: 70.0,
             adaptive_waterfall_normalization: false,
+	    adaptive_top_db_estimate: -35.0,
+            adaptive_floor_db_estimate: -105.0,
 	    display_zoom: 1.0,
         }
     }

@@ -11,11 +11,24 @@ use rigflow_core::{
 use crate::{
     ui::{
         layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
-        spectrum_utils::update_spectrum_db,
+        spectrum_utils::{estimate_row_floor_and_top_db, update_spectrum_db},
         state::UiState,
         waterfall::draw_row_db,
     },
 };
+
+/// Smoothing factor for adaptive waterfall normalization.
+///
+/// Lower values react more slowly and look more stable.
+const ADAPTIVE_NORMALIZATION_ALPHA: f32 = 0.02;
+
+/// Extra headroom above the estimated top so strong peaks do not pin
+/// the display ceiling too aggressively.
+const ADAPTIVE_TOP_HEADROOM_DB: f32 = 3.0;
+
+/// Clamp the automatically chosen visible range to something sane.
+const ADAPTIVE_MIN_RANGE_DB: f32 = 30.0;
+const ADAPTIVE_MAX_RANGE_DB: f32 = 100.0;
 
 /// Runtime statistics for incoming media packets.
 #[derive(Debug, Default)]
@@ -170,6 +183,40 @@ fn decode_waterfall_row_db(payload: &[u8]) -> Option<Vec<f32>> {
     }
 }
 
+fn update_adaptive_waterfall_display(
+    row_db: &[f32],
+    ui_state: &Arc<Mutex<UiState>>,
+) {
+    let Some((row_floor_db, row_top_db)) =
+        estimate_row_floor_and_top_db(row_db)
+    else {
+        return;
+    };
+
+    if let Ok(mut state) = ui_state.lock() {
+        if !state.adaptive_waterfall_normalization {
+            return;
+        }
+
+        let alpha = ADAPTIVE_NORMALIZATION_ALPHA;
+
+        state.adaptive_top_db_estimate =
+            (1.0 - alpha) * state.adaptive_top_db_estimate
+                + alpha * row_top_db;
+
+        state.adaptive_floor_db_estimate =
+            (1.0 - alpha) * state.adaptive_floor_db_estimate
+                + alpha * row_floor_db;
+
+        state.display_top_db =
+            state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
+
+        state.display_range_db = (state.display_top_db
+            - state.adaptive_floor_db_estimate)
+            .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
+    }
+}
+
 fn handle_waterfall_packet(
     payload_with_len: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
@@ -214,6 +261,10 @@ fn handle_waterfall_packet(
     if let Ok(mut spectrum) = spectrum_db.lock() {
         update_spectrum_db(&mut spectrum, &row_db);
     }
+
+    // If adaptive mode is enabled, update the display controls from
+    // the incoming spectral row using slow smoothing.
+    update_adaptive_waterfall_display(&row_db, ui_state);
 
     // Read current display mapping controls.
     let (top_db, range_db) = if let Ok(state) = ui_state.lock() {
