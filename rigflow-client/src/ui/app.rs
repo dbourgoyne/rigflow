@@ -3,14 +3,14 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use tokio::sync::mpsc;
 
-use crate::app::layout::{
-    LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH,
-};
 use crate::app::om_bands::LicenseClass;
 use crate::net::control::ControlCommand;
 use crate::ui::{
     spectrum_view::{
 	draw_spectrum_plot, x_frac_to_frequency_hz, SpectrumInteraction,
+    },
+    layout::{
+	LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH,
     },
     state::UiState,
 };

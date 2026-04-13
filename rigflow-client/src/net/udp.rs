@@ -9,10 +9,11 @@ use rigflow_core::{
 };
 
 use crate::{
-    app::layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
     app::spectrum_utils::update_spectrum_db,
     app::waterfall::draw_row,
 };
+
+use crate::ui::layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH};
 
 /// Runtime statistics for incoming media packets.
 ///

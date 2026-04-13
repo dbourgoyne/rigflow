@@ -1,4 +1,4 @@
-use crate::app::layout::{
+use crate::ui::layout::{
     SPECTRUM_DB_MAX, SPECTRUM_DB_MIN, SPECTRUM_SMOOTHING_ALPHA,
 };
 
