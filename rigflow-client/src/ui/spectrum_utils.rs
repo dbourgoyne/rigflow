@@ -98,3 +98,15 @@ pub fn estimate_row_floor_and_top_db(row_db: &[f32]) -> Option<(f32, f32)> {
 
     Some((floor, top))
 }
+
+pub fn zoom_window(len: usize, zoom: f32) -> (usize, usize) {
+    let zoom = zoom.clamp(1.0, 4.0);
+
+    let visible = ((len as f32) / zoom).round() as usize;
+    let visible = visible.clamp(1, len);
+
+    let start = (len - visible) / 2;
+    let end = start + visible;
+
+    (start, end)
+}

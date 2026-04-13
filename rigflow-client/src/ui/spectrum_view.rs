@@ -38,6 +38,8 @@ pub fn draw_spectrum_plot(
     db_max: f32,
     state: &UiState,
 ) -> SpectrumInteraction {
+    use crate::ui::spectrum_utils::zoom_window;
+    
     // Enforce minimum size so layout never collapses visually.
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
 
@@ -67,7 +69,7 @@ pub fn draw_spectrum_plot(
     draw_band_overlays(&painter, plot_rect, state);
     draw_om_overlays(&painter, plot_rect, state);
     draw_passband_overlay(&painter, plot_rect, state);
-    draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max);
+    draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
     draw_frequency_markers(&painter, plot_rect, state);
 
     // Plot border.
@@ -87,7 +89,18 @@ pub fn draw_spectrum_plot(
                 let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
                     .clamp(0.0, 1.0);
 
-                clicked_freq_hz = Some(x_frac_to_frequency_hz(frac, state));
+		let (start, end) = zoom_window(spectrum_db.len(), state.display_zoom);
+		let visible_len = end - start;
+
+		let bin = start + (frac * visible_len as f32) as usize;
+
+		let freq = {
+		    let left = visible_left_hz(state);
+		    let span = visible_span_hz(state);
+		    left + (bin as f32 / spectrum_db.len() as f32) * span
+		};
+
+		clicked_freq_hz = Some(freq);
             }
         }
     }
@@ -199,16 +212,23 @@ fn draw_trace(
     spectrum_db: &[f32],
     db_min: f32,
     db_max: f32,
+    state: &UiState,
 ) {
+    use crate::ui::spectrum_utils::zoom_window;
+    
     if spectrum_db.len() < 2 || db_max <= db_min {
         return;
     }
 
-    let n = spectrum_db.len();
-    let mut points = Vec::with_capacity(n);
+    let (start, end) = zoom_window(spectrum_db.len(), state.display_zoom);
+    let visible_len = end - start;
 
-    for (i, db) in spectrum_db.iter().enumerate() {
-        let x_t = i as f32 / (n - 1) as f32;
+    let mut points = Vec::with_capacity(visible_len);
+
+    for i in 0..visible_len {
+	let db = spectrum_db[start + i];
+
+	let x_t = i as f32 / (visible_len - 1).max(1) as f32;
         let x = plot_rect.left() + x_t * plot_rect.width();
 
         let clamped = db.clamp(db_min, db_max);

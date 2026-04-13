@@ -14,6 +14,7 @@ pub fn draw_row_db(
     row_db: &[f32],
     top_db: f32,
     range_db: f32,
+    zoom: f32,
 ) {
     if wf_width == 0 || wf_height == 0 || row_db.is_empty() {
         return;
@@ -28,8 +29,13 @@ pub fn draw_row_db(
         buffer.copy_within(0..copy_len, wf_width);
     }
 
+    use crate::ui::spectrum_utils::zoom_window;
+
+    let (start, end) = zoom_window(row_db.len(), zoom);
+    let visible_len = end - start;
+
     for x in 0..wf_width {
-        let src_idx = x * row_db.len() / wf_width;
+	let src_idx = start + (x * visible_len / wf_width).min(visible_len - 1);
         let db = row_db[src_idx];
         let value = db_to_u8(db, top_db, range_db);
         buffer[x] = color_map(value);

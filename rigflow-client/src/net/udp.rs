@@ -267,10 +267,14 @@ fn handle_waterfall_packet(
     update_adaptive_waterfall_display(&row_db, ui_state);
 
     // Read current display mapping controls.
-    let (top_db, range_db) = if let Ok(state) = ui_state.lock() {
-        (state.display_top_db, state.display_range_db)
+    let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
+	(
+            state.display_top_db,
+            state.display_range_db,
+            state.display_zoom,
+	)
     } else {
-        (-35.0, 70.0)
+	(-35.0, 70.0, 1.0)
     };
 
     // Update waterfall image buffer using client-side dB mapping.
@@ -282,6 +286,7 @@ fn handle_waterfall_packet(
             &row_db,
             top_db,
             range_db,
+	    zoom,
         );
     }
 }
