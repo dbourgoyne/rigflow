@@ -11,7 +11,7 @@ use rigflow_core::{
 use crate::{
     ui::{
         layout::WATERFALL_IMAGE_WIDTH,
-        spectrum_utils::update_spectrum_db,
+        spectrum_utils::{color_map, update_spectrum_db},
     },
 };
 
@@ -219,23 +219,20 @@ fn handle_waterfall_packet(
         update_spectrum_db(&mut spectrum, &row_db);
     }
 
-    // Temporary grayscale display just to verify correct decode.
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        if !fb.is_empty() {
+	if !fb.is_empty() {
             let len = fb.len();
             let copy_len = len.saturating_sub(WATERFALL_IMAGE_WIDTH);
             fb.copy_within(0..copy_len, WATERFALL_IMAGE_WIDTH);
 
             for x in 0..WATERFALL_IMAGE_WIDTH {
-                let idx = x * row_db.len() / WATERFALL_IMAGE_WIDTH;
-                let db = row_db[idx];
+		let idx = x * row_db.len() / WATERFALL_IMAGE_WIDTH;
+		let db = row_db[idx];
 
-                let val = ((db + 100.0) * 2.0).clamp(0.0, 255.0) as u8;
-                let rgb =
-                    ((val as u32) << 16) | ((val as u32) << 8) | (val as u32);
-
-                fb[x] = rgb;
+		// Temporary fixed dB mapping, but with your normal colormap.
+		let val = ((db + 100.0) * 2.0).clamp(0.0, 255.0) as u8;
+		fb[x] = color_map(val);
             }
-        }
+	}
     }
 }
