@@ -1,4 +1,4 @@
-use crate::app::om_bands::LicenseClass;
+use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 /// Central UI state shared between:

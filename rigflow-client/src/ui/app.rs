@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 use eframe::egui;
 use tokio::sync::mpsc;
 
-use crate::app::om_bands::LicenseClass;
 use crate::net::control::ControlCommand;
 use crate::ui::{
     spectrum_view::{
@@ -12,6 +11,7 @@ use crate::ui::{
     layout::{
 	LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH,
     },
+    om_bands::LicenseClass,
     state::UiState,
 };
 
