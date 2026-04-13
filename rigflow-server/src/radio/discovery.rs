@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use log::{error,info};
 
 use rigflow_core::radio::{
     HardwareKind, RadioCapabilities, RadioDescriptor, RadioId,
@@ -46,7 +47,7 @@ fn discover_rtl_radios() -> Vec<RadioDescriptor> {
             }
         }
         Err(err) => {
-            eprintln!("RTL discovery failed: {err}");
+            error!("RTL discovery failed: {err}");
         }
     }
 
@@ -71,7 +72,7 @@ fn discover_wav_radios(dir: &Path) -> Vec<RadioDescriptor> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(err) => {
-            eprintln!("Failed to read wav dir '{}': {err}", dir.display());
+            error!("Failed to read wav dir '{}': {err}", dir.display());
             return Vec::new();
         }
     };
@@ -156,10 +157,10 @@ fn default_radio_capabilities() -> RadioCapabilities {
 //
 
 pub fn debug_print_discovered_radios(radios: &[RadioDescriptor]) {
-    println!("Discovered {} radios:", radios.len());
+    info!("Discovered {} radios:", radios.len());
 
     for radio in radios {
-        println!(
+        info!(
             "  id={} kind={:?} name='{}' serial={:?}",
             radio.id.0,
             radio.hardware_kind,

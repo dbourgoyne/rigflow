@@ -7,7 +7,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::debug;
+use log::{debug, info, trace};
 use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -59,7 +59,7 @@ pub async fn run_radio_worker(
     mut stop_rx: oneshot::Receiver<()>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
 ) -> WorkerExit {
-    println!(
+    debug!(
         "[radio-worker {}] starting worker center={} target={}",
         descriptor.id.0, request.center_freq_hz, request.target_freq_hz
     );
@@ -109,7 +109,7 @@ pub async fn run_radio_worker(
                 thread_stop_reason,
             );
 
-            println!(
+            debug!(
                 "[radio-worker {}] async wrapper exiting with {:?}",
                 worker_name, exit
             );
@@ -422,7 +422,7 @@ fn run_iq_worker_threads(
         }
     }
 
-    println!(
+    debug!(
         "[radio-worker {}] worker threads exiting with {:?}",
         descriptor.id.0, exit
     );
@@ -544,7 +544,7 @@ fn spawn_waterfall_thread(
 			let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 			let avg_db = row_db.iter().copied().sum::<f32>() / row_db.len() as f32;
 
-			println!(
+			trace!(
 			    "[radio-worker {}] waterfall row: bins={} min={:.1} max={:.1} avg={:.1}",
 			    descriptor.id.0,
 			    row_db.len(),
@@ -563,7 +563,7 @@ fn spawn_waterfall_thread(
             }
         }
 
-        println!("[radio-worker {}] waterfall thread exiting", descriptor.id.0);
+        debug!("[radio-worker {}] waterfall thread exiting", descriptor.id.0);
     })
 }
 
@@ -620,7 +620,7 @@ fn spawn_capture_thread(
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
 
-        println!(
+        debug!(
             "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
             descriptor.id.0,
             source.sample_rate(),
@@ -677,7 +677,7 @@ fn spawn_capture_thread(
 
             blocks_read += 1;
             if blocks_read % 20 == 0 {
-                println!(
+                trace!(
                     "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
                     descriptor.id.0,
                     blocks_read,
@@ -733,7 +733,7 @@ fn spawn_dsp_thread(
             pipeline.set_ssb_pitch_hz(startup_info.runtime.ssb_pitch_hz);
         }
 
-        println!(
+        info!(
             "[radio-worker {}] pipeline mode={:?} input_sr={} output_sr={} client_sr={}",
             descriptor.id.0,
             startup_info.runtime.demod_mode,
