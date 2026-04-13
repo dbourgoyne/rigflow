@@ -1,10 +1,10 @@
-pub mod actions;
+pub mod app;
 pub mod bands;
 pub mod frequency_view;
 pub mod layout;
 pub mod om_bands;
+pub mod spectrum_utils;
 pub mod state;
 pub mod stats;
-pub mod spectrum_utils;
 pub mod waterfall;
-pub mod ui_action;
+pub mod spectrum_view;

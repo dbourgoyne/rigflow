@@ -84,8 +84,8 @@ impl ServerConfig {
             match arg.as_str() {
                 "--demod" => {
                     let value = next_arg(&mut args, "--demod")?;
-                    cfg.demod = parse_demod_mode(&value)
-                        .ok_or_else(|| format!("unknown demod '{value}'\n\n{}", Self::usage()))?;
+		    cfg.demod = value.parse::<DemodMode>()
+			.map_err(|_| format!("invalid demod mode: {value}"))?;
                 }
 
                 "--wav-dir" => {
@@ -259,16 +259,6 @@ fn parse_source_kind(value: &str) -> Option<SourceKind> {
         "fake" => Some(SourceKind::Fake),
         "wav" => Some(SourceKind::Wav),
         "rtlsdr" => Some(SourceKind::RtlSdr),
-        _ => None,
-    }
-}
-
-fn parse_demod_mode(value: &str) -> Option<DemodMode> {
-    match value {
-        "usb" => Some(DemodMode::Usb),
-        "lsb" => Some(DemodMode::Lsb),
-        "wfm" => Some(DemodMode::Wfm),
-	"nfm" => Some(DemodMode::Nfm),
         _ => None,
     }
 }

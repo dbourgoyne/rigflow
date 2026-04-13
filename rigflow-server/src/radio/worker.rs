@@ -202,6 +202,7 @@ fn pipeline_cfg_for_source(
         DemodMode::Nfm => (12_500.0, 5_000.0),
         DemodMode::Usb => (4_000.0, 3_000.0),
         DemodMode::Lsb => (4_000.0, 3_000.0),
+	DemodMode::Am => todo!(),
     };
 
     DspPipelineConfig {

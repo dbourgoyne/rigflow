@@ -13,11 +13,10 @@ use rigflow_protocol::{ClientMessage, ServerMessage};
 
 use crate::{
     app_state::AppState,
-    dsp::demod::{demod_mode_to_string, sideband_to_string, DemodMode, Sideband},
     radio::{
-	api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
-	types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
-	session::SessionState,
+        api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
+        session::SessionState,
+        types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
     },
 };
 
@@ -232,7 +231,7 @@ async fn handle_legacy_client_text(
                 state,
                 session,
                 WorkerCommand::SetDemodMode {
-                    mode: parse_demod_mode(&mode)?,
+                    mode,
                 },
             )
             .await
@@ -246,7 +245,7 @@ async fn handle_legacy_client_text(
                 state,
                 session,
                 WorkerCommand::SetSideband {
-                    sideband: parse_sideband(&sideband)?,
+                    sideband,
                 },
             )
             .await
@@ -537,26 +536,6 @@ fn radio_manager_error_string(err: RadioManagerError) -> String {
     }
 }
 
-/// Parse a sideband string from legacy client control messages.
-fn parse_sideband(s: &str) -> Result<Sideband, String> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "usb" => Ok(Sideband::Usb),
-        "lsb" => Ok(Sideband::Lsb),
-        _ => Err(format!("invalid sideband: '{s}'")),
-    }
-}
-
-/// Parse a demod mode string from legacy client control messages.
-fn parse_demod_mode(s: &str) -> Result<DemodMode, String> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "wfm" | "fm" => Ok(DemodMode::Wfm),
-        "nfm" => Ok(DemodMode::Nfm),
-        "usb" => Ok(DemodMode::Usb),
-        "lsb" => Ok(DemodMode::Lsb),
-        _ => Err(format!("invalid demod mode: '{s}'")),
-    }
-}
-
 /// Convert the current worker status into a full runtime snapshot for newly acquired clients.
 fn runtime_snapshot_from_status(
     radio_id: rigflow_core::radio::RadioId,
@@ -572,8 +551,8 @@ fn runtime_snapshot_from_status(
             audio_format: runtime.audio_format.clone(),
             waterfall_bins: runtime.waterfall_bins,
             waterfall_frame_rate_hz: runtime.waterfall_frame_rate_hz,
-            demod_mode: demod_mode_to_string(runtime.demod_mode),
-            sideband: sideband_to_string(runtime.sideband),
+            demod_mode: runtime.demod_mode,
+            sideband: runtime.sideband,
             ssb_pitch_hz: runtime.ssb_pitch_hz,
         }),
         _ => None,
@@ -590,8 +569,8 @@ fn runtime_changed_from_status(
             radio_id,
             center_freq_hz: Some(runtime.center_freq_hz),
             target_freq_hz: Some(runtime.target_freq_hz),
-            demod_mode: Some(demod_mode_to_string(runtime.demod_mode)),
-            sideband: Some(sideband_to_string(runtime.sideband)),
+            demod_mode: Some(runtime.demod_mode),
+            sideband: Some(runtime.sideband),
             ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
         }),
         _ => None,

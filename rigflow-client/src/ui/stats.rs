@@ -4,6 +4,16 @@ use log::info;
 
 use crate::net::udp::MediaPacketStats;
 
+/// Periodic client-side media statistics logger.
+///
+/// Tracks:
+/// - audio sample throughput
+/// - media packet rates
+/// - jitter buffer depth
+/// - packet loss / lateness counters
+///
+/// The logger accumulates counters between log intervals, emits one summary
+/// line, then clears the interval-local counters.
 pub struct ClientStatsLogger {
     last_log: Instant,
     audio_samples_since_last: u64,
@@ -17,10 +27,17 @@ impl ClientStatsLogger {
         }
     }
 
+    /// Record audio samples produced during the current logging interval.
     pub fn add_audio_samples(&mut self, count: usize) {
         self.audio_samples_since_last += count as u64;
     }
 
+    /// Log one client stats line once per second.
+    ///
+    /// This function is intentionally interval-based:
+    /// - accumulate counters continuously
+    /// - emit a summary once enough time has passed
+    /// - reset per-interval counters after logging
     pub fn maybe_log(
         &mut self,
         media_stats: &mut MediaPacketStats,
@@ -56,6 +73,7 @@ impl ClientStatsLogger {
             media_stats.dropped_waterfall_packets,
         );
 
+        // Reset interval-local counters after each log emission.
         self.audio_samples_since_last = 0;
         media_stats.incoming_packets = 0;
         media_stats.audio_packets = 0;

@@ -1,277 +1,310 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
-use futures_util::{SinkExt, StreamExt};
+
 use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
+
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+
 use tokio_tungstenite::{
     tungstenite::Message,
     MaybeTlsStream, WebSocketStream,
 };
-use tokio::net::TcpStream;
 
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
-use rigflow_protocol::{ClientMessage, ServerMessage};
+use rigflow_protocol::ServerMessage;
 
-use crate::app::state::UiState;
-use crate::net::control::ControlCommand;
+use crate::ui::state::UiState;
 use crate::client_runtime::MediaCommand;
+use crate::net::control::ControlCommand;
+
+// --- Type aliases ----------------------------------------------------------
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
 
+/// Main WebSocket control task.
+///
+/// Responsibilities:
+/// - manage connection lifecycle
+/// - forward UI commands to the server
+/// - process server messages and update UI state
+/// - coordinate lease renewal
+/// - coordinate media runtime startup/reset behavior
 pub async fn websocket_control_task(
     mut rx: mpsc::UnboundedReceiver<ControlCommand>,
     ui_state: Arc<Mutex<UiState>>,
     media_cmd_tx: mpsc::UnboundedSender<MediaCommand>,
     audio_session_generation: Arc<AtomicU64>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-
+    // Current connection state. `write_opt` and `read_opt` are populated only
+    // while connected.
     let mut write_opt: Option<WsWrite> = None;
     let mut read_opt: Option<WsRead> = None;
     let mut connected_server_ip: Option<String> = None;
+
+    // Renew radio lease periodically while a radio is acquired.
     let mut renew_interval = tokio::time::interval(Duration::from_secs(10));
 
     loop {
-	tokio::select! {
+        tokio::select! {
+            // --- Periodic lease renewal ------------------------------------
             _ = renew_interval.tick() => {
-		let should_renew = {
+                let should_renew = {
                     let state = ui_state.lock().unwrap();
                     state.radio_acquired
-		};
+                };
 
-		if should_renew {
-		    if let Some(write) = write_opt.as_mut() {
-			let renew = ClientRadioMessage::RenewLease;
-			let text = serde_json::to_string(&renew)?;
-			println!("CLIENT sending RenewLease");
-			    write
-				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-				.await?;
-		    }
-		}
+                if should_renew {
+                    if let Some(write) = write_opt.as_mut() {
+                        let renew = ClientRadioMessage::RenewLease;
+                        let text = serde_json::to_string(&renew)?;
 
+                        println!("CLIENT sending RenewLease");
+
+                        write.send(Message::Text(text.into())).await?;
+                    }
+                }
             }
 
-	    cmd = rx.recv() => {
-		match cmd {
+            // --- UI → control command handling -----------------------------
+            cmd = rx.recv() => {
+                match cmd {
+                    Some(ControlCommand::AcquireRadio { radio_id }) => {
+                        let Some(server_ip) = connected_server_ip.clone() else {
+                            let mut state = ui_state.lock().unwrap();
+                            state.server_status =
+                                "acquire failed: not connected to a server".to_string();
+                            continue;
+                        };
 
-		    Some(ControlCommand::AcquireRadio { radio_id }) => {
-			let Some(server_ip) = connected_server_ip.clone() else {
-			    let mut state = ui_state.lock().unwrap();
-			    state.server_status = "acquire failed: not connected to a server".to_string();
-			    continue;
-			};
+                        let (udp_listen_port, ws_port, center_freq_hz, target_freq_hz) = {
+                            let state = ui_state.lock().unwrap();
+                            (
+                                state.udp_listen_port,
+                                state.rigflow_server_ws_port,
+                                state.center_freq_hz as u64,
+                                state.target_freq_hz as u64,
+                            )
+                        };
 
-			let (udp_listen_port, ws_port, center_freq_hz, target_freq_hz) = {
-			    let state = ui_state.lock().unwrap();
-			    (
-				state.udp_listen_port,
-				state.rigflow_server_ws_port,
-				state.center_freq_hz as u64,
-				state.target_freq_hz as u64,
-			    )
-			};
+                        let udp_peer_addr = match build_udp_peer_addr(
+                            &server_ip,
+                            ws_port,
+                            udp_listen_port,
+                        ) {
+                            Ok(addr) => addr,
+                            Err(err) => {
+                                let mut state = ui_state.lock().unwrap();
+                                state.server_status = format!("acquire failed: {}", err);
+                                continue;
+                            }
+                        };
 
-			let udp_peer_addr = match build_udp_peer_addr(&server_ip, ws_port, udp_listen_port) {
-			    Ok(addr) => addr,
-			    Err(err) => {
-				let mut state = ui_state.lock().unwrap();
-				state.server_status = format!("acquire failed: {}", err);
-				continue;
-			    }
-			};
+                        if let Some(write) = write_opt.as_mut() {
+                            let acquire = ClientRadioMessage::AcquireRadio {
+                                radio_id: rigflow_core::radio::RadioId(radio_id),
+                                center_freq_hz,
+                                target_freq_hz,
+                                audio_udp_peer: udp_peer_addr.clone(),
+                                waterfall_udp_peer: udp_peer_addr,
+                            };
 
-			if let Some(write) = write_opt.as_mut() {
-			    let acquire = ClientRadioMessage::AcquireRadio {
-				radio_id: rigflow_core::radio::RadioId(radio_id),
-				center_freq_hz,
-				target_freq_hz,
-				audio_udp_peer: udp_peer_addr.clone(),
-				waterfall_udp_peer: udp_peer_addr,
-			    };
+                            let text = serde_json::to_string(&acquire)?;
+                            println!("CLIENT sending AcquireRadio: {}", text);
 
-			    let text = serde_json::to_string(&acquire)?;
-			    println!("CLIENT sending AcquireRadio: {}", text);
+                            write.send(Message::Text(text.into())).await?;
+                        }
+                    }
 
-			    write
-				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-				.await?;
-			}
-		    }
+                    Some(ControlCommand::ReleaseRadio) => {
+                        if let Some(write) = write_opt.as_mut() {
+                            let msg = ClientRadioMessage::ReleaseRadio;
+                            let text = serde_json::to_string(&msg)?;
 
-		    Some(ControlCommand::ReleaseRadio) => {
-			if let Some(write) = write_opt.as_mut() {
-			    let msg = ClientRadioMessage::ReleaseRadio;
-			    let text = serde_json::to_string(&msg)?;
-			    println!("CLIENT sending ReleaseRadio");
+                            println!("CLIENT sending ReleaseRadio");
 
-			    write
-				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-				.await?;
-			}
-		    }
-		    
-		    Some(ControlCommand::Connect { server_ip }) => {
-			if write_opt.is_some() {
-			    continue;
-			}
+                            write.send(Message::Text(text.into())).await?;
+                        }
+                    }
 
-			let ws_port = {
-			    let state = ui_state.lock().unwrap();
-			    state.rigflow_server_ws_port
-			};
+                    Some(ControlCommand::Connect { server_ip }) => {
+                        if write_opt.is_some() {
+                            continue;
+                        }
 
-			let ws_url = format!("ws://{}:{}/ws", server_ip, ws_port);
-			println!("CLIENT connecting to {}", ws_url);
+                        let ws_port = {
+                            let state = ui_state.lock().unwrap();
+                            state.rigflow_server_ws_port
+                        };
 
-			match tokio_tungstenite::connect_async(&ws_url).await {
-			    Ok((ws_stream, _)) => {
-				let (write, read) = ws_stream.split();
-				write_opt = Some(write);
-				read_opt = Some(read);
-				connected_server_ip = Some(server_ip.clone());
+                        let ws_url = format!("ws://{}:{}/ws", server_ip, ws_port);
+                        println!("CLIENT connecting to {}", ws_url);
 
-				{
-				    let mut state = ui_state.lock().unwrap();
-				    state.server_connected = true;
-				    state.server_status =
-					format!("connected to server {}", server_ip);
-				}
+                        match tokio_tungstenite::connect_async(&ws_url).await {
+                            Ok((ws_stream, _)) => {
+                                let (write, read) = ws_stream.split();
 
-				let server_udp_port = {
-				    let state = ui_state.lock().unwrap();
-				    state.rigflow_server_udp_port
-				};
+                                write_opt = Some(write);
+                                read_opt = Some(read);
+                                connected_server_ip = Some(server_ip.clone());
 
-				let _ = media_cmd_tx.send(MediaCommand::RegisterUdp {
-				    server_ip: server_ip.clone(),
-				    server_udp_port,
-				});
+                                {
+                                    let mut state = ui_state.lock().unwrap();
+                                    state.server_connected = true;
+                                    state.server_status =
+                                        format!("connected to server {}", server_ip);
+                                }
 
-				if let Some(write) = write_opt.as_mut() {
-				    let list_msg = ClientRadioMessage::ListRadios;
-				    let text = serde_json::to_string(&list_msg)?;
-				    println!("CLIENT sending: {}", text);
-					write
-					    .send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-					    .await?;
-				}
-			    }
+                                // Register the UDP media plane immediately after
+                                // WebSocket connect succeeds.
+                                let server_udp_port = {
+                                    let state = ui_state.lock().unwrap();
+                                    state.rigflow_server_udp_port
+                                };
 
-			    Err(err) => {
-				let mut state = ui_state.lock().unwrap();
-				state.server_connected = false;
-				state.server_status = format!("connect failed: {}", err);
-			    }
-			}
-		    }
+                                let _ = media_cmd_tx.send(MediaCommand::RegisterUdp {
+                                    server_ip: server_ip.clone(),
+                                    server_udp_port,
+                                });
 
-		    Some(ControlCommand::Disconnect) => {
-			println!("CLIENT disconnecting");
+                                // Ask the server for the current radio list.
+                                if let Some(write) = write_opt.as_mut() {
+                                    let list_msg = ClientRadioMessage::ListRadios;
+                                    let text = serde_json::to_string(&list_msg)?;
 
-			if let Some(mut write) = write_opt.take() {
-			    let _ = write.close().await;
-			}
+                                    println!("CLIENT sending: {}", text);
 
-			read_opt = None;
+                                    write.send(Message::Text(text.into())).await?;
+                                }
+                            }
 
-			let mut state = ui_state.lock().unwrap();
-			state.server_connected = false;
-			state.server_status = "no server".to_string();
-			state.radio_acquired = false;
-			state.selected_radio_id = None;
-			state.available_radios.clear();
-			connected_server_ip = None;
-		    }
+                            Err(err) => {
+                                let mut state = ui_state.lock().unwrap();
+                                state.server_connected = false;
+                                state.server_status = format!("connect failed: {}", err);
+                            }
+                        }
+                    }
 
-		    Some(ControlCommand::LegacyClientMessage(cmd)) => {
-			println!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
-			if let Some(write) = write_opt.as_mut() {
-			    let text = serde_json::to_string(&cmd)?;
-			    println!("WEBSOCKET sending text: {}", text);
-			    write
-				.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-				.await?;
-			}
-		    }
+                    Some(ControlCommand::Disconnect) => {
+                        println!("CLIENT disconnecting");
 
-		    None => break,
-		}
-	    }
+                        if let Some(mut write) = write_opt.take() {
+                            let _ = write.close().await;
+                        }
 
-	    msg = async {
-		match read_opt.as_mut() {
-		    Some(read) => read.next().await,
-		    None => None,
-		}
-	    }, if read_opt.is_some() => {
-		match msg {
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-			if let Ok(radio_msg) = serde_json::from_str::<ServerRadioMessage>(&text) {
+                        read_opt = None;
+                        connected_server_ip = None;
+
+                        let mut state = ui_state.lock().unwrap();
+                        state.server_connected = false;
+                        state.server_status = "no server".to_string();
+                        state.radio_acquired = false;
+                        state.selected_radio_id = None;
+                        state.available_radios.clear();
+                    }
+
+                    Some(ControlCommand::LegacyClientMessage(cmd)) => {
+                        println!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
+
+                        if let Some(write) = write_opt.as_mut() {
+                            let text = serde_json::to_string(&cmd)?;
+                            println!("WEBSOCKET sending text: {}", text);
+
+                            write.send(Message::Text(text.into())).await?;
+                        }
+                    }
+
+                    None => break,
+                }
+            }
+
+            // --- Server → client message handling --------------------------
+            msg = async {
+                match read_opt.as_mut() {
+                    Some(read) => read.next().await,
+                    None => None,
+                }
+            }, if read_opt.is_some() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        // Try radio-specific messages first.
+                        if let Ok(radio_msg) =
+                            serde_json::from_str::<ServerRadioMessage>(&text)
+                        {
                             println!("CLIENT got radio message: {:?}", radio_msg);
 
-                            if let Some(outgoing) = apply_radio_server_message(radio_msg, &ui_state, &audio_session_generation) {
-				let text = serde_json::to_string(&outgoing)?;
-				println!("CLIENT sending radio message: {}", text);
-				if let Some(write) = write_opt.as_mut() {
-				    write
-					.send(tokio_tungstenite::tungstenite::Message::Text(text.into()))
-					.await?;
-				}
+                            if let Some(outgoing) = apply_radio_server_message(
+                                radio_msg,
+                                &ui_state,
+                                &audio_session_generation,
+                            ) {
+                                let text = serde_json::to_string(&outgoing)?;
+                                println!("CLIENT sending radio message: {}", text);
+
+                                if let Some(write) = write_opt.as_mut() {
+                                    write.send(Message::Text(text.into())).await?;
+                                }
                             }
-			} else if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-			    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-				if let ServerMessage::Error { message } = server_msg {
-				    let mut state = ui_state.lock().unwrap();
-				    state.runtime_error = format!("error: {}", message);
-				}
-			    }
-			} else {
+                        } else if let Ok(server_msg) =
+                            serde_json::from_str::<ServerMessage>(&text)
+                        {
+                            let ServerMessage::Error { message } = server_msg;
+                            let mut state = ui_state.lock().unwrap();
+                            state.runtime_error = format!("error: {}", message);
+                        } else {
                             println!("CLIENT unknown message: {}", text);
-			}
+                        }
                     }
+
                     Some(Ok(_)) => {}
-		    Some(Err(e)) => {
-			println!("CLIENT websocket error: {}", e);
 
-			write_opt = None;
-			read_opt = None;
-			connected_server_ip = None;
+                    Some(Err(error)) => {
+                        println!("CLIENT websocket error: {}", error);
 
-			let mut state = ui_state.lock().unwrap();
-			state.server_connected = false;
-			state.server_status = format!("connection error: {}", e);
-			state.radio_acquired = false;
+                        write_opt = None;
+                        read_opt = None;
+                        connected_server_ip = None;
 
-			continue;
-		    }
+                        let mut state = ui_state.lock().unwrap();
+                        state.server_connected = false;
+                        state.server_status = format!("connection error: {}", error);
+                        state.radio_acquired = false;
 
-		    None => {
-			println!("CLIENT websocket closed");
+                        continue;
+                    }
 
-			write_opt = None;
-			read_opt = None;
-			connected_server_ip = None;
+                    None => {
+                        println!("CLIENT websocket closed");
 
-			let mut state = ui_state.lock().unwrap();
-			state.server_connected = false;
-			state.server_status = "no server".to_string();
-			state.radio_acquired = false;
+                        write_opt = None;
+                        read_opt = None;
+                        connected_server_ip = None;
 
-			continue;
-		    }
-		    
-		}
+                        let mut state = ui_state.lock().unwrap();
+                        state.server_connected = false;
+                        state.server_status = "no server".to_string();
+                        state.radio_acquired = false;
+
+                        continue;
+                    }
+                }
             }
-	}
+        }
     }
 
     Ok(())
 }
 
+/// Apply a radio-specific server message to client UI state.
+///
+/// Returns an optional outbound radio message if the client needs to reply.
+/// Currently this always returns `None`, but the return type allows the
+/// control loop to support request/response workflows later.
 pub fn apply_radio_server_message(
     msg: ServerRadioMessage,
     ui_state: &Arc<Mutex<UiState>>,
@@ -286,7 +319,8 @@ pub fn apply_radio_server_message(
             if radios.is_empty() {
                 state.server_status = "connected, no radios available".to_string();
             } else {
-                state.server_status = format!("connected, {} radios available", radios.len());
+                state.server_status =
+                    format!("connected, {} radios available", radios.len());
             }
         }
 
@@ -294,17 +328,21 @@ pub fn apply_radio_server_message(
             state.radio_acquired = true;
             state.selected_radio_id = Some(radio_id.0.clone());
             state.server_status = format!("radio acquired: {}", radio_id.0);
-	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
+
+            // Force client audio pipeline to reset on radio switch/acquire.
+            audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
 
         ServerRadioMessage::RadioReleased { .. } => {
             state.radio_acquired = false;
             state.server_status = "radio released".to_string();
-	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
+
+            // Force client audio pipeline to reset on release.
+            audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
 
         ServerRadioMessage::LeaseRenewed { .. } => {
-
+            // No UI update currently required.
         }
 
         ServerRadioMessage::RuntimeSnapshot {
@@ -315,7 +353,7 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             ssb_pitch_hz,
-	    ..
+            ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
@@ -333,20 +371,20 @@ pub fn apply_radio_server_message(
             sideband,
             ssb_pitch_hz,
         } => {
-            if let Some(v) = center_freq_hz {
-                state.center_freq_hz = v as f32;
+            if let Some(value) = center_freq_hz {
+                state.center_freq_hz = value as f32;
             }
-            if let Some(v) = target_freq_hz {
-                state.target_freq_hz = v as f32;
+            if let Some(value) = target_freq_hz {
+                state.target_freq_hz = value as f32;
             }
-            if let Some(ref v) = demod_mode {
-                state.demod_mode = v.clone();
+            if let Some(ref value) = demod_mode {
+                state.demod_mode = value.clone();
             }
-            if let Some(ref v) = sideband {
-                state.sideband = v.clone();
+            if let Some(ref value) = sideband {
+                state.sideband = value.clone();
             }
-            if let Some(v) = ssb_pitch_hz {
-                state.ssb_pitch_hz = v;
+            if let Some(value) = ssb_pitch_hz {
+                state.ssb_pitch_hz = value;
             }
         }
 
@@ -358,6 +396,11 @@ pub fn apply_radio_server_message(
     None
 }
 
+/// Build the UDP endpoint string that the client should advertise to the server.
+///
+/// This determines the correct local IP by binding a temporary probe socket,
+/// connecting it to the server, and then reading the OS-selected local route.
+/// The listen port comes from the already-bound media socket.
 fn build_udp_peer_addr(
     server_ip: &str,
     server_port_for_route_probe: u16,
@@ -372,7 +415,11 @@ fn build_udp_peer_addr(
 
     probe
         .connect((server_ip, server_port_for_route_probe))
-        .map_err(|e| format!("failed to probe route to server {server_ip}:{server_port_for_route_probe}: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "failed to probe route to server {server_ip}:{server_port_for_route_probe}: {e}"
+            )
+        })?;
 
     let local_ip = probe
         .local_addr()
