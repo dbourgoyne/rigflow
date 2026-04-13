@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use log::info;
+use log::trace;
 
 use crate::net::udp::MediaPacketStats;
 
@@ -61,7 +61,7 @@ impl ClientStatsLogger {
             0.0
         };
 
-        info!(
+        trace!(
             "client stats: audio={:.1} ksps packets={:.0}/s wf={:.0}/s jitter={:.1} ms late_a={} drop_a={} late_w={} drop_w={}",
             audio_rate / 1_000.0,
             packet_rate,
