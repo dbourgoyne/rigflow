@@ -40,7 +40,7 @@ pub struct UiState {
     pub runtime_error: String,
 
     /// Currently hovered digit in LO widget (for interaction feedback)
-    pub hovered_center_freq_digit: Option<usize>,
+    //pub hovered_center_freq_digit: Option<usize>,
 
     /// Selected amateur radio license class (for band overlays)
     pub selected_license: Option<LicenseClass>,
@@ -49,13 +49,13 @@ pub struct UiState {
     pub spectrum_zoom_x: f32,
 
     /// Whether zoom slider is currently being dragged
-    pub zoom_slider_dragging: bool,
+    //pub zoom_slider_dragging: bool,
 
     /// Whether the "Rigflow Server" menu is expanded
-    pub rigflow_server_menu_expanded: bool,
+    //pub rigflow_server_menu_expanded: bool,
 
     /// Whether the server IP field is actively being edited
-    pub editing_server_ip: bool,
+    //pub editing_server_ip: bool,
 
     // ---------------------------------------------------------------------
     // Server connection state
@@ -104,12 +104,12 @@ impl Default for UiState {
             // --- UI defaults ---------------------------------------------
 
             runtime_error: String::new(),
-            hovered_center_freq_digit: None,
+            //hovered_center_freq_digit: None,
             selected_license: None,
             spectrum_zoom_x: 1.0,
-            zoom_slider_dragging: false,
-            rigflow_server_menu_expanded: false,
-            editing_server_ip: false,
+            //zoom_slider_dragging: false,
+            //rigflow_server_menu_expanded: false,
+            //editing_server_ip: false,
 
             // --- Server defaults -----------------------------------------
 
