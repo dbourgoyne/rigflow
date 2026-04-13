@@ -5,6 +5,6 @@ pub mod layout;
 pub mod om_bands;
 pub mod spectrum_utils;
 pub mod state;
-//pub mod stats;
+pub mod stats;
 pub mod waterfall;
 pub mod spectrum_view;

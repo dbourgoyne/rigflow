@@ -14,9 +14,6 @@ use rigflow_core::{
 };
 
 use crate::{
-    app::{
-        stats::ClientStatsLogger,
-    },
     net::udp::{handle_media_packet, MediaPacketStats},
     ui::{
 	layout::{
@@ -24,6 +21,7 @@ use crate::{
             WATERFALL_TOP, WIDTH,
         },
 	state::UiState,
+	stats::ClientStatsLogger,
     },
 };
 
