@@ -1,8 +1,8 @@
 mod app;
 mod client_runtime;
-mod eframe_app;
 mod net;
 mod spectrum_view;
+mod ui;
 mod widgets;
 
 use std::sync::{Arc, Mutex};
@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::app::state::UiState;
 use crate::client_runtime::start_media_runtime;
-use crate::eframe_app::RigflowApp;
+use crate::ui::app::RigflowApp;
 use crate::net::control::ControlCommand;
 use crate::net::websocket::websocket_control_task;
 
