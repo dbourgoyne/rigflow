@@ -151,7 +151,7 @@ impl Default for UiState {
 	    // --- Waterfall Display defaults ------------------------------
 	    display_top_db: -35.0,
             display_range_db: 70.0,
-            adaptive_waterfall_normalization: false,
+            adaptive_waterfall_normalization: true,
 	    adaptive_top_db_estimate: -35.0,
             adaptive_floor_db_estimate: -105.0,
 	    display_zoom: 1.0,
