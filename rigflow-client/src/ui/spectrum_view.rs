@@ -2,34 +2,24 @@ use eframe::egui::{
     self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke,
 };
 use rigflow_core::dsp::modes::DemodMode;
+
 use crate::ui::{
     bands::visible_radio_bands,
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
     layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
     om_bands::{
-	visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
-	COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
-	COLOR_OM_USB_PHONE_CW_RTTY_DATA,
+        visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
+        COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
+        COLOR_OM_USB_PHONE_CW_RTTY_DATA,
     },
+    spectrum_utils::zoom_window,
     state::UiState,
 };
 
-/// Result of user interaction with the spectrum plot.
-///
-/// Currently only supports click-to-tune.
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
 }
 
-/// Draw the full spectrum plot.
-///
-/// Responsibilities:
-/// - layout and background
-/// - axes and grid
-/// - overlays (bands, OM segments, passband)
-/// - spectrum trace
-/// - frequency markers
-/// - click interaction → frequency
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
     size: egui::Vec2,
@@ -38,18 +28,13 @@ pub fn draw_spectrum_plot(
     db_max: f32,
     state: &UiState,
 ) -> SpectrumInteraction {
-    use crate::ui::spectrum_utils::zoom_window;
-    
-    // Enforce minimum size so layout never collapses visually.
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
 
     let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click());
     let painter = ui.painter_at(outer_rect);
 
-    // Plot background.
     painter.rect_filled(outer_rect, 4.0, Color32::from_rgb(20, 20, 24));
 
-    // Inner plotting region after gutters are reserved for axis labels.
     let plot_rect = Rect::from_min_max(
         Pos2::new(outer_rect.left() + LEFT_GUTTER, outer_rect.top() + TOP_GUTTER),
         Pos2::new(
@@ -58,21 +43,20 @@ pub fn draw_spectrum_plot(
         ),
     );
 
-    // Guard against degenerate layout.
     if plot_rect.width() <= 1.0 || plot_rect.height() <= 1.0 {
         return empty_interaction();
     }
 
-    // Render back → front.
-    draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
-    draw_x_axis(&painter, plot_rect, outer_rect, state);
-    draw_band_overlays(&painter, plot_rect, state);
-    draw_om_overlays(&painter, plot_rect, state);
-    draw_passband_overlay(&painter, plot_rect, state);
-    draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
-    draw_frequency_markers(&painter, plot_rect, state);
+    let spectrum_len = spectrum_db.len();
 
-    // Plot border.
+    draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
+    draw_x_axis(&painter, plot_rect, outer_rect, spectrum_len, state);
+    draw_band_overlays(&painter, plot_rect, spectrum_len, state);
+    draw_om_overlays(&painter, plot_rect, spectrum_len, state);
+    draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
+    draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
+    draw_frequency_markers(&painter, plot_rect, spectrum_len, state);
+
     painter.rect_stroke(
         plot_rect,
         0.0,
@@ -80,7 +64,6 @@ pub fn draw_spectrum_plot(
         egui::StrokeKind::Inside,
     );
 
-    // Click-to-tune interaction.
     let mut clicked_freq_hz = None;
 
     if response.clicked() && visible_span_hz(state) > 0.0 {
@@ -89,18 +72,11 @@ pub fn draw_spectrum_plot(
                 let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
                     .clamp(0.0, 1.0);
 
-		let (start, end) = zoom_window(spectrum_db.len(), state.display_zoom);
-		let visible_len = end - start;
-
-		let bin = start + (frac * visible_len as f32) as usize;
-
-		let freq = {
-		    let left = visible_left_hz(state);
-		    let span = visible_span_hz(state);
-		    left + (bin as f32 / spectrum_db.len() as f32) * span
-		};
-
-		clicked_freq_hz = Some(freq);
+                if let Some((left_hz, right_hz)) =
+                    zoomed_visible_freq_range_hz(spectrum_len, state)
+                {
+                    clicked_freq_hz = Some(left_hz + frac * (right_hz - left_hz));
+                }
             }
         }
     }
@@ -154,15 +130,17 @@ fn draw_x_axis(
     painter: &egui::Painter,
     plot_rect: Rect,
     outer_rect: Rect,
+    spectrum_len: usize,
     state: &UiState,
 ) {
     let grid_color = Color32::from_gray(55);
     let text_color = Color32::from_gray(180);
 
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
-    let span_hz = right_hz - left_hz;
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return;
+    };
 
+    let span_hz = right_hz - left_hz;
     if span_hz <= 0.0 {
         return;
     }
@@ -214,8 +192,6 @@ fn draw_trace(
     db_max: f32,
     state: &UiState,
 ) {
-    use crate::ui::spectrum_utils::zoom_window;
-    
     if spectrum_db.len() < 2 || db_max <= db_min {
         return;
     }
@@ -223,12 +199,15 @@ fn draw_trace(
     let (start, end) = zoom_window(spectrum_db.len(), state.display_zoom);
     let visible_len = end - start;
 
+    if visible_len < 2 {
+        return;
+    }
+
     let mut points = Vec::with_capacity(visible_len);
 
     for i in 0..visible_len {
-	let db = spectrum_db[start + i];
-
-	let x_t = i as f32 / (visible_len - 1).max(1) as f32;
+        let db = spectrum_db[start + i];
+        let x_t = i as f32 / (visible_len - 1) as f32;
         let x = plot_rect.left() + x_t * plot_rect.width();
 
         let clamped = db.clamp(db_min, db_max);
@@ -254,9 +233,40 @@ fn format_freq(freq_hz: f32) -> String {
     }
 }
 
-fn freq_to_plot_x_egui(freq_hz: f32, plot_rect: Rect, state: &UiState) -> Option<f32> {
+pub(crate) fn zoomed_visible_freq_range_hz(
+    spectrum_len: usize,
+    state: &UiState,
+) -> Option<(f32, f32)> {
+    if spectrum_len == 0 {
+        return None;
+    }
+
     let left_hz = visible_left_hz(state);
     let right_hz = visible_right_hz(state);
+    let span_hz = right_hz - left_hz;
+
+    if span_hz <= 0.0 {
+        return None;
+    }
+
+    let (start, end) = zoom_window(spectrum_len, state.display_zoom);
+
+    let start_frac = start as f32 / spectrum_len as f32;
+    let end_frac = end as f32 / spectrum_len as f32;
+
+    let zoom_left_hz = left_hz + start_frac * span_hz;
+    let zoom_right_hz = left_hz + end_frac * span_hz;
+
+    Some((zoom_left_hz, zoom_right_hz))
+}
+
+fn freq_to_plot_x_egui(
+    freq_hz: f32,
+    plot_rect: Rect,
+    spectrum_len: usize,
+    state: &UiState,
+) -> Option<f32> {
+    let (left_hz, right_hz) = zoomed_visible_freq_range_hz(spectrum_len, state)?;
 
     if right_hz <= left_hz || freq_hz < left_hz || freq_hz > right_hz {
         return None;
@@ -269,37 +279,20 @@ fn freq_to_plot_x_egui(freq_hz: f32, plot_rect: Rect, state: &UiState) -> Option
 fn draw_frequency_markers(
     painter: &egui::Painter,
     plot_rect: Rect,
+    spectrum_len: usize,
     state: &UiState,
 ) {
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return;
+    };
 
     if right_hz <= left_hz {
         return;
     }
 
-    // Center-frequency marker intentionally left disabled.
-    /*
-    if let Some(center_x) = freq_to_plot_x_egui(state.center_freq_hz, plot_rect, state) {
-        painter.line_segment(
-            [
-                Pos2::new(center_x, plot_rect.top()),
-                Pos2::new(center_x, plot_rect.bottom()),
-            ],
-            Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
-        );
-
-        painter.text(
-            Pos2::new(center_x + 4.0, plot_rect.top() + 4.0),
-            Align2::LEFT_TOP,
-            "CF",
-            FontId::monospace(10.0),
-            Color32::from_rgb(120, 160, 255),
-        );
-    }
-    */
-
-    if let Some(target_x) = freq_to_plot_x_egui(state.target_freq_hz, plot_rect, state) {
+    if let Some(target_x) =
+        freq_to_plot_x_egui(state.target_freq_hz, plot_rect, spectrum_len, state)
+    {
         painter.line_segment(
             [
                 Pos2::new(target_x, plot_rect.top()),
@@ -330,31 +323,18 @@ fn draw_frequency_markers(
             FontId::monospace(10.0),
             Color32::from_rgb(255, 220, 80),
         );
-
-        // Bottom arrow intentionally left disabled.
-        /*
-        let tri = vec![
-            Pos2::new(target_x, plot_rect.bottom() - 2.0),
-            Pos2::new(target_x - 5.0, plot_rect.bottom() - 10.0),
-            Pos2::new(target_x + 5.0, plot_rect.bottom() - 10.0),
-        ];
-
-        painter.add(egui::Shape::convex_polygon(
-            tri,
-            Color32::from_rgb(255, 220, 80),
-            Stroke::NONE,
-        ));
-        */
     }
 }
 
 fn draw_passband_overlay(
     painter: &egui::Painter,
     plot_rect: Rect,
+    spectrum_len: usize,
     state: &UiState,
 ) {
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return;
+    };
 
     if right_hz <= left_hz {
         return;
@@ -363,11 +343,11 @@ fn draw_passband_overlay(
     let target_freq_hz = state.target_freq_hz;
 
     let (pb_left_hz, pb_right_hz) = match state.demod_mode {
-	DemodMode::Wfm => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
-	DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
-	DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
-	DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
-	DemodMode::Am => todo!(),
+        DemodMode::Wfm => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
+        DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
+        DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
+        DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
+        DemodMode::Am => todo!(),
     };
 
     let visible_pb_left_hz = pb_left_hz.max(left_hz);
@@ -377,10 +357,20 @@ fn draw_passband_overlay(
         return;
     }
 
-    let Some(x0) = freq_to_plot_x_egui(visible_pb_left_hz, plot_rect, state) else {
+    let Some(x0) = freq_to_plot_x_egui(
+        visible_pb_left_hz,
+        plot_rect,
+        spectrum_len,
+        state,
+    ) else {
         return;
     };
-    let Some(x1) = freq_to_plot_x_egui(visible_pb_right_hz, plot_rect, state) else {
+    let Some(x1) = freq_to_plot_x_egui(
+        visible_pb_right_hz,
+        plot_rect,
+        spectrum_len,
+        state,
+    ) else {
         return;
     };
 
@@ -415,10 +405,12 @@ pub fn x_frac_to_frequency_hz(frac: f32, state: &UiState) -> f32 {
 fn draw_band_overlays(
     painter: &egui::Painter,
     plot_rect: Rect,
+    spectrum_len: usize,
     state: &UiState,
 ) {
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return;
+    };
 
     if right_hz <= left_hz {
         return;
@@ -429,16 +421,19 @@ fn draw_band_overlays(
         return;
     }
 
-    // Draw a shallow strip just above the x-axis labels.
     let band_strip_height = 14.0;
     let y0 = plot_rect.bottom() - band_strip_height - 2.0;
     let y1 = plot_rect.bottom() - 2.0;
 
     for band in visible_bands {
-        let Some(x0) = freq_to_plot_x_egui(band.start_hz, plot_rect, state) else {
+        let Some(x0) =
+            freq_to_plot_x_egui(band.start_hz, plot_rect, spectrum_len, state)
+        else {
             continue;
         };
-        let Some(x1) = freq_to_plot_x_egui(band.end_hz, plot_rect, state) else {
+        let Some(x1) =
+            freq_to_plot_x_egui(band.end_hz, plot_rect, spectrum_len, state)
+        else {
             continue;
         };
 
@@ -462,7 +457,6 @@ fn draw_band_overlays(
             egui::StrokeKind::Inside,
         );
 
-        // Only draw the label if there is enough horizontal room.
         if (x1 - x0) >= 48.0 {
             painter.text(
                 Pos2::new((x0 + x1) * 0.5, y0 + 1.0),
@@ -507,14 +501,16 @@ fn om_kind_label(kind: OmKind) -> &'static str {
 fn draw_om_overlays(
     painter: &egui::Painter,
     plot_rect: Rect,
+    spectrum_len: usize,
     state: &UiState,
 ) {
     let Some(license) = state.selected_license else {
         return;
     };
 
-    let left_hz = visible_left_hz(state);
-    let right_hz = visible_right_hz(state);
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return;
+    };
 
     if right_hz <= left_hz {
         return;
@@ -525,7 +521,6 @@ fn draw_om_overlays(
         return;
     }
 
-    // Draw immediately above the general band strip at roughly one-third height.
     let band_strip_height = 14.0;
     let om_strip_height = band_strip_height / 3.0;
     let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
@@ -533,10 +528,14 @@ fn draw_om_overlays(
     let om_y0 = om_y1 - om_strip_height;
 
     for seg in visible_segments {
-        let Some(x0) = freq_to_plot_x_egui(seg.start_hz, plot_rect, state) else {
+        let Some(x0) =
+            freq_to_plot_x_egui(seg.start_hz, plot_rect, spectrum_len, state)
+        else {
             continue;
         };
-        let Some(x1) = freq_to_plot_x_egui(seg.end_hz, plot_rect, state) else {
+        let Some(x1) =
+            freq_to_plot_x_egui(seg.end_hz, plot_rect, spectrum_len, state)
+        else {
             continue;
         };
 
@@ -581,39 +580,4 @@ fn empty_interaction() -> SpectrumInteraction {
 fn format_mhz(freq_hz: f32) -> String {
     let mhz = freq_hz / 1_000_000.0;
     format!("{mhz:.3}")
-}
-
-/// Estimate a robust spectral floor and top from a row of dB values.
-///
-/// Returns:
-/// - floor estimate from a low percentile
-/// - top estimate from a high percentile
-///
-/// This is more stable than using raw min/max because it ignores
-/// single-bin outliers and impulsive spikes.
-pub fn estimate_row_floor_and_top_db(row_db: &[f32]) -> Option<(f32, f32)> {
-    if row_db.is_empty() {
-        return None;
-    }
-
-    let mut values: Vec<f32> = row_db
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .collect();
-
-    if values.is_empty() {
-        return None;
-    }
-
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-
-    let n = values.len();
-    let floor_idx = ((n as f32) * 0.20) as usize;
-    let top_idx = ((n as f32) * 0.98) as usize;
-
-    let floor = values[floor_idx.min(n - 1)];
-    let top = values[top_idx.min(n - 1)];
-
-    Some((floor, top))
 }
