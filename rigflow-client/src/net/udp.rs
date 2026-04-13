@@ -10,10 +10,8 @@ use rigflow_core::{
 
 use crate::{
     ui::{
-        layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
+        layout::WATERFALL_IMAGE_WIDTH,
         spectrum_utils::update_spectrum_db,
-        state::UiState,
-        waterfall::draw_row_db,
     },
 };
 
@@ -48,7 +46,6 @@ pub fn handle_media_packet(
     jitter: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
-    ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
 ) {
     let Some(header) = parse_media_header(packet) else {
@@ -85,7 +82,6 @@ pub fn handle_media_packet(
                 payload,
                 waterfall_buffer,
                 spectrum_db,
-                ui_state,
             );
         }
 
@@ -168,7 +164,7 @@ fn decode_waterfall_row_db(payload: &[u8]) -> Option<Vec<f32>> {
     } else {
         None
     }
-
+}
 
 fn handle_waterfall_packet(
     payload_with_len: &[u8],
@@ -179,7 +175,7 @@ fn handle_waterfall_packet(
         return;
     }
 
-    // --- Extract payload length (big-endian u16)
+    // First 2 bytes are the waterfall payload length (big-endian u16).
     let payload_len =
         u16::from_be_bytes([payload_with_len[0], payload_with_len[1]]) as usize;
 
@@ -189,7 +185,7 @@ fn handle_waterfall_packet(
         return;
     }
 
-    // --- Decode f32 row
+    // Each spectral bin is one little-endian f32.
     if !payload.len().is_multiple_of(4) {
         return;
     }
@@ -209,28 +205,37 @@ fn handle_waterfall_packet(
         return;
     }
 
-    // --- DEBUG (temporary — very useful)
     let min_db = row_db.iter().copied().fold(f32::INFINITY, f32::min);
     let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
-    println!("WF row: min={:.1} max={:.1}", min_db, max_db);
+    println!(
+        "WF row: bins={} min={:.1} max={:.1}",
+        row_db.len(),
+        min_db,
+        max_db
+    );
 
-    // --- Update spectrum (now correct type)
     if let Ok(mut spectrum) = spectrum_db.lock() {
         update_spectrum_db(&mut spectrum, &row_db);
     }
 
-    // --- TEMP: crude visualization (just to verify)
+    // Temporary grayscale display just to verify correct decode.
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        // Map dB to simple grayscale for now
-        for x in 0..WATERFALL_IMAGE_WIDTH {
-            let idx = x * row_db.len() / WATERFALL_IMAGE_WIDTH;
-            let db = row_db[idx];
+        if !fb.is_empty() {
+            let len = fb.len();
+            let copy_len = len.saturating_sub(WATERFALL_IMAGE_WIDTH);
+            fb.copy_within(0..copy_len, WATERFALL_IMAGE_WIDTH);
 
-            let val = ((db + 100.0) * 2.0).clamp(0.0, 255.0) as u8;
-            let rgb = ((val as u32) << 16) | ((val as u32) << 8) | val;
+            for x in 0..WATERFALL_IMAGE_WIDTH {
+                let idx = x * row_db.len() / WATERFALL_IMAGE_WIDTH;
+                let db = row_db[idx];
 
-            fb[x] = rgb;
+                let val = ((db + 100.0) * 2.0).clamp(0.0, 255.0) as u8;
+                let rgb =
+                    ((val as u32) << 16) | ((val as u32) << 8) | (val as u32);
+
+                fb[x] = rgb;
+            }
         }
     }
-}}
+}
