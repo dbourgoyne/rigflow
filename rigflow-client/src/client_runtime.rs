@@ -19,11 +19,11 @@ use crate::{
             HEIGHT, SPECTRUM_DB_MIN, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
             WATERFALL_TOP, WIDTH,
         },
-        state::UiState,
         stats::ClientStatsLogger,
     },
     net::udp::{handle_media_packet, MediaPacketStats},
 };
+use crate::ui::state::UiState;
 
 /// UDP socket listen address for media plane (audio + waterfall)
 const LISTEN_ADDR: &str = "0.0.0.0:50000";

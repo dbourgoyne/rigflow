@@ -6,7 +6,6 @@ use crate::app::bands::visible_radio_bands;
 use crate::app::{
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
     layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
-    state::UiState,
 };
 use crate::app::om_bands::{
     visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
@@ -14,6 +13,7 @@ use crate::app::om_bands::{
     COLOR_OM_USB_PHONE_CW_RTTY_DATA,
 };
 use rigflow_core::dsp::modes::DemodMode;
+use crate::ui::state::UiState;
 
 /// Result of user interaction with the spectrum plot.
 ///

@@ -10,7 +10,7 @@ use eframe::NativeOptions;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::app::state::UiState;
+use crate::ui::state::UiState;
 use crate::client_runtime::start_media_runtime;
 use crate::ui::app::RigflowApp;
 use crate::net::control::ControlCommand;

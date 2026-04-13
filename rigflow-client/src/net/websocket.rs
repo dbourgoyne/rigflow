@@ -16,7 +16,7 @@ use tokio_tungstenite::{
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
 use rigflow_protocol::ServerMessage;
 
-use crate::app::state::UiState;
+use crate::ui::state::UiState;
 use crate::client_runtime::MediaCommand;
 use crate::net::control::ControlCommand;
 

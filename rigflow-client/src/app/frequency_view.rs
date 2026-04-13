@@ -1,4 +1,4 @@
-use crate::app::state::UiState;
+use crate::ui::state::UiState;
 
 /// Compute the visible frequency span (Hz) of the spectrum view.
 ///
