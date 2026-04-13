@@ -16,6 +16,7 @@ pub enum LicenseClass {
     Novice,
 }
 
+#[allow(dead_code)]
 /// Cycle forward through license classes (used for UI toggling).
 pub fn next_license(license: LicenseClass) -> LicenseClass {
     match license {
@@ -27,6 +28,7 @@ pub fn next_license(license: LicenseClass) -> LicenseClass {
     }
 }
 
+#[allow(dead_code)]
 /// Cycle backward through license classes.
 pub fn prev_license(license: LicenseClass) -> LicenseClass {
     match license {
