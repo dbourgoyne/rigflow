@@ -136,6 +136,7 @@ pub struct UiState {
     pub show_add_bookmark_dialog: bool,
     pub pending_bookmark_name: String,
     pub bookmark_status: String,
+    pub pending_apply_default_bookmark: bool,
 }
 
 impl Default for UiState {
@@ -200,6 +201,7 @@ impl Default for UiState {
 	    show_add_bookmark_dialog: false,
 	    pending_bookmark_name: String::new(),
 	    bookmark_status: String::new(),
+	    pending_apply_default_bookmark: false,
         }
     }
 }

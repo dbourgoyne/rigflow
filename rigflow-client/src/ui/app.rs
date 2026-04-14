@@ -915,6 +915,21 @@ impl eframe::App for RigflowApp {
 				ui.add_space(6.0);
 				ui.colored_label(egui::Color32::YELLOW, &snapshot.bookmark_status);
 			    }
+
+			    let auto_apply_changed = if let Ok(mut state) = self.state.lock() {
+				ui.checkbox(
+				    &mut state.auto_apply_default_bookmark_on_acquire,
+				    "Auto-apply default on radio acquire",
+				)
+				    .changed()
+			    } else {
+				false
+			    };
+
+			    if auto_apply_changed {
+				self.save_bookmarks_to_current_operator();
+			    }
+
 			});
 		    });
 		
@@ -1293,6 +1308,21 @@ impl eframe::App for RigflowApp {
 			self.save_current_as_bookmark();
 		    }
 		});
+	}
+
+	let default_bookmark_to_apply = {
+	    let mut state = self.state.lock().unwrap();
+
+	    if state.pending_apply_default_bookmark {
+		state.pending_apply_default_bookmark = false;
+		state.default_bookmark_id.clone()
+	    } else {
+		None
+	    }
+	};
+
+	if let Some(bookmark_id) = default_bookmark_to_apply {
+	    self.apply_bookmark(&bookmark_id);
 	}
 
         ctx.request_repaint();
