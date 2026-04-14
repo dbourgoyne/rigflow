@@ -7,6 +7,7 @@ pub mod store;
 pub use bootstrap::{
     apply_app_state_to_ui_state,
     apply_operator_settings_to_ui_state,
+    apply_ui_state_to_operator_settings,
     load_initial_ui_state,
 };
 pub use error::PersistenceError;

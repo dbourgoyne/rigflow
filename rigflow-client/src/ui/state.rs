@@ -125,6 +125,17 @@ pub struct UiState {
     pub pending_operator_license: Option<crate::ui::om_bands::LicenseClass>,
     pub persistence_status: String,
 
+    // ---------------------------------------------------------------------
+    // Bookmarks
+    // ---------------------------------------------------------------------
+    pub bookmarks: Vec<crate::persistence::BookmarkFile>,
+    pub selected_bookmark_id: Option<String>,
+    pub default_bookmark_id: Option<String>,
+    pub auto_apply_default_bookmark_on_acquire: bool,
+
+    pub show_add_bookmark_dialog: bool,
+    pub pending_bookmark_name: String,
+    pub bookmark_status: String,
 }
 
 impl Default for UiState {
@@ -179,6 +190,16 @@ impl Default for UiState {
 	    pending_operator_id: String::new(),
 	    pending_operator_license: None,
 	    persistence_status: String::new(),
+
+	    // --- Bookmark defaults -------------------------------------
+	    bookmarks: Vec::new(),
+	    selected_bookmark_id: None,
+	    default_bookmark_id: None,
+	    auto_apply_default_bookmark_on_acquire: false,
+
+	    show_add_bookmark_dialog: false,
+	    pending_bookmark_name: String::new(),
+	    bookmark_status: String::new(),
         }
     }
 }

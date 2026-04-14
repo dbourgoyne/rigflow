@@ -72,15 +72,39 @@ pub fn apply_operator_settings_to_ui_state(
     state.selected_license = operator.selected_license;
     state.rigflow_server_ip = operator.server_ip.clone();
 
-    // Bookmark-driven display defaults:
-    //
-    // We are *not* auto-applying bookmarks yet in this step.
-    // So we do not touch:
-    // - target frequency
-    // - demod mode
-    // - sideband
-    //
-    // We also do not apply bookmark-owned display settings here.
-    // That should happen only when a bookmark is explicitly applied,
-    // or later when "auto-apply default bookmark on acquire" is wired.
+    state.default_bookmark_id = operator.default_bookmark_id.clone();
+    state.auto_apply_default_bookmark_on_acquire =
+        operator.auto_apply_default_bookmark_on_acquire;
+
+    state.bookmarks = operator.bookmarks.clone();
+
+    // Keep selection stable if possible, otherwise clear it.
+    let selected_still_exists = state
+        .selected_bookmark_id
+        .as_ref()
+        .map(|selected_id| {
+            state.bookmarks.iter().any(|bookmark| &bookmark.id == selected_id)
+        })
+        .unwrap_or(false);
+
+    if !selected_still_exists {
+        state.selected_bookmark_id = state.default_bookmark_id.clone();
+    }
+
+    state.bookmark_status.clear();
+}
+
+pub fn apply_ui_state_to_operator_settings(
+    state: &UiState,
+    operator: &mut OperatorSettingsFile,
+) {
+    operator.operator_id = state.operator_id.clone();
+    operator.selected_license = state.selected_license;
+    operator.server_ip = state.rigflow_server_ip.clone();
+
+    operator.default_bookmark_id = state.default_bookmark_id.clone();
+    operator.auto_apply_default_bookmark_on_acquire =
+        state.auto_apply_default_bookmark_on_acquire;
+
+    operator.bookmarks = state.bookmarks.clone();
 }
