@@ -1104,6 +1104,22 @@ impl eframe::App for RigflowApp {
 
 				ui.add_space(8.0);
 
+				if let Some(selected_id) = &snapshot.selected_bookmark_id {
+				    if let Some(bookmark) = snapshot.bookmarks.iter().find(|b| &b.id == selected_id) {
+					if let Some(notes) = &bookmark.notes {
+					    if !notes.trim().is_empty() {
+						ui.add_space(8.0);
+						ui.label("Notes:");
+						ui.group(|ui| {
+						    ui.label(notes);
+						});
+					    }
+					}
+				    }
+				}
+
+				ui.add_space(8.0);
+
 				ui.horizontal(|ui| {
 				    let selected_id = snapshot.selected_bookmark_id.clone();
 
@@ -1136,19 +1152,6 @@ impl eframe::App for RigflowApp {
 
 			    ui.add_space(8.0);
 
-			    if let Some(selected_id) = &snapshot.selected_bookmark_id {
-				if let Some(bookmark) = snapshot.bookmarks.iter().find(|b| &b.id == selected_id) {
-				    if let Some(notes) = &bookmark.notes {
-					if !notes.trim().is_empty() {
-					    ui.add_space(8.0);
-					    ui.label("Notes:");
-					    ui.group(|ui| {
-						ui.label(notes);
-					    });
-					}
-				    }
-				}
-			    }
 
 			    if ui.button("Save Current as Bookmark").clicked() {
 				if let Ok(mut state) = self.state.lock() {
