@@ -615,99 +615,12 @@ impl RigflowApp {
         }
     }
     // -------- Start extraction -----------------
-    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-	let mut center_delta_hz: f32 = 0.0;
-
-	ctx.input(|input| {
-            let step = if input.modifiers.shift {
-		1_000_000.0
-            } else {
-		25_000.0
-            };
-
-            if input.key_pressed(egui::Key::ArrowUp) {
-		center_delta_hz += step;
-            }
-
-            if input.key_pressed(egui::Key::ArrowDown) {
-		center_delta_hz -= step;
-            }
-	});
-
-	if center_delta_hz != 0.0 {
-            let mut send_center: Option<u64> = None;
-
-            if let Ok(mut state) = self.state.lock() {
-		let new_center = (state.center_freq_hz + center_delta_hz).max(0.0);
-		state.center_freq_hz = new_center;
-
-		if state.radio_acquired {
-                    send_center = Some(new_center as u64);
-		}
-            }
-
-            if let Some(hz) = send_center {
-		let _ = self.ws_cmd_tx.send(
-                    ControlCommand::LegacyClientMessage(
-			rigflow_protocol::ClientMessage::SetCenterFrequency {
-                            center_freq_hz: hz as f32,
-			},
-                    ),
-		);
-            }
-	}
-
-	let mut target_delta_hz: f32 = 0.0;
-
-	ctx.input(|input| {
-            let step = if input.modifiers.shift { 1_000.0 } else { 10.0 };
-
-            if input.key_pressed(egui::Key::ArrowRight) {
-		target_delta_hz += step;
-            }
-
-            if input.key_pressed(egui::Key::ArrowLeft) {
-		target_delta_hz -= step;
-            }
-	});
-
-	if target_delta_hz != 0.0 {
-            let mut send_target: Option<u64> = None;
-
-            if let Ok(mut state) = self.state.lock() {
-		let new_target = (state.target_freq_hz + target_delta_hz).max(0.0);
-		state.target_freq_hz = new_target;
-
-		if state.radio_acquired {
-                    send_target = Some(new_target as u64);
-		}
-            }
-
-            if let Some(hz) = send_target {
-		let _ = self.ws_cmd_tx.send(
-                    ControlCommand::LegacyClientMessage(
-			rigflow_protocol::ClientMessage::SetFrequency {
-                            target_freq_hz: hz as f32,
-			},
-                    ),
-		);
-            }
-	}
-    }
-    
-    fn snapshot_state(&self) -> UiState {
-	let state = self.state.lock().unwrap();
-	state.clone()
-    }
-}
-
-impl eframe::App for RigflowApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
-	let snapshot = self.snapshot_state();
-	let config_mode = !snapshot.server_connected;
-
-	self.handle_keyboard_shortcuts(ctx);
+    fn draw_left_panel(
+	&mut self,
+	ctx: &egui::Context,
+	snapshot: &UiState,
+	config_mode: bool,
+    ) {
 
         egui::SidePanel::left("left_panel")
             .resizable(true)
@@ -902,7 +815,7 @@ impl eframe::App for RigflowApp {
                                         if let Ok(mut state) = self.state.lock() {
                                             state.server_status =
                                                 "connect failed: missing server IP"
-                                                    .to_string();
+                                                .to_string();
                                         }
                                     } else {
                                         let _ = self.ws_cmd_tx.send(
@@ -1070,7 +983,7 @@ impl eframe::App for RigflowApp {
                                         &mut state.display_zoom,
                                         1.0..=4.0,
                                     )
-                                    .text("Zoom"),
+					.text("Zoom"),
                                 );
 
                                 ui.checkbox(
@@ -1087,7 +1000,7 @@ impl eframe::App for RigflowApp {
                                             &mut state.display_top_db,
                                             -120.0..=20.0,
                                         )
-                                        .text("Top dB"),
+                                            .text("Top dB"),
                                     );
 
                                     ui.add(
@@ -1095,7 +1008,7 @@ impl eframe::App for RigflowApp {
                                             &mut state.display_range_db,
                                             10.0..=120.0,
                                         )
-                                        .text("Range dB"),
+                                            .text("Range dB"),
                                     );
                                 });
                             } else {
@@ -1230,11 +1143,105 @@ impl eframe::App for RigflowApp {
 			    if auto_apply_changed {
 				self.save_bookmarks_to_current_operator();
 			    }
-
 			});
 		    });
-		
             });
+    }
+    
+    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+	let mut center_delta_hz: f32 = 0.0;
+
+	ctx.input(|input| {
+            let step = if input.modifiers.shift {
+		1_000_000.0
+            } else {
+		25_000.0
+            };
+
+            if input.key_pressed(egui::Key::ArrowUp) {
+		center_delta_hz += step;
+            }
+
+            if input.key_pressed(egui::Key::ArrowDown) {
+		center_delta_hz -= step;
+            }
+	});
+
+	if center_delta_hz != 0.0 {
+            let mut send_center: Option<u64> = None;
+
+            if let Ok(mut state) = self.state.lock() {
+		let new_center = (state.center_freq_hz + center_delta_hz).max(0.0);
+		state.center_freq_hz = new_center;
+
+		if state.radio_acquired {
+                    send_center = Some(new_center as u64);
+		}
+            }
+
+            if let Some(hz) = send_center {
+		let _ = self.ws_cmd_tx.send(
+                    ControlCommand::LegacyClientMessage(
+			rigflow_protocol::ClientMessage::SetCenterFrequency {
+                            center_freq_hz: hz as f32,
+			},
+                    ),
+		);
+            }
+	}
+
+	let mut target_delta_hz: f32 = 0.0;
+
+	ctx.input(|input| {
+            let step = if input.modifiers.shift { 1_000.0 } else { 10.0 };
+
+            if input.key_pressed(egui::Key::ArrowRight) {
+		target_delta_hz += step;
+            }
+
+            if input.key_pressed(egui::Key::ArrowLeft) {
+		target_delta_hz -= step;
+            }
+	});
+
+	if target_delta_hz != 0.0 {
+            let mut send_target: Option<u64> = None;
+
+            if let Ok(mut state) = self.state.lock() {
+		let new_target = (state.target_freq_hz + target_delta_hz).max(0.0);
+		state.target_freq_hz = new_target;
+
+		if state.radio_acquired {
+                    send_target = Some(new_target as u64);
+		}
+            }
+
+            if let Some(hz) = send_target {
+		let _ = self.ws_cmd_tx.send(
+                    ControlCommand::LegacyClientMessage(
+			rigflow_protocol::ClientMessage::SetFrequency {
+                            target_freq_hz: hz as f32,
+			},
+                    ),
+		);
+            }
+	}
+    }
+    
+    fn snapshot_state(&self) -> UiState {
+	let state = self.state.lock().unwrap();
+	state.clone()
+    }
+}
+
+impl eframe::App for RigflowApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+
+	let snapshot = self.snapshot_state();
+	let config_mode = !snapshot.server_connected;
+
+	self.handle_keyboard_shortcuts(ctx);
+	self.draw_left_panel(ctx, &snapshot, config_mode);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::NONE
