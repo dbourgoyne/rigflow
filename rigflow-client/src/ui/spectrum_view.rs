@@ -48,6 +48,7 @@ pub fn draw_spectrum_plot(
     }
 
     let spectrum_len = spectrum_db.len();
+    let pointer_pos = response.hover_pos();
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, spectrum_len, state);
@@ -55,6 +56,7 @@ pub fn draw_spectrum_plot(
     draw_om_overlays(&painter, plot_rect, spectrum_len, state);
     draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
+    draw_bookmark_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
     draw_frequency_markers(&painter, plot_rect, spectrum_len, state);
 
     painter.rect_stroke(
@@ -568,6 +570,191 @@ fn draw_om_overlays(
                 Color32::from_rgba_premultiplied(235, 235, 235, 170),
             );
         }
+    }
+}
+
+fn draw_bookmark_overlays(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    spectrum_len: usize,
+    state: &UiState,
+    pointer_pos: Option<Pos2>,
+) {
+    if state.bookmarks.is_empty() {
+        return;
+    }
+
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return;
+    };
+
+    if right_hz <= left_hz {
+        return;
+    }
+
+    // Position bookmark labels just above the OM strip.
+    let band_strip_height = 14.0;
+    let om_strip_height = band_strip_height / 3.0;
+    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let om_y1 = band_y0 - 1.0;
+    let om_y0 = om_y1 - om_strip_height;
+
+    let bookmark_y1 = om_y0 - 4.0;
+    let bookmark_height = 18.0;
+    let bookmark_y0 = bookmark_y1 - bookmark_height;
+
+    let font_id = FontId::monospace(10.0);
+    let text_color = Color32::from_rgb(230, 230, 210);
+    let border_color = Color32::from_rgba_premultiplied(255, 220, 120, 180);
+    let fill_color = Color32::from_rgba_premultiplied(255, 220, 120, 28);
+
+    let mut hovered_bookmark: Option<(&crate::persistence::BookmarkFile, Rect)> = None;
+
+    for bookmark in &state.bookmarks {
+        let Some(center_x) =
+            freq_to_plot_x_egui(bookmark.frequency_hz, plot_rect, spectrum_len, state)
+        else {
+            continue;
+        };
+
+        if !center_x.is_finite() {
+            continue;
+        }
+
+        let title = bookmark.name.trim();
+        if title.is_empty() {
+            continue;
+        }
+
+        let galley = painter.layout_no_wrap(
+            title.to_string(),
+            font_id.clone(),
+            text_color,
+        );
+
+        let padding_x = 6.0;
+        let rect_width = galley.size().x + padding_x * 2.0;
+
+        let mut x0 = center_x - rect_width * 0.5;
+        let mut x1 = center_x + rect_width * 0.5;
+
+        // Clamp horizontally into the plot region.
+        if x0 < plot_rect.left() {
+            let delta = plot_rect.left() - x0;
+            x0 += delta;
+            x1 += delta;
+        }
+        if x1 > plot_rect.right() {
+            let delta = x1 - plot_rect.right();
+            x0 -= delta;
+            x1 -= delta;
+        }
+
+        let rect = Rect::from_min_max(
+            Pos2::new(x0, bookmark_y0),
+            Pos2::new(x1, bookmark_y1),
+        );
+
+        painter.rect_filled(rect, 4.0, fill_color);
+        painter.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(1.0, border_color),
+            egui::StrokeKind::Inside,
+        );
+
+        painter.galley(
+            Pos2::new(
+                rect.center().x - galley.size().x * 0.5,
+                rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            text_color,
+        );
+
+        if let Some(pointer) = pointer_pos {
+            if rect.contains(pointer) {
+                hovered_bookmark = Some((bookmark, rect));
+            }
+        }
+    }
+
+    if let Some((bookmark, _rect)) = hovered_bookmark {
+        draw_bookmark_tooltip(painter, bookmark, pointer_pos);
+    }
+}
+
+fn draw_bookmark_tooltip(
+    painter: &egui::Painter,
+    bookmark: &crate::persistence::BookmarkFile,
+    pointer_pos: Option<Pos2>,
+) {
+    let Some(pointer_pos) = pointer_pos else {
+        return;
+    };
+
+    let mut lines = vec![
+        bookmark.name.clone(),
+        format!("{} MHz", format_mhz(bookmark.frequency_hz)),
+    ];
+
+    if let Some(notes) = &bookmark.notes {
+        let trimmed = notes.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    let font_id = FontId::monospace(10.0);
+    let text_color = Color32::from_rgb(235, 235, 235);
+    let border_color = Color32::from_rgba_premultiplied(255, 255, 255, 80);
+    let fill_color = Color32::from_rgba_premultiplied(28, 28, 32, 235);
+
+    let padding = egui::vec2(8.0, 6.0);
+    let line_spacing = 2.0;
+
+    let galleys: Vec<_> = lines
+        .iter()
+        .map(|line| painter.layout_no_wrap(line.clone(), font_id.clone(), text_color))
+        .collect();
+
+    let max_width = galleys
+        .iter()
+        .map(|g| g.size().x)
+        .fold(0.0_f32, f32::max);
+
+    let total_text_height = galleys
+        .iter()
+        .map(|g| g.size().y)
+        .sum::<f32>()
+        + line_spacing * (galleys.len().saturating_sub(1) as f32);
+
+    let bubble_size = egui::vec2(
+        max_width + padding.x * 2.0,
+        total_text_height + padding.y * 2.0,
+    );
+
+    let bubble_rect = Rect::from_min_size(
+        Pos2::new(pointer_pos.x + 12.0, pointer_pos.y + 12.0),
+        bubble_size,
+    );
+
+    painter.rect_filled(bubble_rect, 6.0, fill_color);
+    painter.rect_stroke(
+        bubble_rect,
+        6.0,
+        Stroke::new(1.0, border_color),
+        egui::StrokeKind::Inside,
+    );
+
+    let mut y = bubble_rect.top() + padding.y;
+    for galley in galleys {
+        painter.galley(
+            Pos2::new(bubble_rect.left() + padding.x, y),
+            galley.clone(),
+            text_color,
+        );
+        y += galley.size().y + line_spacing;
     }
 }
 
