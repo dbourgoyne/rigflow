@@ -9,30 +9,37 @@ use rigflow_core::{
 };
 
 use crate::{
-    ui::layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
-    ui::spectrum_utils::update_spectrum_db,
-    ui::waterfall::draw_row,
+    ui::{
+        layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
+        spectrum_utils::{estimate_row_floor_and_top_db, update_spectrum_db},
+        state::UiState,
+        waterfall::draw_row_db,
+    },
 };
 
-/// Runtime statistics for incoming media packets.
+/// Smoothing factor for adaptive waterfall normalization.
 ///
-/// Used for:
-/// - debugging packet loss / reordering
-/// - understanding network behavior
+/// Lower values react more slowly and look more stable.
+const ADAPTIVE_NORMALIZATION_ALPHA: f32 = 0.02;
+
+/// Extra headroom above the estimated top so strong peaks do not pin
+/// the display ceiling too aggressively.
+const ADAPTIVE_TOP_HEADROOM_DB: f32 = 3.0;
+
+/// Clamp the automatically chosen visible range to something sane.
+const ADAPTIVE_MIN_RANGE_DB: f32 = 30.0;
+const ADAPTIVE_MAX_RANGE_DB: f32 = 100.0;
+
+/// Runtime statistics for incoming media packets.
 #[derive(Debug, Default)]
 pub struct MediaPacketStats {
     pub incoming_packets: u64,
-
     pub audio_packets: u64,
     pub waterfall_packets: u64,
-
     pub dropped_audio_packets: u64,
     pub dropped_waterfall_packets: u64,
-
     pub late_audio_packets: u64,
     pub late_waterfall_packets: u64,
-
-    /// Last seen sequence number for each stream
     last_audio_sequence: Option<u32>,
     last_waterfall_sequence: Option<u32>,
 }
@@ -43,30 +50,20 @@ impl MediaPacketStats {
     }
 }
 
-/// Internal stream discriminator used for stats tracking.
 enum StreamKind {
     Audio,
     Waterfall,
 }
 
-/// Entry point for handling a single UDP media packet.
-///
-/// Responsibilities:
-/// - parse and validate header
-/// - update packet statistics
-/// - dispatch to audio or waterfall pipeline
-///
-/// This function is on the hot path—keep it simple and predictable.
 #[allow(clippy::too_many_arguments)]
 pub fn handle_media_packet(
     packet: &[u8],
     jitter: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
+    ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
 ) {
-    // --- Header parsing ---------------------------------------------------
-
     let Some(header) = parse_media_header(packet) else {
         return;
     };
@@ -75,26 +72,17 @@ pub fn handle_media_packet(
         return;
     }
 
-    // Payload begins after fixed header (16 bytes)
     let payload = &packet[16..];
-
-    // --- Stats: total packet count ---------------------------------------
 
     if let Ok(mut s) = stats.lock() {
         s.incoming_packets += 1;
     }
 
-    // --- Dispatch by stream type -----------------------------------------
-
     match header.stream_type {
         STREAM_TYPE_AUDIO => {
             if let Ok(mut s) = stats.lock() {
                 s.audio_packets += 1;
-                update_sequence_stats(
-                    &mut s,
-                    StreamKind::Audio,
-                    header.sequence,
-                );
+                update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
             handle_audio_packet(payload, header.sequence, jitter);
@@ -103,30 +91,21 @@ pub fn handle_media_packet(
         STREAM_TYPE_WATERFALL => {
             if let Ok(mut s) = stats.lock() {
                 s.waterfall_packets += 1;
-                update_sequence_stats(
-                    &mut s,
-                    StreamKind::Waterfall,
-                    header.sequence,
-                );
+                update_sequence_stats(&mut s, StreamKind::Waterfall, header.sequence);
             }
 
             handle_waterfall_packet(
                 payload,
                 waterfall_buffer,
                 spectrum_db,
+		ui_state,
             );
         }
 
-        // Unknown stream type → ignore
         _ => {}
     }
 }
 
-/// Update packet sequence tracking and loss statistics.
-///
-/// Detects:
-/// - dropped packets (sequence gaps)
-/// - late/out-of-order packets
 fn update_sequence_stats(
     stats: &mut MediaPacketStats,
     kind: StreamKind,
@@ -164,22 +143,15 @@ fn update_sequence_stats(
     }
 }
 
-/// Handle an audio packet.
-///
-/// Responsibilities:
-/// - decode i16 PCM → f32
-/// - push into jitter buffer
 fn handle_audio_packet(
     payload: &[u8],
     sequence: u32,
     jitter: &Arc<Mutex<JitterBuffer>>,
 ) {
-    // Must be 16-bit samples
     if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
     }
 
-    // Convert LE i16 → normalized f32
     let mut samples = Vec::with_capacity(payload.len() / 2);
 
     for chunk in payload.chunks_exact(2) {
@@ -192,38 +164,110 @@ fn handle_audio_packet(
     }
 }
 
-/// Handle a waterfall packet.
-///
-/// Responsibilities:
-/// - update spectrum plot
-/// - append row to waterfall buffer
-///
-/// Note: UI state is cloned once to avoid holding lock during rendering work.
+fn update_adaptive_waterfall_display(
+    row_db: &[f32],
+    ui_state: &Arc<Mutex<UiState>>,
+) {
+    let Some((row_floor_db, row_top_db)) =
+        estimate_row_floor_and_top_db(row_db)
+    else {
+        return;
+    };
+
+    if let Ok(mut state) = ui_state.lock() {
+        if !state.adaptive_waterfall_normalization {
+            return;
+        }
+
+        let alpha = ADAPTIVE_NORMALIZATION_ALPHA;
+
+        state.adaptive_top_db_estimate =
+            (1.0 - alpha) * state.adaptive_top_db_estimate
+                + alpha * row_top_db;
+
+        state.adaptive_floor_db_estimate =
+            (1.0 - alpha) * state.adaptive_floor_db_estimate
+                + alpha * row_floor_db;
+
+        state.display_top_db =
+            state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
+
+        state.display_range_db = (state.display_top_db
+            - state.adaptive_floor_db_estimate)
+            .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
+    }
+}
+
 fn handle_waterfall_packet(
-    payload: &[u8],
+    payload_with_len: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
+    ui_state: &Arc<Mutex<UiState>>,
 ) {
-    if payload.is_empty() {
+    if payload_with_len.len() < 2 {
         return;
     }
 
-    let row = payload;
+    // First 2 bytes are the waterfall payload length (big-endian u16).
+    let payload_len =
+        u16::from_be_bytes([payload_with_len[0], payload_with_len[1]]) as usize;
 
-    // --- Update spectrum --------------------------------------------------
+    let payload = &payload_with_len[2..];
 
-    if let Ok(mut spectrum) = spectrum_db.lock() {
-        update_spectrum_db(&mut spectrum, row);
+    if payload.len() != payload_len {
+        return;
     }
 
-    // --- Update waterfall buffer -----------------------------------------
+    // Each spectral bin is one little-endian f32.
+    if !payload.len().is_multiple_of(4) {
+        return;
+    }
 
+    let mut row_db = Vec::with_capacity(payload.len() / 4);
+
+    for chunk in payload.chunks_exact(4) {
+        row_db.push(f32::from_le_bytes([
+            chunk[0],
+            chunk[1],
+            chunk[2],
+            chunk[3],
+        ]));
+    }
+
+    if !row_db.iter().all(|v| v.is_finite()) {
+        return;
+    }
+
+    // Update smoothed spectrum trace.
+    if let Ok(mut spectrum) = spectrum_db.lock() {
+        update_spectrum_db(&mut spectrum, &row_db);
+    }
+
+    // If adaptive mode is enabled, update the display controls from
+    // the incoming spectral row using slow smoothing.
+    update_adaptive_waterfall_display(&row_db, ui_state);
+
+    // Read current display mapping controls.
+    let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
+	(
+            state.display_top_db,
+            state.display_range_db,
+            state.display_zoom,
+	)
+    } else {
+	(-35.0, 70.0, 1.0)
+    };
+
+    // Update waterfall image buffer using client-side dB mapping.
     if let Ok(mut fb) = waterfall_buffer.lock() {
-        draw_row(
+        draw_row_db(
             &mut fb,
             WATERFALL_IMAGE_WIDTH,
             WATERFALL_IMAGE_HEIGHT,
-            row,
+            &row_db,
+            top_db,
+            range_db,
+	    zoom,
         );
     }
 }

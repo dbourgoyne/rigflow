@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
+use log::{debug,error,info};
 
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
@@ -219,7 +220,7 @@ impl RadioManager {
             radio.descriptor.clone()
         };
 
-        println!("[radio-manager] acquire requested for {}", radio_id.0);
+        info!("[radio-manager] acquire requested for {}", radio_id.0);
 
         let (worker_tx, worker_rx) = mpsc::channel(64);
         let (status_tx, status_rx) = watch::channel(WorkerStatus::Starting);
@@ -236,7 +237,7 @@ impl RadioManager {
             startup_tx,
         ));
 
-        println!("[radio-manager] worker spawned for {}", radio_id.0);
+        debug!("[radio-manager] worker spawned for {}", radio_id.0);
 
         {
             let mut radios = self.radios.write().await;
@@ -257,7 +258,7 @@ impl RadioManager {
 
         match startup {
             Ok(Ok(WorkerStartResult::Ready(_ready))) => {
-                println!("[radio-manager] worker reported READY for {}", radio_id.0);
+                debug!("[radio-manager] worker reported READY for {}", radio_id.0);
 
                 let mut radios = self.radios.write().await;
                 let radio = radios
@@ -273,7 +274,7 @@ impl RadioManager {
                 })
             }
             Ok(Ok(WorkerStartResult::Failed(reason))) => {
-                println!(
+                error!(
                     "[radio-manager] worker reported FAILED for {}: {}",
                     radio_id.0, reason
                 );
@@ -283,7 +284,7 @@ impl RadioManager {
             Ok(Err(_)) => {
                 let reason = "worker exited before startup completed".to_string();
 
-                println!(
+                info!(
                     "[radio-manager] worker exited before READY for {}",
                     radio_id.0
                 );
@@ -294,7 +295,7 @@ impl RadioManager {
             Err(_) => {
                 let reason = "startup timed out".to_string();
 
-                println!(
+                info!(
                     "[radio-manager] worker startup TIMED OUT for {}",
                     radio_id.0
                 );
@@ -334,7 +335,7 @@ impl RadioManager {
         lease.last_renewed_at = now;
         lease.expires_at = now + self.config.lease_ttl;
 
-        println!(
+        info!(
             "LEASE RENEWED: client_id={:?} radio_id={:?} lease_id={:?}",
             client_id, radio_id, lease_id
         );
@@ -486,7 +487,7 @@ impl RadioManager {
             })
             .await;
 
-        println!(
+        info!(
             "[radio-manager] stopping runtime for radio, reason={:?}",
             reason
         );
@@ -495,7 +496,7 @@ impl RadioManager {
             let _ = stop_tx.send(());
         }
 
-        println!("[radio-manager] worker join completed cleanly");
+        debug!("[radio-manager] worker join completed cleanly");
 
         match tokio::time::timeout(shutdown_timeout, runtime.join_handle).await {
             Ok(Ok(WorkerExit::Clean { .. })) => Ok(()),

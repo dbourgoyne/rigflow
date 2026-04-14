@@ -6,6 +6,7 @@ use axum::{
     response::Response,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
+use log::{debug, info};
 use tokio::sync::mpsc;
 
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
@@ -339,7 +340,7 @@ async fn handle_radio_message(
                 .saturating_duration_since(std::time::Instant::now())
                 .as_millis() as u64;
 
-            println!(
+            info!(
                 "radio acquired: client_id={:?} radio_id={:?} lease_id={:?}",
                 session.client_id,
                 acquire_result.radio_id,
@@ -616,7 +617,7 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         ssb_pitch_hz,
     } = msg
     {
-        println!(
+        debug!(
             "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={}",
             radio_id.0,
             center_freq_hz,
@@ -644,7 +645,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         ssb_pitch_hz,
     } = msg
     {
-        println!(
+        info!(
             "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?}",
             radio_id.0,
             center_freq_hz,

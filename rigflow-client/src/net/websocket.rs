@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use log::{debug, error, info};
+
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 
@@ -63,7 +65,7 @@ pub async fn websocket_control_task(
                         let renew = ClientRadioMessage::RenewLease;
                         let text = serde_json::to_string(&renew)?;
 
-                        println!("CLIENT sending RenewLease");
+                        info!("CLIENT sending RenewLease");
 
                         write.send(Message::Text(text.into())).await?;
                     }
@@ -114,7 +116,7 @@ pub async fn websocket_control_task(
                             };
 
                             let text = serde_json::to_string(&acquire)?;
-                            println!("CLIENT sending AcquireRadio: {}", text);
+                            info!("CLIENT sending AcquireRadio: {}", text);
 
                             write.send(Message::Text(text.into())).await?;
                         }
@@ -125,7 +127,7 @@ pub async fn websocket_control_task(
                             let msg = ClientRadioMessage::ReleaseRadio;
                             let text = serde_json::to_string(&msg)?;
 
-                            println!("CLIENT sending ReleaseRadio");
+                            info!("CLIENT sending ReleaseRadio");
 
                             write.send(Message::Text(text.into())).await?;
                         }
@@ -142,7 +144,7 @@ pub async fn websocket_control_task(
                         };
 
                         let ws_url = format!("ws://{}:{}/ws", server_ip, ws_port);
-                        println!("CLIENT connecting to {}", ws_url);
+                        info!("CLIENT connecting to {}", ws_url);
 
                         match tokio_tungstenite::connect_async(&ws_url).await {
                             Ok((ws_stream, _)) => {
@@ -176,7 +178,7 @@ pub async fn websocket_control_task(
                                     let list_msg = ClientRadioMessage::ListRadios;
                                     let text = serde_json::to_string(&list_msg)?;
 
-                                    println!("CLIENT sending: {}", text);
+                                    debug!("CLIENT sending: {}", text);
 
                                     write.send(Message::Text(text.into())).await?;
                                 }
@@ -191,7 +193,7 @@ pub async fn websocket_control_task(
                     }
 
                     Some(ControlCommand::Disconnect) => {
-                        println!("CLIENT disconnecting");
+                        info!("CLIENT disconnecting");
 
                         if let Some(mut write) = write_opt.take() {
                             let _ = write.close().await;
@@ -209,11 +211,11 @@ pub async fn websocket_control_task(
                     }
 
                     Some(ControlCommand::LegacyClientMessage(cmd)) => {
-                        println!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
+                        info!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
 
                         if let Some(write) = write_opt.as_mut() {
                             let text = serde_json::to_string(&cmd)?;
-                            println!("WEBSOCKET sending text: {}", text);
+                            info!("WEBSOCKET sending text: {}", text);
 
                             write.send(Message::Text(text.into())).await?;
                         }
@@ -236,7 +238,7 @@ pub async fn websocket_control_task(
                         if let Ok(radio_msg) =
                             serde_json::from_str::<ServerRadioMessage>(&text)
                         {
-                            println!("CLIENT got radio message: {:?}", radio_msg);
+                            info!("CLIENT got radio message: {:?}", radio_msg);
 
                             if let Some(outgoing) = apply_radio_server_message(
                                 radio_msg,
@@ -244,7 +246,7 @@ pub async fn websocket_control_task(
                                 &audio_session_generation,
                             ) {
                                 let text = serde_json::to_string(&outgoing)?;
-                                println!("CLIENT sending radio message: {}", text);
+                                info!("CLIENT sending radio message: {}", text);
 
                                 if let Some(write) = write_opt.as_mut() {
                                     write.send(Message::Text(text.into())).await?;
@@ -257,14 +259,14 @@ pub async fn websocket_control_task(
                             let mut state = ui_state.lock().unwrap();
                             state.runtime_error = format!("error: {}", message);
                         } else {
-                            println!("CLIENT unknown message: {}", text);
+                            info!("CLIENT unknown message: {}", text);
                         }
                     }
 
                     Some(Ok(_)) => {}
 
                     Some(Err(error)) => {
-                        println!("CLIENT websocket error: {}", error);
+                        error!("CLIENT websocket error: {}", error);
 
                         write_opt = None;
                         read_opt = None;
@@ -279,7 +281,7 @@ pub async fn websocket_control_task(
                     }
 
                     None => {
-                        println!("CLIENT websocket closed");
+                        debug!("CLIENT websocket closed");
 
                         write_opt = None;
                         read_opt = None;

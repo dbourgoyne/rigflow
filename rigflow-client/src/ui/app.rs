@@ -1,19 +1,22 @@
 use std::sync::{Arc, Mutex};
 
+use log::warn;
 use eframe::egui;
 use tokio::sync::mpsc;
 
 use crate::net::control::ControlCommand;
 use crate::ui::{
-    spectrum_view::{
-	draw_spectrum_plot, x_frac_to_frequency_hz, SpectrumInteraction,
-    },
     layout::{
-	LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH,
+        LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH,
     },
     om_bands::LicenseClass,
+    spectrum_view::{
+        draw_spectrum_plot, x_frac_to_frequency_hz, zoomed_visible_freq_range_hz,
+        SpectrumInteraction,
+    },
     state::UiState,
 };
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -22,7 +25,6 @@ pub struct RigflowApp {
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
     pub waterfall_texture: Option<egui::TextureHandle>,
 }
-use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 impl RigflowApp {
     pub fn new(
@@ -40,11 +42,6 @@ impl RigflowApp {
         }
     }
 
-    /// Upload the current waterfall pixel buffer into an egui texture.
-    ///
-    /// The media thread maintains the CPU-side pixel buffer as packed RGB
-    /// values. Each frame, the UI converts that into an egui `ColorImage`
-    /// and either updates the existing texture or creates it on first use.
     fn update_waterfall_texture(
         &mut self,
         ctx: &egui::Context,
@@ -57,7 +54,7 @@ impl RigflowApp {
         };
 
         if pixels.len() != wf_width * wf_height {
-            println!(
+            warn!(
                 "waterfall texture size mismatch: pixels={} expected={}",
                 pixels.len(),
                 wf_width * wf_height
@@ -94,22 +91,15 @@ impl RigflowApp {
 
 impl eframe::App for RigflowApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Snapshot shared UI state once at the start of the frame so most UI
-        // rendering can read without repeatedly holding the mutex.
         let snapshot = {
             let state = self.state.lock().unwrap();
             state.clone()
         };
 
-        // --- Keyboard center-frequency tuning --------------------------------
         let mut center_delta_hz: f32 = 0.0;
 
         ctx.input(|input| {
-            let step = if input.modifiers.shift {
-                1_000_000.0 // large step (1 MHz)
-            } else {
-                25_000.0 // small step (25 kHz)
-            };
+            let step = if input.modifiers.shift { 1_000_000.0 } else { 25_000.0 };
 
             if input.key_pressed(egui::Key::ArrowUp) {
                 center_delta_hz += step;
@@ -143,15 +133,10 @@ impl eframe::App for RigflowApp {
             }
         }
 
-        // --- Keyboard target-frequency tuning --------------------------------
         let mut target_delta_hz: f32 = 0.0;
 
         ctx.input(|input| {
-            let step = if input.modifiers.shift {
-                1_000.0 // large step (1 kHz)
-            } else {
-                10.0 // small step (10 Hz)
-            };
+            let step = if input.modifiers.shift { 1_000.0 } else { 10.0 };
 
             if input.key_pressed(egui::Key::ArrowRight) {
                 target_delta_hz += step;
@@ -195,7 +180,6 @@ impl eframe::App for RigflowApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        // --- Radio Operator menu ------------------------------
                         ui.collapsing("Radio Operator", |ui| {
                             let mut selected = snapshot.selected_license;
 
@@ -228,7 +212,6 @@ impl eframe::App for RigflowApp {
                             }
                         });
 
-                        // --- Rigflow Server menu ------------------------------
                         egui::CollapsingHeader::new("Rigflow Server")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -279,7 +262,6 @@ impl eframe::App for RigflowApp {
 
                         ui.separator();
 
-                        // --- Radios menu --------------------------------------
                         egui::CollapsingHeader::new("Radios")
                             .default_open(true)
                             .show(ui, |ui| {
@@ -351,12 +333,6 @@ impl eframe::App for RigflowApp {
                                 }
                             });
 
-                        // --- Radio Control menu -------------------------------
-                        //
-                        // This section only appears after a radio has been
-                        // successfully acquired. The existing structure here
-                        // is intentionally preserved because it is behavior-
-                        // sensitive and directly tied to working UI flow.
                         if snapshot.radio_acquired {
                             egui::CollapsingHeader::new("Radio Control")
                                 .default_open(true)
@@ -393,11 +369,11 @@ impl eframe::App for RigflowApp {
                                         if let Ok(mut state) = self.state.lock() {
                                             state.demod_mode =
                                                 selected_demod.clone();
-					    state.sideband = match selected_demod {
-						DemodMode::Lsb => Sideband::Lsb,
-						DemodMode::Usb => Sideband::Usb,
-						_ => state.sideband,
-					    };
+                                            state.sideband = match selected_demod {
+                                                DemodMode::Lsb => Sideband::Lsb,
+                                                DemodMode::Usb => Sideband::Usb,
+                                                _ => state.sideband,
+                                            };
                                         }
 
                                         let _ = self.ws_cmd_tx.send(
@@ -414,11 +390,13 @@ impl eframe::App for RigflowApp {
                                             let _ = self.ws_cmd_tx.send(
                                                 ControlCommand::LegacyClientMessage(
                                                     rigflow_protocol::ClientMessage::SetSideband {
-							sideband: match selected_demod {
-							    DemodMode::Lsb => Sideband::Lsb,
-							    DemodMode::Usb => Sideband::Usb,
-							    _ => unreachable!("sideband only sent for USB/LSB"),
-							},
+                                                        sideband: match selected_demod {
+                                                            DemodMode::Lsb => Sideband::Lsb,
+                                                            DemodMode::Usb => Sideband::Usb,
+                                                            _ => unreachable!(
+                                                                "sideband only sent for USB/LSB"
+                                                            ),
+                                                        },
                                                     },
                                                 ),
                                             );
@@ -426,6 +404,46 @@ impl eframe::App for RigflowApp {
                                     }
                                 });
                         }
+
+                        ui.collapsing("Waterfall Control", |ui| {
+                            if let Ok(mut state) = self.state.lock() {
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut state.display_zoom,
+                                        1.0..=4.0,
+                                    )
+                                    .text("Zoom"),
+                                );
+
+                                ui.checkbox(
+                                    &mut state.adaptive_waterfall_normalization,
+                                    "Adaptive normalization",
+                                );
+
+                                let manual_enabled =
+                                    !state.adaptive_waterfall_normalization;
+
+                                ui.add_enabled_ui(manual_enabled, |ui| {
+                                    ui.add(
+                                        egui::Slider::new(
+                                            &mut state.display_top_db,
+                                            -120.0..=20.0,
+                                        )
+                                        .text("Top dB"),
+                                    );
+
+                                    ui.add(
+                                        egui::Slider::new(
+                                            &mut state.display_range_db,
+                                            10.0..=120.0,
+                                        )
+                                        .text("Range dB"),
+                                    );
+                                });
+                            } else {
+                                ui.label("Waterfall controls unavailable");
+                            }
+                        });
                     });
             });
 
@@ -450,7 +468,6 @@ impl eframe::App for RigflowApp {
                         - 2.0)
                         .max(120.0);
 
-                    // --- LO frequency widget strip --------------------------
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), lo_strip_height),
                         egui::Layout::top_down(egui::Align::Min),
@@ -529,7 +546,6 @@ impl eframe::App for RigflowApp {
                         },
                     );
 
-                    // --- Spectrum region ------------------------------------
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), spectrum_height),
                         egui::Layout::top_down(egui::Align::Min),
@@ -572,7 +588,6 @@ impl eframe::App for RigflowApp {
                     ui.separator();
                     ui.add_space(gap);
 
-                    // --- Waterfall region -----------------------------------
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), waterfall_height),
                         egui::Layout::top_down(egui::Align::Min),
@@ -618,12 +633,28 @@ impl eframe::App for RigflowApp {
                                                 state.clone()
                                             };
 
-                                            clicked_freq_hz = Some(
-                                                x_frac_to_frequency_hz(
-                                                    frac,
+                                            let spectrum_len = {
+                                                let spectrum =
+                                                    self.spectrum_db.lock().unwrap();
+                                                spectrum.len()
+                                            };
+
+                                            if let Some((left_hz, right_hz)) =
+                                                zoomed_visible_freq_range_hz(
+                                                    spectrum_len,
                                                     &state_snapshot,
-                                                ),
-                                            );
+                                                )
+                                            {
+                                                clicked_freq_hz =
+                                                    Some(left_hz + frac * (right_hz - left_hz));
+                                            } else {
+                                                clicked_freq_hz = Some(
+                                                    x_frac_to_frequency_hz(
+                                                        frac,
+                                                        &state_snapshot,
+                                                    ),
+                                                );
+                                            }
                                         }
                                     }
                                 });
@@ -655,7 +686,6 @@ impl eframe::App for RigflowApp {
                 });
         });
 
-        // Real-time UI: continuously repaint so spectrum/waterfall remain live.
         ctx.request_repaint();
     }
 }
