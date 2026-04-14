@@ -109,6 +109,22 @@ pub struct UiState {
 
     /// Waterfall/spectrum display zoom
     pub display_zoom: f32,
+
+    // ---------------------------------------------------------------------
+    // Persistent Storage
+    // ---------------------------------------------------------------------
+
+    /// Operator ID (call sign)
+    pub operator_id: String,
+
+    /// Vector of all known operators
+    pub known_operator_ids: Vec<String>,
+
+    pub show_add_operator_dialog: bool,
+    pub pending_operator_id: String,
+    pub pending_operator_license: Option<crate::ui::om_bands::LicenseClass>,
+    pub persistence_status: String,
+
 }
 
 impl Default for UiState {
@@ -155,6 +171,14 @@ impl Default for UiState {
 	    adaptive_top_db_estimate: -35.0,
             adaptive_floor_db_estimate: -105.0,
 	    display_zoom: 1.0,
+
+	    // --- Persistent defaults -------------------------------------
+	    operator_id: String::new(),
+	    known_operator_ids: Vec::new(),
+	    show_add_operator_dialog: false,
+	    pending_operator_id: String::new(),
+	    pending_operator_license: None,
+	    persistence_status: String::new(),
         }
     }
 }

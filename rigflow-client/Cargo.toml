@@ -17,3 +17,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tokio-tungstenite = "0.24"
 rigflow-protocol = { path = "../rigflow-protocol" }
 rigflow-core = { path = "../rigflow-core" }
+directories = "5"

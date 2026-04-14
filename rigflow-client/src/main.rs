@@ -1,4 +1,5 @@
 mod client_runtime;
+mod persistence;
 mod net;
 mod ui;
 mod widgets;
@@ -16,6 +17,7 @@ use crate::client_runtime::start_media_runtime;
 use crate::ui::app::RigflowApp;
 use crate::net::control::ControlCommand;
 use crate::net::websocket::websocket_control_task;
+use crate::persistence::load_initial_ui_state;
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging for both the UI process and background runtime tasks.
@@ -23,8 +25,24 @@ fn main() -> Result<(), eframe::Error> {
         .format_timestamp_millis()
         .init();
 
+    // Load persisted startup state first, then wrap it in shared UI state.
+    let (initial_ui_state, persistence_store) =
+    match load_initial_ui_state(None) {
+        Ok(value) => value,
+        Err(err) => {
+            eprintln!("failed to load persistent state: {err}");
+            (
+                UiState::default(),
+                crate::persistence::PersistenceStore::new(
+                    crate::persistence::resolve_config_dir(None)
+                        .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                ),
+            )
+        }
+    };
+
     // Shared UI/application state used by the egui app and background tasks.
-    let ui_state = Arc::new(Mutex::new(UiState::default()));
+    let ui_state = Arc::new(Mutex::new(initial_ui_state));
 
     // Start the media runtime first so audio/waterfall infrastructure is ready
     // before the UI and WebSocket control plane begin interacting with it.
@@ -67,6 +85,7 @@ fn main() -> Result<(), eframe::Error> {
                 ws_cmd_tx.clone(),
                 media_handles.waterfall_buffer.clone(),
                 media_handles.spectrum_db.clone(),
+		persistence_store,
             )))
         }),
     )

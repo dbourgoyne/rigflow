@@ -7,7 +7,8 @@ pub const COLOR_OM_USB_PHONE_CW_RTTY_DATA: u32 = 0x0040b0ff; // light blue
 pub const COLOR_OM_FIXED_DIGITAL: u32 = 0x00ff9000;          // orange
 
 /// Classification of operator privileges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Serialize, Deserialize};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LicenseClass {
     AmateurExtra,
     Advanced,

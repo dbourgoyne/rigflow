@@ -5,6 +5,12 @@ use eframe::egui;
 use tokio::sync::mpsc;
 
 use crate::net::control::ControlCommand;
+
+use crate::persistence::{
+    normalize_operator_id, PersistenceStore,
+    apply_operator_settings_to_ui_state,
+};
+
 use crate::ui::{
     layout::{
         LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH,
@@ -23,25 +29,94 @@ pub struct RigflowApp {
     pub ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
     pub waterfall_buffer: Arc<Mutex<Vec<u32>>>,
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
+    pub persistence_store: PersistenceStore,
     pub waterfall_texture: Option<egui::TextureHandle>,
 }
 
 impl RigflowApp {
     pub fn new(
-        state: Arc<Mutex<UiState>>,
-        ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
-        waterfall_buffer: Arc<Mutex<Vec<u32>>>,
-        spectrum_db: Arc<Mutex<Vec<f32>>>,
+	state: Arc<Mutex<UiState>>,
+	ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
+	waterfall_buffer: Arc<Mutex<Vec<u32>>>,
+	spectrum_db: Arc<Mutex<Vec<f32>>>,
+	persistence_store: PersistenceStore,
     ) -> Self {
-        Self {
+	Self {
             state,
             ws_cmd_tx,
             waterfall_buffer,
             spectrum_db,
+            persistence_store,
             waterfall_texture: None,
-        }
+	}
     }
 
+    fn save_pending_operator(&mut self) {
+	let (raw_operator_id, selected_license) = {
+            let state = self.state.lock().unwrap();
+            (
+		state.pending_operator_id.clone(),
+		state.pending_operator_license,
+            )
+	};
+
+	let operator_id = match normalize_operator_id(&raw_operator_id) {
+            Ok(id) => id,
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("invalid operator id: {err}");
+		}
+		return;
+            }
+	};
+
+	let mut operator_settings =
+            match self.persistence_store.load_or_create_operator_settings(&operator_id) {
+		Ok(settings) => settings,
+		Err(err) => {
+                    if let Ok(mut state) = self.state.lock() {
+			state.persistence_status =
+                            format!("failed to load/create operator: {err}");
+                    }
+                    return;
+		}
+            };
+
+	operator_settings.selected_license = selected_license;
+
+	if let Err(err) = self.persistence_store.save_operator_settings(&operator_settings) {
+            if let Ok(mut state) = self.state.lock() {
+		state.persistence_status =
+                    format!("failed to save operator settings: {err}");
+            }
+            return;
+	}
+
+	let app_state = match self.persistence_store.upsert_known_operator(&operator_id) {
+            Ok(app_state) => app_state,
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status =
+			format!("failed to update known operators: {err}");
+		}
+		return;
+            }
+	};
+
+	if let Ok(mut state) = self.state.lock() {
+            apply_operator_settings_to_ui_state(
+		&mut state,
+		&operator_settings,
+		&app_state,
+            );
+
+            state.show_add_operator_dialog = false;
+            state.pending_operator_id.clear();
+            state.pending_operator_license = None;
+            state.persistence_status.clear();
+	}
+    }
+    
     fn update_waterfall_texture(
         &mut self,
         ctx: &egui::Context,
@@ -180,37 +255,83 @@ impl eframe::App for RigflowApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.collapsing("Radio Operator", |ui| {
-                            let mut selected = snapshot.selected_license;
+			ui.collapsing("Radio Operator", |ui| {
+			    ui.label("Current operator:");
 
-                            ui.radio_value(
-                                &mut selected,
-                                Some(LicenseClass::AmateurExtra),
-                                "Amateur Extra",
-                            );
-                            ui.radio_value(
-                                &mut selected,
-                                Some(LicenseClass::Advanced),
-                                "Advanced",
-                            );
-                            ui.radio_value(
-                                &mut selected,
-                                Some(LicenseClass::General),
-                                "General",
-                            );
-                            ui.radio_value(
-                                &mut selected,
-                                Some(LicenseClass::Technician),
-                                "Technician",
-                            );
-                            ui.radio_value(&mut selected, None, "None");
+			    if snapshot.operator_id.trim().is_empty() {
+				ui.monospace("none");
+			    } else {
+				ui.monospace(&snapshot.operator_id);
+			    }
 
-                            if selected != snapshot.selected_license {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.selected_license = selected;
-                                }
-                            }
-                        });
+			    ui.add_space(6.0);
+
+			    ui.label("Known operators:");
+
+			    if snapshot.known_operator_ids.is_empty() {
+				ui.label("none");
+			    } else {
+				for operator_id in &snapshot.known_operator_ids {
+				    let selected = snapshot.operator_id == *operator_id;
+
+				    if ui.selectable_label(selected, operator_id).clicked() {
+					match self.persistence_store.load_or_create_operator_settings(operator_id) {
+					    Ok(operator_settings) => {
+						match self.persistence_store.load_app_state() {
+						    Ok(mut app_state) => {
+							app_state.last_operator_id = Some(operator_id.clone());
+
+							if let Err(err) = self.persistence_store.save_app_state(&app_state) {
+							    if let Ok(mut state) = self.state.lock() {
+								state.persistence_status =
+								    format!("failed to save app state: {err}");
+							    }
+							}
+
+							if let Ok(mut state) = self.state.lock() {
+							    apply_operator_settings_to_ui_state(
+								&mut state,
+								&operator_settings,
+								&app_state,
+							    );
+							    state.persistence_status.clear();
+							}
+						    }
+						    Err(err) => {
+							if let Ok(mut state) = self.state.lock() {
+							    state.persistence_status =
+								format!("failed to load app state: {err}");
+							}
+						    }
+						}
+					    }
+					    Err(err) => {
+						if let Ok(mut state) = self.state.lock() {
+						    state.persistence_status =
+							format!("failed to load operator: {err}");
+						}
+					    }
+					}
+				    }
+				}
+			    }
+
+			    ui.add_space(8.0);
+
+			    if ui.button("Add Operator").clicked() {
+				if let Ok(mut state) = self.state.lock() {
+				    state.show_add_operator_dialog = true;
+				    state.pending_operator_id.clear();
+				    state.pending_operator_license = None;
+				    state.persistence_status.clear();
+				}
+			    }
+
+			    if !snapshot.persistence_status.is_empty() {
+				ui.add_space(6.0);
+				ui.colored_label(egui::Color32::YELLOW, &snapshot.persistence_status);
+			    }
+			});
 
                         egui::CollapsingHeader::new("Rigflow Server")
                             .default_open(false)
@@ -685,6 +806,90 @@ impl eframe::App for RigflowApp {
                     );
                 });
         });
+
+	let show_add_operator_dialog = {
+	    let state = self.state.lock().unwrap();
+	    state.show_add_operator_dialog
+	};
+
+	if show_add_operator_dialog {
+	    egui::Window::new("Add Operator")
+		.collapsible(false)
+		.resizable(false)
+		.show(ctx, |ui| {
+		    let mut save_requested = false;
+		    let mut cancel_requested = false;
+
+		    if let Ok(mut state) = self.state.lock() {
+			ui.label("Operator ID / Call Sign:");
+			ui.text_edit_singleline(&mut state.pending_operator_id);
+
+			ui.add_space(8.0);
+			ui.label("License:");
+
+			use crate::ui::om_bands::LicenseClass;
+
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::AmateurExtra),
+			    "Amateur Extra",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::Advanced),
+			    "Advanced",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::General),
+			    "General",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::Technician),
+			    "Technician",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    None,
+			    "None",
+			);
+
+			if !state.persistence_status.is_empty() {
+			    ui.add_space(8.0);
+			    ui.colored_label(
+				egui::Color32::YELLOW,
+				&state.persistence_status,
+			    );
+			}
+
+			ui.add_space(10.0);
+
+			ui.horizontal(|ui| {
+			    if ui.button("Cancel").clicked() {
+				cancel_requested = true;
+			    }
+
+			    if ui.button("Save").clicked() {
+				save_requested = true;
+			    }
+			});
+		    }
+
+		    if cancel_requested {
+			if let Ok(mut state) = self.state.lock() {
+			    state.show_add_operator_dialog = false;
+			    state.pending_operator_id.clear();
+			    state.pending_operator_license = None;
+			    state.persistence_status.clear();
+			}
+		    }
+
+		    if save_requested {
+			self.save_pending_operator();
+		    }
+		});
+	}
 
         ctx.request_repaint();
     }
