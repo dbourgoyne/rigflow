@@ -7,8 +7,12 @@ use tokio::sync::mpsc;
 use crate::net::control::ControlCommand;
 
 use crate::persistence::{
-    normalize_operator_id, PersistenceStore,
     apply_operator_settings_to_ui_state,
+    apply_ui_state_to_operator_settings,
+    normalize_operator_id,
+    BookmarkDisplaySettingsFile,
+    BookmarkFile,
+    PersistenceStore,
 };
 
 use crate::ui::{
@@ -48,6 +52,228 @@ impl RigflowApp {
             spectrum_db,
             persistence_store,
             waterfall_texture: None,
+	}
+    }
+
+    fn set_default_bookmark(&mut self, bookmark_id: &str) {
+	if let Ok(mut state) = self.state.lock() {
+            state.default_bookmark_id = Some(bookmark_id.to_string());
+            state.bookmark_status.clear();
+	}
+
+	self.save_bookmarks_to_current_operator();
+    }
+
+    fn apply_bookmark(&mut self, bookmark_id: &str) {
+	let bookmark = {
+            let state = self.state.lock().unwrap();
+            state
+		.bookmarks
+		.iter()
+		.find(|b| b.id == bookmark_id)
+		.cloned()
+	};
+
+	let Some(bookmark) = bookmark else {
+            if let Ok(mut state) = self.state.lock() {
+		state.bookmark_status = "bookmark not found".to_string();
+            }
+            return;
+	};
+
+	{
+            let mut state = self.state.lock().unwrap();
+
+            state.selected_bookmark_id = Some(bookmark.id.clone());
+            state.target_freq_hz = bookmark.frequency_hz;
+            state.demod_mode = bookmark.demod_mode;
+
+            if let Some(sideband) = bookmark.sideband {
+		state.sideband = sideband;
+            }
+
+            if let Some(display) = &bookmark.display {
+		if let Some(zoom) = display.zoom {
+                    state.display_zoom = zoom;
+		}
+		if let Some(adaptive) = display.adaptive_waterfall_normalization {
+                    state.adaptive_waterfall_normalization = adaptive;
+		}
+		if let Some(top_db) = display.waterfall_top_db {
+                    state.display_top_db = top_db;
+		}
+		if let Some(range_db) = display.waterfall_range_db {
+                    state.display_range_db = range_db;
+		}
+            }
+
+            state.bookmark_status.clear();
+	}
+
+	let _ = self.ws_cmd_tx.send(
+            ControlCommand::LegacyClientMessage(
+		rigflow_protocol::ClientMessage::SetFrequency {
+                    target_freq_hz: bookmark.frequency_hz,
+		},
+            ),
+	);
+
+	let _ = self.ws_cmd_tx.send(
+            ControlCommand::LegacyClientMessage(
+		rigflow_protocol::ClientMessage::SetDemodMode {
+                    mode: bookmark.demod_mode,
+		},
+            ),
+	);
+
+	if let Some(sideband) = bookmark.sideband {
+            let _ = self.ws_cmd_tx.send(
+		ControlCommand::LegacyClientMessage(
+                    rigflow_protocol::ClientMessage::SetSideband { sideband },
+		),
+            );
+	}
+    }
+
+    fn save_current_as_bookmark(&mut self) {
+	let (
+            name,
+            target_freq_hz,
+            demod_mode,
+            sideband,
+            zoom,
+            adaptive_waterfall_normalization,
+            display_top_db,
+            display_range_db,
+            existing_ids,
+	) = {
+            let state = self.state.lock().unwrap();
+
+            (
+		state.pending_bookmark_name.trim().to_string(),
+		state.target_freq_hz,
+		state.demod_mode,
+		state.sideband,
+		state.display_zoom,
+		state.adaptive_waterfall_normalization,
+		state.display_top_db,
+		state.display_range_db,
+		state
+                    .bookmarks
+                    .iter()
+                    .map(|b| b.id.clone())
+                    .collect::<Vec<_>>(),
+            )
+	};
+
+	if name.is_empty() {
+            if let Ok(mut state) = self.state.lock() {
+		state.bookmark_status = "bookmark name cannot be empty".to_string();
+            }
+            return;
+	}
+
+	let mut bookmark_id = Self::make_bookmark_id(&name);
+	if existing_ids.iter().any(|id| id == &bookmark_id) {
+            let mut suffix = 2;
+            while existing_ids.iter().any(|id| id == &format!("{bookmark_id}-{suffix}")) {
+		suffix += 1;
+            }
+            bookmark_id = format!("{bookmark_id}-{suffix}");
+	}
+
+	let bookmark = BookmarkFile {
+            id: bookmark_id.clone(),
+            name,
+            frequency_hz: target_freq_hz,
+            demod_mode,
+            sideband: Some(sideband),
+            display: Some(BookmarkDisplaySettingsFile {
+		zoom: Some(zoom),
+		adaptive_waterfall_normalization: Some(
+                    adaptive_waterfall_normalization,
+		),
+		waterfall_top_db: Some(display_top_db),
+		waterfall_range_db: Some(display_range_db),
+            }),
+            notes: None,
+	};
+
+	if let Ok(mut state) = self.state.lock() {
+            state.bookmarks.push(bookmark);
+            state.selected_bookmark_id = Some(bookmark_id);
+            state.show_add_bookmark_dialog = false;
+            state.pending_bookmark_name.clear();
+            state.bookmark_status.clear();
+	}
+
+	self.save_bookmarks_to_current_operator();
+    }
+
+    fn make_bookmark_id(name: &str) -> String {
+	let mut id = String::new();
+
+	for ch in name.trim().chars() {
+            if ch.is_ascii_alphanumeric() {
+		id.push(ch.to_ascii_lowercase());
+            } else if ch == ' ' || ch == '-' || ch == '_' {
+		if !id.ends_with('-') {
+                    id.push('-');
+		}
+            }
+	}
+
+	let id = id.trim_matches('-').to_string();
+
+	if id.is_empty() {
+            "bookmark".to_string()
+	} else {
+            id
+	}
+    }
+
+    fn save_bookmarks_to_current_operator(&mut self) {
+	let operator_id = {
+            let state = self.state.lock().unwrap();
+            state.operator_id.clone()
+	};
+
+	if operator_id.trim().is_empty() {
+            return;
+	}
+
+	let operator_id = match normalize_operator_id(&operator_id) {
+            Ok(id) => id,
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.bookmark_status = format!("invalid operator id: {err}");
+		}
+		return;
+            }
+	};
+
+	let mut operator_settings =
+            match self.persistence_store.load_or_create_operator_settings(&operator_id) {
+		Ok(settings) => settings,
+		Err(err) => {
+                    if let Ok(mut state) = self.state.lock() {
+			state.bookmark_status =
+                            format!("failed to load operator settings: {err}");
+                    }
+                    return;
+		}
+            };
+
+	{
+            let state = self.state.lock().unwrap();
+            apply_ui_state_to_operator_settings(&state, &mut operator_settings);
+	}
+
+	if let Err(err) = self.persistence_store.save_operator_settings(&operator_settings) {
+            if let Ok(mut state) = self.state.lock() {
+		state.bookmark_status =
+                    format!("failed to save operator settings: {err}");
+            }
 	}
     }
 
@@ -599,7 +825,85 @@ impl eframe::App for RigflowApp {
                                 ui.label("Waterfall controls unavailable");
                             }
                         });
-                    });
+			
+
+			ui.separator();
+
+			ui.collapsing("Bookmarks", |ui| {
+			    let snapshot = {
+				let state = self.state.lock().unwrap();
+				state.clone()
+			    };
+
+			    if snapshot.bookmarks.is_empty() {
+				ui.label("no bookmarks");
+			    } else {
+				for bookmark in &snapshot.bookmarks {
+				    let selected = snapshot
+					.selected_bookmark_id
+					.as_ref()
+					.map(|id| id == &bookmark.id)
+					.unwrap_or(false);
+
+				    let mut label = bookmark.name.clone();
+				    if snapshot
+					.default_bookmark_id
+					.as_ref()
+					.map(|id| id == &bookmark.id)
+					.unwrap_or(false)
+				    {
+					label.push_str("  [default]");
+				    }
+
+				    if ui.selectable_label(selected, label).clicked() {
+					if let Ok(mut state) = self.state.lock() {
+					    state.selected_bookmark_id = Some(bookmark.id.clone());
+					}
+				    }
+				}
+
+				ui.add_space(8.0);
+
+				ui.horizontal(|ui| {
+				    let selected_id = snapshot.selected_bookmark_id.clone();
+
+				    if ui
+					.add_enabled(selected_id.is_some(), egui::Button::new("Apply"))
+					.clicked()
+				    {
+					if let Some(bookmark_id) = selected_id.clone() {
+					    self.apply_bookmark(&bookmark_id);
+					}
+				    }
+
+				    if ui
+					.add_enabled(selected_id.is_some(), egui::Button::new("Set Default"))
+					.clicked()
+				    {
+					if let Some(bookmark_id) = selected_id.clone() {
+					    self.set_default_bookmark(&bookmark_id);
+					}
+				    }
+				});
+			    }
+
+			    ui.add_space(8.0);
+
+			    if ui.button("Save Current as Bookmark").clicked() {
+				if let Ok(mut state) = self.state.lock() {
+				    state.show_add_bookmark_dialog = true;
+				    state.pending_bookmark_name.clear();
+				    state.bookmark_status.clear();
+				}
+			    }
+
+			    if !snapshot.bookmark_status.is_empty() {
+				ui.add_space(6.0);
+				ui.colored_label(egui::Color32::YELLOW, &snapshot.bookmark_status);
+			    }
+			});
+		    });
+		
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -921,6 +1225,58 @@ impl eframe::App for RigflowApp {
 
 		    if save_requested {
 			self.save_pending_operator();
+		    }
+		});
+	}
+
+	let show_add_bookmark_dialog = {
+	    let state = self.state.lock().unwrap();
+	    state.show_add_bookmark_dialog
+	};
+
+	if show_add_bookmark_dialog {
+	    egui::Window::new("Save Current as Bookmark")
+		.collapsible(false)
+		.resizable(false)
+		.show(ctx, |ui| {
+		    let mut save_requested = false;
+		    let mut cancel_requested = false;
+
+		    if let Ok(mut state) = self.state.lock() {
+			ui.label("Bookmark name:");
+			ui.text_edit_singleline(&mut state.pending_bookmark_name);
+
+			if !state.bookmark_status.is_empty() {
+			    ui.add_space(8.0);
+			    ui.colored_label(
+				egui::Color32::YELLOW,
+				&state.bookmark_status,
+			    );
+			}
+
+			ui.add_space(10.0);
+
+			ui.horizontal(|ui| {
+			    if ui.button("Cancel").clicked() {
+				cancel_requested = true;
+			    }
+
+			    if ui.button("Save").clicked() {
+				save_requested = true;
+			    }
+			});
+		    }
+
+		    if cancel_requested {
+			if let Ok(mut state) = self.state.lock() {
+			    state.show_add_bookmark_dialog = false;
+			    state.pending_bookmark_name.clear();
+			    state.bookmark_status.clear();
+			}
+		    }
+
+		    if save_requested {
+			self.save_current_as_bookmark();
 		    }
 		});
 	}
