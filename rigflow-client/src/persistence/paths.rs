@@ -3,8 +3,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use directories::ProjectDirs;
-
 use crate::persistence::error::PersistenceError;
 
 /// Resolve the rigflow config directory.
@@ -12,7 +10,8 @@ use crate::persistence::error::PersistenceError;
 /// Priority:
 /// 1. explicit CLI override
 /// 2. RIGFLOW_CONFIG_DIR
-/// 3. OS-standard config directory
+/// 3. XDG_CONFIG_HOME/rigflow
+/// 4. ~/.config/rigflow
 pub fn resolve_config_dir(
     cli_override: Option<&Path>,
 ) -> Result<PathBuf, PersistenceError> {
@@ -24,10 +23,12 @@ pub fn resolve_config_dir(
         return Ok(PathBuf::from(path));
     }
 
-    let project_dirs = ProjectDirs::from("com", "rigflow", "rigflow")
-        .ok_or(PersistenceError::NoConfigDirectory)?;
+    if let Some(xdg_config_home) = env::var_os("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(xdg_config_home).join("rigflow"));
+    }
 
-    Ok(project_dirs.config_dir().to_path_buf())
+    let home = env::var_os("HOME").ok_or(PersistenceError::NoConfigDirectory)?;
+    Ok(PathBuf::from(home).join(".config").join("rigflow"))
 }
 
 pub fn app_state_path(config_dir: &Path) -> PathBuf {
