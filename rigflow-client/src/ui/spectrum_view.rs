@@ -18,6 +18,7 @@ use crate::ui::{
 
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
+    pub clicked_bookmark_id: Option<String>,
 }
 
 pub fn draw_spectrum_plot(
@@ -49,6 +50,7 @@ pub fn draw_spectrum_plot(
 
     let spectrum_len = spectrum_db.len();
     let pointer_pos = response.hover_pos();
+    let pointer_clicked = response.clicked();
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, spectrum_len, state);
@@ -56,7 +58,16 @@ pub fn draw_spectrum_plot(
     draw_om_overlays(&painter, plot_rect, spectrum_len, state);
     draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
-    draw_bookmark_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
+
+    let clicked_bookmark_id = draw_bookmark_overlays(
+	&painter,
+	plot_rect,
+	spectrum_len,
+	state,
+	pointer_pos,
+	pointer_clicked,
+    );
+    
     draw_frequency_markers(&painter, plot_rect, spectrum_len, state);
 
     painter.rect_stroke(
@@ -68,24 +79,26 @@ pub fn draw_spectrum_plot(
 
     let mut clicked_freq_hz = None;
 
-    if response.clicked() && visible_span_hz(state) > 0.0 {
-        if let Some(pointer_pos) = response.interact_pointer_pos() {
+    if clicked_bookmark_id.is_none() && response.clicked() && visible_span_hz(state) > 0.0 {
+	if let Some(pointer_pos) = response.interact_pointer_pos() {
             if plot_rect.contains(pointer_pos) {
-                let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
+		let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
                     .clamp(0.0, 1.0);
 
-                if let Some((left_hz, right_hz)) =
+		if let Some((left_hz, right_hz)) =
                     zoomed_visible_freq_range_hz(spectrum_len, state)
-                {
+		{
                     clicked_freq_hz = Some(left_hz + frac * (right_hz - left_hz));
-                }
+		}
             }
-        }
+	}
     }
 
     SpectrumInteraction {
-        clicked_target_freq_hz: clicked_freq_hz,
+	clicked_target_freq_hz: clicked_freq_hz,
+	clicked_bookmark_id,
     }
+
 }
 
 fn draw_grid_and_y_axis(
@@ -579,20 +592,23 @@ fn draw_bookmark_overlays(
     spectrum_len: usize,
     state: &UiState,
     pointer_pos: Option<Pos2>,
-) {
+    pointer_clicked: bool,
+) -> Option<String> {
+
     if state.bookmarks.is_empty() {
-        return;
+        return None;
     }
 
     let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
-        return;
+        return None;
     };
 
     if right_hz <= left_hz {
-        return;
+        return None;
     }
 
     // Position bookmark labels just above the OM strip.
+    let mut clicked_bookmark_id: Option<String> = None;
     let band_strip_height = 14.0;
     let om_strip_height = band_strip_height / 3.0;
     let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
@@ -604,9 +620,9 @@ fn draw_bookmark_overlays(
     let bookmark_y0 = bookmark_y1 - bookmark_height;
 
     let font_id = FontId::monospace(10.0);
-    let text_color = Color32::from_rgb(230, 230, 210);
-    let border_color = Color32::from_rgba_premultiplied(255, 220, 120, 180);
-    let fill_color = Color32::from_rgba_premultiplied(255, 220, 120, 28);
+    let text_color = Color32::from_rgb(255, 220, 80);
+    let border_color = Color32::from_rgb(255, 220, 80);
+    let fill_color = Color32::from_rgba_premultiplied(0, 0, 0, 0);
 
     let mut hovered_bookmark: Option<(&crate::persistence::BookmarkFile, Rect)> = None;
 
@@ -621,7 +637,15 @@ fn draw_bookmark_overlays(
             continue;
         }
 
-        let title = bookmark.name.trim();
+	let full_title = bookmark.name.trim();
+
+	let title = if full_title.chars().count() > 16 {
+	    let truncated: String = full_title.chars().take(16).collect();
+	    format!("{truncated}...")
+	} else {
+	    full_title.to_string()
+	};
+
         if title.is_empty() {
             continue;
         }
@@ -672,16 +696,23 @@ fn draw_bookmark_overlays(
             text_color,
         );
 
-        if let Some(pointer) = pointer_pos {
-            if rect.contains(pointer) {
-                hovered_bookmark = Some((bookmark, rect));
-            }
-        }
+	if let Some(pointer) = pointer_pos {
+	    if rect.contains(pointer) {
+		hovered_bookmark = Some((bookmark, rect));
+
+		if pointer_clicked {
+		    clicked_bookmark_id = Some(bookmark.id.clone());
+		}
+	    }
+	}
     }
 
     if let Some((bookmark, _rect)) = hovered_bookmark {
-        draw_bookmark_tooltip(painter, bookmark, pointer_pos);
+	draw_bookmark_tooltip(painter, bookmark, pointer_pos);
     }
+
+    clicked_bookmark_id
+
 }
 
 fn draw_bookmark_tooltip(
@@ -761,6 +792,7 @@ fn draw_bookmark_tooltip(
 fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
         clicked_target_freq_hz: None,
+        clicked_bookmark_id: None,
     }
 }
 

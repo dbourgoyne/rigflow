@@ -1348,17 +1348,17 @@ impl eframe::App for RigflowApp {
                                     &state_snapshot,
                                 );
 
-                            if let Some(clicked_freq_hz) =
-                                interaction.clicked_target_freq_hz
-                            {
-                                let _ = self.ws_cmd_tx.send(
-                                    ControlCommand::LegacyClientMessage(
-                                        rigflow_protocol::ClientMessage::SetFrequency {
-                                            target_freq_hz: clicked_freq_hz,
-                                        },
-                                    ),
-                                );
-                            }
+			    if let Some(bookmark_id) = interaction.clicked_bookmark_id {
+				self.apply_bookmark(&bookmark_id);
+			    } else if let Some(clicked_freq_hz) = interaction.clicked_target_freq_hz {
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetFrequency {
+					    target_freq_hz: clicked_freq_hz,
+					},
+				    ),
+				);
+			    }
                         },
                     );
 
