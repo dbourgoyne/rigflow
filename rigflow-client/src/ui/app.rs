@@ -55,6 +55,44 @@ impl RigflowApp {
 	}
     }
 
+    fn delete_selected_bookmark(&mut self) {
+	let selected_id = {
+            let state = self.state.lock().unwrap();
+            state.selected_bookmark_id.clone()
+	};
+
+	let Some(selected_id) = selected_id else {
+            if let Ok(mut state) = self.state.lock() {
+		state.bookmark_status = "no bookmark selected".to_string();
+            }
+            return;
+	};
+
+	if let Ok(mut state) = self.state.lock() {
+            let before_len = state.bookmarks.len();
+            state.bookmarks.retain(|bookmark| bookmark.id != selected_id);
+
+            if state.bookmarks.len() == before_len {
+		state.bookmark_status = "bookmark not found".to_string();
+		return;
+            }
+
+            if state
+		.default_bookmark_id
+		.as_ref()
+		.map(|id| id == &selected_id)
+		.unwrap_or(false)
+            {
+		state.default_bookmark_id = None;
+            }
+
+            state.selected_bookmark_id = None;
+            state.bookmark_status.clear();
+	}
+
+	self.save_bookmarks_to_current_operator();
+    }
+
     fn set_default_bookmark(&mut self, bookmark_id: &str) {
 	if let Ok(mut state) = self.state.lock() {
             state.default_bookmark_id = Some(bookmark_id.to_string());
@@ -897,6 +935,13 @@ impl eframe::App for RigflowApp {
 					if let Some(bookmark_id) = selected_id.clone() {
 					    self.set_default_bookmark(&bookmark_id);
 					}
+				    }
+
+				    if ui
+					.add_enabled(selected_id.is_some(), egui::Button::new("Delete"))
+					.clicked()
+				    {
+					self.delete_selected_bookmark();
 				    }
 				});
 			    }
