@@ -302,20 +302,22 @@ impl RigflowApp {
 
     fn save_current_as_bookmark(&mut self) {
 	let (
-            name,
-            target_freq_hz,
-            demod_mode,
-            sideband,
-            zoom,
-            adaptive_waterfall_normalization,
-            display_top_db,
-            display_range_db,
-            existing_ids,
+	    name,
+	    notes,
+	    target_freq_hz,
+	    demod_mode,
+	    sideband,
+	    zoom,
+	    adaptive_waterfall_normalization,
+	    display_top_db,
+	    display_range_db,
+	    existing_ids,
 	) = {
             let state = self.state.lock().unwrap();
 
-            (
+	    (
 		state.pending_bookmark_name.trim().to_string(),
+		state.pending_bookmark_notes.trim().to_string(),
 		state.target_freq_hz,
 		state.demod_mode,
 		state.sideband,
@@ -324,11 +326,11 @@ impl RigflowApp {
 		state.display_top_db,
 		state.display_range_db,
 		state
-                    .bookmarks
-                    .iter()
-                    .map(|b| b.id.clone())
-                    .collect::<Vec<_>>(),
-            )
+		    .bookmarks
+		    .iter()
+		    .map(|b| b.id.clone())
+		    .collect::<Vec<_>>(),
+	    )
 	};
 
 	if name.is_empty() {
@@ -348,28 +350,29 @@ impl RigflowApp {
 	}
 
 	let bookmark = BookmarkFile {
-            id: bookmark_id.clone(),
-            name,
-            frequency_hz: target_freq_hz,
-            demod_mode,
-            sideband: Some(sideband),
-            display: Some(BookmarkDisplaySettingsFile {
+	    id: bookmark_id.clone(),
+	    name,
+	    frequency_hz: target_freq_hz,
+	    demod_mode,
+	    sideband: Some(sideband),
+	    display: Some(BookmarkDisplaySettingsFile {
 		zoom: Some(zoom),
 		adaptive_waterfall_normalization: Some(
-                    adaptive_waterfall_normalization,
+		    adaptive_waterfall_normalization,
 		),
 		waterfall_top_db: Some(display_top_db),
 		waterfall_range_db: Some(display_range_db),
-            }),
-            notes: None,
+	    }),
+	    notes: if notes.is_empty() { None } else { Some(notes) },
 	};
 
 	if let Ok(mut state) = self.state.lock() {
-            state.bookmarks.push(bookmark);
-            state.selected_bookmark_id = Some(bookmark_id);
-            state.show_add_bookmark_dialog = false;
-            state.pending_bookmark_name.clear();
-            state.bookmark_status.clear();
+	    state.bookmarks.push(bookmark);
+	    state.selected_bookmark_id = Some(bookmark_id);
+	    state.show_add_bookmark_dialog = false;
+	    state.pending_bookmark_name.clear();
+	    state.pending_bookmark_notes.clear();
+	    state.bookmark_status.clear();
 	}
 
 	self.save_bookmarks_to_current_operator();
@@ -1133,10 +1136,25 @@ impl eframe::App for RigflowApp {
 
 			    ui.add_space(8.0);
 
+			    if let Some(selected_id) = &snapshot.selected_bookmark_id {
+				if let Some(bookmark) = snapshot.bookmarks.iter().find(|b| &b.id == selected_id) {
+				    if let Some(notes) = &bookmark.notes {
+					if !notes.trim().is_empty() {
+					    ui.add_space(8.0);
+					    ui.label("Notes:");
+					    ui.group(|ui| {
+						ui.label(notes);
+					    });
+					}
+				    }
+				}
+			    }
+
 			    if ui.button("Save Current as Bookmark").clicked() {
 				if let Ok(mut state) = self.state.lock() {
 				    state.show_add_bookmark_dialog = true;
 				    state.pending_bookmark_name.clear();
+				    state.pending_bookmark_notes.clear();
 				    state.bookmark_status.clear();
 				}
 			    }
@@ -1505,6 +1523,14 @@ impl eframe::App for RigflowApp {
 			ui.label("Bookmark name:");
 			ui.text_edit_singleline(&mut state.pending_bookmark_name);
 
+			ui.add_space(8.0);
+			ui.label("Notes:");
+			ui.add(
+			    egui::TextEdit::multiline(&mut state.pending_bookmark_notes)
+				.desired_rows(4)
+				.desired_width(320.0),
+			);
+
 			if !state.bookmark_status.is_empty() {
 			    ui.add_space(8.0);
 			    ui.colored_label(
@@ -1530,6 +1556,7 @@ impl eframe::App for RigflowApp {
 			if let Ok(mut state) = self.state.lock() {
 			    state.show_add_bookmark_dialog = false;
 			    state.pending_bookmark_name.clear();
+			    state.pending_bookmark_notes.clear();
 			    state.bookmark_status.clear();
 			}
 		    }
