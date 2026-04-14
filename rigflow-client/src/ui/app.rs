@@ -616,6 +616,96 @@ impl RigflowApp {
     }
     // -------- Start extraction -----------------
 
+    fn draw_add_operator_dialog (
+        &mut self,
+        ctx: &egui::Context,
+    ) {
+	let show_add_operator_dialog = {
+	    let state = self.state.lock().unwrap();
+	    state.show_add_operator_dialog
+	};
+
+	if show_add_operator_dialog {
+	    egui::Window::new("Add Operator")
+		.collapsible(false)
+		.resizable(false)
+		.show(ctx, |ui| {
+		    let mut save_requested = false;
+		    let mut cancel_requested = false;
+
+		    if let Ok(mut state) = self.state.lock() {
+			ui.label("Operator ID / Call Sign:");
+			ui.text_edit_singleline(&mut state.pending_operator_id);
+
+			ui.add_space(8.0);
+			ui.label("License:");
+
+			use crate::ui::om_bands::LicenseClass;
+
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::AmateurExtra),
+			    "Amateur Extra",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::Advanced),
+			    "Advanced",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::General),
+			    "General",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    Some(LicenseClass::Technician),
+			    "Technician",
+			);
+			ui.radio_value(
+			    &mut state.pending_operator_license,
+			    None,
+			    "None",
+			);
+
+			if !state.persistence_status.is_empty() {
+			    ui.add_space(8.0);
+			    ui.colored_label(
+				egui::Color32::YELLOW,
+				&state.persistence_status,
+			    );
+			}
+
+			ui.add_space(10.0);
+
+			ui.horizontal(|ui| {
+			    if ui.button("Cancel").clicked() {
+				cancel_requested = true;
+			    }
+
+			    if ui.button("Save").clicked() {
+				save_requested = true;
+			    }
+			});
+		    }
+
+		    if cancel_requested {
+			if let Ok(mut state) = self.state.lock() {
+			    state.show_add_operator_dialog = false;
+			    state.pending_operator_id.clear();
+			    state.pending_operator_license = None;
+			    state.persistence_status.clear();
+			}
+		    }
+
+		    if save_requested {
+			self.save_pending_operator();
+		    }
+		});
+	}
+    }
+
+
     fn draw_center_panel(
         &mut self,
         ctx: &egui::Context,
@@ -1490,90 +1580,7 @@ impl eframe::App for RigflowApp {
 	self.handle_keyboard_shortcuts(ctx);
 	self.draw_left_panel(ctx, &snapshot, config_mode);
 	self.draw_center_panel(ctx, &snapshot);
-
-	let show_add_operator_dialog = {
-	    let state = self.state.lock().unwrap();
-	    state.show_add_operator_dialog
-	};
-
-	if show_add_operator_dialog {
-	    egui::Window::new("Add Operator")
-		.collapsible(false)
-		.resizable(false)
-		.show(ctx, |ui| {
-		    let mut save_requested = false;
-		    let mut cancel_requested = false;
-
-		    if let Ok(mut state) = self.state.lock() {
-			ui.label("Operator ID / Call Sign:");
-			ui.text_edit_singleline(&mut state.pending_operator_id);
-
-			ui.add_space(8.0);
-			ui.label("License:");
-
-			use crate::ui::om_bands::LicenseClass;
-
-			ui.radio_value(
-			    &mut state.pending_operator_license,
-			    Some(LicenseClass::AmateurExtra),
-			    "Amateur Extra",
-			);
-			ui.radio_value(
-			    &mut state.pending_operator_license,
-			    Some(LicenseClass::Advanced),
-			    "Advanced",
-			);
-			ui.radio_value(
-			    &mut state.pending_operator_license,
-			    Some(LicenseClass::General),
-			    "General",
-			);
-			ui.radio_value(
-			    &mut state.pending_operator_license,
-			    Some(LicenseClass::Technician),
-			    "Technician",
-			);
-			ui.radio_value(
-			    &mut state.pending_operator_license,
-			    None,
-			    "None",
-			);
-
-			if !state.persistence_status.is_empty() {
-			    ui.add_space(8.0);
-			    ui.colored_label(
-				egui::Color32::YELLOW,
-				&state.persistence_status,
-			    );
-			}
-
-			ui.add_space(10.0);
-
-			ui.horizontal(|ui| {
-			    if ui.button("Cancel").clicked() {
-				cancel_requested = true;
-			    }
-
-			    if ui.button("Save").clicked() {
-				save_requested = true;
-			    }
-			});
-		    }
-
-		    if cancel_requested {
-			if let Ok(mut state) = self.state.lock() {
-			    state.show_add_operator_dialog = false;
-			    state.pending_operator_id.clear();
-			    state.pending_operator_license = None;
-			    state.persistence_status.clear();
-			}
-		    }
-
-		    if save_requested {
-			self.save_pending_operator();
-		    }
-		});
-	}
+	self.draw_add_operator_dialog(ctx);
 
 	let show_add_bookmark_dialog = {
 	    let state = self.state.lock().unwrap();
