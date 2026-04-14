@@ -56,6 +56,32 @@ impl RigflowApp {
 	}
     }
 
+    fn update_selected_bookmark_notes(&mut self, notes: String) {
+	let selected_id = {
+            let state = self.state.lock().unwrap();
+            state.selected_bookmark_id.clone()
+	};
+
+	let Some(selected_id) = selected_id else {
+            return;
+	};
+
+	if let Ok(mut state) = self.state.lock() {
+            if let Some(bookmark) = state.bookmarks.iter_mut().find(|b| b.id == selected_id) {
+		let trimmed = notes.trim().to_string();
+		bookmark.notes = if trimmed.is_empty() {
+                    None
+		} else {
+                    Some(trimmed)
+		};
+
+		state.bookmark_status.clear();
+            }
+	}
+
+	self.save_bookmarks_to_current_operator();
+    }
+
     fn save_selected_operator_license(&mut self) {
 	let (operator_id, selected_license) = {
             let state = self.state.lock().unwrap();
@@ -1104,18 +1130,31 @@ impl eframe::App for RigflowApp {
 
 				ui.add_space(8.0);
 
-				if let Some(selected_id) = &snapshot.selected_bookmark_id {
-				    if let Some(bookmark) = snapshot.bookmarks.iter().find(|b| &b.id == selected_id) {
-					if let Some(notes) = &bookmark.notes {
-					    if !notes.trim().is_empty() {
-						ui.add_space(8.0);
-						ui.label("Notes:");
-						ui.group(|ui| {
-						    ui.label(notes);
-						});
-					    }
-					}
-				    }
+				ui.label("Notes:");
+
+				let mut edited_notes = snapshot
+				    .selected_bookmark_id
+				    .as_ref()
+				    .and_then(|selected_id| {
+					snapshot
+					    .bookmarks
+					    .iter()
+					    .find(|b| &b.id == selected_id)
+					    .and_then(|b| b.notes.clone())
+				    })
+				    .unwrap_or_default();
+
+				let notes_changed = ui
+				    .add_enabled(
+					snapshot.selected_bookmark_id.is_some(),
+					egui::TextEdit::multiline(&mut edited_notes)
+					    .desired_rows(4)
+					    .desired_width(f32::INFINITY),
+				    )
+				    .changed();
+
+				if notes_changed {
+				    self.update_selected_bookmark_notes(edited_notes);
 				}
 
 				ui.add_space(8.0);
