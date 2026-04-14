@@ -82,56 +82,70 @@ impl RigflowApp {
 	};
 
 	{
-            let mut state = self.state.lock().unwrap();
 
-            state.selected_bookmark_id = Some(bookmark.id.clone());
-            state.target_freq_hz = bookmark.frequency_hz;
-            state.demod_mode = bookmark.demod_mode;
+	    let center_freq_hz = bookmark.frequency_hz;
 
-            if let Some(sideband) = bookmark.sideband {
-		state.sideband = sideband;
-            }
+	    {
+		let mut state = self.state.lock().unwrap();
 
-            if let Some(display) = &bookmark.display {
-		if let Some(zoom) = display.zoom {
-                    state.display_zoom = zoom;
+		state.center_freq_hz = center_freq_hz;
+		state.target_freq_hz = bookmark.frequency_hz;
+		state.demod_mode = bookmark.demod_mode;
+
+		if let Some(sideband) = bookmark.sideband {
+		    state.sideband = sideband;
 		}
-		if let Some(adaptive) = display.adaptive_waterfall_normalization {
-                    state.adaptive_waterfall_normalization = adaptive;
+
+		if let Some(display) = &bookmark.display {
+		    if let Some(zoom) = display.zoom {
+			state.display_zoom = zoom;
+		    }
+		    if let Some(adaptive) = display.adaptive_waterfall_normalization {
+			state.adaptive_waterfall_normalization = adaptive;
+		    }
+		    if let Some(top_db) = display.waterfall_top_db {
+			state.display_top_db = top_db;
+		    }
+		    if let Some(range_db) = display.waterfall_range_db {
+			state.display_range_db = range_db;
+		    }
 		}
-		if let Some(top_db) = display.waterfall_top_db {
-                    state.display_top_db = top_db;
-		}
-		if let Some(range_db) = display.waterfall_range_db {
-                    state.display_range_db = range_db;
-		}
-            }
 
-            state.bookmark_status.clear();
-	}
+		state.selected_bookmark_id = Some(bookmark.id.clone());
+		state.bookmark_status.clear();
+	    }
 
-	let _ = self.ws_cmd_tx.send(
-            ControlCommand::LegacyClientMessage(
-		rigflow_protocol::ClientMessage::SetFrequency {
-                    target_freq_hz: bookmark.frequency_hz,
-		},
-            ),
-	);
-
-	let _ = self.ws_cmd_tx.send(
-            ControlCommand::LegacyClientMessage(
-		rigflow_protocol::ClientMessage::SetDemodMode {
-                    mode: bookmark.demod_mode,
-		},
-            ),
-	);
-
-	if let Some(sideband) = bookmark.sideband {
-            let _ = self.ws_cmd_tx.send(
+	    let _ = self.ws_cmd_tx.send(
 		ControlCommand::LegacyClientMessage(
-                    rigflow_protocol::ClientMessage::SetSideband { sideband },
+		    rigflow_protocol::ClientMessage::SetCenterFrequency {
+			center_freq_hz,
+		    },
 		),
-            );
+	    );
+
+	    let _ = self.ws_cmd_tx.send(
+		ControlCommand::LegacyClientMessage(
+		    rigflow_protocol::ClientMessage::SetFrequency {
+			target_freq_hz: bookmark.frequency_hz,
+		    },
+		),
+	    );
+
+	    let _ = self.ws_cmd_tx.send(
+		ControlCommand::LegacyClientMessage(
+		    rigflow_protocol::ClientMessage::SetDemodMode {
+			mode: bookmark.demod_mode,
+		    },
+		),
+	    );
+
+	    if let Some(sideband) = bookmark.sideband {
+		let _ = self.ws_cmd_tx.send(
+		    ControlCommand::LegacyClientMessage(
+			rigflow_protocol::ClientMessage::SetSideband { sideband },
+		    ),
+		);
+	    }
 	}
     }
 
