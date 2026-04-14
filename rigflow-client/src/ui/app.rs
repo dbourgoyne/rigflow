@@ -1572,7 +1572,7 @@ impl eframe::App for RigflowApp {
 		    ui.label(format!("Delete operator \"{}\"?", operator_id));
 		    ui.add_space(6.0);
 		    ui.colored_label(
-			egui::Color32::YELLOW,
+			egui::Color32::RED,
 			"All operator settings, including bookmarks, will be lost.",
 		    );
 
