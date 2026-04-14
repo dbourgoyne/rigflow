@@ -614,17 +614,20 @@ impl RigflowApp {
             }
         }
     }
+    // -------- Start extraction -----------------
+    fn snapshot_state(&self) -> UiState {
+	let state = self.state.lock().unwrap();
+	state.clone()
+    }
 }
 
 impl eframe::App for RigflowApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let snapshot = {
-            let state = self.state.lock().unwrap();
-            state.clone()
-        };
 
-        let mut center_delta_hz: f32 = 0.0;
+	let snapshot = self.snapshot_state();
 	let config_mode = !snapshot.server_connected;
+	
+        let mut center_delta_hz: f32 = 0.0;
 
         ctx.input(|input| {
             let step = if input.modifiers.shift { 1_000_000.0 } else { 25_000.0 };
