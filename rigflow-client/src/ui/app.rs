@@ -10,6 +10,7 @@ use crate::persistence::{
     apply_operator_settings_to_ui_state,
     apply_ui_state_to_operator_settings,
     normalize_operator_id,
+    operator_file_path,
     BookmarkDisplaySettingsFile,
     BookmarkFile,
     PersistenceStore,
@@ -55,6 +56,118 @@ impl RigflowApp {
 	}
     }
 
+    fn save_selected_operator_license(&mut self) {
+	let (operator_id, selected_license) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.selected_license)
+	};
+
+	if operator_id.trim().is_empty() {
+            return;
+	}
+
+	let mut operator_settings =
+            match self.persistence_store.load_or_create_operator_settings(&operator_id) {
+		Ok(settings) => settings,
+		Err(err) => {
+                    if let Ok(mut state) = self.state.lock() {
+			state.persistence_status =
+                            format!("failed to load operator: {err}");
+                    }
+                    return;
+		}
+            };
+
+	operator_settings.selected_license = selected_license;
+
+	if let Err(err) = self.persistence_store.save_operator_settings(&operator_settings) {
+            if let Ok(mut state) = self.state.lock() {
+		state.persistence_status =
+                    format!("failed to save operator license: {err}");
+            }
+	}
+    }
+
+    fn delete_operator(&mut self, operator_id: &str) {
+	use std::fs;
+
+	let operator_id = match normalize_operator_id(operator_id) {
+            Ok(id) => id,
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("invalid operator id: {err}");
+		}
+		return;
+            }
+	};
+
+	let path = operator_file_path(self.persistence_store.config_dir(), &operator_id);
+
+	if let Err(err) = fs::remove_file(&path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status =
+			format!("failed to delete operator file: {err}");
+		}
+		return;
+            }
+	}
+
+	let mut app_state = match self.persistence_store.load_app_state() {
+            Ok(app_state) => app_state,
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status =
+			format!("failed to load app state: {err}");
+		}
+		return;
+            }
+	};
+
+	app_state.known_operator_ids.retain(|id| id != &operator_id);
+	let next_operator = app_state.known_operator_ids.first().cloned();
+	app_state.last_operator_id = next_operator.clone();
+
+	if let Err(err) = self.persistence_store.save_app_state(&app_state) {
+            if let Ok(mut state) = self.state.lock() {
+		state.persistence_status =
+                    format!("failed to save app state: {err}");
+            }
+            return;
+	}
+
+	if let Ok(mut state) = self.state.lock() {
+            state.show_delete_operator_dialog = false;
+            state.pending_delete_operator_id = None;
+	}
+
+	if let Some(next_operator_id) = next_operator {
+            match self.persistence_store.load_or_create_operator_settings(&next_operator_id) {
+		Ok(operator_settings) => {
+                    if let Ok(mut state) = self.state.lock() {
+			apply_operator_settings_to_ui_state(
+                            &mut state,
+                            &operator_settings,
+                            &app_state,
+			);
+			state.persistence_status.clear();
+                    }
+		}
+		Err(err) => {
+                    if let Ok(mut state) = self.state.lock() {
+			state.persistence_status =
+                            format!("failed to load replacement operator: {err}");
+                    }
+		}
+            }
+	} else if let Ok(mut state) = self.state.lock() {
+            let mut new_state = UiState::default();
+            new_state.known_operator_ids = Vec::new();
+            new_state.persistence_status.clear();
+            *state = new_state;
+	}
+    }
+    
     fn delete_selected_bookmark(&mut self) {
 	let selected_id = {
             let state = self.state.lock().unwrap();
@@ -482,6 +595,7 @@ impl eframe::App for RigflowApp {
         };
 
         let mut center_delta_hz: f32 = 0.0;
+	let config_mode = !snapshot.server_connected;
 
         ctx.input(|input| {
             let step = if input.modifiers.shift { 1_000_000.0 } else { 25_000.0 };
@@ -565,27 +679,42 @@ impl eframe::App for RigflowApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-			ui.collapsing("Radio Operator", |ui| {
-			    ui.label("Current operator:");
 
-			    if snapshot.operator_id.trim().is_empty() {
-				ui.monospace("none");
-			    } else {
-				ui.monospace(&snapshot.operator_id);
+			//-------- Radio operator ----------
+			ui.collapsing("Radio Operator", |ui| {
+			    if !config_mode {
+				ui.label("Disconnect from the server to change operator settings.");
+				ui.add_space(6.0);
 			    }
 
-			    ui.add_space(6.0);
+			    ui.add_enabled_ui(config_mode, |ui| {
+				ui.label("Current operator:");
 
-			    ui.label("Known operators:");
+				let mut selected_operator = if snapshot.operator_id.trim().is_empty() {
+				    None
+				} else {
+				    Some(snapshot.operator_id.clone())
+				};
 
-			    if snapshot.known_operator_ids.is_empty() {
-				ui.label("none");
-			    } else {
-				for operator_id in &snapshot.known_operator_ids {
-				    let selected = snapshot.operator_id == *operator_id;
+				egui::ComboBox::from_id_salt("operator_combo")
+				    .selected_text(
+					selected_operator
+					    .clone()
+					    .unwrap_or_else(|| "none".to_string()),
+				    )
+				    .show_ui(ui, |ui| {
+					for operator_id in &snapshot.known_operator_ids {
+					    ui.selectable_value(
+						&mut selected_operator,
+						Some(operator_id.clone()),
+						operator_id,
+					    );
+					}
+				    });
 
-				    if ui.selectable_label(selected, operator_id).clicked() {
-					match self.persistence_store.load_or_create_operator_settings(operator_id) {
+				if selected_operator != Some(snapshot.operator_id.clone()) {
+				    if let Some(operator_id) = selected_operator {
+					match self.persistence_store.load_or_create_operator_settings(&operator_id) {
 					    Ok(operator_settings) => {
 						match self.persistence_store.load_app_state() {
 						    Ok(mut app_state) => {
@@ -624,39 +753,95 @@ impl eframe::App for RigflowApp {
 					}
 				    }
 				}
-			    }
 
-			    ui.add_space(8.0);
+				ui.add_space(8.0);
 
-			    if ui.button("Add Operator").clicked() {
-				if let Ok(mut state) = self.state.lock() {
-				    state.show_add_operator_dialog = true;
-				    state.pending_operator_id.clear();
-				    state.pending_operator_license = None;
-				    state.persistence_status.clear();
+				ui.horizontal(|ui| {
+				    if ui.button("Add Operator").clicked() {
+					if let Ok(mut state) = self.state.lock() {
+					    state.show_add_operator_dialog = true;
+					    state.pending_operator_id.clear();
+					    state.pending_operator_license = None;
+					    state.persistence_status.clear();
+					}
+				    }
+
+				    if ui
+					.add_enabled(
+					    !snapshot.operator_id.trim().is_empty(),
+					    egui::Button::new("Delete Operator"),
+					)
+					.clicked()
+				    {
+					if let Ok(mut state) = self.state.lock() {
+					    state.show_delete_operator_dialog = true;
+					    state.pending_delete_operator_id = Some(state.operator_id.clone());
+					    state.persistence_status.clear();
+					}
+				    }
+				});
+
+				ui.add_space(8.0);
+				ui.label("License:");
+
+				let mut selected_license = snapshot.selected_license;
+
+				ui.radio_value(
+				    &mut selected_license,
+				    Some(LicenseClass::AmateurExtra),
+				    "Amateur Extra",
+				);
+				ui.radio_value(
+				    &mut selected_license,
+				    Some(LicenseClass::Advanced),
+				    "Advanced",
+				);
+				ui.radio_value(
+				    &mut selected_license,
+				    Some(LicenseClass::General),
+				    "General",
+				);
+				ui.radio_value(
+				    &mut selected_license,
+				    Some(LicenseClass::Technician),
+				    "Technician",
+				);
+				ui.radio_value(&mut selected_license, None, "None");
+
+				if selected_license != snapshot.selected_license {
+				    if let Ok(mut state) = self.state.lock() {
+					state.selected_license = selected_license;
+				    }
+				    self.save_selected_operator_license();
 				}
-			    }
+			    });
 
 			    if !snapshot.persistence_status.is_empty() {
 				ui.add_space(6.0);
-				ui.colored_label(egui::Color32::YELLOW, &snapshot.persistence_status);
+				ui.colored_label(
+				    egui::Color32::YELLOW,
+				    &snapshot.persistence_status,
+				);
 			    }
 			});
 
+			//-------- Rigflow Server ----------
                         egui::CollapsingHeader::new("Rigflow Server")
                             .default_open(false)
                             .show(ui, |ui| {
                                 ui.label("rigflow server IP:");
 
 				let mut ip = snapshot.rigflow_server_ip.clone();
-				if ui.text_edit_singleline(&mut ip).changed() {
-				    if let Ok(mut state) = self.state.lock() {
-					state.rigflow_server_ip = ip;
+				ui.add_enabled_ui(config_mode, |ui| {
+				    if ui.text_edit_singleline(&mut ip).changed() {
+					if let Ok(mut state) = self.state.lock() {
+					    state.rigflow_server_ip = ip.clone();
+					}
+
+					self.save_server_ip();
 				    }
-
-				    self.save_server_ip();
-				}
-
+				});
+				
 				ui.add_space(8.0);
 
 				let button_text = if snapshot.server_connected {
@@ -1368,6 +1553,56 @@ impl eframe::App for RigflowApp {
 
 	if let Some(bookmark_id) = default_bookmark_to_apply {
 	    self.apply_bookmark(&bookmark_id);
+	}
+
+	let delete_target = {
+	    let state = self.state.lock().unwrap();
+	    if state.show_delete_operator_dialog {
+		state.pending_delete_operator_id.clone()
+	    } else {
+		None
+	    }
+	};
+
+	if let Some(operator_id) = delete_target {
+	    egui::Window::new("Delete Operator")
+		.collapsible(false)
+		.resizable(false)
+		.show(ctx, |ui| {
+		    ui.label(format!("Delete operator \"{}\"?", operator_id));
+		    ui.add_space(6.0);
+		    ui.colored_label(
+			egui::Color32::YELLOW,
+			"All operator settings, including bookmarks, will be lost.",
+		    );
+
+		    ui.add_space(10.0);
+
+		    let mut cancel_requested = false;
+		    let mut delete_requested = false;
+
+		    ui.horizontal(|ui| {
+			if ui.button("Cancel").clicked() {
+			    cancel_requested = true;
+			}
+
+			if ui.button("Delete").clicked() {
+			    delete_requested = true;
+			}
+		    });
+
+		    if cancel_requested {
+			if let Ok(mut state) = self.state.lock() {
+			    state.show_delete_operator_dialog = false;
+			    state.pending_delete_operator_id = None;
+			    state.persistence_status.clear();
+			}
+		    }
+
+		    if delete_requested {
+			self.delete_operator(&operator_id);
+		    }
+		});
 	}
 
         ctx.request_repaint();

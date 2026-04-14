@@ -123,6 +123,8 @@ pub struct UiState {
     pub show_add_operator_dialog: bool,
     pub pending_operator_id: String,
     pub pending_operator_license: Option<crate::ui::om_bands::LicenseClass>,
+    pub show_delete_operator_dialog: bool,
+    pub pending_delete_operator_id: Option<String>,
     pub persistence_status: String,
 
     // ---------------------------------------------------------------------
@@ -190,6 +192,8 @@ impl Default for UiState {
 	    show_add_operator_dialog: false,
 	    pending_operator_id: String::new(),
 	    pending_operator_license: None,
+	    show_delete_operator_dialog: false,
+	    pending_delete_operator_id: None,
 	    persistence_status: String::new(),
 
 	    // --- Bookmark defaults -------------------------------------
