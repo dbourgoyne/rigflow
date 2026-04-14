@@ -708,7 +708,7 @@ fn draw_bookmark_overlays(
     }
 
     if let Some((bookmark, _rect)) = hovered_bookmark {
-	draw_bookmark_tooltip(painter, bookmark, pointer_pos);
+	draw_bookmark_tooltip(painter, plot_rect, bookmark, pointer_pos);
     }
 
     clicked_bookmark_id
@@ -717,6 +717,7 @@ fn draw_bookmark_overlays(
 
 fn draw_bookmark_tooltip(
     painter: &egui::Painter,
+    plot_rect: Rect,
     bookmark: &crate::persistence::BookmarkFile,
     pointer_pos: Option<Pos2>,
 ) {
@@ -765,11 +766,40 @@ fn draw_bookmark_tooltip(
         total_text_height + padding.y * 2.0,
     );
 
-    let bubble_rect = Rect::from_min_size(
-        Pos2::new(pointer_pos.x + 12.0, pointer_pos.y + 12.0),
-        bubble_size,
-    );
+    let margin = 12.0;
 
+    let preferred_x = if pointer_pos.x > plot_rect.center().x {
+	// Mouse is in the right half: place bubble to the left of the pointer.
+	pointer_pos.x - margin - bubble_size.x
+    } else {
+	// Mouse is in the left half: place bubble to the right of the pointer.
+	pointer_pos.x + margin
+    };
+
+    let preferred_y = pointer_pos.y + margin;
+
+    // Keep the bubble inside the plot when possible, but avoid invalid clamp ranges.
+    let min_x = plot_rect.left() + 4.0;
+    let max_x = plot_rect.right() - bubble_size.x - 4.0;
+    let bubble_x = if max_x >= min_x {
+	preferred_x.clamp(min_x, max_x)
+    } else {
+	min_x
+    };
+
+    let min_y = plot_rect.top() + 4.0;
+    let max_y = plot_rect.bottom() - bubble_size.y - 4.0;
+    let bubble_y = if max_y >= min_y {
+	preferred_y.clamp(min_y, max_y)
+    } else {
+	min_y
+    };
+
+    let bubble_rect = Rect::from_min_size(
+	Pos2::new(bubble_x, bubble_y),
+	bubble_size,
+    );
+    
     painter.rect_filled(bubble_rect, 6.0, fill_color);
     painter.rect_stroke(
         bubble_rect,
