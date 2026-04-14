@@ -18,6 +18,7 @@ use crate::ui::{
 
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
+    pub clicked_bookmark_id: Option<String>,
 }
 
 pub fn draw_spectrum_plot(
@@ -48,6 +49,8 @@ pub fn draw_spectrum_plot(
     }
 
     let spectrum_len = spectrum_db.len();
+    let pointer_pos = response.hover_pos();
+    let pointer_clicked = response.clicked();
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, spectrum_len, state);
@@ -55,6 +58,16 @@ pub fn draw_spectrum_plot(
     draw_om_overlays(&painter, plot_rect, spectrum_len, state);
     draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
+
+    let clicked_bookmark_id = draw_bookmark_overlays(
+	&painter,
+	plot_rect,
+	spectrum_len,
+	state,
+	pointer_pos,
+	pointer_clicked,
+    );
+    
     draw_frequency_markers(&painter, plot_rect, spectrum_len, state);
 
     painter.rect_stroke(
@@ -66,24 +79,26 @@ pub fn draw_spectrum_plot(
 
     let mut clicked_freq_hz = None;
 
-    if response.clicked() && visible_span_hz(state) > 0.0 {
-        if let Some(pointer_pos) = response.interact_pointer_pos() {
+    if clicked_bookmark_id.is_none() && response.clicked() && visible_span_hz(state) > 0.0 {
+	if let Some(pointer_pos) = response.interact_pointer_pos() {
             if plot_rect.contains(pointer_pos) {
-                let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
+		let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width())
                     .clamp(0.0, 1.0);
 
-                if let Some((left_hz, right_hz)) =
+		if let Some((left_hz, right_hz)) =
                     zoomed_visible_freq_range_hz(spectrum_len, state)
-                {
+		{
                     clicked_freq_hz = Some(left_hz + frac * (right_hz - left_hz));
-                }
+		}
             }
-        }
+	}
     }
 
     SpectrumInteraction {
-        clicked_target_freq_hz: clicked_freq_hz,
+	clicked_target_freq_hz: clicked_freq_hz,
+	clicked_bookmark_id,
     }
+
 }
 
 fn draw_grid_and_y_axis(
@@ -571,9 +586,243 @@ fn draw_om_overlays(
     }
 }
 
+fn draw_bookmark_overlays(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    spectrum_len: usize,
+    state: &UiState,
+    pointer_pos: Option<Pos2>,
+    pointer_clicked: bool,
+) -> Option<String> {
+
+    if state.bookmarks.is_empty() {
+        return None;
+    }
+
+    let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
+        return None;
+    };
+
+    if right_hz <= left_hz {
+        return None;
+    }
+
+    // Position bookmark labels just above the OM strip.
+    let mut clicked_bookmark_id: Option<String> = None;
+    let band_strip_height = 14.0;
+    let om_strip_height = band_strip_height / 3.0;
+    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let om_y1 = band_y0 - 1.0;
+    let om_y0 = om_y1 - om_strip_height;
+
+    let bookmark_y1 = om_y0 - 4.0;
+    let bookmark_height = 18.0;
+    let bookmark_y0 = bookmark_y1 - bookmark_height;
+
+    let font_id = FontId::monospace(10.0);
+    let text_color = Color32::from_rgb(255, 220, 80);
+    let border_color = Color32::from_rgb(255, 220, 80);
+    let fill_color = Color32::from_rgba_premultiplied(0, 0, 0, 0);
+
+    let mut hovered_bookmark: Option<(&crate::persistence::BookmarkFile, Rect)> = None;
+
+    for bookmark in &state.bookmarks {
+        let Some(center_x) =
+            freq_to_plot_x_egui(bookmark.frequency_hz, plot_rect, spectrum_len, state)
+        else {
+            continue;
+        };
+
+        if !center_x.is_finite() {
+            continue;
+        }
+
+	let full_title = bookmark.name.trim();
+
+	let title = if full_title.chars().count() > 16 {
+	    let truncated: String = full_title.chars().take(16).collect();
+	    format!("{truncated}...")
+	} else {
+	    full_title.to_string()
+	};
+
+        if title.is_empty() {
+            continue;
+        }
+
+        let galley = painter.layout_no_wrap(
+            title.to_string(),
+            font_id.clone(),
+            text_color,
+        );
+
+        let padding_x = 6.0;
+        let rect_width = galley.size().x + padding_x * 2.0;
+
+        let mut x0 = center_x - rect_width * 0.5;
+        let mut x1 = center_x + rect_width * 0.5;
+
+        // Clamp horizontally into the plot region.
+        if x0 < plot_rect.left() {
+            let delta = plot_rect.left() - x0;
+            x0 += delta;
+            x1 += delta;
+        }
+        if x1 > plot_rect.right() {
+            let delta = x1 - plot_rect.right();
+            x0 -= delta;
+            x1 -= delta;
+        }
+
+        let rect = Rect::from_min_max(
+            Pos2::new(x0, bookmark_y0),
+            Pos2::new(x1, bookmark_y1),
+        );
+
+        painter.rect_filled(rect, 4.0, fill_color);
+        painter.rect_stroke(
+            rect,
+            4.0,
+            Stroke::new(1.0, border_color),
+            egui::StrokeKind::Inside,
+        );
+
+        painter.galley(
+            Pos2::new(
+                rect.center().x - galley.size().x * 0.5,
+                rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            text_color,
+        );
+
+	if let Some(pointer) = pointer_pos {
+	    if rect.contains(pointer) {
+		hovered_bookmark = Some((bookmark, rect));
+
+		if pointer_clicked {
+		    clicked_bookmark_id = Some(bookmark.id.clone());
+		}
+	    }
+	}
+    }
+
+    if let Some((bookmark, _rect)) = hovered_bookmark {
+	draw_bookmark_tooltip(painter, plot_rect, bookmark, pointer_pos);
+    }
+
+    clicked_bookmark_id
+
+}
+
+fn draw_bookmark_tooltip(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    bookmark: &crate::persistence::BookmarkFile,
+    pointer_pos: Option<Pos2>,
+) {
+    let Some(pointer_pos) = pointer_pos else {
+        return;
+    };
+
+    let mut lines = vec![
+        bookmark.name.clone(),
+        format!("{} MHz", format_mhz(bookmark.frequency_hz)),
+    ];
+
+    if let Some(notes) = &bookmark.notes {
+        let trimmed = notes.trim();
+        if !trimmed.is_empty() {
+            lines.push(trimmed.to_string());
+        }
+    }
+
+    let font_id = FontId::monospace(10.0);
+    let text_color = Color32::from_rgb(235, 235, 235);
+    let border_color = Color32::from_rgba_premultiplied(255, 255, 255, 80);
+    let fill_color = Color32::from_rgba_premultiplied(28, 28, 32, 235);
+
+    let padding = egui::vec2(8.0, 6.0);
+    let line_spacing = 2.0;
+
+    let galleys: Vec<_> = lines
+        .iter()
+        .map(|line| painter.layout_no_wrap(line.clone(), font_id.clone(), text_color))
+        .collect();
+
+    let max_width = galleys
+        .iter()
+        .map(|g| g.size().x)
+        .fold(0.0_f32, f32::max);
+
+    let total_text_height = galleys
+        .iter()
+        .map(|g| g.size().y)
+        .sum::<f32>()
+        + line_spacing * (galleys.len().saturating_sub(1) as f32);
+
+    let bubble_size = egui::vec2(
+        max_width + padding.x * 2.0,
+        total_text_height + padding.y * 2.0,
+    );
+
+    let margin = 12.0;
+
+    let preferred_x = if pointer_pos.x > plot_rect.center().x {
+	// Mouse is in the right half: place bubble to the left of the pointer.
+	pointer_pos.x - margin - bubble_size.x
+    } else {
+	// Mouse is in the left half: place bubble to the right of the pointer.
+	pointer_pos.x + margin
+    };
+
+    let preferred_y = pointer_pos.y + margin;
+
+    // Keep the bubble inside the plot when possible, but avoid invalid clamp ranges.
+    let min_x = plot_rect.left() + 4.0;
+    let max_x = plot_rect.right() - bubble_size.x - 4.0;
+    let bubble_x = if max_x >= min_x {
+	preferred_x.clamp(min_x, max_x)
+    } else {
+	min_x
+    };
+
+    let min_y = plot_rect.top() + 4.0;
+    let max_y = plot_rect.bottom() - bubble_size.y - 4.0;
+    let bubble_y = if max_y >= min_y {
+	preferred_y.clamp(min_y, max_y)
+    } else {
+	min_y
+    };
+
+    let bubble_rect = Rect::from_min_size(
+	Pos2::new(bubble_x, bubble_y),
+	bubble_size,
+    );
+    
+    painter.rect_filled(bubble_rect, 6.0, fill_color);
+    painter.rect_stroke(
+        bubble_rect,
+        6.0,
+        Stroke::new(1.0, border_color),
+        egui::StrokeKind::Inside,
+    );
+
+    let mut y = bubble_rect.top() + padding.y;
+    for galley in galleys {
+        painter.galley(
+            Pos2::new(bubble_rect.left() + padding.x, y),
+            galley.clone(),
+            text_color,
+        );
+        y += galley.size().y + line_spacing;
+    }
+}
+
 fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
         clicked_target_freq_hz: None,
+        clicked_bookmark_id: None,
     }
 }
 

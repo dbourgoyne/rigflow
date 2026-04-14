@@ -326,14 +326,21 @@ pub fn apply_radio_server_message(
             }
         }
 
-        ServerRadioMessage::RadioAcquired { radio_id, .. } => {
-            state.radio_acquired = true;
-            state.selected_radio_id = Some(radio_id.0.clone());
-            state.server_status = format!("radio acquired: {}", radio_id.0);
+	ServerRadioMessage::RadioAcquired { radio_id, .. } => {
+	    state.radio_acquired = true;
+	    state.selected_radio_id = Some(radio_id.0.clone());
+	    state.server_status = format!("radio acquired: {}", radio_id.0);
 
-            // Force client audio pipeline to reset on radio switch/acquire.
-            audio_session_generation.fetch_add(1, Ordering::Relaxed);
-        }
+	    if state.auto_apply_default_bookmark_on_acquire
+		&& state.default_bookmark_id.is_some()
+		&& !state.bookmarks.is_empty()
+	    {
+		state.pending_apply_default_bookmark = true;
+	    }
+
+	    // Force client audio pipeline to reset on radio switch/acquire.
+	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
+	}
 
         ServerRadioMessage::RadioReleased { .. } => {
             state.radio_acquired = false;

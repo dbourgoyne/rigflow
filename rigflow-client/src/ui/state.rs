@@ -109,6 +109,37 @@ pub struct UiState {
 
     /// Waterfall/spectrum display zoom
     pub display_zoom: f32,
+
+    // ---------------------------------------------------------------------
+    // Persistent Storage
+    // ---------------------------------------------------------------------
+
+    /// Operator ID (call sign)
+    pub operator_id: String,
+
+    /// Vector of all known operators
+    pub known_operator_ids: Vec<String>,
+
+    pub show_add_operator_dialog: bool,
+    pub pending_operator_id: String,
+    pub pending_operator_license: Option<crate::ui::om_bands::LicenseClass>,
+    pub show_delete_operator_dialog: bool,
+    pub pending_delete_operator_id: Option<String>,
+    pub persistence_status: String,
+
+    // ---------------------------------------------------------------------
+    // Bookmarks
+    // ---------------------------------------------------------------------
+    pub bookmarks: Vec<crate::persistence::BookmarkFile>,
+    pub selected_bookmark_id: Option<String>,
+    pub default_bookmark_id: Option<String>,
+    pub auto_apply_default_bookmark_on_acquire: bool,
+
+    pub show_add_bookmark_dialog: bool,
+    pub pending_bookmark_name: String,
+    pub pending_bookmark_notes: String,
+    pub bookmark_status: String,
+    pub pending_apply_default_bookmark: bool,
 }
 
 impl Default for UiState {
@@ -155,6 +186,28 @@ impl Default for UiState {
 	    adaptive_top_db_estimate: -35.0,
             adaptive_floor_db_estimate: -105.0,
 	    display_zoom: 1.0,
+
+	    // --- Persistent defaults -------------------------------------
+	    operator_id: String::new(),
+	    known_operator_ids: Vec::new(),
+	    show_add_operator_dialog: false,
+	    pending_operator_id: String::new(),
+	    pending_operator_license: None,
+	    show_delete_operator_dialog: false,
+	    pending_delete_operator_id: None,
+	    persistence_status: String::new(),
+
+	    // --- Bookmark defaults -------------------------------------
+	    bookmarks: Vec::new(),
+	    selected_bookmark_id: None,
+	    default_bookmark_id: None,
+	    auto_apply_default_bookmark_on_acquire: false,
+
+	    show_add_bookmark_dialog: false,
+	    pending_bookmark_name: String::new(),
+	    pending_bookmark_notes: String::new(),
+	    bookmark_status: String::new(),
+	    pending_apply_default_bookmark: false,
         }
     }
 }
