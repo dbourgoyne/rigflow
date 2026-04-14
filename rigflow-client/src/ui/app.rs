@@ -51,6 +51,38 @@ impl RigflowApp {
 	}
     }
 
+    fn save_server_ip(&mut self) {
+	let (operator_id, server_ip) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.rigflow_server_ip.clone())
+	};
+
+	if operator_id.trim().is_empty() {
+            return;
+	}
+
+	let mut operator_settings =
+            match self.persistence_store.load_or_create_operator_settings(&operator_id) {
+		Ok(settings) => settings,
+		Err(err) => {
+                    if let Ok(mut state) = self.state.lock() {
+			state.persistence_status =
+                            format!("failed to load operator: {err}");
+                    }
+                    return;
+		}
+            };
+
+	operator_settings.server_ip = server_ip;
+
+	if let Err(err) = self.persistence_store.save_operator_settings(&operator_settings) {
+            if let Ok(mut state) = self.state.lock() {
+		state.persistence_status =
+                    format!("failed to save server IP: {err}");
+            }
+	}
+    }
+
     fn save_pending_operator(&mut self) {
 	let (raw_operator_id, selected_license) = {
             let state = self.state.lock().unwrap();
@@ -338,20 +370,22 @@ impl eframe::App for RigflowApp {
                             .show(ui, |ui| {
                                 ui.label("rigflow server IP:");
 
-                                let mut ip = snapshot.rigflow_server_ip.clone();
-                                if ui.text_edit_singleline(&mut ip).changed() {
-                                    if let Ok(mut state) = self.state.lock() {
-                                        state.rigflow_server_ip = ip;
-                                    }
-                                }
+				let mut ip = snapshot.rigflow_server_ip.clone();
+				if ui.text_edit_singleline(&mut ip).changed() {
+				    if let Ok(mut state) = self.state.lock() {
+					state.rigflow_server_ip = ip;
+				    }
 
-                                ui.add_space(8.0);
+				    self.save_server_ip();
+				}
 
-                                let button_text = if snapshot.server_connected {
-                                    "Disconnect"
-                                } else {
-                                    "Connect"
-                                };
+				ui.add_space(8.0);
+
+				let button_text = if snapshot.server_connected {
+				    "Disconnect"
+				} else {
+				    "Connect"
+				};
 
                                 if ui.button(button_text).clicked() {
                                     let ip =
