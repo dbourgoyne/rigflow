@@ -1,6 +1,7 @@
 pub mod app;
 mod app_center;
 mod app_dialogs;
+mod app_panels;
 pub mod bands;
 pub mod frequency_view;
 pub mod layout;
