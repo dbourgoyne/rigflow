@@ -134,6 +134,7 @@ impl eframe::App for RigflowApp {
 	self.draw_center_panel(ctx, &snapshot);
 	self.draw_add_operator_dialog(ctx);
 	self.draw_add_bookmark_dialog(ctx);
+	self.draw_delete_operator_dialog(ctx);
 
         ctx.request_repaint();
     }

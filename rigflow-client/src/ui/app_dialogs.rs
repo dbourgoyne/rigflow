@@ -82,7 +82,9 @@ impl RigflowApp {
 	if let Some(bookmark_id) = default_bookmark_to_apply {
 	    self.apply_bookmark(&bookmark_id);
 	}
+    }
 
+    pub (crate) fn draw_delete_operator_dialog(&mut self, ctx: &egui::Context) {
 	let delete_target = {
 	    let state = self.state.lock().unwrap();
 	    if state.show_delete_operator_dialog {
@@ -133,6 +135,7 @@ impl RigflowApp {
 		});
 	}
     }
+    
 
     pub(crate) fn draw_add_operator_dialog (
         &mut self,
