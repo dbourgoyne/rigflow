@@ -9,6 +9,241 @@ use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 impl RigflowApp {
 
+    
+    pub(crate) fn draw_left_panel(
+	&mut self,
+	ctx: &egui::Context,
+	snapshot: &UiState,
+	config_mode: bool,
+    ) {
+
+        egui::SidePanel::left("left_panel")
+            .resizable(true)
+            .default_width(260.0)
+            .show(ctx, |ui| {
+                ui.heading("rigflow");
+                ui.separator();
+
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+			self.draw_operator_panel(ui, snapshot, config_mode);
+                        ui.separator();
+			self.draw_server_panel(ui, snapshot, config_mode);
+			ui.separator();
+			self.draw_radios_panel(ui, snapshot);
+			self.draw_radio_control_panel(ui, snapshot);
+			ui.separator();
+			self.draw_waterfall_control_panel(ui);
+			ui.separator();
+			self.draw_bookmarks_panel(ui);
+			ui.separator();
+		    });
+            });
+    }
+
+
+    pub(crate) fn draw_waterfall_control_panel(
+	&mut self,
+	ui: &mut egui::Ui,
+    ) {
+        ui.collapsing("Waterfall Control", |ui| {
+            if let Ok(mut state) = self.state.lock() {
+                ui.add(
+                    egui::Slider::new(
+                        &mut state.display_zoom,
+                        1.0..=4.0,
+                    )
+			.text("Zoom"),
+                );
+
+                ui.checkbox(
+                    &mut state.adaptive_waterfall_normalization,
+                    "Adaptive normalization",
+                );
+
+                let manual_enabled =
+                    !state.adaptive_waterfall_normalization;
+
+                ui.add_enabled_ui(manual_enabled, |ui| {
+                    ui.add(
+                        egui::Slider::new(
+                            &mut state.display_top_db,
+                            -120.0..=20.0,
+                        )
+                            .text("Top dB"),
+                    );
+
+                    ui.add(
+                        egui::Slider::new(
+                            &mut state.display_range_db,
+                            10.0..=120.0,
+                        )
+                            .text("Range dB"),
+                    );
+                });
+            } else {
+                ui.label("Waterfall controls unavailable");
+            }
+        });
+    }
+
+    pub(crate) fn draw_radio_control_panel(
+	&mut self,
+	ui: &mut egui::Ui,
+	snapshot: &UiState,
+    ) {    
+        if snapshot.radio_acquired {
+            egui::CollapsingHeader::new("Radio Control")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label("Demod");
+
+                    let mut selected_demod =
+                        snapshot.demod_mode.clone();
+
+                    ui.horizontal(|ui| {
+                        ui.radio_value(
+                            &mut selected_demod,
+                            DemodMode::Wfm,
+                            "wfm",
+                        );
+                        ui.radio_value(
+                            &mut selected_demod,
+                            DemodMode::Nfm,
+                            "nfm",
+                        );
+                        ui.radio_value(
+                            &mut selected_demod,
+                            DemodMode::Lsb,
+                            "lsb",
+                        );
+                        ui.radio_value(
+                            &mut selected_demod,
+                            DemodMode::Usb,
+                            "usb",
+                        );
+                    });
+
+                    if selected_demod != snapshot.demod_mode {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.demod_mode =
+                                selected_demod.clone();
+                            state.sideband = match selected_demod {
+                                DemodMode::Lsb => Sideband::Lsb,
+                                DemodMode::Usb => Sideband::Usb,
+                                _ => state.sideband,
+                            };
+                        }
+
+                        let _ = self.ws_cmd_tx.send(
+                            ControlCommand::LegacyClientMessage(
+                                rigflow_protocol::ClientMessage::SetDemodMode {
+                                    mode: selected_demod,
+                                },
+                            ),
+                        );
+
+                        if selected_demod == DemodMode::Lsb
+                            || selected_demod == DemodMode::Usb
+                        {
+                            let _ = self.ws_cmd_tx.send(
+                                ControlCommand::LegacyClientMessage(
+                                    rigflow_protocol::ClientMessage::SetSideband {
+                                        sideband: match selected_demod {
+                                            DemodMode::Lsb => Sideband::Lsb,
+                                            DemodMode::Usb => Sideband::Usb,
+                                            _ => unreachable!(
+                                                "sideband only sent for USB/LSB"
+                                            ),
+                                        },
+                                    },
+                                ),
+                            );
+                        }
+                    }
+                });
+        }
+    }
+
+    pub(crate) fn draw_radios_panel(
+	&mut self,
+	ui: &mut egui::Ui,
+	snapshot: &UiState,
+    ) {
+	
+        egui::CollapsingHeader::new("Radios")
+            .default_open(true)
+            .show(ui, |ui| {
+                if snapshot.available_radios.is_empty() {
+                    ui.label("no radios");
+                } else {
+                    let mut selected =
+                        snapshot.selected_radio_id.clone();
+
+                    for radio in &snapshot.available_radios {
+                        let label = if radio.is_leased {
+                            format!("{} (busy)", radio.display_name)
+                        } else {
+                            radio.display_name.clone()
+                        };
+
+                        let is_selected =
+                            selected.as_deref() == Some(&radio.id.0);
+
+                        if ui
+                            .selectable_label(is_selected, label)
+                            .clicked()
+                        {
+                            selected = Some(radio.id.0.clone());
+                        }
+                    }
+
+                    if selected != snapshot.selected_radio_id {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.selected_radio_id = selected.clone();
+                        }
+                    }
+
+                    ui.add_space(8.0);
+
+                    let can_acquire =
+                        selected.is_some() && !snapshot.radio_acquired;
+                    let can_release = snapshot.radio_acquired;
+
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(
+                                can_acquire,
+                                egui::Button::new("Acquire"),
+                            )
+                            .clicked()
+                        {
+                            if let Some(radio_id) = selected.clone() {
+                                let _ = self.ws_cmd_tx.send(
+                                    ControlCommand::AcquireRadio {
+                                        radio_id,
+                                    },
+                                );
+                            }
+                        }
+
+                        if ui
+                            .add_enabled(
+                                can_release,
+                                egui::Button::new("Release"),
+                            )
+                            .clicked()
+                        {
+                            let _ = self.ws_cmd_tx.send(
+                                ControlCommand::ReleaseRadio,
+                            );
+                        }
+                    });
+                }
+            });
+    }
+
     pub(crate) fn draw_server_panel(
 	&mut self,
 	ui: &mut egui::Ui,
@@ -350,219 +585,5 @@ impl RigflowApp {
 		self.save_bookmarks_to_current_operator();
 	    }
 	});
-    }
-
-    pub(crate) fn draw_left_panel(
-	&mut self,
-	ctx: &egui::Context,
-	snapshot: &UiState,
-	config_mode: bool,
-    ) {
-
-        egui::SidePanel::left("left_panel")
-            .resizable(true)
-            .default_width(260.0)
-            .show(ctx, |ui| {
-                ui.heading("rigflow");
-                ui.separator();
-
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-
-			self.draw_operator_panel(ui, snapshot, config_mode);
-                        ui.separator();
-			self.draw_server_panel(ui, snapshot, config_mode);
-			ui.separator();
-
-                        egui::CollapsingHeader::new("Radios")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                if snapshot.available_radios.is_empty() {
-                                    ui.label("no radios");
-                                } else {
-                                    let mut selected =
-                                        snapshot.selected_radio_id.clone();
-
-                                    for radio in &snapshot.available_radios {
-                                        let label = if radio.is_leased {
-                                            format!("{} (busy)", radio.display_name)
-                                        } else {
-                                            radio.display_name.clone()
-                                        };
-
-                                        let is_selected =
-                                            selected.as_deref() == Some(&radio.id.0);
-
-                                        if ui
-                                            .selectable_label(is_selected, label)
-                                            .clicked()
-                                        {
-                                            selected = Some(radio.id.0.clone());
-                                        }
-                                    }
-
-                                    if selected != snapshot.selected_radio_id {
-                                        if let Ok(mut state) = self.state.lock() {
-                                            state.selected_radio_id = selected.clone();
-                                        }
-                                    }
-
-                                    ui.add_space(8.0);
-
-                                    let can_acquire =
-                                        selected.is_some() && !snapshot.radio_acquired;
-                                    let can_release = snapshot.radio_acquired;
-
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .add_enabled(
-                                                can_acquire,
-                                                egui::Button::new("Acquire"),
-                                            )
-                                            .clicked()
-                                        {
-                                            if let Some(radio_id) = selected.clone() {
-                                                let _ = self.ws_cmd_tx.send(
-                                                    ControlCommand::AcquireRadio {
-                                                        radio_id,
-                                                    },
-                                                );
-                                            }
-                                        }
-
-                                        if ui
-                                            .add_enabled(
-                                                can_release,
-                                                egui::Button::new("Release"),
-                                            )
-                                            .clicked()
-                                        {
-                                            let _ = self.ws_cmd_tx.send(
-                                                ControlCommand::ReleaseRadio,
-                                            );
-                                        }
-                                    });
-                                }
-                            });
-
-                        if snapshot.radio_acquired {
-                            egui::CollapsingHeader::new("Radio Control")
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    ui.label("Demod");
-
-                                    let mut selected_demod =
-                                        snapshot.demod_mode.clone();
-
-                                    ui.horizontal(|ui| {
-                                        ui.radio_value(
-                                            &mut selected_demod,
-                                            DemodMode::Wfm,
-                                            "wfm",
-                                        );
-                                        ui.radio_value(
-                                            &mut selected_demod,
-                                            DemodMode::Nfm,
-                                            "nfm",
-                                        );
-                                        ui.radio_value(
-                                            &mut selected_demod,
-                                            DemodMode::Lsb,
-                                            "lsb",
-                                        );
-                                        ui.radio_value(
-                                            &mut selected_demod,
-                                            DemodMode::Usb,
-                                            "usb",
-                                        );
-                                    });
-
-                                    if selected_demod != snapshot.demod_mode {
-                                        if let Ok(mut state) = self.state.lock() {
-                                            state.demod_mode =
-                                                selected_demod.clone();
-                                            state.sideband = match selected_demod {
-                                                DemodMode::Lsb => Sideband::Lsb,
-                                                DemodMode::Usb => Sideband::Usb,
-                                                _ => state.sideband,
-                                            };
-                                        }
-
-                                        let _ = self.ws_cmd_tx.send(
-                                            ControlCommand::LegacyClientMessage(
-                                                rigflow_protocol::ClientMessage::SetDemodMode {
-                                                    mode: selected_demod,
-                                                },
-                                            ),
-                                        );
-
-                                        if selected_demod == DemodMode::Lsb
-                                            || selected_demod == DemodMode::Usb
-                                        {
-                                            let _ = self.ws_cmd_tx.send(
-                                                ControlCommand::LegacyClientMessage(
-                                                    rigflow_protocol::ClientMessage::SetSideband {
-                                                        sideband: match selected_demod {
-                                                            DemodMode::Lsb => Sideband::Lsb,
-                                                            DemodMode::Usb => Sideband::Usb,
-                                                            _ => unreachable!(
-                                                                "sideband only sent for USB/LSB"
-                                                            ),
-                                                        },
-                                                    },
-                                                ),
-                                            );
-                                        }
-                                    }
-                                });
-                        }
-
-                        ui.collapsing("Waterfall Control", |ui| {
-                            if let Ok(mut state) = self.state.lock() {
-                                ui.add(
-                                    egui::Slider::new(
-                                        &mut state.display_zoom,
-                                        1.0..=4.0,
-                                    )
-					.text("Zoom"),
-                                );
-
-                                ui.checkbox(
-                                    &mut state.adaptive_waterfall_normalization,
-                                    "Adaptive normalization",
-                                );
-
-                                let manual_enabled =
-                                    !state.adaptive_waterfall_normalization;
-
-                                ui.add_enabled_ui(manual_enabled, |ui| {
-                                    ui.add(
-                                        egui::Slider::new(
-                                            &mut state.display_top_db,
-                                            -120.0..=20.0,
-                                        )
-                                            .text("Top dB"),
-                                    );
-
-                                    ui.add(
-                                        egui::Slider::new(
-                                            &mut state.display_range_db,
-                                            10.0..=120.0,
-                                        )
-                                            .text("Range dB"),
-                                    );
-                                });
-                            } else {
-                                ui.label("Waterfall controls unavailable");
-                            }
-                        });
-
-			self.draw_bookmarks_panel(ui);
-
-
-			ui.separator();
-		    });
-            });
     }
 }
