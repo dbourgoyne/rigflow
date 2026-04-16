@@ -54,7 +54,12 @@ impl Default for ServerConfig {
             wav_file: "input_iq.wav".to_string(),
             wav_dir: "./".to_string(),
 
-            fake_sample_rate_hz: 48_000.0,
+	    // Use a high enough fake sample rate so the existing mode-dependent
+	    // pipeline cutoffs (especially WFM) remain valid without hitting
+	    // Nyquist assertions. This keeps the fake source compatible with
+	    // the current RTL-oriented DSP pipeline until cutoffs are derived
+	    // from sample rate + decimation more robustly.
+            fake_sample_rate_hz: 1_024_000.0,
             fake_tone_hz: 1_500.0,
             fake_center_freq_hz: 101_100_000.0,
             fake_target_freq_hz: 101_100_000.0,
@@ -224,7 +229,7 @@ pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig
 
 pub fn choose_block_size(source: &SourceKind) -> usize {
     match source {
-        SourceKind::Fake => 240,
+        SourceKind::Fake => 8192,
 	SourceKind::Wav => 8192,
         SourceKind::RtlSdr => 16384,
     }
@@ -232,7 +237,10 @@ pub fn choose_block_size(source: &SourceKind) -> usize {
 
 pub fn choose_decimation(source: &SourceKind) -> usize {
     match source {
-        SourceKind::Fake => 4,
+	// Chosen so fake source lands at roughly the same post-decimation
+	// sample rate as RTL-SDR (~170.7 kHz), which avoids current WFM
+	// cutoff/assert issues in the pipeline.
+        SourceKind::Fake => 6,
         SourceKind::Wav => 16,
         SourceKind::RtlSdr => 12,
     }
