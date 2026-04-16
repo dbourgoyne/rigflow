@@ -118,6 +118,11 @@ impl RigflowApp {
                             DemodMode::Am,
                             "am",
                         );
+			ui.radio_value(
+                            &mut selected_demod,
+                            DemodMode::Cw,
+                            "cw",
+                        );
                         ui.radio_value(
                             &mut selected_demod,
                             DemodMode::Lsb,
