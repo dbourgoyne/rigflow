@@ -145,6 +145,8 @@ fn default_radio_capabilities() -> RadioCapabilities {
         max_sample_rate_hz: 2_400_000,
         supports_wfm: true,
         supports_nfm: true,
+	supports_am: true,
+	supports_cw: true,
         supports_usb: true,
         supports_lsb: true,
     }

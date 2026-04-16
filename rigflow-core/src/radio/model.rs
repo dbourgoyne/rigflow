@@ -60,6 +60,8 @@ pub struct RadioCapabilities {
     pub supports_nfm: bool,
     pub supports_usb: bool,
     pub supports_lsb: bool,
+    pub supports_am: bool,
+    pub supports_cw: bool,
 }
 
 /// Description of a radio available on the server.

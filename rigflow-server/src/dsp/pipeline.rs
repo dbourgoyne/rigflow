@@ -10,6 +10,7 @@ use crate::dsp::audio::deemphasis::DeemphasisFilter;
 use crate::dsp::audio::resampler::AudioResampler;
 use crate::dsp::decimator::PolyphaseDecimator;
 use crate::dsp::demod::am::AmDemodulator;
+use crate::dsp::demod::cw::CwDemodulator;
 use crate::dsp::demod::fm::FmDemodulator;
 use crate::dsp::demod::ssb::SsbDemodulator;
 use crate::dsp::demod::{DemodMode, Sideband};
@@ -172,6 +173,7 @@ pub struct DspPipeline {
     ssb_demod: SsbDemodulator,
     fm_demod: FmDemodulator,
     am_demod: AmDemodulator,
+    cw_demod: CwDemodulator,
 
     dc_blocker: DcBlocker,
     agc: Agc,
@@ -270,6 +272,7 @@ impl DspPipeline {
             sideband: Sideband::Usb,
             ssb_demod: SsbDemodulator::new(Sideband::Usb),
 	    am_demod: AmDemodulator::new(),
+	    cw_demod: CwDemodulator::new(cfg.input_sample_rate_hz, 700.),
             fm_demod: FmDemodulator::new(),
             dc_blocker: DcBlocker::new(0.995),
             agc: Agc::new(0.3, 0.9, 0.999, 20.0),
@@ -388,6 +391,7 @@ impl DspPipeline {
             DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
             DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
 	    DemodMode::Am => self.am_demod.process(&iq),
+	    DemodMode::Cw => self.cw_demod.process(&iq),
 	};
 
 	self.dc_blocker.process_in_place(&mut audio);
@@ -396,6 +400,13 @@ impl DspPipeline {
             DemodMode::Wfm => self.process_fm_audio_post(&mut audio, WFM_AUDIO_GAIN),
             DemodMode::Nfm => self.process_fm_audio_post(&mut audio, NFM_AUDIO_GAIN),
 	    DemodMode::Am => {
+		self.agc.process_in_place(&mut audio);
+
+		if let Some(fir) = &mut self.audio_fir {
+		    fir.process_in_place(&mut audio);
+		}
+	    }
+	    DemodMode::Cw => {
 		self.agc.process_in_place(&mut audio);
 
 		if let Some(fir) = &mut self.audio_fir {
@@ -424,6 +435,8 @@ impl DspPipeline {
         self.dc_blocker.reset();
         self.agc.reset();
         self.fm_demod.reset();
+	self.am_demod.reset();
+	self.cw_demod.reset();
 
         if let Some(fir) = &mut self.audio_fir {
             fir.reset();
