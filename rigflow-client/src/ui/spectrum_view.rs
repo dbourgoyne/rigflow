@@ -364,7 +364,11 @@ fn draw_passband_overlay(
         DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
 	DemodMode::Am => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 	DemodMode::Cw => todo!(),
+=======
+	DemodMode::Cw => (target_freq_hz - 1_000.0, target_freq_hz + 1_000.0),
+>>>>>>> Stashed changes
 =======
 	DemodMode::Cw => (target_freq_hz - 1_000.0, target_freq_hz + 1_000.0),
 >>>>>>> Stashed changes
