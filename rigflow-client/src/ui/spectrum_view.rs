@@ -362,7 +362,7 @@ fn draw_passband_overlay(
         DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
         DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
         DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
-        DemodMode::Am => todo!(),
+	DemodMode::Am => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
     };
 
     let visible_pb_left_hz = pb_left_hz.max(left_hz);
