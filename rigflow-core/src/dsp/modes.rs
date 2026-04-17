@@ -93,3 +93,46 @@ impl FromStr for Sideband {
         }
     }
 }
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct BandwidthLimits {
+    pub min_hz: f32,
+    pub max_hz: f32,
+    pub default_hz: f32,
+}
+
+pub fn filter_bandwidth_limits(mode: DemodMode) -> BandwidthLimits {
+    match mode {
+        DemodMode::Usb | DemodMode::Lsb => BandwidthLimits {
+            min_hz: 300.0,
+            max_hz: 4000.0,
+            default_hz: 2700.0,
+        },
+        DemodMode::Cw => BandwidthLimits {
+            min_hz: 100.0,
+            max_hz: 1500.0,
+            default_hz: 500.0,
+        },
+        DemodMode::Am => BandwidthLimits {
+            min_hz: 1000.0,
+            max_hz: 10000.0,
+            default_hz: 5000.0,
+        },
+        DemodMode::Nfm => BandwidthLimits {
+            min_hz: 1500.0,
+            max_hz: 8000.0,
+            default_hz: 4000.0,
+        },
+        DemodMode::Wfm => BandwidthLimits {
+            min_hz: 5000.0,
+            max_hz: 20000.0,
+            default_hz: 15000.0,
+        },
+    }
+}
+
+pub fn clamp_filter_bandwidth(mode: DemodMode, hz: f32) -> f32 {
+    let limits = filter_bandwidth_limits(mode);
+    hz.clamp(limits.min_hz, limits.max_hz)
+}

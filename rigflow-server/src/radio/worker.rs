@@ -734,6 +734,8 @@ fn spawn_dsp_thread(
             startup_info.input_sample_rate_hz,
         ));
 
+	pipeline.set_filter_bandwidth_hz(startup_info.runtime.filter_bandwidth_hz);
+
         if matches!(
             startup_info.runtime.demod_mode,
             DemodMode::Usb | DemodMode::Lsb
@@ -796,6 +798,8 @@ fn spawn_dsp_thread(
                     current.target_freq_hz,
                     startup_info.input_sample_rate_hz,
                 ));
+
+		pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
 
                 if matches!(current.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
                     pipeline.set_sideband(current.sideband);

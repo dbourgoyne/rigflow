@@ -15,6 +15,7 @@ use crate::dsp::demod::fm::FmDemodulator;
 use crate::dsp::demod::ssb::SsbDemodulator;
 use crate::dsp::demod::{DemodMode, Sideband};
 use crate::dsp::tuner::VirtualTuner;
+use rigflow_core::dsp::modes::clamp_filter_bandwidth;
 
 #[derive(Debug, Clone)]
 pub struct DspPipelineConfig {
@@ -506,7 +507,7 @@ impl DspPipeline {
     }
 
     pub fn set_filter_bandwidth_hz(&mut self, bandwidth_hz: f32) {
-	let bandwidth_hz = bandwidth_hz.max(100.0);
+	let bandwidth_hz = clamp_filter_bandwidth( self.mode, bandwidth_hz );
 
 	match self.mode {
             DemodMode::Usb | DemodMode::Lsb => {

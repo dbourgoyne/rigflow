@@ -5,7 +5,7 @@ use crate::UiState;
 use crate::ui::om_bands::LicenseClass;
 use crate::persistence::apply_operator_settings_to_ui_state;
 use crate::ControlCommand;
-use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::dsp::modes::{DemodMode, Sideband, filter_bandwidth_limits, clamp_filter_bandwidth};
 
 impl RigflowApp {
 
@@ -98,28 +98,38 @@ impl RigflowApp {
                 .default_open(true)
                 .show(ui, |ui| {
 
-		    let mut selected_demod =
-                        snapshot.demod_mode.clone();
-		    let (min_bw, max_bw, default_bw) = match selected_demod {
-			DemodMode::Usb | DemodMode::Lsb => (300.0, 4000.0, 2700.0),
-			DemodMode::Cw => (100.0, 1500.0, 500.0),
-			DemodMode::Am => (1000.0, 10000.0, 5000.0),
-			DemodMode::Nfm => (1500.0, 8000.0, 4000.0),
-			DemodMode::Wfm => (5000.0, 20000.0, 15000.0),
-		    };
+		    let bw_limits = filter_bandwidth_limits( snapshot.demod_mode );
 
 		    if let Ok(mut state) = self.state.lock() {
-			*&mut state.filter_bandwidth_hz = default_bw;
+
+			if state.last_demod_mode_for_bw != Some(snapshot.demod_mode) {
+			    state.filter_bandwidth_hz = bw_limits.default_hz;
+			    state.last_demod_mode_for_bw = Some(snapshot.demod_mode);
+			}
+
+			state.filter_bandwidth_hz = clamp_filter_bandwidth( snapshot.demod_mode, state.filter_bandwidth_hz );
+
 			ui.add(
-			    egui::Slider::new(
-				&mut state.filter_bandwidth_hz,
-				min_bw..=max_bw,
-			    )
-				.text("Filter Bandwidth (Hz)"),
+			    egui::Slider::new(&mut state.filter_bandwidth_hz, bw_limits.min_hz..=bw_limits.max_hz)
+				.text("Filter Bandwidth (Hz)")
 			);
-                    };
+
+			if state.filter_bandwidth_hz != snapshot.filter_bandwidth_hz {
+                            let _ = self.ws_cmd_tx.send(
+				ControlCommand::LegacyClientMessage(
+                                    rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					bandwidth_hz: state.filter_bandwidth_hz
+                                    },
+				),
+                            );
+			}
+
+		    }
 		    
                     ui.label("Demod");
+
+		    let mut selected_demod =
+                        snapshot.demod_mode.clone();
 
                     ui.horizontal(|ui| {
                         ui.radio_value(

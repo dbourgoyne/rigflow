@@ -25,6 +25,7 @@ pub struct UiState {
 
     /// Current demodulation mode
     pub demod_mode: DemodMode,
+    pub last_demod_mode_for_bw: Option<DemodMode>,
 
     /// SSB pitch offset (Hz)
     pub ssb_pitch_hz: f32,
@@ -154,6 +155,7 @@ impl Default for UiState {
             target_freq_hz: 0.0,
             sideband: Sideband::Lsb,
             demod_mode: DemodMode::Wfm,
+	    last_demod_mode_for_bw: None,
             ssb_pitch_hz: 0.0,
 	    filter_bandwidth_hz: 30000.0,
             input_sample_rate_hz: 0.0,
