@@ -504,4 +504,38 @@ impl DspPipeline {
         self.ssb_pitch_hz = pitch_hz;
         self.rebuild_ssb_filters(self.ssb_bandwidth_hz, self.ssb_fir_taps);
     }
+
+    pub fn set_filter_bandwidth_hz(&mut self, bandwidth_hz: f32) {
+	let bandwidth_hz = bandwidth_hz.max(100.0);
+
+	match self.mode {
+            DemodMode::Usb | DemodMode::Lsb => {
+		self.rebuild_ssb_filters(bandwidth_hz, self.ssb_fir_taps);
+
+		self.audio_fir = Some(AudioFir::new(
+                    self.output_sample_rate_hz,
+                    bandwidth_hz,
+                    self.ssb_fir_taps,
+		));
+            }
+
+            DemodMode::Cw => {
+		self.audio_fir = Some(AudioFir::new(
+                    self.output_sample_rate_hz,
+                    bandwidth_hz,
+                    self.ssb_fir_taps,
+		));
+            }
+
+            DemodMode::Am | DemodMode::Nfm | DemodMode::Wfm => {
+		self.audio_fir = Some(AudioFir::new(
+                    self.output_sample_rate_hz,
+                    bandwidth_hz,
+                    self.ssb_fir_taps,
+		));
+            }
+	}
+
+	self.reset_audio_state();
+    }
 }

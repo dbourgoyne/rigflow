@@ -37,6 +37,7 @@ struct SharedControlState {
     demod_mode: DemodMode,
     sideband: Sideband,
     ssb_pitch_hz: f32,
+    filter_bandwidth_hz: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +234,7 @@ fn build_runtime_state(
         demod_mode: control.demod_mode,
         sideband: control.sideband,
         ssb_pitch_hz: control.ssb_pitch_hz,
+	filter_bandwidth_hz: control.filter_bandwidth_hz,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -299,6 +301,7 @@ fn run_iq_worker_threads(
         demod_mode: server_cfg.demod,
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
+	filter_bandwidth_hz: 3000.0 // sensible default
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -472,6 +475,11 @@ fn spawn_command_thread(
                         stop_flag.store(true, Ordering::Relaxed);
                         break;
                     }
+		    WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
+			}
+		    }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => {
@@ -799,6 +807,7 @@ fn spawn_dsp_thread(
                 applied.ssb_pitch_hz = current.ssb_pitch_hz;
                 applied.center_freq_hz = current.center_freq_hz;
                 applied.target_freq_hz = current.target_freq_hz;
+		applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
                 changed = true;
             } else {
                 if current.sideband != applied.sideband {
@@ -812,6 +821,12 @@ fn spawn_dsp_thread(
                     applied.ssb_pitch_hz = current.ssb_pitch_hz;
                     changed = true;
                 }
+
+		if (current.filter_bandwidth_hz - applied.filter_bandwidth_hz).abs() > f32::EPSILON {
+		    pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+		    applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
+		    changed = true;
+		}
             }
 
             if changed {

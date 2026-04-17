@@ -379,6 +379,7 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    filter_bandwidth_hz,
         } => {
             if let Some(value) = center_freq_hz {
                 state.center_freq_hz = value as f32;
@@ -394,6 +395,9 @@ pub fn apply_radio_server_message(
             }
             if let Some(value) = ssb_pitch_hz {
                 state.ssb_pitch_hz = value;
+            }
+	    if let Some(value) = filter_bandwidth_hz {
+                state.filter_bandwidth_hz = value;
             }
         }
 

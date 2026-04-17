@@ -97,6 +97,17 @@ impl RigflowApp {
             egui::CollapsingHeader::new("Radio Control")
                 .default_open(true)
                 .show(ui, |ui| {
+
+		    if let Ok(mut state) = self.state.lock() {
+			ui.add(
+			    egui::Slider::new(
+				&mut state.filter_bandwidth_hz,
+				3000.0..=10000.0,
+			    )
+				.text("Filter Bandwidth (Hz)"),
+			);
+                    };
+		    
                     ui.label("Demod");
 
                     let mut selected_demod =

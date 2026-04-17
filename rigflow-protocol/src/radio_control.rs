@@ -103,7 +103,9 @@ pub enum ServerRadioMessage {
         /// Current demodulation state
         demod_mode: DemodMode,
         sideband: Sideband,
+	
         ssb_pitch_hz: f32,
+	filter_bandwidth_hz: f32,
     },
 
     /// Incremental runtime update.
@@ -117,7 +119,9 @@ pub enum ServerRadioMessage {
 
         demod_mode: Option<DemodMode>,
         sideband: Option<Sideband>,
+
         ssb_pitch_hz: Option<f32>,
+	filter_bandwidth_hz: Option<f32>,
     },
 
     /// Error message related to radio control or streaming.

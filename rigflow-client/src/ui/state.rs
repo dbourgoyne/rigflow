@@ -29,6 +29,9 @@ pub struct UiState {
     /// SSB pitch offset (Hz)
     pub ssb_pitch_hz: f32,
 
+    /// Filter Bandwidth (Hz)
+    pub filter_bandwidth_hz: f32,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -152,6 +155,7 @@ impl Default for UiState {
             sideband: Sideband::Lsb,
             demod_mode: DemodMode::Wfm,
             ssb_pitch_hz: 0.0,
+	    filter_bandwidth_hz: 30000.0,
             input_sample_rate_hz: 0.0,
 
             // --- UI defaults ---------------------------------------------

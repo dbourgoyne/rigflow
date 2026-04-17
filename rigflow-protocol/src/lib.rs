@@ -36,6 +36,11 @@ pub enum ClientMessage {
     SetSsbPitch {
         pitch_hz: f32,
     },
+
+    /// Adjust filter bandwidth (Hz)
+    SetFilterBandwidth {
+	bandwidth_hz: f32
+    },
 }
 
 /// General server → client messages.

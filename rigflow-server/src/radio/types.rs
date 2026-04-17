@@ -75,6 +75,7 @@ pub struct WorkerRuntimeState {
     pub demod_mode: DemodMode,
     pub sideband: Sideband,
     pub ssb_pitch_hz: f32,
+    pub filter_bandwidth_hz: f32,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,
@@ -91,6 +92,7 @@ pub enum WorkerCommand {
     SetDemodMode { mode: DemodMode },
     SetSideband { sideband: Sideband },
     SetSsbPitch { pitch_hz: f32 },
+    SetFilterBandwidth { bandwidth_hz: f32 },
     Stop { reason: StopReason },
 }
 
