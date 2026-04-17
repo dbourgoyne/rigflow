@@ -98,20 +98,28 @@ impl RigflowApp {
                 .default_open(true)
                 .show(ui, |ui| {
 
+		    let mut selected_demod =
+                        snapshot.demod_mode.clone();
+		    let (min_bw, max_bw, default_bw) = match selected_demod {
+			DemodMode::Usb | DemodMode::Lsb => (300.0, 4000.0, 2700.0),
+			DemodMode::Cw => (100.0, 1500.0, 500.0),
+			DemodMode::Am => (1000.0, 10000.0, 5000.0),
+			DemodMode::Nfm => (1500.0, 8000.0, 4000.0),
+			DemodMode::Wfm => (5000.0, 20000.0, 15000.0),
+		    };
+
 		    if let Ok(mut state) = self.state.lock() {
+			*&mut state.filter_bandwidth_hz = default_bw;
 			ui.add(
 			    egui::Slider::new(
 				&mut state.filter_bandwidth_hz,
-				3000.0..=10000.0,
+				min_bw..=max_bw,
 			    )
 				.text("Filter Bandwidth (Hz)"),
 			);
                     };
 		    
                     ui.label("Demod");
-
-                    let mut selected_demod =
-                        snapshot.demod_mode.clone();
 
                     ui.horizontal(|ui| {
                         ui.radio_value(
