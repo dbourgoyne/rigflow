@@ -37,6 +37,7 @@ struct SharedControlState {
     demod_mode: DemodMode,
     sideband: Sideband,
     ssb_pitch_hz: f32,
+    cw_pitch_hz: f32,
     filter_bandwidth_hz: f32,
 }
 
@@ -234,6 +235,7 @@ fn build_runtime_state(
         demod_mode: control.demod_mode,
         sideband: control.sideband,
         ssb_pitch_hz: control.ssb_pitch_hz,
+	cw_pitch_hz: control.cw_pitch_hz,
 	filter_bandwidth_hz: control.filter_bandwidth_hz,
 
         input_sample_rate_hz,
@@ -301,6 +303,7 @@ fn run_iq_worker_threads(
         demod_mode: server_cfg.demod,
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
+	cw_pitch_hz: 600.0,
 	filter_bandwidth_hz: 3000.0 // sensible default
     }));
 
@@ -465,11 +468,19 @@ fn spawn_command_thread(
                             control_state.sideband = sideband;
                         }
                     }
-                    WorkerCommand::SetSsbPitch { pitch_hz } => {
-                        if let Ok(mut control_state) = control.lock() {
-                            control_state.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
-                        }
-                    }
+		    WorkerCommand::SetPitch { pitch_hz } => {
+			if let Ok(mut control_state) = control.lock() {
+			    match control_state.demod_mode {
+				DemodMode::Usb | DemodMode::Lsb => {
+				    control_state.ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
+				}
+				DemodMode::Cw => {
+				    control_state.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
+				}
+				_ => {}
+			    }
+			}
+		    }
                     WorkerCommand::Stop { reason } => {
                         set_stop_reason(&stop_reason, reason);
                         stop_flag.store(true, Ordering::Relaxed);
@@ -801,14 +812,21 @@ fn spawn_dsp_thread(
 
 		pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
 
-                if matches!(current.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
-                    pipeline.set_sideband(current.sideband);
-                    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-                }
+		match current.demod_mode {
+		    DemodMode::Usb | DemodMode::Lsb => {
+			pipeline.set_sideband(current.sideband);
+			pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+		    }
+		    DemodMode::Cw => {
+			pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+		    }
+		    _ => {}
+		}
 
                 applied.demod_mode = current.demod_mode;
                 applied.sideband = current.sideband;
                 applied.ssb_pitch_hz = current.ssb_pitch_hz;
+		applied.cw_pitch_hz = current.cw_pitch_hz;
                 applied.center_freq_hz = current.center_freq_hz;
                 applied.target_freq_hz = current.target_freq_hz;
 		applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
@@ -820,13 +838,25 @@ fn spawn_dsp_thread(
                     changed = true;
                 }
 
-                if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
-                    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-                    applied.ssb_pitch_hz = current.ssb_pitch_hz;
-                    changed = true;
-                }
+		match current.demod_mode {
+		    DemodMode::Usb | DemodMode::Lsb => {
+			if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
+			    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+			    applied.ssb_pitch_hz = current.ssb_pitch_hz;
+			    changed = true;
+			}
+		    }
+		    DemodMode::Cw => {
+			if (current.cw_pitch_hz - applied.cw_pitch_hz).abs() > f32::EPSILON {
+			    pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+			    applied.cw_pitch_hz = current.cw_pitch_hz;
+			    changed = true;
+			}
+		    }
+		    _ => {}
+		}
 
-		if (current.filter_bandwidth_hz - applied.filter_bandwidth_hz).abs() > f32::EPSILON {
+		if (current.filter_bandwidth_hz - applied.filter_bandwidth_hz).abs() > 1.0 {
 		    pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
 		    applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
 		    changed = true;

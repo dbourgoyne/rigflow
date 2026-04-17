@@ -98,6 +98,7 @@ impl RigflowApp {
                 .default_open(true)
                 .show(ui, |ui| {
 
+		    //----------- Filter Bandwidth Hz Slider -----------------
 		    let bw_limits = filter_bandwidth_limits( snapshot.demod_mode );
 
 		    if let Ok(mut state) = self.state.lock() {
@@ -124,6 +125,49 @@ impl RigflowApp {
                             );
 			}
 
+		    }
+
+		    //----------- SSB and CW Pitch Hz Slider -----------------
+		    match snapshot.demod_mode {
+			DemodMode::Usb | DemodMode::Lsb => {
+			    if let Ok(mut state) = self.state.lock() {
+				let response = ui.add(
+				    egui::Slider::new(&mut state.ssb_pitch_hz, -1500.0..=1500.0)
+					.text("SSB Pitch (Hz)")
+				);
+
+				if response.changed() {
+				    self.ws_cmd_tx.send(
+				    	ControlCommand::LegacyClientMessage(
+					    rigflow_protocol::ClientMessage::SetPitch {
+						pitch_hz: state.ssb_pitch_hz,
+					    }
+					)
+				    ).ok();
+				}
+			    }
+			}
+
+			DemodMode::Cw => {
+			    if let Ok(mut state) = self.state.lock() {
+				let response = ui.add(
+				    egui::Slider::new(&mut state.cw_pitch_hz, 300.0..=1200.0)
+					.text("CW Pitch (Hz)")
+				);
+
+				if response.changed() {
+				    self.ws_cmd_tx.send(
+					ControlCommand::LegacyClientMessage(
+					    rigflow_protocol::ClientMessage::SetPitch {
+						pitch_hz: state.cw_pitch_hz,
+					    }
+					)
+				    ).ok();
+				}
+			    }
+			}
+
+			_ => {}
 		    }
 		    
                     ui.label("Demod");

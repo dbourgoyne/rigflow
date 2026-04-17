@@ -255,11 +255,11 @@ async fn handle_legacy_client_text(
             Ok(None)
         }
 
-        ClientMessage::SetSsbPitch { pitch_hz } => {
+        ClientMessage::SetPitch { pitch_hz } => {
             send_worker_command_for_session(
                 state,
                 session,
-                WorkerCommand::SetSsbPitch { pitch_hz },
+                WorkerCommand::SetPitch { pitch_hz },
             )
             .await
             .map_err(radio_manager_error_string)?;

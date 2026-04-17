@@ -187,6 +187,7 @@ pub struct DspPipeline {
     ssb_bandwidth_hz: f32,
     ssb_fir_taps: usize,
     ssb_pitch_hz: f32,
+    cw_pitch_hz: f32,
 
     output_sample_rate_hz: f32,
     client_output_sample_rate_hz: f32,
@@ -240,6 +241,7 @@ impl DspPipeline {
         let ssb_bandwidth_hz = cfg.audio_cutoff_hz.max(300.0);
         let ssb_fir_taps = cfg.audio_fir_taps.max(31) | 1;
         let ssb_pitch_hz = 0.0;
+	let cw_pitch_hz = 600.0;
 
         let ssb_usb_fir = Some(ComplexSidebandFir::new(
             output_sample_rate_hz,
@@ -285,6 +287,7 @@ impl DspPipeline {
             ssb_bandwidth_hz,
             ssb_fir_taps,
             ssb_pitch_hz,
+	    cw_pitch_hz,
             output_sample_rate_hz,
             client_output_sample_rate_hz: cfg.client_output_sample_rate_hz,
             tuned_iq_scratch: Vec::new(),
@@ -504,6 +507,12 @@ impl DspPipeline {
         info!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
         self.ssb_pitch_hz = pitch_hz;
         self.rebuild_ssb_filters(self.ssb_bandwidth_hz, self.ssb_fir_taps);
+	self.reset_audio_state();
+    }
+
+    pub fn set_cw_pitch_hz(&mut self, pitch_hz: f32) {
+	self.cw_pitch_hz = pitch_hz;
+	self.reset_audio_state();
     }
 
     pub fn set_filter_bandwidth_hz(&mut self, bandwidth_hz: f32) {

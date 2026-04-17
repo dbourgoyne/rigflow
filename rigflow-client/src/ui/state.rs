@@ -30,6 +30,9 @@ pub struct UiState {
     /// SSB pitch offset (Hz)
     pub ssb_pitch_hz: f32,
 
+    /// CW pitch offset (Hz)
+    pub cw_pitch_hz: f32,
+
     /// Filter Bandwidth (Hz)
     pub filter_bandwidth_hz: f32,
 
@@ -157,6 +160,7 @@ impl Default for UiState {
             demod_mode: DemodMode::Wfm,
 	    last_demod_mode_for_bw: None,
             ssb_pitch_hz: 0.0,
+	    cw_pitch_hz: 600.0,
 	    filter_bandwidth_hz: 30000.0,
             input_sample_rate_hz: 0.0,
 
