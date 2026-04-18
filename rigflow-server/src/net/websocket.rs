@@ -567,6 +567,7 @@ fn runtime_snapshot_from_status(
             demod_mode: runtime.demod_mode,
             sideband: runtime.sideband,
             ssb_pitch_hz: runtime.ssb_pitch_hz,
+	    cw_pitch_hz: runtime.cw_pitch_hz,
 	    filter_bandwidth_hz: runtime.filter_bandwidth_hz,
         }),
         _ => None,
@@ -586,6 +587,7 @@ fn runtime_changed_from_status(
             demod_mode: Some(runtime.demod_mode),
             sideband: Some(runtime.sideband),
             ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
+	    cw_pitch_hz: Some(runtime.cw_pitch_hz),
 	    filter_bandwidth_hz: Some(runtime.filter_bandwidth_hz),
         }),
         _ => None,
@@ -629,11 +631,12 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         demod_mode,
         sideband,
         ssb_pitch_hz,
+	cw_pitch_hz,
 	filter_bandwidth_hz,
     } = msg
     {
         debug!(
-            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={} filter_bandwidth={}",
+            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={} cw_pitch={} filter_bandwidth={}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
@@ -645,6 +648,7 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    cw_pitch_hz,
 	    filter_bandwidth_hz,
         );
     }
@@ -659,17 +663,19 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         demod_mode,
         sideband,
         ssb_pitch_hz,
+	cw_pitch_hz,
 	filter_bandwidth_hz,
     } = msg
     {
         info!(
-            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} filter_bandwidth={:?}",
+            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    cw_pitch_hz,
 	    filter_bandwidth_hz,
         );
     }

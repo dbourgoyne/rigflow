@@ -362,6 +362,8 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    cw_pitch_hz,
+	    filter_bandwidth_hz,
             ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
@@ -370,6 +372,8 @@ pub fn apply_radio_server_message(
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.ssb_pitch_hz = ssb_pitch_hz;
+	    state.cw_pitch_hz = cw_pitch_hz;
+	    state.filter_bandwidth_hz = filter_bandwidth_hz;
         }
 
         ServerRadioMessage::RuntimeChanged {
@@ -379,6 +383,7 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             ssb_pitch_hz,
+	    cw_pitch_hz,
 	    filter_bandwidth_hz,
         } => {
             if let Some(value) = center_freq_hz {
@@ -395,6 +400,9 @@ pub fn apply_radio_server_message(
             }
             if let Some(value) = ssb_pitch_hz {
                 state.ssb_pitch_hz = value;
+            }
+	    if let Some(value) = cw_pitch_hz {
+                state.cw_pitch_hz = value;
             }
 	    if let Some(value) = filter_bandwidth_hz {
                 state.filter_bandwidth_hz = value;

@@ -105,6 +105,7 @@ pub enum ServerRadioMessage {
         sideband: Sideband,
 	
         ssb_pitch_hz: f32,
+	cw_pitch_hz: f32,
 	filter_bandwidth_hz: f32,
     },
 
@@ -121,6 +122,7 @@ pub enum ServerRadioMessage {
         sideband: Option<Sideband>,
 
         ssb_pitch_hz: Option<f32>,
+	cw_pitch_hz: Option<f32>,
 	filter_bandwidth_hz: Option<f32>,
     },
 
