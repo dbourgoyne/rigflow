@@ -1,18 +1,11 @@
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
-/// Central UI state shared between:
-/// - egui rendering thread
-/// - networking (WebSocket)
-/// - media runtime
-///
-/// This struct is intentionally simple (plain data) and is typically
-/// wrapped in `Arc<Mutex<UiState>>`.
 #[derive(Debug, Clone)]
 pub struct UiState {
-    // ---------------------------------------------------------------------
-    // Radio tuning state
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // RADIO STATE (Operator-facing, synchronized with server)
+    // =====================================================================
 
     /// Center frequency (LO), in Hz
     pub center_freq_hz: f32,
@@ -20,123 +13,129 @@ pub struct UiState {
     /// Target tuned frequency, in Hz
     pub target_freq_hz: f32,
 
-    /// Current sideband
-    pub sideband: Sideband,
-
     /// Current demodulation mode
     pub demod_mode: DemodMode,
-    pub last_demod_mode_for_bw: Option<DemodMode>,
+
+    /// Current sideband (SSB)
+    pub sideband: Sideband,
 
     /// SSB pitch offset (Hz)
     pub ssb_pitch_hz: f32,
 
-    /// CW pitch offset (Hz)
+    /// CW pitch (Hz)
     pub cw_pitch_hz: f32,
 
-    /// Filter Bandwidth (Hz)
+    /// Audio filter bandwidth (Hz)
     pub filter_bandwidth_hz: f32,
 
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
-    // ---------------------------------------------------------------------
-    // UI / interaction state
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // RADIO-DERIVED UI STATE
+    // (depends on demod mode or radio state)
+    // =====================================================================
 
-    /// Last runtime error message to display in UI
-    pub runtime_error: String,
+    /// Tracks last demod mode for applying defaults (e.g. bandwidth)
+    pub last_demod_mode_for_bw: Option<DemodMode>,
 
-    /// Currently hovered digit in LO widget (for interaction feedback)
-    //pub hovered_center_freq_digit: Option<usize>,
+    // =====================================================================
+    // UI RUNTIME / HELPER STATE (non-persistent, non-radio)
+    // =====================================================================
 
-    /// Selected amateur radio license class (for band overlays)
-    pub selected_license: Option<LicenseClass>,
+    /// Last filter bandwidth value sent to server (for debounce)
+    pub last_filter_bw_sent_hz: f32,
 
-    /// Horizontal zoom level for spectrum view
-    pub spectrum_zoom_x: f32,
+    /// Timestamp of last filter bandwidth send
+    pub last_filter_bw_send_time: std::time::Instant,
 
-    /// Whether zoom slider is currently being dragged
-    //pub zoom_slider_dragging: bool,
+    /// Last SSB pitch sent to server
+    pub last_ssb_pitch_sent_hz: f32,
 
-    /// Whether the "Rigflow Server" menu is expanded
-    //pub rigflow_server_menu_expanded: bool,
+    /// Timestamp of last SSB pitch send
+    pub last_ssb_pitch_send_time: std::time::Instant,
 
-    /// Whether the server IP field is actively being edited
-    //pub editing_server_ip: bool,
+    /// Last CW pitch sent to server
+    pub last_cw_pitch_sent_hz: f32,
 
-    // ---------------------------------------------------------------------
-    // Server connection state
-    // ---------------------------------------------------------------------
+    /// Timestamp of last CW pitch send
+    pub last_cw_pitch_send_time: std::time::Instant,
 
-    /// WebSocket port for rigflow server
-    pub rigflow_server_ws_port: u16,
-
-    /// UDP port for rigflow media plane
-    pub rigflow_server_udp_port: u16,
-
-    /// Local UDP port this client is listening on
-    pub udp_listen_port: u16,
-
-    /// List of radios reported by the server
-    pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
-
-    /// Currently selected radio ID (if any)
-    pub selected_radio_id: Option<String>,
-
-    /// Whether the client is currently connected to a server
-    pub server_connected: bool,
-
-    /// Human-readable server status string (UI display)
-    pub server_status: String,
+    // =====================================================================
+    // CONNECTION / SERVER STATE
+    // =====================================================================
 
     /// Server IP address entered by the user
     pub rigflow_server_ip: String,
 
-    /// Whether a radio is currently acquired (lease held)
+    /// WebSocket port
+    pub rigflow_server_ws_port: u16,
+
+    /// UDP port (server)
+    pub rigflow_server_udp_port: u16,
+
+    /// Local UDP listen port
+    pub udp_listen_port: u16,
+
+    /// Whether connected to server
+    pub server_connected: bool,
+
+    /// Whether a radio is currently acquired
     pub radio_acquired: bool,
 
-    // ---------------------------------------------------------------------
-    // Waterfall Display
-    // ---------------------------------------------------------------------
+    /// Human-readable server status
+    pub server_status: String,
 
-    /// Waterfall/spectrum display top level in dB.
+    /// Available radios
+    pub available_radios: Vec<rigflow_protocol::radio_control::RadioInfo>,
+
+    /// Selected radio
+    pub selected_radio_id: Option<String>,
+
+    // =====================================================================
+    // UI STATE (Rendering / Interaction)
+    // =====================================================================
+
+    pub runtime_error: String,
+
+    pub selected_license: Option<LicenseClass>,
+
+    pub spectrum_zoom_x: f32,
+
+    // =====================================================================
+    // WATERFALL / DISPLAY
+    // =====================================================================
+
     pub display_top_db: f32,
-
-    /// Waterfall/spectrum display range in dB.
     pub display_range_db: f32,
 
-    /// Whether display scaling is controlled automatically.
     pub adaptive_waterfall_normalization: bool,
 
-    /// Smoothed estimate of the current spectral top level in dB.
     pub adaptive_top_db_estimate: f32,
-
-    /// Smoothed estimate of the current spectral floor level in dB.
     pub adaptive_floor_db_estimate: f32,
 
-    /// Waterfall/spectrum display zoom
     pub display_zoom: f32,
 
-    // ---------------------------------------------------------------------
-    // Persistent Storage
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
+    // =====================================================================
 
-    /// Operator ID (call sign)
     pub operator_id: String,
-
-    /// Vector of all known operators
     pub known_operator_ids: Vec<String>,
 
     pub show_add_operator_dialog: bool,
     pub pending_operator_id: String,
-    pub pending_operator_license: Option<crate::ui::om_bands::LicenseClass>,
+    pub pending_operator_license: Option<LicenseClass>,
+
     pub show_delete_operator_dialog: bool,
     pub pending_delete_operator_id: Option<String>,
+
     pub persistence_status: String,
 
-    // ---------------------------------------------------------------------
-    // Bookmarks
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // BOOKMARKS
+    // =====================================================================
+
     pub bookmarks: Vec<crate::persistence::BookmarkFile>,
     pub selected_bookmark_id: Option<String>,
     pub default_bookmark_id: Option<String>,
@@ -149,75 +148,112 @@ pub struct UiState {
     pub pending_apply_default_bookmark: bool,
 }
 
+
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            // --- Radio defaults ------------------------------------------
+            // =================================================================
+            // RADIO STATE
+            // =================================================================
 
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
-            sideband: Sideband::Lsb,
             demod_mode: DemodMode::Wfm,
-	    last_demod_mode_for_bw: None,
+            sideband: Sideband::Lsb,
+
             ssb_pitch_hz: 0.0,
-	    cw_pitch_hz: 600.0,
-	    filter_bandwidth_hz: 30000.0,
+            cw_pitch_hz: 600.0,
+
+            filter_bandwidth_hz: 3000.0,
             input_sample_rate_hz: 0.0,
 
-            // --- UI defaults ---------------------------------------------
+            // =================================================================
+            // RADIO-DERIVED UI STATE
+            // =================================================================
 
-            runtime_error: String::new(),
-            //hovered_center_freq_digit: None,
-            selected_license: None,
-            spectrum_zoom_x: 1.0,
-            //zoom_slider_dragging: false,
-            //rigflow_server_menu_expanded: false,
-            //editing_server_ip: false,
+            last_demod_mode_for_bw: None,
 
-            // --- Server defaults -----------------------------------------
+            // =================================================================
+            // UI RUNTIME / HELPER STATE
+            // =================================================================
 
+	    last_filter_bw_sent_hz: 0.0,
+            last_filter_bw_send_time: std::time::Instant::now(),
+
+            last_ssb_pitch_sent_hz: 0.0,
+            last_ssb_pitch_send_time: std::time::Instant::now(),
+
+            last_cw_pitch_sent_hz: 0.0,
+            last_cw_pitch_send_time: std::time::Instant::now(),
+
+            // =================================================================
+            // CONNECTION / SERVER STATE
+            // =================================================================
+
+            rigflow_server_ip: "192.168.0.225".to_string(),
             rigflow_server_ws_port: 9000,
             rigflow_server_udp_port: 9001,
             udp_listen_port: 0,
-            available_radios: Vec::new(),
-            selected_radio_id: None,
+
             server_connected: false,
-            server_status: "no server".to_string(),
-
-            // Default dev/test IP — consider making configurable later
-            rigflow_server_ip: "192.168.0.225".to_string(),
-
             radio_acquired: false,
 
-	    // --- Waterfall Display defaults ------------------------------
-	    display_top_db: -35.0,
+            server_status: "no server".to_string(),
+
+            available_radios: Vec::new(),
+            selected_radio_id: None,
+
+	    // =================================================================
+            // UI STATE
+            // =================================================================
+
+            runtime_error: String::new(),
+            selected_license: None,
+            spectrum_zoom_x: 1.0,
+
+            // =================================================================
+            // WATERFALL / DISPLAY
+            // =================================================================
+
+            display_top_db: -35.0,
             display_range_db: 70.0,
+
             adaptive_waterfall_normalization: true,
-	    adaptive_top_db_estimate: -35.0,
+            adaptive_top_db_estimate: -35.0,
             adaptive_floor_db_estimate: -105.0,
-	    display_zoom: 1.0,
 
-	    // --- Persistent defaults -------------------------------------
+            display_zoom: 1.0,
+
+            // =================================================================
+            // OPERATOR / PERSISTENCE
+            // =================================================================
+
 	    operator_id: String::new(),
-	    known_operator_ids: Vec::new(),
-	    show_add_operator_dialog: false,
-	    pending_operator_id: String::new(),
-	    pending_operator_license: None,
-	    show_delete_operator_dialog: false,
-	    pending_delete_operator_id: None,
-	    persistence_status: String::new(),
+            known_operator_ids: Vec::new(),
 
-	    // --- Bookmark defaults -------------------------------------
-	    bookmarks: Vec::new(),
-	    selected_bookmark_id: None,
-	    default_bookmark_id: None,
-	    auto_apply_default_bookmark_on_acquire: false,
+            show_add_operator_dialog: false,
+            pending_operator_id: String::new(),
+            pending_operator_license: None,
+
+            show_delete_operator_dialog: false,
+            pending_delete_operator_id: None,
+
+            persistence_status: String::new(),
+
+            // =================================================================
+            // BOOKMARKS
+            // =================================================================
+
+            bookmarks: Vec::new(),
+            selected_bookmark_id: None,
+            default_bookmark_id: None,
+            auto_apply_default_bookmark_on_acquire: false,
 
 	    show_add_bookmark_dialog: false,
-	    pending_bookmark_name: String::new(),
-	    pending_bookmark_notes: String::new(),
-	    bookmark_status: String::new(),
-	    pending_apply_default_bookmark: false,
+            pending_bookmark_name: String::new(),
+            pending_bookmark_notes: String::new(),
+            bookmark_status: String::new(),
+            pending_apply_default_bookmark: false,
         }
     }
 }
