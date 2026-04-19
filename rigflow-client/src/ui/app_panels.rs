@@ -138,7 +138,7 @@ impl RigflowApp {
 
 			// Throttled live updates while dragging.
 			if response.changed() {
-			    println!("response changed");
+
 			    if let Some(send_hz) = should_send_debounced(
 				now,
 				state.filter_bandwidth_hz,
@@ -146,7 +146,7 @@ impl RigflowApp {
 				10.0,
 				Duration::from_millis(75),
 			    ) {
-				println!("response changed: sending message: bandwidth_hz = {}", send_hz);
+
 				let _ = self.ws_cmd_tx.send(
 				    ControlCommand::LegacyClientMessage(
 					rigflow_protocol::ClientMessage::SetFilterBandwidth {
@@ -158,7 +158,7 @@ impl RigflowApp {
 			}
 			// Always send the final exact value when drag ends.
 			if response.drag_stopped() {
-			    println!("drag stopped");
+
 			    let final_hz = state
 				.filter_bandwidth_hz
 				.round()
@@ -167,7 +167,7 @@ impl RigflowApp {
 			    if (final_hz - state.last_filter_bw_sent_hz).abs() >= 1.0 {
 				state.last_filter_bw_sent_hz = final_hz;
 				state.last_filter_bw_send_time = now;
-				println!("drag stopped: sending message: bandwidth_hz = {}", final_hz);
+
 				let _ = self.ws_cmd_tx.send(
 				    ControlCommand::LegacyClientMessage(
 					rigflow_protocol::ClientMessage::SetFilterBandwidth {
