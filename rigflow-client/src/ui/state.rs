@@ -1,5 +1,12 @@
+use std::time::Instant;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+
+#[derive(Debug, Clone, Copy)]
+pub struct DebounceState {
+    pub last_sent_value: f32,
+    pub last_send_time: Instant,
+}
 
 #[derive(Debug, Clone)]
 pub struct UiState {
@@ -45,18 +52,21 @@ pub struct UiState {
 
     /// Last filter bandwidth value sent to server (for debounce)
     pub last_filter_bw_sent_hz: f32,
+    pub filter_bw_debounce: DebounceState,
 
     /// Timestamp of last filter bandwidth send
     pub last_filter_bw_send_time: std::time::Instant,
 
     /// Last SSB pitch sent to server
     pub last_ssb_pitch_sent_hz: f32,
+    pub ssb_pitch_debounce: DebounceState,
 
     /// Timestamp of last SSB pitch send
     pub last_ssb_pitch_send_time: std::time::Instant,
 
     /// Last CW pitch sent to server
     pub last_cw_pitch_sent_hz: f32,
+    pub cw_pitch_debounce: DebounceState,
 
     /// Timestamp of last CW pitch send
     pub last_cw_pitch_send_time: std::time::Instant,
@@ -179,12 +189,24 @@ impl Default for UiState {
 
 	    last_filter_bw_sent_hz: 0.0,
             last_filter_bw_send_time: std::time::Instant::now(),
+	    filter_bw_debounce: DebounceState {
+		last_sent_value: 0.0,
+		last_send_time: std::time::Instant::now(),
+	    },
 
             last_ssb_pitch_sent_hz: 0.0,
             last_ssb_pitch_send_time: std::time::Instant::now(),
+	    ssb_pitch_debounce: DebounceState {
+		last_sent_value: 0.0,
+		last_send_time: std::time::Instant::now(),
+	    },
 
             last_cw_pitch_sent_hz: 0.0,
             last_cw_pitch_send_time: std::time::Instant::now(),
+	    cw_pitch_debounce: DebounceState {
+		last_sent_value: 600.0, // good CW default
+		last_send_time: std::time::Instant::now(),
+	    },
 
             // =================================================================
             // CONNECTION / SERVER STATE

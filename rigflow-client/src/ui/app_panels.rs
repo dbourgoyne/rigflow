@@ -1,3 +1,4 @@
+use std::time::{Duration, Instant};
 use super::app::RigflowApp;
 use eframe::egui;
 
@@ -6,6 +7,7 @@ use crate::ui::om_bands::LicenseClass;
 use crate::persistence::apply_operator_settings_to_ui_state;
 use crate::ControlCommand;
 use rigflow_core::dsp::modes::{DemodMode, Sideband, filter_bandwidth_limits, clamp_filter_bandwidth};
+use crate::ui::utils::should_send_debounced;
 
 impl RigflowApp {
 
@@ -98,34 +100,86 @@ impl RigflowApp {
                 .default_open(true)
                 .show(ui, |ui| {
 
-		    //----------- Filter Bandwidth Hz Slider -----------------
-		    let bw_limits = filter_bandwidth_limits( snapshot.demod_mode );
-
+		    // ----------- Filter Bandwidth Slider ---------------
 		    if let Ok(mut state) = self.state.lock() {
+			let bw_limits = filter_bandwidth_limits(snapshot.demod_mode);
 
+			// Apply default once on first mode entry.
 			if state.last_demod_mode_for_bw != Some(snapshot.demod_mode) {
 			    state.filter_bandwidth_hz = bw_limits.default_hz;
 			    state.last_demod_mode_for_bw = Some(snapshot.demod_mode);
+			    state.filter_bw_debounce.last_sent_value = bw_limits.default_hz;
+			    state.filter_bw_debounce.last_send_time = std::time::Instant::now();
+
+			    let _ = self.ws_cmd_tx.send(
+				ControlCommand::LegacyClientMessage(
+				    rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					bandwidth_hz: bw_limits.default_hz,
+				    },
+				),
+			    );
 			}
 
-			state.filter_bandwidth_hz = clamp_filter_bandwidth( snapshot.demod_mode, state.filter_bandwidth_hz );
+			// Keep local value in valid range.
+			state.filter_bandwidth_hz = clamp_filter_bandwidth(
+			    snapshot.demod_mode,
+			    state.filter_bandwidth_hz
+			);
 
-			ui.add(
-			    egui::Slider::new(&mut state.filter_bandwidth_hz, bw_limits.min_hz..=bw_limits.max_hz)
+			let response = ui.add(
+			    egui::Slider::new(
+				&mut state.filter_bandwidth_hz,
+				bw_limits.min_hz..=bw_limits.max_hz,
+			    )
 				.text("Filter Bandwidth (Hz)")
 			);
 
-			if state.filter_bandwidth_hz != snapshot.filter_bandwidth_hz {
-                            let _ = self.ws_cmd_tx.send(
-				ControlCommand::LegacyClientMessage(
-                                    rigflow_protocol::ClientMessage::SetFilterBandwidth {
-					bandwidth_hz: state.filter_bandwidth_hz
-                                    },
-				),
-                            );
-			}
+			let now = Instant::now();
 
+			// Throttled live updates while dragging.
+			if response.changed() {
+			    println!("response changed");
+			    if let Some(send_hz) = should_send_debounced(
+				now,
+				state.filter_bandwidth_hz,
+				&mut state.filter_bw_debounce,
+				10.0,
+				Duration::from_millis(75),
+			    ) {
+				println!("response changed: sending message: bandwidth_hz = {}", send_hz);
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					    bandwidth_hz: send_hz,
+					},
+				    ),
+				);
+			    }
+			}
+			// Always send the final exact value when drag ends.
+			if response.drag_stopped() {
+			    println!("drag stopped");
+			    let final_hz = state
+				.filter_bandwidth_hz
+				.round()
+				.clamp(bw_limits.min_hz, bw_limits.max_hz);
+
+			    if (final_hz - state.last_filter_bw_sent_hz).abs() >= 1.0 {
+				state.last_filter_bw_sent_hz = final_hz;
+				state.last_filter_bw_send_time = now;
+				println!("drag stopped: sending message: bandwidth_hz = {}", final_hz);
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					    bandwidth_hz: final_hz,
+					},
+				    ),
+				);
+			    }
+			}
 		    }
+
+
 
 		    //----------- SSB and CW Pitch Hz Slider -----------------
 		    match snapshot.demod_mode {
