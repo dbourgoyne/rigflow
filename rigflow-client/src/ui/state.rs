@@ -7,6 +7,14 @@ pub struct DebounceState {
     pub last_sent_value: f32,
     pub last_send_time: Instant,
 }
+impl DebounceState {
+    pub fn new(initial: f32) -> Self {
+        Self {
+            last_sent_value: initial,
+            last_send_time: Instant::now(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct UiState {
@@ -189,24 +197,15 @@ impl Default for UiState {
 
 	    last_filter_bw_sent_hz: 0.0,
             last_filter_bw_send_time: std::time::Instant::now(),
-	    filter_bw_debounce: DebounceState {
-		last_sent_value: 0.0,
-		last_send_time: std::time::Instant::now(),
-	    },
+	    filter_bw_debounce: DebounceState::new(0.0),
 
             last_ssb_pitch_sent_hz: 0.0,
             last_ssb_pitch_send_time: std::time::Instant::now(),
-	    ssb_pitch_debounce: DebounceState {
-		last_sent_value: 0.0,
-		last_send_time: std::time::Instant::now(),
-	    },
+	    ssb_pitch_debounce: DebounceState::new(0.0),
 
             last_cw_pitch_sent_hz: 0.0,
             last_cw_pitch_send_time: std::time::Instant::now(),
-	    cw_pitch_debounce: DebounceState {
-		last_sent_value: 600.0, // good CW default
-		last_send_time: std::time::Instant::now(),
-	    },
+	    cw_pitch_debounce: DebounceState::new(600.0),
 
             // =================================================================
             // CONNECTION / SERVER STATE
