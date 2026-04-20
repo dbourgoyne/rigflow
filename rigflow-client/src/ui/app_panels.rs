@@ -6,8 +6,8 @@ use crate::UiState;
 use crate::ui::om_bands::LicenseClass;
 use crate::persistence::apply_operator_settings_to_ui_state;
 use crate::ControlCommand;
-use rigflow_core::dsp::modes::{DemodMode, Sideband, filter_bandwidth_limits, clamp_filter_bandwidth};
-use crate::ui::utils::should_send_debounced;
+use rigflow_core::dsp::modes::{DemodMode, Sideband, filter_bandwidth_limits, clamp_filter_bandwidth, pitch_limits};
+use crate::ui::utils::{should_send_debounced, current_pitch_debounce_mut};
 
 impl RigflowApp {
 
@@ -182,46 +182,50 @@ impl RigflowApp {
 
 
 		    //----------- SSB and CW Pitch Hz Slider -----------------
-		    match snapshot.demod_mode {
-			DemodMode::Usb | DemodMode::Lsb => {
-			    if let Ok(mut state) = self.state.lock() {
+		    if let Some(limits) = pitch_limits(snapshot.demod_mode) {
+			if let Ok(mut state) = self.state.lock() {
+			    if let Some((pitch_value, debounce)) =
+				current_pitch_debounce_mut(&mut state, snapshot.demod_mode)
+			    {
+				*pitch_value = pitch_value.clamp(limits.min_hz, limits.max_hz);
+
 				let response = ui.add(
-				    egui::Slider::new(&mut state.ssb_pitch_hz, -1500.0..=1500.0)
-					.text("SSB Pitch (Hz)")
+				    egui::Slider::new(pitch_value, limits.min_hz..=limits.max_hz)
+					.text(limits.label),
 				);
 
+				let now = std::time::Instant::now();
+
 				if response.changed() {
-				    self.ws_cmd_tx.send(
-				    	ControlCommand::LegacyClientMessage(
-					    rigflow_protocol::ClientMessage::SetPitch {
-						pitch_hz: state.ssb_pitch_hz,
-					    }
-					)
-				    ).ok();
+				    if let Some(send_hz) = should_send_debounced(
+					now,
+					*pitch_value,
+					debounce,
+					limits.debounce_delta_hz,
+					std::time::Duration::from_millis(limits.debounce_interval_ms),
+				    ) {
+					let _ = self.ws_cmd_tx.send(
+					    ControlCommand::LegacyClientMessage(
+						rigflow_protocol::ClientMessage::SetPitch { pitch_hz: send_hz },
+					    ),
+					);
+				    }
 				}
-			    }
-			}
 
-			DemodMode::Cw => {
-			    if let Ok(mut state) = self.state.lock() {
-				let response = ui.add(
-				    egui::Slider::new(&mut state.cw_pitch_hz, 300.0..=1200.0)
-					.text("CW Pitch (Hz)")
-				);
+				if response.drag_stopped() {
+				    let final_hz = pitch_value.round().clamp(limits.min_hz, limits.max_hz);
 
-				if response.changed() {
-				    self.ws_cmd_tx.send(
+				    debounce.last_sent_value = final_hz;
+				    debounce.last_send_time = now;
+
+				    let _ = self.ws_cmd_tx.send(
 					ControlCommand::LegacyClientMessage(
-					    rigflow_protocol::ClientMessage::SetPitch {
-						pitch_hz: state.cw_pitch_hz,
-					    }
-					)
-				    ).ok();
+					    rigflow_protocol::ClientMessage::SetPitch { pitch_hz: final_hz },
+					),
+				    );
 				}
 			    }
 			}
-
-			_ => {}
 		    }
 		    
                     ui.label("Demod");

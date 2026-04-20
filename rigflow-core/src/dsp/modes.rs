@@ -94,12 +94,42 @@ impl FromStr for Sideband {
     }
 }
 
-
-#[derive(Debug, Clone, Copy)]
-pub struct BandwidthLimits {
+pub struct PitchUiConfig {
     pub min_hz: f32,
     pub max_hz: f32,
     pub default_hz: f32,
+    pub label: &'static str,
+    pub debounce_delta_hz: f32,
+    pub debounce_interval_ms: u64,
+}
+
+pub fn pitch_limits(mode: DemodMode) -> Option<PitchUiConfig> {
+    match mode {
+        DemodMode::Usb | DemodMode::Lsb => Some(PitchUiConfig {
+            min_hz: -1500.0,
+            max_hz: 1500.0,
+            default_hz: 0.0,
+            label: "SSB Pitch (Hz)",
+	    debounce_delta_hz: 5.0,
+	    debounce_interval_ms: 40,
+        }),
+        DemodMode::Cw => Some(PitchUiConfig {
+            min_hz: 300.0,
+            max_hz: 1200.0,
+            default_hz: 600.0,
+            label: "CW Pitch (Hz)",
+	    debounce_delta_hz: 10.0,
+	    debounce_interval_ms: 50,
+        }),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BandwidthLimits {
+     pub min_hz: f32,
+     pub max_hz: f32,
+     pub default_hz: f32,
 }
 
 pub fn filter_bandwidth_limits(mode: DemodMode) -> BandwidthLimits {

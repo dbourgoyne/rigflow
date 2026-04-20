@@ -53,6 +53,7 @@ pub struct UiState {
 
     /// Tracks last demod mode for applying defaults (e.g. bandwidth)
     pub last_demod_mode_for_bw: Option<DemodMode>,
+    pub last_demod_mode_for_pitch: Option<DemodMode>,
 
     // =====================================================================
     // UI RUNTIME / HELPER STATE (non-persistent, non-radio)
@@ -190,6 +191,7 @@ impl Default for UiState {
             // =================================================================
 
             last_demod_mode_for_bw: None,
+	    last_demod_mode_for_pitch: None,
 
             // =================================================================
             // UI RUNTIME / HELPER STATE
