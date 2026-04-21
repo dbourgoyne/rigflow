@@ -1,6 +1,7 @@
 use std::time::Instant;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use crate::persistence::models::DemodPreferenceSetFile;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DebounceState {
@@ -34,11 +35,8 @@ pub struct UiState {
     /// Current sideband (SSB)
     pub sideband: Sideband,
 
-    /// SSB pitch offset (Hz)
-    pub ssb_pitch_hz: f32,
-
-    /// CW pitch (Hz)
-    pub cw_pitch_hz: f32,
+    /// pitch (Hz)
+    pub pitch_hz: f32,
 
     /// Audio filter bandwidth (Hz)
     pub filter_bandwidth_hz: f32,
@@ -53,32 +51,16 @@ pub struct UiState {
 
     /// Tracks last demod mode for applying defaults (e.g. bandwidth)
     pub last_demod_mode_for_bw: Option<DemodMode>,
-    pub last_demod_mode_for_pitch: Option<DemodMode>,
 
     // =====================================================================
     // UI RUNTIME / HELPER STATE (non-persistent, non-radio)
     // =====================================================================
 
     /// Last filter bandwidth value sent to server (for debounce)
-    pub last_filter_bw_sent_hz: f32,
     pub filter_bw_debounce: DebounceState,
 
-    /// Timestamp of last filter bandwidth send
-    pub last_filter_bw_send_time: std::time::Instant,
-
-    /// Last SSB pitch sent to server
-    pub last_ssb_pitch_sent_hz: f32,
-    pub ssb_pitch_debounce: DebounceState,
-
-    /// Timestamp of last SSB pitch send
-    pub last_ssb_pitch_send_time: std::time::Instant,
-
-    /// Last CW pitch sent to server
-    pub last_cw_pitch_sent_hz: f32,
-    pub cw_pitch_debounce: DebounceState,
-
-    /// Timestamp of last CW pitch send
-    pub last_cw_pitch_send_time: std::time::Instant,
+    /// Pitch debounce (shared across modes)
+    pub pitch_debounce: DebounceState,
 
     // =====================================================================
     // CONNECTION / SERVER STATE
@@ -152,6 +134,12 @@ pub struct UiState {
     pub persistence_status: String,
 
     // =====================================================================
+    // PER-DEMOD OPERATOR PREFERENCES
+    // =====================================================================
+
+    pub demod_preferences: DemodPreferenceSetFile,
+
+    // =====================================================================
     // BOOKMARKS
     // =====================================================================
 
@@ -170,7 +158,7 @@ pub struct UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        Self {
+        let mut state = Self {
             // =================================================================
             // RADIO STATE
             // =================================================================
@@ -180,8 +168,8 @@ impl Default for UiState {
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,
 
-            ssb_pitch_hz: 0.0,
-            cw_pitch_hz: 600.0,
+	    demod_preferences: DemodPreferenceSetFile::default(),
+            pitch_hz: 0.0,
 
             filter_bandwidth_hz: 3000.0,
             input_sample_rate_hz: 0.0,
@@ -191,23 +179,14 @@ impl Default for UiState {
             // =================================================================
 
             last_demod_mode_for_bw: None,
-	    last_demod_mode_for_pitch: None,
 
             // =================================================================
             // UI RUNTIME / HELPER STATE
             // =================================================================
 
-	    last_filter_bw_sent_hz: 0.0,
-            last_filter_bw_send_time: std::time::Instant::now(),
 	    filter_bw_debounce: DebounceState::new(0.0),
-
-            last_ssb_pitch_sent_hz: 0.0,
-            last_ssb_pitch_send_time: std::time::Instant::now(),
-	    ssb_pitch_debounce: DebounceState::new(0.0),
-
-            last_cw_pitch_sent_hz: 0.0,
-            last_cw_pitch_send_time: std::time::Instant::now(),
-	    cw_pitch_debounce: DebounceState::new(600.0),
+	    
+	    pitch_debounce: DebounceState::new(0.0),
 
             // =================================================================
             // CONNECTION / SERVER STATE
@@ -277,6 +256,16 @@ impl Default for UiState {
             pending_bookmark_notes: String::new(),
             bookmark_status: String::new(),
             pending_apply_default_bookmark: false,
-        }
+        };
+
+	let prefs = state.demod_preferences.get(state.demod_mode);
+
+	state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
+	state.pitch_hz = prefs.pitch_hz;
+
+	state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
+	state.pitch_debounce = DebounceState::new(state.pitch_hz);
+
+	state
     }
 }

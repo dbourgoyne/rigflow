@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 use crate::ui::state::DebounceState;
-use crate::UiState;
-use rigflow_core::dsp::modes::DemodMode;
 
 pub fn should_send_debounced(
     now: Instant,
@@ -24,25 +22,3 @@ pub fn should_send_debounced(
     }
 }
 
-fn current_pitch_value(state: &UiState, mode: DemodMode) -> Option<f32> {
-    match mode {
-        DemodMode::Usb | DemodMode::Lsb => Some(state.ssb_pitch_hz),
-        DemodMode::Cw => Some(state.cw_pitch_hz),
-        _ => None,
-    }
-}
-
-pub fn current_pitch_debounce_mut(
-    state: &mut UiState,
-    mode: DemodMode,
-) -> Option<(&mut f32, &mut DebounceState)> {
-    match mode {
-        DemodMode::Usb | DemodMode::Lsb => {
-            Some((&mut state.ssb_pitch_hz, &mut state.ssb_pitch_debounce))
-        }
-        DemodMode::Cw => {
-            Some((&mut state.cw_pitch_hz, &mut state.cw_pitch_debounce))
-        }
-        _ => None,
-    }
-}

@@ -4,7 +4,7 @@ use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
-pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 1;
+pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
@@ -23,6 +23,68 @@ impl Default for AppStateFile {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct DemodPreferencesFile {
+    pub filter_bandwidth_hz: f32,
+    pub pitch_hz: f32,
+}
+
+impl DemodPreferencesFile {
+    pub fn new(filter_bandwidth_hz: f32, pitch_hz: f32) -> Self {
+        Self {
+            filter_bandwidth_hz,
+            pitch_hz,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemodPreferenceSetFile {
+    pub wfm: DemodPreferencesFile,
+    pub nfm: DemodPreferencesFile,
+    pub am: DemodPreferencesFile,
+    pub usb: DemodPreferencesFile,
+    pub lsb: DemodPreferencesFile,
+    pub cw: DemodPreferencesFile,
+}
+
+impl Default for DemodPreferenceSetFile {
+    fn default() -> Self {
+        Self {
+            wfm: DemodPreferencesFile::new(15_000.0, 0.0),
+            nfm: DemodPreferencesFile::new(4_000.0, 0.0),
+            am: DemodPreferencesFile::new(5_000.0, 0.0),
+            usb: DemodPreferencesFile::new(2_700.0, 0.0),
+            lsb: DemodPreferencesFile::new(2_700.0, 0.0),
+            cw: DemodPreferencesFile::new(500.0, 600.0),
+        }
+    }
+}
+
+impl DemodPreferenceSetFile {
+    pub fn get(&self, mode: DemodMode) -> DemodPreferencesFile {
+        match mode {
+            DemodMode::Wfm => self.wfm,
+            DemodMode::Nfm => self.nfm,
+            DemodMode::Am => self.am,
+            DemodMode::Usb => self.usb,
+            DemodMode::Lsb => self.lsb,
+            DemodMode::Cw => self.cw,
+        }
+    }
+
+    pub fn get_mut(&mut self, mode: DemodMode) -> &mut DemodPreferencesFile {
+        match mode {
+            DemodMode::Wfm => &mut self.wfm,
+            DemodMode::Nfm => &mut self.nfm,
+            DemodMode::Am => &mut self.am,
+            DemodMode::Usb => &mut self.usb,
+            DemodMode::Lsb => &mut self.lsb,
+            DemodMode::Cw => &mut self.cw,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorSettingsFile {
     pub version: u32,
@@ -30,6 +92,8 @@ pub struct OperatorSettingsFile {
 
     pub selected_license: Option<LicenseClass>,
     pub server_ip: String,
+
+    pub demod_preferences: DemodPreferenceSetFile,
 
     pub default_bookmark_id: Option<String>,
     pub auto_apply_default_bookmark_on_acquire: bool,
@@ -44,6 +108,7 @@ impl OperatorSettingsFile {
             operator_id,
             selected_license: None,
             server_ip: String::new(),
+            demod_preferences: DemodPreferenceSetFile::default(),
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
             bookmarks: Vec::new(),

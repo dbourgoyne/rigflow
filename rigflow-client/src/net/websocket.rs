@@ -354,60 +354,78 @@ pub fn apply_radio_server_message(
             // No UI update currently required.
         }
 
-        ServerRadioMessage::RuntimeSnapshot {
-            radio_id: _,
-            center_freq_hz,
-            target_freq_hz,
-            input_sample_rate_hz,
-            demod_mode,
-            sideband,
-            ssb_pitch_hz,
+	ServerRadioMessage::RuntimeSnapshot {
+	    radio_id: _,
+	    center_freq_hz,
+	    target_freq_hz,
+	    input_sample_rate_hz,
+	    demod_mode,
+	    sideband,
+	    ssb_pitch_hz,
 	    cw_pitch_hz,
 	    filter_bandwidth_hz,
-            ..
-        } => {
-            state.center_freq_hz = center_freq_hz as f32;
-            state.target_freq_hz = target_freq_hz as f32;
-            state.input_sample_rate_hz = input_sample_rate_hz;
-            state.demod_mode = demod_mode;
-            state.sideband = sideband;
-            state.ssb_pitch_hz = ssb_pitch_hz;
-	    state.cw_pitch_hz = cw_pitch_hz;
-	    state.filter_bandwidth_hz = filter_bandwidth_hz;
-        }
+	    ..
+	} => {
+	    state.center_freq_hz = center_freq_hz as f32;
+	    state.target_freq_hz = target_freq_hz as f32;
+	    state.input_sample_rate_hz = input_sample_rate_hz;
+	    state.demod_mode = demod_mode;
+	    state.sideband = sideband;
 
-        ServerRadioMessage::RuntimeChanged {
-            radio_id: _,
-            center_freq_hz,
-            target_freq_hz,
-            demod_mode,
-            sideband,
-            ssb_pitch_hz,
+	    // Update stored per-demod preferences from server state.
+	    state.demod_preferences.usb.pitch_hz = ssb_pitch_hz;
+	    state.demod_preferences.lsb.pitch_hz = ssb_pitch_hz;
+	    state.demod_preferences.cw.pitch_hz = cw_pitch_hz;
+	    state
+		.demod_preferences
+		.get_mut(demod_mode)
+		.filter_bandwidth_hz = filter_bandwidth_hz;
+
+	    apply_active_demod_preferences(&mut state);
+	}
+
+	ServerRadioMessage::RuntimeChanged {
+	    radio_id: _,
+	    center_freq_hz,
+	    target_freq_hz,
+	    demod_mode,
+	    sideband,
+	    ssb_pitch_hz,
 	    cw_pitch_hz,
 	    filter_bandwidth_hz,
-        } => {
-            if let Some(value) = center_freq_hz {
-                state.center_freq_hz = value as f32;
-            }
-            if let Some(value) = target_freq_hz {
-                state.target_freq_hz = value as f32;
-            }
-            if let Some(ref value) = demod_mode {
-                state.demod_mode = value.clone();
-            }
-            if let Some(ref value) = sideband {
-                state.sideband = value.clone();
-            }
-            if let Some(value) = ssb_pitch_hz {
-                state.ssb_pitch_hz = value;
-            }
+	} => {
+	    if let Some(value) = center_freq_hz {
+		state.center_freq_hz = value as f32;
+	    }
+
+	    if let Some(value) = target_freq_hz {
+		state.target_freq_hz = value as f32;
+	    }
+
+	    if let Some(ref value) = demod_mode {
+		state.demod_mode = *value;
+	    }
+
+	    if let Some(ref value) = sideband {
+		state.sideband = *value;
+	    }
+
+	    if let Some(value) = ssb_pitch_hz {
+		state.demod_preferences.usb.pitch_hz = value;
+		state.demod_preferences.lsb.pitch_hz = value;
+	    }
+
 	    if let Some(value) = cw_pitch_hz {
-                state.cw_pitch_hz = value;
-            }
+		state.demod_preferences.cw.pitch_hz = value;
+	    }
+
 	    if let Some(value) = filter_bandwidth_hz {
-                state.filter_bandwidth_hz = value;
-            }
-        }
+		let mode = state.demod_mode;
+		state.demod_preferences.get_mut(mode).filter_bandwidth_hz = value;
+	    }
+
+	    apply_active_demod_preferences(&mut state);
+	}
 
         ServerRadioMessage::RadioError { message, .. } => {
             state.runtime_error = format!("radio error: {}", message);
@@ -448,4 +466,16 @@ fn build_udp_peer_addr(
         .ip();
 
     Ok(format!("{}:{}", local_ip, udp_listen_port))
+}
+
+fn apply_active_demod_preferences(state: &mut UiState) {
+    let prefs = state.demod_preferences.get(state.demod_mode);
+
+    state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
+    state.pitch_hz = prefs.pitch_hz;
+
+    state.filter_bw_debounce = crate::ui::state::DebounceState::new(state.filter_bandwidth_hz);
+    state.pitch_debounce = crate::ui::state::DebounceState::new(state.pitch_hz);
+
+    state.last_demod_mode_for_bw = Some(state.demod_mode);
 }
