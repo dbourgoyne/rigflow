@@ -96,170 +96,183 @@ impl RigflowApp {
 	ui: &mut egui::Ui,
 	snapshot: &UiState,
     ) {
-if snapshot.radio_acquired {
-    egui::CollapsingHeader::new("Radio Control")
-        .default_open(true)
-        .show(ui, |ui| {
+	if snapshot.radio_acquired {
+	    egui::CollapsingHeader::new("Radio Control")
+		.default_open(true)
+		.show(ui, |ui| {
 
-            if let Ok(mut state) = self.state.lock() {
-                // ---------------------------------------------------------
-                // Load active controls from per-demod preferences on mode switch
-                // ---------------------------------------------------------
-                if state.last_demod_mode_for_bw != Some(snapshot.demod_mode) {
-                    apply_mode_preferences(&mut state, snapshot.demod_mode);
+		    let mut save_demod_prefs = false;
+		    
+		    if let Ok(mut state) = self.state.lock() {
+			// ---------------------------------------------------------
+			// Load active controls from per-demod preferences on mode switch
+			// ---------------------------------------------------------
+			let should_apply_controls =
+			    state.pending_apply_mode_controls
+			    || state.last_demod_mode_for_controls != Some(snapshot.demod_mode);
 
-                    let _ = self.ws_cmd_tx.send(
-                        ControlCommand::LegacyClientMessage(
-                            rigflow_protocol::ClientMessage::SetFilterBandwidth {
-                                bandwidth_hz: state.filter_bandwidth_hz,
-                            },
-                        ),
-                    );
+			if should_apply_controls {
+			    println!("============== Should Apply Controls ==================");
+			    state.pending_apply_mode_controls = false;
 
-                    if pitch_limits(snapshot.demod_mode).is_some() {
-                        let _ = self.ws_cmd_tx.send(
-                            ControlCommand::LegacyClientMessage(
-                                rigflow_protocol::ClientMessage::SetPitch {
-                                    pitch_hz: state.pitch_hz,
-                                },
-                            ),
-                        );
-                    }
-                }
+			    apply_mode_preferences(&mut state, snapshot.demod_mode);
 
-                // ---------------------------------------------------------
-                // Filter bandwidth
-                // ---------------------------------------------------------
-                let bw_limits = filter_bandwidth_limits(snapshot.demod_mode);
+			    let _ = self.ws_cmd_tx.send(
+				ControlCommand::LegacyClientMessage(
+				    rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					bandwidth_hz: state.filter_bandwidth_hz,
+				    },
+				),
+			    );
 
-                state.filter_bandwidth_hz = clamp_filter_bandwidth(
-                    snapshot.demod_mode,
-                    state.filter_bandwidth_hz,
-                );
+			    if pitch_limits(snapshot.demod_mode).is_some() {
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetPitch {
+					    pitch_hz: state.pitch_hz,
+					},
+				    ),
+				);
+			    }
+			}
 
-                let bw_response = ui.add(
-                    egui::Slider::new(
-                        &mut state.filter_bandwidth_hz,
-                        bw_limits.min_hz..=bw_limits.max_hz,
-                    )
-			.text("Filter Bandwidth (Hz)"),
-                );
+			// ---------------------------------------------------------
+			// Filter bandwidth
+			// ---------------------------------------------------------
+			let bw_limits = filter_bandwidth_limits(snapshot.demod_mode);
 
-                // Keep per-demod preference in sync with active UI value
-                state
-                    .demod_preferences
-                    .get_mut(snapshot.demod_mode)
-                    .filter_bandwidth_hz = state.filter_bandwidth_hz;
+			state.filter_bandwidth_hz = clamp_filter_bandwidth(
+			    snapshot.demod_mode,
+			    state.filter_bandwidth_hz,
+			);
 
-                let now = Instant::now();
+			let bw_response = ui.add(
+			    egui::Slider::new(
+				&mut state.filter_bandwidth_hz,
+				bw_limits.min_hz..=bw_limits.max_hz,
+			    )
+				.text("Filter Bandwidth (Hz)"),
+			);
 
-                if bw_response.changed() {
-                    if let Some(send_hz) = should_send_debounced(
-                        now,
-                        state.filter_bandwidth_hz,
-                        &mut state.filter_bw_debounce,
-                        10.0,
-                        Duration::from_millis(75),
-                    ) {
-                        let _ = self.ws_cmd_tx.send(
-                            ControlCommand::LegacyClientMessage(
-                                rigflow_protocol::ClientMessage::SetFilterBandwidth {
-                                    bandwidth_hz: send_hz,
-                                },
-                            ),
-                        );
-                    }
-                }
+			// Keep per-demod preference in sync with active UI value
+			state
+			    .demod_preferences
+			    .get_mut(snapshot.demod_mode)
+			    .filter_bandwidth_hz = state.filter_bandwidth_hz;
 
-                if bw_response.drag_stopped() {
-                    let final_hz = state
-                        .filter_bandwidth_hz
-                        .round()
-                        .clamp(bw_limits.min_hz, bw_limits.max_hz);
+			let now = Instant::now();
 
-                    state.filter_bandwidth_hz = final_hz;
-                    state
-                        .demod_preferences
-                        .get_mut(snapshot.demod_mode)
-                        .filter_bandwidth_hz = final_hz;
+			if bw_response.changed() {
+			    if let Some(send_hz) = should_send_debounced(
+				now,
+				state.filter_bandwidth_hz,
+				&mut state.filter_bw_debounce,
+				10.0,
+				Duration::from_millis(75),
+			    ) {
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					    bandwidth_hz: send_hz,
+					},
+				    ),
+				);
+			    }
+			}
 
-                    state.filter_bw_debounce.last_sent_value = final_hz;
-                    state.filter_bw_debounce.last_send_time = now;
+			if bw_response.drag_stopped() {
+			    let final_hz = state
+				.filter_bandwidth_hz
+				.round()
+				.clamp(bw_limits.min_hz, bw_limits.max_hz);
 
-                    let _ = self.ws_cmd_tx.send(
-                        ControlCommand::LegacyClientMessage(
-                            rigflow_protocol::ClientMessage::SetFilterBandwidth {
-                                bandwidth_hz: final_hz,
-                            },
-                        ),
-                    );
-                }
+			    state.filter_bandwidth_hz = final_hz;
+			    state
+				.demod_preferences
+				.get_mut(snapshot.demod_mode)
+				.filter_bandwidth_hz = final_hz;
 
-                // ---------------------------------------------------------
-                // Pitch (only for modes where it applies)
-                // ---------------------------------------------------------
-                if let Some(limits) = pitch_limits(snapshot.demod_mode) {
-                    state.pitch_hz = state.pitch_hz.clamp(limits.min_hz, limits.max_hz);
+			    state.filter_bw_debounce.last_sent_value = final_hz;
+			    state.filter_bw_debounce.last_send_time = now;
 
-                    let pitch_response = ui.add(
-                        egui::Slider::new(
-                            &mut state.pitch_hz,
-                            limits.min_hz..=limits.max_hz,
-                        )
-                            .text(limits.label),
-                    );
+			    let _ = self.ws_cmd_tx.send(
+				ControlCommand::LegacyClientMessage(
+				    rigflow_protocol::ClientMessage::SetFilterBandwidth {
+					bandwidth_hz: final_hz,
+				    },
+				),
+			    );
 
-                    // Keep per-demod preference in sync with active UI value
-                    state
-                        .demod_preferences
-                        .get_mut(snapshot.demod_mode)
-                        .pitch_hz = state.pitch_hz;
+			    save_demod_prefs = true;
+			}
 
-                    let now = Instant::now();
+			// ---------------------------------------------------------
+			// Pitch (only for modes where it applies)
+			// ---------------------------------------------------------
+			if let Some(limits) = pitch_limits(snapshot.demod_mode) {
+			    state.pitch_hz = state.pitch_hz.clamp(limits.min_hz, limits.max_hz);
 
-                    if pitch_response.changed() {
-                        if let Some(send_hz) = should_send_debounced(
-                            now,
-                            state.pitch_hz,
-                            &mut state.pitch_debounce,
-                            limits.debounce_delta_hz,
-                            Duration::from_millis(limits.debounce_interval_ms),
-                        ) {
-                            let _ = self.ws_cmd_tx.send(
-                                ControlCommand::LegacyClientMessage(
-                                    rigflow_protocol::ClientMessage::SetPitch {
-                                        pitch_hz: send_hz,
-                                    },
-                                ),
-                            );
-                        }
-                    }
+			    let pitch_response = ui.add(
+				egui::Slider::new(
+				    &mut state.pitch_hz,
+				    limits.min_hz..=limits.max_hz,
+				)
+				    .text(limits.label),
+			    );
 
-                    if pitch_response.drag_stopped() {
-                        let final_hz = state
-                            .pitch_hz
-                            .round()
-                            .clamp(limits.min_hz, limits.max_hz);
+			    // Keep per-demod preference in sync with active UI value
+			    state
+				.demod_preferences
+				.get_mut(snapshot.demod_mode)
+				.pitch_hz = state.pitch_hz;
 
-                        state.pitch_hz = final_hz;
-                        state
-                            .demod_preferences
-                            .get_mut(snapshot.demod_mode)
-                            .pitch_hz = final_hz;
+			    let now = Instant::now();
 
-                        state.pitch_debounce.last_sent_value = final_hz;
-                        state.pitch_debounce.last_send_time = now;
+			    if pitch_response.changed() {
+				if let Some(send_hz) = should_send_debounced(
+				    now,
+				    state.pitch_hz,
+				    &mut state.pitch_debounce,
+				    limits.debounce_delta_hz,
+				    Duration::from_millis(limits.debounce_interval_ms),
+				) {
+				    let _ = self.ws_cmd_tx.send(
+					ControlCommand::LegacyClientMessage(
+					    rigflow_protocol::ClientMessage::SetPitch {
+						pitch_hz: send_hz,
+					    },
+					),
+				    );
+				}
+			    }
 
-                        let _ = self.ws_cmd_tx.send(
-                            ControlCommand::LegacyClientMessage(
-                                rigflow_protocol::ClientMessage::SetPitch {
-                                    pitch_hz: final_hz,
-                                },
-                            ),
-                        );
-		    }
-                }
-            };
+			    if pitch_response.drag_stopped() {
+				let final_hz = state
+				    .pitch_hz
+				    .round()
+				    .clamp(limits.min_hz, limits.max_hz);
+
+				state.pitch_hz = final_hz;
+				state
+				    .demod_preferences
+				    .get_mut(snapshot.demod_mode)
+				    .pitch_hz = final_hz;
+
+				state.pitch_debounce.last_sent_value = final_hz;
+				state.pitch_debounce.last_send_time = now;
+
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::LegacyClientMessage(
+					rigflow_protocol::ClientMessage::SetPitch {
+					    pitch_hz: final_hz,
+					},
+				    ),
+				);
+
+				save_demod_prefs = true;
+			    }
+			}
+		    };
 		    
 		    ui.label("Demod");
 
@@ -336,6 +349,9 @@ if snapshot.radio_acquired {
                             );
                         }
                     }
+		    if save_demod_prefs {
+			self.save_demod_preferences_to_current_operator();
+		    }
                 });
         }
     }
@@ -771,5 +787,5 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
     state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
     state.pitch_debounce = DebounceState::new(state.pitch_hz);
 
-    state.last_demod_mode_for_bw = Some(mode);
+    state.last_demod_mode_for_controls = Some(mode);
 }

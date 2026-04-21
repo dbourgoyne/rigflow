@@ -21,6 +21,7 @@ use rigflow_protocol::ServerMessage;
 use crate::ui::state::UiState;
 use crate::client_runtime::MediaCommand;
 use crate::net::control::ControlCommand;
+use crate::ui::state::DebounceState;
 
 // --- Type aliases ----------------------------------------------------------
 
@@ -338,6 +339,9 @@ pub fn apply_radio_server_message(
 		state.pending_apply_default_bookmark = true;
 	    }
 
+	    // Reapply current mode controls on every acquire.
+	    state.pending_apply_mode_controls = true;
+
 	    // Force client audio pipeline to reset on radio switch/acquire.
 	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
 	}
@@ -372,16 +376,8 @@ pub fn apply_radio_server_message(
 	    state.demod_mode = demod_mode;
 	    state.sideband = sideband;
 
-	    // Update stored per-demod preferences from server state.
-	    state.demod_preferences.usb.pitch_hz = ssb_pitch_hz;
-	    state.demod_preferences.lsb.pitch_hz = ssb_pitch_hz;
-	    state.demod_preferences.cw.pitch_hz = cw_pitch_hz;
-	    state
-		.demod_preferences
-		.get_mut(demod_mode)
-		.filter_bandwidth_hz = filter_bandwidth_hz;
-
-	    apply_active_demod_preferences(&mut state);
+	    // Do NOT overwrite persisted per-demod prefs here.
+	    state.pending_apply_mode_controls = true;
 	}
 
 	ServerRadioMessage::RuntimeChanged {
@@ -474,8 +470,8 @@ fn apply_active_demod_preferences(state: &mut UiState) {
     state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
     state.pitch_hz = prefs.pitch_hz;
 
-    state.filter_bw_debounce = crate::ui::state::DebounceState::new(state.filter_bandwidth_hz);
-    state.pitch_debounce = crate::ui::state::DebounceState::new(state.pitch_hz);
+    state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
+    state.pitch_debounce = DebounceState::new(state.pitch_hz);
 
-    state.last_demod_mode_for_bw = Some(state.demod_mode);
+    state.last_demod_mode_for_controls = Some(state.demod_mode);
 }

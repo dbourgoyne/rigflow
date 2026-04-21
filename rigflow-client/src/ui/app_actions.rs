@@ -12,6 +12,57 @@ use crate::persistence::{normalize_operator_id,
 
 impl RigflowApp {
 
+    pub(crate) fn save_demod_preferences_to_current_operator(&mut self) {
+	let snapshot = {
+            let state = self.state.lock().unwrap();
+            (
+		state.operator_id.clone(),
+		state.demod_preferences.clone(),
+            )
+	};
+
+	let (operator_id, demod_preferences) = snapshot;
+
+	log::info!(
+            "save_demod_preferences_to_current_operator: operator='{}' prefs={:?}",
+            operator_id,
+            demod_preferences
+	);
+
+	if operator_id.trim().is_empty() {
+            log::warn!("save_demod_preferences_to_current_operator: empty operator_id");
+            return;
+	}
+
+	match self.persistence_store.load_or_create_operator_settings(&operator_id) {
+            Ok(mut operator_settings) => {
+		operator_settings.demod_preferences = demod_preferences;
+
+		log::info!(
+                    "about to save operator settings for '{}' with demod_preferences={:?}",
+                    operator_settings.operator_id,
+                    operator_settings.demod_preferences
+		);
+
+		if let Err(err) = self.persistence_store.save_operator_settings(&operator_settings) {
+                    if let Ok(mut state) = self.state.lock() {
+			state.persistence_status =
+                            format!("failed to save demod preferences: {err}");
+                    }
+		} else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+		}
+            }
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status =
+			format!("failed to load operator settings: {err}");
+		}
+            }
+	}
+    }
+
+
     pub(crate) fn update_selected_bookmark_notes(&mut self, notes: String) {
 	let selected_id = {
             let state = self.state.lock().unwrap();

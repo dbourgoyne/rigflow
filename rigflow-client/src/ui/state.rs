@@ -50,7 +50,10 @@ pub struct UiState {
     // =====================================================================
 
     /// Tracks last demod mode for applying defaults (e.g. bandwidth)
-    pub last_demod_mode_for_bw: Option<DemodMode>,
+    pub last_demod_mode_for_controls: Option<DemodMode>,
+
+    /// One-shot flag: after radio acquire, reapply current mode controls
+    pub pending_apply_mode_controls: bool,
 
     // =====================================================================
     // UI RUNTIME / HELPER STATE (non-persistent, non-radio)
@@ -178,7 +181,8 @@ impl Default for UiState {
             // RADIO-DERIVED UI STATE
             // =================================================================
 
-            last_demod_mode_for_bw: None,
+            last_demod_mode_for_controls: None,
+	    pending_apply_mode_controls: false,
 
             // =================================================================
             // UI RUNTIME / HELPER STATE

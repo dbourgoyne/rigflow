@@ -92,6 +92,19 @@ pub fn apply_operator_settings_to_ui_state(
     }
 
     state.bookmark_status.clear();
+
+    // --- NEW: load per-demod preferences ---
+    state.demod_preferences = operator.demod_preferences.clone();
+
+    let prefs = state.demod_preferences.get(state.demod_mode);
+
+    state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
+    state.pitch_hz = prefs.pitch_hz;
+
+    state.filter_bw_debounce = crate::ui::state::DebounceState::new(state.filter_bandwidth_hz);
+    state.pitch_debounce = crate::ui::state::DebounceState::new(state.pitch_hz);
+
+    state.last_demod_mode_for_controls = Some(state.demod_mode);
 }
 
 pub fn apply_ui_state_to_operator_settings(
@@ -107,4 +120,7 @@ pub fn apply_ui_state_to_operator_settings(
         state.auto_apply_default_bookmark_on_acquire;
 
     operator.bookmarks = state.bookmarks.clone();
+
+    // --- NEW: persist per-demod preferences ---
+    operator.demod_preferences = state.demod_preferences.clone();
 }
