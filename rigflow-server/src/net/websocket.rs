@@ -10,8 +10,6 @@ use log::{debug, info};
 use tokio::sync::mpsc;
 
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
-use rigflow_protocol::{ClientMessage, ServerMessage};
-use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 use crate::{
     app_state::AppState,
@@ -22,15 +20,7 @@ use crate::{
     },
 };
 
-/// Messages that may be sent to a connected WebSocket client.
-///
-/// We currently support two logical protocols over the same socket:
-/// - legacy JSON control/status messages
-/// - radio-leasing / multi-radio control messages
-enum ConnectionMessage {
-    Legacy(ServerMessage),
-    Radio(ServerRadioMessage),
-}
+type WsSender = futures::stream::SplitSink<WebSocket, Message>;
 
 /// Axum entry point for `/ws`.
 pub async fn ws_handler(
@@ -42,82 +32,23 @@ pub async fn ws_handler(
 
 /// Handle a single WebSocket client connection.
 ///
-/// This function splits the socket into send/receive halves and runs:
-/// - a send task that forwards server-side events to the client
-/// - a receive task that parses inbound client messages
-///
-/// When either side exits, the connection is considered done.
+/// Responsibilities:
+/// - parse inbound `ClientRadioMessage`s
+/// - send outbound `ServerRadioMessage`s
+/// - manage per-connection lease/session cleanup
 async fn client_socket(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
-    // Each connection gets a unique logical client id used by the radio manager.
+    // Each websocket connection maps to one logical client id.
     let mut session = SessionState::new(ClientId(uuid::Uuid::new_v4().to_string()));
 
-    // Legacy broadcast channels.
-    let mut msg_rx = state.tx.subscribe();
-    let mut audio_rx = state.audio_tx.subscribe();
-    let mut waterfall_rx = state.waterfall_tx.subscribe();
-
-    // Per-connection local channel used for targeted responses.
-    let (local_tx, mut local_rx) = mpsc::unbounded_channel::<ConnectionMessage>();
+    // Per-connection local channel for targeted responses and worker status updates.
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel::<ServerRadioMessage>();
 
     let send_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                maybe_local = local_rx.recv() => {
-                    match maybe_local {
-                        Some(msg) => {
-                            if send_connection_message(&mut sender, &msg).await.is_err() {
-                                break;
-                            }
-                        }
-                        None => break,
-                    }
-                }
-
-                msg = msg_rx.recv() => {
-                    match msg {
-                        Ok(msg) => {
-                            let wrapped = ConnectionMessage::Legacy(msg);
-                            if send_connection_message(&mut sender, &wrapped).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-
-                audio = audio_rx.recv() => {
-                    match audio {
-                        Ok(mut bytes) => {
-                            // Prefix audio frames with a type byte.
-                            let mut framed = Vec::with_capacity(bytes.len() + 1);
-                            framed.push(b'A');
-                            framed.append(&mut bytes);
-
-                            if sender.send(Message::Binary(framed)).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
-
-                wf = waterfall_rx.recv() => {
-                    match wf {
-                        Ok(mut bytes) => {
-                            // Prefix waterfall frames with a type byte.
-                            let mut framed = Vec::with_capacity(bytes.len() + 1);
-                            framed.push(b'W');
-                            framed.append(&mut bytes);
-
-                            if sender.send(Message::Binary(framed)).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
+        while let Some(msg) = local_rx.recv().await {
+            if send_connection_message(&mut sender, &msg).await.is_err() {
+                break;
             }
         }
     });
@@ -131,7 +62,7 @@ async fn client_socket(socket: WebSocket, state: AppState) {
                 }
                 Message::Close(_) => break,
 
-                // We currently ignore inbound websocket ping/pong/binary frames from clients.
+                // No client-originated binary/media traffic over websocket.
                 Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
             }
         }
@@ -146,149 +77,44 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     }
 }
 
-/// Serialize and send a connection-scoped message to the client.
+/// Serialize and send one server radio message to the client.
 async fn send_connection_message(
-    sender: &mut futures::stream::SplitSink<WebSocket, Message>,
-    msg: &ConnectionMessage,
+    sender: &mut WsSender,
+    msg: &ServerRadioMessage,
 ) -> Result<(), ()> {
-    let text = match msg {
-        ConnectionMessage::Legacy(msg) => serde_json::to_string(msg).map_err(|_| ())?,
-        ConnectionMessage::Radio(msg) => serde_json::to_string(msg).map_err(|_| ())?,
-    };
-
-    sender.send(Message::Text(text)).await.map_err(|_| ())
+    let text = serde_json::to_string(msg).map_err(|_| ())?;
+    sender.send(Message::Text(text.into())).await.map_err(|_| ())
 }
 
 /// Parse one inbound text frame.
 ///
-/// We first try the newer radio-control protocol. If that fails, we fall back to
-/// legacy text control messages.
+/// We now support only the unified radio-control protocol.
 async fn handle_incoming_text(
     text: &str,
     app_state: &AppState,
     session: &mut SessionState,
-    local_tx: &mpsc::UnboundedSender<ConnectionMessage>,
+    local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
 ) {
-    if let Ok(cmd) = serde_json::from_str::<ClientRadioMessage>(text) {
-        handle_radio_message(app_state, session, cmd, local_tx).await;
-        return;
-    }
-
-    match handle_legacy_client_text(text, app_state, session).await {
-        Ok(Some(reply)) => {
-            let _ = local_tx.send(ConnectionMessage::Legacy(reply));
+    match serde_json::from_str::<ClientRadioMessage>(text) {
+        Ok(cmd) => {
+            handle_radio_message(app_state, session, cmd, local_tx).await;
         }
-        Ok(None) => {}
         Err(err) => {
-            let _ = local_tx.send(ConnectionMessage::Legacy(ServerMessage::Error {
-                message: err,
-            }));
+            send_radio_error(
+                local_tx,
+                "invalid_message",
+                &format!("failed to parse client message: {err}"),
+            );
         }
     }
 }
 
-/// Handle legacy JSON control messages.
-///
-/// These messages ultimately become worker commands routed through the radio manager
-/// for the currently acquired radio in this session.
-async fn handle_legacy_client_text(
-    text: &str,
-    state: &AppState,
-    session: &SessionState,
-) -> Result<Option<ServerMessage>, String> {
-    let cmd: ClientMessage =
-        serde_json::from_str(text).map_err(|e| format!("invalid json: {e}"))?;
-
-    match cmd {
-	
-        ClientMessage::SetFrequency { target_freq_hz } => {
-            send_worker_command_for_session(
-                state,
-                session,
-                WorkerCommand::SetTargetFrequency {
-                    hz: target_freq_hz as u64,
-                },
-            )
-            .await
-            .map_err(radio_manager_error_string)?;
-
-            Ok(None)
-        }
-
-        ClientMessage::SetCenterFrequency { center_freq_hz } => {
-            send_worker_command_for_session(
-                state,
-                session,
-                WorkerCommand::SetCenterFrequency {
-                    hz: center_freq_hz as u64,
-                },
-            )
-            .await
-            .map_err(radio_manager_error_string)?;
-
-            Ok(None)
-        }
-
-        ClientMessage::SetDemodMode { mode } => {
-            send_worker_command_for_session(
-                state,
-                session,
-                WorkerCommand::SetDemodMode {
-                    mode,
-                },
-            )
-            .await
-            .map_err(radio_manager_error_string)?;
-
-            Ok(None)
-        }
-
-        ClientMessage::SetSideband { sideband } => {
-            send_worker_command_for_session(
-                state,
-                session,
-                WorkerCommand::SetSideband {
-                    sideband,
-                },
-            )
-            .await
-            .map_err(radio_manager_error_string)?;
-
-            Ok(None)
-        }
-
-        ClientMessage::SetPitch { pitch_hz } => {
-            send_worker_command_for_session(
-                state,
-                session,
-                WorkerCommand::SetPitch { pitch_hz },
-            )
-            .await
-            .map_err(radio_manager_error_string)?;
-
-            Ok(None)
-        }
-
-	ClientMessage::SetFilterBandwidth { bandwidth_hz } => {
-            send_worker_command_for_session(
-                state,
-                session,
-                WorkerCommand::SetFilterBandwidth { bandwidth_hz },
-            )
-            .await
-            .map_err(radio_manager_error_string)?;
-
-            Ok(None)
-        }
-    }
-}
-
-/// Handle modern radio-control messages.
+/// Handle unified radio-control messages.
 async fn handle_radio_message(
     app_state: &AppState,
     session: &mut SessionState,
     msg: ClientRadioMessage,
-    local_tx: &mpsc::UnboundedSender<ConnectionMessage>,
+    local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
 ) {
     match msg {
         ClientRadioMessage::ListRadios => {
@@ -361,7 +187,6 @@ async fn handle_radio_message(
                 acquire_result.lease_id
             );
 
-            // Send acquisition confirmation first.
             send_radio(
                 local_tx,
                 ServerRadioMessage::RadioAcquired {
@@ -371,7 +196,7 @@ async fn handle_radio_message(
                 },
             );
 
-            // Subscribe to worker runtime state updates for this leased radio.
+            // Subscribe to runtime state updates for this leased radio.
             let mut status_rx = match app_state
                 .radio_manager
                 .subscribe_runtime_status(
@@ -388,7 +213,7 @@ async fn handle_radio_message(
                 }
             };
 
-            // Immediately send a full snapshot based on current worker status.
+            // Send initial full snapshot.
             let initial_status = status_rx.borrow().clone();
             if let Some(snapshot) =
                 runtime_snapshot_from_status(acquire_result.radio_id.clone(), &initial_status)
@@ -397,7 +222,7 @@ async fn handle_radio_message(
                 send_radio(local_tx, snapshot);
             }
 
-            // Forward future runtime changes asynchronously.
+            // Forward future runtime changes.
             let local_tx_clone = local_tx.clone();
             let radio_id_clone = acquire_result.radio_id.clone();
 
@@ -498,79 +323,81 @@ async fn handle_radio_message(
             }
         }
 
-	ClientRadioMessage::SetTargetFrequency { target_freq_hz } => {
-            let _ = send_worker_command_for_session(
+        ClientRadioMessage::SetTargetFrequency { target_freq_hz } => {
+            if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::SetTargetFrequency {
-                    hz: target_freq_hz as u64,
-                },
+                WorkerCommand::SetTargetFrequency { hz: target_freq_hz },
             )
-		.await
-		.map_err(radio_manager_error_string);
+            .await
+            {
+                send_radio_error(local_tx, "set_target_frequency_failed", &radio_manager_error_string(err));
+            }
         }
 
-
-	ClientRadioMessage::SetCenterFrequency { center_freq_hz } => {
-            let _ = send_worker_command_for_session(
+        ClientRadioMessage::SetCenterFrequency { center_freq_hz } => {
+            if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::SetCenterFrequency {
-                    hz: center_freq_hz as u64,
-                },
+                WorkerCommand::SetCenterFrequency { hz: center_freq_hz },
             )
-		.await
-		.map_err(radio_manager_error_string);
+            .await
+            {
+                send_radio_error(local_tx, "set_center_frequency_failed", &radio_manager_error_string(err));
+            }
         }
 
-	ClientRadioMessage::SetDemodMode { mode } => {
-            let _ = send_worker_command_for_session(
+        ClientRadioMessage::SetDemodMode { mode } => {
+            if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::SetDemodMode {
-                    mode: mode as DemodMode,
-                },
+                WorkerCommand::SetDemodMode { mode },
             )
-		.await
-		.map_err(radio_manager_error_string);
+            .await
+            {
+                send_radio_error(local_tx, "set_demod_mode_failed", &radio_manager_error_string(err));
+            }
         }
 
-	ClientRadioMessage::SetSideband { sideband } => {
-            let _ = send_worker_command_for_session(
+        ClientRadioMessage::SetSideband { sideband } => {
+            if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::SetSideband {
-                    sideband: sideband as Sideband,
-                },
+                WorkerCommand::SetSideband { sideband },
             )
-		.await
-		.map_err(radio_manager_error_string);
+            .await
+            {
+                send_radio_error(local_tx, "set_sideband_failed", &radio_manager_error_string(err));
+            }
         }
 
-	ClientRadioMessage::SetPitch { pitch_hz } => {
-            let _ = send_worker_command_for_session(
+        ClientRadioMessage::SetPitch { pitch_hz } => {
+            if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::SetPitch {
-                    pitch_hz: pitch_hz as f32,
-                },
+                WorkerCommand::SetPitch { pitch_hz },
             )
-		.await
-		.map_err(radio_manager_error_string);
+            .await
+            {
+                send_radio_error(local_tx, "set_pitch_failed", &radio_manager_error_string(err));
+            }
         }
 
-	ClientRadioMessage::SetFilterBandwidth { bandwidth_hz } => {
-            let _ = send_worker_command_for_session(
+        ClientRadioMessage::SetFilterBandwidth { bandwidth_hz } => {
+            if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::SetFilterBandwidth {
-                    bandwidth_hz: bandwidth_hz as f32,
-                },
+                WorkerCommand::SetFilterBandwidth { bandwidth_hz },
             )
-		.await
-		.map_err(radio_manager_error_string);
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_filter_bandwidth_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
         }
-
     }
 }
 
@@ -643,8 +470,8 @@ fn runtime_snapshot_from_status(
             demod_mode: runtime.demod_mode,
             sideband: runtime.sideband,
             ssb_pitch_hz: runtime.ssb_pitch_hz,
-	    cw_pitch_hz: runtime.cw_pitch_hz,
-	    filter_bandwidth_hz: runtime.filter_bandwidth_hz,
+            cw_pitch_hz: runtime.cw_pitch_hz,
+            filter_bandwidth_hz: runtime.filter_bandwidth_hz,
         }),
         _ => None,
     }
@@ -663,8 +490,8 @@ fn runtime_changed_from_status(
             demod_mode: Some(runtime.demod_mode),
             sideband: Some(runtime.sideband),
             ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
-	    cw_pitch_hz: Some(runtime.cw_pitch_hz),
-	    filter_bandwidth_hz: Some(runtime.filter_bandwidth_hz),
+            cw_pitch_hz: Some(runtime.cw_pitch_hz),
+            filter_bandwidth_hz: Some(runtime.filter_bandwidth_hz),
         }),
         _ => None,
     }
@@ -672,15 +499,15 @@ fn runtime_changed_from_status(
 
 /// Send a radio-control protocol message over the local connection queue.
 fn send_radio(
-    local_tx: &mpsc::UnboundedSender<ConnectionMessage>,
+    local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
     msg: ServerRadioMessage,
 ) {
-    let _ = local_tx.send(ConnectionMessage::Radio(msg));
+    let _ = local_tx.send(msg);
 }
 
 /// Send a standardized radio error.
 fn send_radio_error(
-    local_tx: &mpsc::UnboundedSender<ConnectionMessage>,
+    local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
     code: &str,
     message: &str,
 ) {
@@ -707,12 +534,12 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         demod_mode,
         sideband,
         ssb_pitch_hz,
-	cw_pitch_hz,
-	filter_bandwidth_hz,
+        cw_pitch_hz,
+        filter_bandwidth_hz,
     } = msg
     {
         debug!(
-            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={} sideband={} ssb_pitch={} cw_pitch={} filter_bandwidth={}",
+            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={:?} sideband={:?} ssb_pitch={} cw_pitch={} filter_bandwidth={}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
@@ -724,8 +551,8 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
             demod_mode,
             sideband,
             ssb_pitch_hz,
-	    cw_pitch_hz,
-	    filter_bandwidth_hz,
+            cw_pitch_hz,
+            filter_bandwidth_hz,
         );
     }
 }
@@ -739,8 +566,8 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         demod_mode,
         sideband,
         ssb_pitch_hz,
-	cw_pitch_hz,
-	filter_bandwidth_hz,
+        cw_pitch_hz,
+        filter_bandwidth_hz,
     } = msg
     {
         info!(
@@ -751,8 +578,8 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
             demod_mode,
             sideband,
             ssb_pitch_hz,
-	    cw_pitch_hz,
-	    filter_bandwidth_hz,
+            cw_pitch_hz,
+            filter_bandwidth_hz,
         );
     }
 }
