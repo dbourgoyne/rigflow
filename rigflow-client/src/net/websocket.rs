@@ -21,7 +21,6 @@ use rigflow_protocol::ServerMessage;
 use crate::ui::state::UiState;
 use crate::client_runtime::MediaCommand;
 use crate::net::control::ControlCommand;
-use crate::ui::state::DebounceState;
 
 // --- Type aliases ----------------------------------------------------------
 
@@ -383,9 +382,7 @@ pub fn apply_radio_server_message(
 	    target_freq_hz,
 	    demod_mode,
 	    sideband,
-	    ssb_pitch_hz,
-	    cw_pitch_hz,
-	    filter_bandwidth_hz,
+	    ..
 	} => {
 	    if let Some(value) = center_freq_hz {
 		state.center_freq_hz = value as f32;
@@ -397,27 +394,13 @@ pub fn apply_radio_server_message(
 
 	    if let Some(ref value) = demod_mode {
 		state.demod_mode = *value;
+		state.pending_apply_mode_controls = true;
 	    }
 
 	    if let Some(ref value) = sideband {
 		state.sideband = *value;
 	    }
 
-	    if let Some(value) = ssb_pitch_hz {
-		state.demod_preferences.usb.pitch_hz = value;
-		state.demod_preferences.lsb.pitch_hz = value;
-	    }
-
-	    if let Some(value) = cw_pitch_hz {
-		state.demod_preferences.cw.pitch_hz = value;
-	    }
-
-	    if let Some(value) = filter_bandwidth_hz {
-		let mode = state.demod_mode;
-		state.demod_preferences.get_mut(mode).filter_bandwidth_hz = value;
-	    }
-
-	    apply_active_demod_preferences(&mut state);
 	}
 
         ServerRadioMessage::RadioError { message, .. } => {
@@ -427,6 +410,7 @@ pub fn apply_radio_server_message(
 
     None
 }
+
 
 /// Build the UDP endpoint string that the client should advertise to the server.
 ///
@@ -459,16 +443,4 @@ fn build_udp_peer_addr(
         .ip();
 
     Ok(format!("{}:{}", local_ip, udp_listen_port))
-}
-
-fn apply_active_demod_preferences(state: &mut UiState) {
-    let prefs = state.demod_preferences.get(state.demod_mode);
-
-    state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
-    state.pitch_hz = prefs.pitch_hz;
-
-    state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
-    state.pitch_debounce = DebounceState::new(state.pitch_hz);
-
-    state.last_demod_mode_for_controls = Some(state.demod_mode);
 }
