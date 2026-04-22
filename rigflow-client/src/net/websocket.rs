@@ -211,16 +211,16 @@ pub async fn websocket_control_task(
                         state.available_radios.clear();
                     }
 
-                    Some(ControlCommand::LegacyClientMessage(cmd)) => {
-                        info!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
+		    Some(ControlCommand::RadioMessage(cmd)) => {
+			info!("WEBSOCKET got RadioMessage: {:?}", cmd);
 
-                        if let Some(write) = write_opt.as_mut() {
-                            let text = serde_json::to_string(&cmd)?;
-                            info!("WEBSOCKET sending text: {}", text);
+			if let Some(write) = write_opt.as_mut() {
+			    let text = serde_json::to_string(&cmd)?;
+			    info!("WEBSOCKET sending text: {}", text);
 
-                            write.send(Message::Text(text.into())).await?;
-                        }
-                    }
+			    write.send(Message::Text(text.into())).await?;
+			}
+		    }
 
                     None => break,
                 }
@@ -365,9 +365,6 @@ pub fn apply_radio_server_message(
 	    input_sample_rate_hz,
 	    demod_mode,
 	    sideband,
-	    ssb_pitch_hz,
-	    cw_pitch_hz,
-	    filter_bandwidth_hz,
 	    ..
 	} => {
 	    state.center_freq_hz = center_freq_hz as f32;

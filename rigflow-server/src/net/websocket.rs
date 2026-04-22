@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
 use rigflow_protocol::{ClientMessage, ServerMessage};
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
 
 use crate::{
     app_state::AppState,
@@ -199,6 +200,7 @@ async fn handle_legacy_client_text(
         serde_json::from_str(text).map_err(|e| format!("invalid json: {e}"))?;
 
     match cmd {
+	
         ClientMessage::SetFrequency { target_freq_hz } => {
             send_worker_command_for_session(
                 state,
@@ -495,6 +497,80 @@ async fn handle_radio_message(
                 }
             }
         }
+
+	ClientRadioMessage::SetTargetFrequency { target_freq_hz } => {
+            let _ = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetTargetFrequency {
+                    hz: target_freq_hz as u64,
+                },
+            )
+		.await
+		.map_err(radio_manager_error_string);
+        }
+
+
+	ClientRadioMessage::SetCenterFrequency { center_freq_hz } => {
+            let _ = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetCenterFrequency {
+                    hz: center_freq_hz as u64,
+                },
+            )
+		.await
+		.map_err(radio_manager_error_string);
+        }
+
+	ClientRadioMessage::SetDemodMode { mode } => {
+            let _ = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetDemodMode {
+                    mode: mode as DemodMode,
+                },
+            )
+		.await
+		.map_err(radio_manager_error_string);
+        }
+
+	ClientRadioMessage::SetSideband { sideband } => {
+            let _ = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSideband {
+                    sideband: sideband as Sideband,
+                },
+            )
+		.await
+		.map_err(radio_manager_error_string);
+        }
+
+	ClientRadioMessage::SetPitch { pitch_hz } => {
+            let _ = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetPitch {
+                    pitch_hz: pitch_hz as f32,
+                },
+            )
+		.await
+		.map_err(radio_manager_error_string);
+        }
+
+	ClientRadioMessage::SetFilterBandwidth { bandwidth_hz } => {
+            let _ = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetFilterBandwidth {
+                    bandwidth_hz: bandwidth_hz as f32,
+                },
+            )
+		.await
+		.map_err(radio_manager_error_string);
+        }
+
     }
 }
 

@@ -118,8 +118,8 @@ impl RigflowApp {
 			    apply_mode_preferences(&mut state, snapshot.demod_mode);
 
 			    let _ = self.ws_cmd_tx.send(
-				ControlCommand::LegacyClientMessage(
-				    rigflow_protocol::ClientMessage::SetFilterBandwidth {
+				ControlCommand::RadioMessage(
+				    rigflow_protocol::ClientRadioMessage::SetFilterBandwidth {
 					bandwidth_hz: state.filter_bandwidth_hz,
 				    },
 				),
@@ -127,8 +127,8 @@ impl RigflowApp {
 
 			    if pitch_limits(snapshot.demod_mode).is_some() {
 				let _ = self.ws_cmd_tx.send(
-				    ControlCommand::LegacyClientMessage(
-					rigflow_protocol::ClientMessage::SetPitch {
+				    ControlCommand::RadioMessage(
+					rigflow_protocol::ClientRadioMessage::SetPitch {
 					    pitch_hz: state.pitch_hz,
 					},
 				    ),
@@ -171,8 +171,8 @@ impl RigflowApp {
 				Duration::from_millis(75),
 			    ) {
 				let _ = self.ws_cmd_tx.send(
-				    ControlCommand::LegacyClientMessage(
-					rigflow_protocol::ClientMessage::SetFilterBandwidth {
+				    ControlCommand::RadioMessage(
+					rigflow_protocol::ClientRadioMessage::SetFilterBandwidth {
 					    bandwidth_hz: send_hz,
 					},
 				    ),
@@ -196,8 +196,8 @@ impl RigflowApp {
 			    state.filter_bw_debounce.last_send_time = now;
 
 			    let _ = self.ws_cmd_tx.send(
-				ControlCommand::LegacyClientMessage(
-				    rigflow_protocol::ClientMessage::SetFilterBandwidth {
+				ControlCommand::RadioMessage(
+				    rigflow_protocol::ClientRadioMessage::SetFilterBandwidth {
 					bandwidth_hz: final_hz,
 				    },
 				),
@@ -237,8 +237,8 @@ impl RigflowApp {
 				    Duration::from_millis(limits.debounce_interval_ms),
 				) {
 				    let _ = self.ws_cmd_tx.send(
-					ControlCommand::LegacyClientMessage(
-					    rigflow_protocol::ClientMessage::SetPitch {
+					ControlCommand::RadioMessage(
+					    rigflow_protocol::ClientRadioMessage::SetPitch {
 						pitch_hz: send_hz,
 					    },
 					),
@@ -262,8 +262,8 @@ impl RigflowApp {
 				state.pitch_debounce.last_send_time = now;
 
 				let _ = self.ws_cmd_tx.send(
-				    ControlCommand::LegacyClientMessage(
-					rigflow_protocol::ClientMessage::SetPitch {
+				    ControlCommand::RadioMessage(
+					rigflow_protocol::ClientRadioMessage::SetPitch {
 					    pitch_hz: final_hz,
 					},
 				    ),
@@ -324,8 +324,8 @@ impl RigflowApp {
                         }
 
                         let _ = self.ws_cmd_tx.send(
-                            ControlCommand::LegacyClientMessage(
-                                rigflow_protocol::ClientMessage::SetDemodMode {
+                            ControlCommand::RadioMessage(
+                                rigflow_protocol::ClientRadioMessage::SetDemodMode {
                                     mode: selected_demod,
                                 },
                             ),
@@ -335,8 +335,8 @@ impl RigflowApp {
                             || selected_demod == DemodMode::Usb
                         {
                             let _ = self.ws_cmd_tx.send(
-                                ControlCommand::LegacyClientMessage(
-                                    rigflow_protocol::ClientMessage::SetSideband {
+                                ControlCommand::RadioMessage(
+                                    rigflow_protocol::ClientRadioMessage::SetSideband {
                                         sideband: match selected_demod {
                                             DemodMode::Lsb => Sideband::Lsb,
                                             DemodMode::Usb => Sideband::Usb,

@@ -40,6 +40,31 @@ pub enum ClientRadioMessage {
 
     /// Renew the current lease before expiration.
     RenewLease,
+
+    SetCenterFrequency {
+        center_freq_hz: u64,
+    },
+
+    SetTargetFrequency {
+        target_freq_hz: u64,
+    },
+
+    SetDemodMode {
+        mode: DemodMode,
+    },
+
+    SetSideband {
+        sideband: Sideband,
+    },
+
+    SetPitch {
+        pitch_hz: f32,
+    },
+
+    SetFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+    
 }
 
 /// Messages sent from server → client over WebSocket.

@@ -99,9 +99,9 @@ impl RigflowApp {
                                 }
 
                                 let _ = self.ws_cmd_tx.send(
-                                    ControlCommand::LegacyClientMessage(
-                                        rigflow_protocol::ClientMessage::SetCenterFrequency {
-                                            center_freq_hz: new_center_hz,
+                                    ControlCommand::RadioMessage(
+                                        rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+                                            center_freq_hz: new_center_hz as u64,
                                         },
                                     ),
                                 );
@@ -113,9 +113,9 @@ impl RigflowApp {
                                 }
 
                                 let _ = self.ws_cmd_tx.send(
-                                    ControlCommand::LegacyClientMessage(
-                                        rigflow_protocol::ClientMessage::SetFrequency {
-                                            target_freq_hz: new_target_hz,
+                                    ControlCommand::RadioMessage(
+                                        rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                                            target_freq_hz: new_target_hz as u64,
                                         },
                                     ),
                                 );
@@ -151,9 +151,9 @@ impl RigflowApp {
 				self.apply_bookmark(&bookmark_id);
 			    } else if let Some(clicked_freq_hz) = interaction.clicked_target_freq_hz {
 				let _ = self.ws_cmd_tx.send(
-				    ControlCommand::LegacyClientMessage(
-					rigflow_protocol::ClientMessage::SetFrequency {
-					    target_freq_hz: clicked_freq_hz,
+				    ControlCommand::RadioMessage(
+					rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+					    target_freq_hz: clicked_freq_hz as u64,
 					},
 				    ),
 				);
@@ -249,9 +249,9 @@ impl RigflowApp {
                                         }
 
                                         let _ = self.ws_cmd_tx.send(
-                                            ControlCommand::LegacyClientMessage(
-                                                rigflow_protocol::ClientMessage::SetFrequency {
-                                                    target_freq_hz: clicked_freq_hz,
+                                            ControlCommand::RadioMessage(
+                                                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                                                    target_freq_hz: clicked_freq_hz as u64,
                                                 },
                                             ),
                                         );

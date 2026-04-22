@@ -300,24 +300,24 @@ impl RigflowApp {
 	    }
 
 	    let _ = self.ws_cmd_tx.send(
-		ControlCommand::LegacyClientMessage(
-		    rigflow_protocol::ClientMessage::SetCenterFrequency {
-			center_freq_hz,
+		ControlCommand::RadioMessage(
+		    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+			center_freq_hz: bookmark.frequency_hz as u64,
 		    },
 		),
 	    );
 
 	    let _ = self.ws_cmd_tx.send(
-		ControlCommand::LegacyClientMessage(
-		    rigflow_protocol::ClientMessage::SetFrequency {
-			target_freq_hz: bookmark.frequency_hz,
+		ControlCommand::RadioMessage(
+		    rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+			target_freq_hz: bookmark.frequency_hz as u64,
 		    },
 		),
 	    );
 
 	    let _ = self.ws_cmd_tx.send(
-		ControlCommand::LegacyClientMessage(
-		    rigflow_protocol::ClientMessage::SetDemodMode {
+		ControlCommand::RadioMessage(
+		    rigflow_protocol::ClientRadioMessage::SetDemodMode {
 			mode: bookmark.demod_mode,
 		    },
 		),
@@ -325,8 +325,8 @@ impl RigflowApp {
 
 	    if let Some(sideband) = bookmark.sideband {
 		let _ = self.ws_cmd_tx.send(
-		    ControlCommand::LegacyClientMessage(
-			rigflow_protocol::ClientMessage::SetSideband { sideband },
+		    ControlCommand::RadioMessage(
+			rigflow_protocol::ClientRadioMessage::SetSideband { sideband },
 		    ),
 		);
 	    }
