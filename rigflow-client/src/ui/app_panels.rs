@@ -516,7 +516,7 @@ impl RigflowApp {
         egui::CollapsingHeader::new("Radios")
             .default_open(true)
             .show(ui, |ui| {
-                if snapshot.available_radios.is_empty() {
+                if snapshot.available_radios.is_empty() | !snapshot.server_connected {
                     ui.label("no radios");
                 } else {
                     let mut selected =
