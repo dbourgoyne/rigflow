@@ -392,9 +392,13 @@ pub fn apply_radio_server_message(
 		state.target_freq_hz = value as f32;
 	    }
 
-	    if let Some(ref value) = demod_mode {
-		state.demod_mode = *value;
-		state.pending_apply_mode_controls = true;
+	    if let Some(value) = demod_mode {
+		let mode_changed = state.demod_mode != value;
+		state.demod_mode = value;
+
+		if mode_changed {
+		    state.pending_apply_mode_controls = true;
+		}
 	    }
 
 	    if let Some(ref value) = sideband {

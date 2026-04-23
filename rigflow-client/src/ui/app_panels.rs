@@ -136,6 +136,7 @@ impl RigflowApp {
 			    }
 
 			    if default_deemphasis_mode(snapshot.demod_mode).is_some() {
+				println!("---------should apply controls: deemphasis-----------");
 				let _ = self.ws_cmd_tx.send(
 				    ControlCommand::RadioMessage(
 					rigflow_protocol::radio_control::ClientRadioMessage::SetDeemphasisMode {
@@ -396,7 +397,7 @@ impl RigflowApp {
 				    let _ = self.ws_cmd_tx.send(
 					ControlCommand::RadioMessage(
 					    rigflow_protocol::radio_control::ClientRadioMessage::SetDeemphasisMode {
-						mode: default_mode,
+						mode: state.deemphasis_mode,
 					    },
 					),
 				    );
@@ -789,7 +790,7 @@ impl RigflowApp {
 	    if !snapshot.persistence_status.is_empty() {
 		ui.add_space(6.0);
 		ui.colored_label(
-		    egui::Color32::YELLOW,
+		    egui::Color32::RED,
 		    &snapshot.persistence_status,
 		);
 	    }
