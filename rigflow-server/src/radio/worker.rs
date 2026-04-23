@@ -497,7 +497,16 @@ fn spawn_command_thread(
 		    }
 		    WorkerCommand::SetDeemphasisMode { mode } => {
 			if let Ok(mut control_state) = control.lock() {
+			    //let before = control_state.deemphasis_mode;
+
 			    control_state.deemphasis_mode = mode;
+			    /*
+			    info!(
+				"[worker] SetDeemphasisMode: {:?} -> {:?}",
+				before,
+				control_state.deemphasis_mode
+			    );
+			    */
 			}
 		    }
                 },
@@ -790,20 +799,38 @@ fn spawn_dsp_thread(
                 break;
             }
 
-            let current = current_control(&control);
+	    let current = current_control(&control);
+	    
             let mut changed = false;
 
             if current.center_freq_hz != applied.center_freq_hz {
                 pipeline.set_center_frequency(current.center_freq_hz as f32);
-                applied.center_freq_hz = current.center_freq_hz;
                 changed = true;
             }
 
             if current.target_freq_hz != applied.target_freq_hz {
                 pipeline.set_target_frequency(current.target_freq_hz as f32);
-                applied.target_freq_hz = current.target_freq_hz;
                 changed = true;
             }
+
+	    /*
+	    info!(
+		"[worker] apply check: current={:?} applied={:?}",
+		current.deemphasis_mode,
+		applied.deemphasis_mode
+	    );
+	    */
+	    if current.deemphasis_mode != applied.deemphasis_mode {
+		/*
+		info!(
+		    "[worker] applying deemphasis change: {:?} -> {:?}",
+		    applied.deemphasis_mode,
+		    current.deemphasis_mode
+	        );
+		*/
+		pipeline.set_deemphasis_mode(current.deemphasis_mode);
+		changed = true;
+	    }
 
             if current.demod_mode != applied.demod_mode {
                 let cfg = ServerConfig {
@@ -832,14 +859,14 @@ fn spawn_dsp_thread(
 		    _ => {}
 		}
 
-                applied.demod_mode = current.demod_mode;
-                applied.sideband = current.sideband;
-                applied.ssb_pitch_hz = current.ssb_pitch_hz;
-		applied.cw_pitch_hz = current.cw_pitch_hz;
-                applied.center_freq_hz = current.center_freq_hz;
-                applied.target_freq_hz = current.target_freq_hz;
-		applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
-                changed = true;
+		// Reapply deemphasis because its effective behavior depends on demod mode.
+		pipeline.set_deemphasis_mode(current.deemphasis_mode);
+
+//		if changed {
+//		    applied = current.clone();
+		//		}
+		changed = true;
+
             } else {
                 if current.sideband != applied.sideband {
                     pipeline.set_sideband(current.sideband);
@@ -873,6 +900,7 @@ fn spawn_dsp_thread(
             }
 
             if changed {
+		applied = current.clone();
                 let runtime = build_runtime_state(&current, startup_info.input_sample_rate_hz);
                 let _ = status_tx.send(WorkerStatus::Running { runtime });
             }

@@ -274,6 +274,12 @@ impl DspPipeline {
     }
     
     fn rebuild_audio_path_for_mode(&mut self) {
+	info!(
+	    "rebuild_audio_path_for_mode: demod={:?} deemphasis_mode={:?} tau={:?}",
+	    self.mode,
+	    self.deemphasis_mode,
+	    Self::deemphasis_tau_for(self.mode, self.deemphasis_mode)
+	);
 	let bandwidth_hz = clamp_filter_bandwidth(self.mode, self.filter_bandwidth_hz);
 	self.filter_bandwidth_hz = bandwidth_hz;
 
@@ -336,9 +342,15 @@ impl DspPipeline {
     }
 
     pub fn set_deemphasis_mode(&mut self, mode: DeemphasisMode) {
+	info!("pipeline set_deemphasis_mode: {:?}", mode);
 	self.deemphasis_mode = mode;
 	self.rebuild_audio_path_for_mode();
 	self.reset_audio_state();
+	info!(
+	    "pipeline deemphasis after rebuild: mode={:?} tau={:?}",
+	    self.deemphasis_mode,
+	    Self::deemphasis_tau_for(self.mode, self.deemphasis_mode)
+	);
     }
 
     pub fn set_target_frequency(&mut self, target_freq_hz: f32) {

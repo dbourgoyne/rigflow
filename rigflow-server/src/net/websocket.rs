@@ -116,6 +116,7 @@ async fn handle_radio_message(
     msg: ClientRadioMessage,
     local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
 ) {
+    info!("WEBSOCKET: handle_radio_message: msg = {:?}", msg);
     match msg {
         ClientRadioMessage::ListRadios => {
             let radios = app_state
@@ -400,6 +401,7 @@ async fn handle_radio_message(
         }
 
 	ClientRadioMessage::SetDeemphasisMode { mode } => {
+	    info!("WEBSOCKET: SetDeemphasis: mode = {:?}", mode);
 	    if let Err(err) = send_worker_command_for_session(
 		app_state,
 		session,
