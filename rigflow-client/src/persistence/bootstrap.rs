@@ -100,6 +100,7 @@ pub fn apply_operator_settings_to_ui_state(
 
     state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
     state.pitch_hz = prefs.pitch_hz;
+    state.deemphasis_mode = prefs.deemphasis_mode;
 
     state.filter_bw_debounce = crate::ui::state::DebounceState::new(state.filter_bandwidth_hz);
     state.pitch_debounce = crate::ui::state::DebounceState::new(state.pitch_hz);

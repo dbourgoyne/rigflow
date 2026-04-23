@@ -2,6 +2,7 @@ use std::time::Instant;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use crate::persistence::models::DemodPreferenceSetFile;
+use rigflow_core::dsp::modes::DeemphasisMode;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DebounceState {
@@ -40,6 +41,8 @@ pub struct UiState {
 
     /// Audio filter bandwidth (Hz)
     pub filter_bandwidth_hz: f32,
+
+    pub deemphasis_mode: DeemphasisMode,
 
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
@@ -173,8 +176,8 @@ impl Default for UiState {
 
 	    demod_preferences: DemodPreferenceSetFile::default(),
             pitch_hz: 0.0,
-
             filter_bandwidth_hz: 3000.0,
+	    deemphasis_mode: DeemphasisMode::Off,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

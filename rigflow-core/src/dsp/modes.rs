@@ -166,3 +166,37 @@ pub fn clamp_filter_bandwidth(mode: DemodMode, hz: f32) -> f32 {
     let limits = filter_bandwidth_limits(mode);
     hz.clamp(limits.min_hz, limits.max_hz)
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeemphasisMode {
+    Off,
+    Tau50us,
+    Tau75us,
+}
+
+impl DeemphasisMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            DeemphasisMode::Off => "Off",
+            DeemphasisMode::Tau50us => "50 µs",
+            DeemphasisMode::Tau75us => "75 µs",
+        }
+    }
+
+    pub fn tau_seconds(self) -> Option<f32> {
+        match self {
+            DeemphasisMode::Off => None,
+            DeemphasisMode::Tau50us => Some(50e-6),
+            DeemphasisMode::Tau75us => Some(75e-6),
+        }
+    }
+}
+
+pub fn default_deemphasis_mode(mode: DemodMode) -> Option<DeemphasisMode> {
+    match mode {
+        DemodMode::Wfm => Some(DeemphasisMode::Tau75us),
+        DemodMode::Nfm => Some(DeemphasisMode::Tau75us),
+        _ => None,
+    }
+}

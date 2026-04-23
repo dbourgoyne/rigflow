@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ui::om_bands::LicenseClass;
-use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::dsp::modes::{DemodMode, Sideband, DeemphasisMode};
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
 pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 2;
@@ -27,13 +27,15 @@ impl Default for AppStateFile {
 pub struct DemodPreferencesFile {
     pub filter_bandwidth_hz: f32,
     pub pitch_hz: f32,
+    pub deemphasis_mode: DeemphasisMode,
 }
 
 impl DemodPreferencesFile {
-    pub fn new(filter_bandwidth_hz: f32, pitch_hz: f32) -> Self {
+    pub fn new(filter_bandwidth_hz: f32, pitch_hz: f32, deemphasis_mode: DeemphasisMode) -> Self {
         Self {
             filter_bandwidth_hz,
             pitch_hz,
+	    deemphasis_mode,
         }
     }
 }
@@ -51,12 +53,12 @@ pub struct DemodPreferenceSetFile {
 impl Default for DemodPreferenceSetFile {
     fn default() -> Self {
         Self {
-            wfm: DemodPreferencesFile::new(15_000.0, 0.0),
-            nfm: DemodPreferencesFile::new(4_000.0, 0.0),
-            am: DemodPreferencesFile::new(5_000.0, 0.0),
-            usb: DemodPreferencesFile::new(2_700.0, 0.0),
-            lsb: DemodPreferencesFile::new(2_700.0, 0.0),
-            cw: DemodPreferencesFile::new(500.0, 600.0),
+            wfm: DemodPreferencesFile::new(15_000.0,   0.0, DeemphasisMode::Tau75us),
+            nfm: DemodPreferencesFile::new( 4_000.0,   0.0, DeemphasisMode::Tau75us),
+            am:  DemodPreferencesFile::new( 5_000.0,   0.0, DeemphasisMode::Off),
+            usb: DemodPreferencesFile::new( 2_700.0,   0.0, DeemphasisMode::Off),
+            lsb: DemodPreferencesFile::new( 2_700.0,   0.0, DeemphasisMode::Off),
+            cw:  DemodPreferencesFile::new(   500.0, 600.0, DeemphasisMode::Off),
         }
     }
 }

@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
+use rigflow_core::dsp::modes::{DeemphasisMode, default_deemphasis_mode};
 
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::config::{
@@ -39,6 +40,7 @@ struct SharedControlState {
     ssb_pitch_hz: f32,
     cw_pitch_hz: f32,
     filter_bandwidth_hz: f32,
+    pub deemphasis_mode: DeemphasisMode,
 }
 
 #[derive(Debug, Clone)]
@@ -235,8 +237,9 @@ fn build_runtime_state(
         demod_mode: control.demod_mode,
         sideband: control.sideband,
         ssb_pitch_hz: control.ssb_pitch_hz,
-	cw_pitch_hz: control.cw_pitch_hz,
-	filter_bandwidth_hz: control.filter_bandwidth_hz,
+        cw_pitch_hz: control.cw_pitch_hz,
+        filter_bandwidth_hz: control.filter_bandwidth_hz,
+        deemphasis_mode: control.deemphasis_mode,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -304,7 +307,8 @@ fn run_iq_worker_threads(
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
 	cw_pitch_hz: 600.0,
-	filter_bandwidth_hz: 3000.0 // sensible default
+	filter_bandwidth_hz: 3000.0, // sensible default
+	deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -489,6 +493,11 @@ fn spawn_command_thread(
 		    WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
 			if let Ok(mut control_state) = control.lock() {
 			    control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
+			}
+		    }
+		    WorkerCommand::SetDeemphasisMode { mode } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.deemphasis_mode = mode;
 			}
 		    }
                 },

@@ -398,6 +398,22 @@ async fn handle_radio_message(
                 );
             }
         }
+
+	ClientRadioMessage::SetDeemphasisMode { mode } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetDeemphasisMode { mode },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_deemphasis_mode_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
     }
 }
 
@@ -472,6 +488,7 @@ fn runtime_snapshot_from_status(
             ssb_pitch_hz: runtime.ssb_pitch_hz,
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
+	    deemphasis_mode: runtime.deemphasis_mode,
         }),
         _ => None,
     }
@@ -492,6 +509,7 @@ fn runtime_changed_from_status(
             ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
             cw_pitch_hz: Some(runtime.cw_pitch_hz),
             filter_bandwidth_hz: Some(runtime.filter_bandwidth_hz),
+	    deemphasis_mode: Some(runtime.deemphasis_mode),
         }),
         _ => None,
     }
@@ -536,10 +554,11 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         ssb_pitch_hz,
         cw_pitch_hz,
         filter_bandwidth_hz,
+	deemphasis_mode,
     } = msg
     {
         debug!(
-            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={:?} sideband={:?} ssb_pitch={} cw_pitch={} filter_bandwidth={}",
+            "[websocket] RuntimeSnapshot radio={} center={} target={} input_sr={} audio_sr={} audio_fmt={} bins={} fps={} demod={:?} sideband={:?} ssb_pitch={} cw_pitch={} filter_bandwidth={}, deemphais_mode = {:?}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
@@ -553,6 +572,7 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
             ssb_pitch_hz,
             cw_pitch_hz,
             filter_bandwidth_hz,
+	    deemphasis_mode,
         );
     }
 }
@@ -568,10 +588,11 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         ssb_pitch_hz,
         cw_pitch_hz,
         filter_bandwidth_hz,
+	deemphasis_mode,
     } = msg
     {
         info!(
-            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?}",
+            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?} deemphasis_mode={:?}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
@@ -580,6 +601,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
             ssb_pitch_hz,
             cw_pitch_hz,
             filter_bandwidth_hz,
+	    deemphasis_mode,
         );
     }
 }

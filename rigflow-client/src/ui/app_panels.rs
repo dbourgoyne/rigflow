@@ -7,7 +7,7 @@ use crate::UiState;
 use crate::ui::om_bands::LicenseClass;
 use crate::persistence::apply_operator_settings_to_ui_state;
 use crate::ControlCommand;
-use rigflow_core::dsp::modes::{DemodMode, Sideband, filter_bandwidth_limits, clamp_filter_bandwidth, pitch_limits};
+use rigflow_core::dsp::modes::{DemodMode, Sideband, DeemphasisMode, filter_bandwidth_limits, clamp_filter_bandwidth, pitch_limits, default_deemphasis_mode};
 use crate::ui::utils::should_send_debounced;
 use crate::ui::state::DebounceState;
 
@@ -130,6 +130,16 @@ impl RigflowApp {
 				    ControlCommand::RadioMessage(
 					rigflow_protocol::ClientRadioMessage::SetPitch {
 					    pitch_hz: state.pitch_hz,
+					},
+				    ),
+				);
+			    }
+
+			    if default_deemphasis_mode(snapshot.demod_mode).is_some() {
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::RadioMessage(
+					rigflow_protocol::radio_control::ClientRadioMessage::SetDeemphasisMode {
+					    mode: state.deemphasis_mode,
 					},
 				    ),
 				);
@@ -335,6 +345,82 @@ impl RigflowApp {
 				    save_demod_prefs = true;
 				}
 			    });
+			}
+
+			if default_deemphasis_mode(snapshot.demod_mode).is_some() {
+			    let mut deemphasis_changed = false;
+			    let default_mode = default_deemphasis_mode(snapshot.demod_mode).unwrap();
+			    let at_default = state.deemphasis_mode == default_mode;
+
+			    ui.horizontal(|ui| {
+				ui.label("Deemphasis");
+
+				egui::ComboBox::from_id_salt("deemphasis_mode_combo")
+				    .selected_text(state.deemphasis_mode.label())
+				    .show_ui(ui, |ui| {
+					deemphasis_changed |= ui
+					    .selectable_value(
+						&mut state.deemphasis_mode,
+						DeemphasisMode::Off,
+						DeemphasisMode::Off.label(),
+					    )
+					    .changed();
+
+					deemphasis_changed |= ui
+					    .selectable_value(
+						&mut state.deemphasis_mode,
+						DeemphasisMode::Tau50us,
+						DeemphasisMode::Tau50us.label(),
+					    )
+					    .changed();
+
+					deemphasis_changed |= ui
+					    .selectable_value(
+						&mut state.deemphasis_mode,
+						DeemphasisMode::Tau75us,
+						DeemphasisMode::Tau75us.label(),
+					    )
+					    .changed();
+				    });
+
+				if ui
+				    .add_enabled(!at_default, egui::Button::new("Default"))
+				    .clicked()
+				{
+				    state.deemphasis_mode = default_mode;
+				    state
+					.demod_preferences
+					.get_mut(snapshot.demod_mode)
+					.deemphasis_mode = default_mode;
+
+				    let _ = self.ws_cmd_tx.send(
+					ControlCommand::RadioMessage(
+					    rigflow_protocol::radio_control::ClientRadioMessage::SetDeemphasisMode {
+						mode: default_mode,
+					    },
+					),
+				    );
+
+				    save_demod_prefs = true;
+				}
+			    });
+
+			    if deemphasis_changed {
+				state
+				    .demod_preferences
+				    .get_mut(snapshot.demod_mode)
+				    .deemphasis_mode = state.deemphasis_mode;
+
+				let _ = self.ws_cmd_tx.send(
+				    ControlCommand::RadioMessage(
+					rigflow_protocol::radio_control::ClientRadioMessage::SetDeemphasisMode {
+					    mode: state.deemphasis_mode,
+					},
+				    ),
+				);
+
+				save_demod_prefs = true;
+			    }
 			}
 		    }
 		    
@@ -847,6 +933,7 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
 
     state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
     state.pitch_hz = prefs.pitch_hz;
+    state.deemphasis_mode = prefs.deemphasis_mode;
 
     state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
     state.pitch_debounce = DebounceState::new(state.pitch_hz);

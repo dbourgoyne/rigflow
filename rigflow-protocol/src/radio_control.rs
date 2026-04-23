@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use rigflow_core::{
     radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId},
-    dsp::modes::{DemodMode, Sideband},
+    dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
 
 /// Messages sent from client → server over WebSocket.
@@ -63,6 +63,10 @@ pub enum ClientRadioMessage {
 
     SetFilterBandwidth {
         bandwidth_hz: f32,
+    },
+
+    SetDeemphasisMode {
+    mode: DeemphasisMode,
     },
     
 }
@@ -132,6 +136,7 @@ pub enum ServerRadioMessage {
         ssb_pitch_hz: f32,
 	cw_pitch_hz: f32,
 	filter_bandwidth_hz: f32,
+	deemphasis_mode: DeemphasisMode,
     },
 
     /// Incremental runtime update.
@@ -149,6 +154,7 @@ pub enum ServerRadioMessage {
         ssb_pitch_hz: Option<f32>,
 	cw_pitch_hz: Option<f32>,
 	filter_bandwidth_hz: Option<f32>,
+	deemphasis_mode: Option<DeemphasisMode>,
     },
 
     /// Error message related to radio control or streaming.
