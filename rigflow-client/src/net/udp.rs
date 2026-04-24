@@ -187,14 +187,15 @@ fn update_adaptive_waterfall_display(
 
         state.adaptive_floor_db_estimate =
             (1.0 - alpha) * state.adaptive_floor_db_estimate
-                + alpha * row_floor_db;
+            + alpha * row_floor_db;
 
-        state.display_top_db =
-            state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
+	let adaptive_display_top_db =
+	    state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
 
-        state.display_range_db = (state.display_top_db
-            - state.adaptive_floor_db_estimate)
-            .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
+	state.adaptive_range_db_estimate = (
+	    adaptive_display_top_db - state.adaptive_floor_db_estimate
+	)
+	    .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
     }
 }
 
@@ -249,11 +250,19 @@ fn handle_waterfall_packet(
 
     // Read current display mapping controls.
     let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
-	(
-            state.display_top_db,
-            state.display_range_db,
-            state.display_zoom,
-	)
+	if state.adaptive_waterfall_normalization {
+            (
+		state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB,
+		state.adaptive_range_db_estimate,
+		state.display_zoom,
+            )
+	} else {
+            (
+		state.manual_waterfall_top_db,
+		state.manual_waterfall_range_db,
+		state.display_zoom,
+            )
+	}
     } else {
 	(-35.0, 70.0, 1.0)
     };

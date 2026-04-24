@@ -288,10 +288,10 @@ impl RigflowApp {
 			state.adaptive_waterfall_normalization = adaptive;
 		    }
 		    if let Some(top_db) = display.waterfall_top_db {
-			state.display_top_db = top_db;
+			state.manual_waterfall_top_db = top_db;
 		    }
 		    if let Some(range_db) = display.waterfall_range_db {
-			state.display_range_db = range_db;
+			state.manual_waterfall_range_db = range_db;
 		    }
 		}
 
@@ -342,8 +342,8 @@ impl RigflowApp {
 	    sideband,
 	    zoom,
 	    adaptive_waterfall_normalization,
-	    display_top_db,
-	    display_range_db,
+	    manual_waterfall_top_db,
+	    manual_waterfall_range_db,
 	    existing_ids,
 	) = {
             let state = self.state.lock().unwrap();
@@ -356,8 +356,8 @@ impl RigflowApp {
 		state.sideband,
 		state.display_zoom,
 		state.adaptive_waterfall_normalization,
-		state.display_top_db,
-		state.display_range_db,
+		state.manual_waterfall_top_db,
+		state.manual_waterfall_range_db,
 		state
 		    .bookmarks
 		    .iter()
@@ -393,8 +393,8 @@ impl RigflowApp {
 		adaptive_waterfall_normalization: Some(
 		    adaptive_waterfall_normalization,
 		),
-		waterfall_top_db: Some(display_top_db),
-		waterfall_range_db: Some(display_range_db),
+		waterfall_top_db: Some(manual_waterfall_top_db),
+		waterfall_range_db: Some(manual_waterfall_range_db),
 	    }),
 	    notes: if notes.is_empty() { None } else { Some(notes) },
 	};

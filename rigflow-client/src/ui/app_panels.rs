@@ -72,7 +72,7 @@ impl RigflowApp {
                 ui.add_enabled_ui(manual_enabled, |ui| {
                     ui.add(
                         egui::Slider::new(
-                            &mut state.display_top_db,
+                            &mut state.manual_waterfall_top_db,
                             -120.0..=20.0,
                         )
                             .text("Top dB"),
@@ -80,7 +80,7 @@ impl RigflowApp {
 
                     ui.add(
                         egui::Slider::new(
-                            &mut state.display_range_db,
+                            &mut state.manual_waterfall_range_db,
                             10.0..=120.0,
                         )
                             .text("Range dB"),
