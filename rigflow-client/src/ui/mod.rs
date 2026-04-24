@@ -4,10 +4,11 @@ pub mod frequency_view;
 pub mod layout;
 pub mod om_bands;
 pub mod spectrum_utils;
+pub mod spectrum_view;
 pub mod state;
 pub mod stats;
+pub mod utils;
 pub mod waterfall;
-pub mod spectrum_view;
 
 mod app_actions;
 mod app_center;

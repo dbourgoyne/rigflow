@@ -15,6 +15,10 @@ use crate::dsp::demod::fm::FmDemodulator;
 use crate::dsp::demod::ssb::SsbDemodulator;
 use crate::dsp::demod::{DemodMode, Sideband};
 use crate::dsp::tuner::VirtualTuner;
+use rigflow_core::dsp::modes::{
+    clamp_filter_bandwidth, default_deemphasis_mode, DeemphasisMode,
+};
+
 
 #[derive(Debug, Clone)]
 pub struct DspPipelineConfig {
@@ -33,10 +37,7 @@ pub struct DspPipelineConfig {
     pub mode: DemodMode,
 }
 
-const WFM_DEEMPHASIS_TAU_SECONDS: f32 = 75e-6;
 const WFM_AUDIO_GAIN: f32 = 1.5;
-
-const NFM_DEEMPHASIS_TAU_SECONDS: f32 = 75e-6;
 const NFM_AUDIO_GAIN: f32 = 12.0;
 
 /// Complex FIR used to isolate one sideband by modulating a low-pass prototype.
@@ -186,6 +187,9 @@ pub struct DspPipeline {
     ssb_bandwidth_hz: f32,
     ssb_fir_taps: usize,
     ssb_pitch_hz: f32,
+    cw_pitch_hz: f32,
+    filter_bandwidth_hz: f32,
+    deemphasis_mode: DeemphasisMode,
 
     output_sample_rate_hz: f32,
     client_output_sample_rate_hz: f32,
@@ -202,117 +206,151 @@ pub struct DspPipeline {
 
 impl DspPipeline {
     pub fn new(cfg: DspPipelineConfig) -> Self {
-        let output_sample_rate_hz = cfg.input_sample_rate_hz / cfg.decimation_factor as f32;
+	let output_sample_rate_hz = cfg.input_sample_rate_hz / cfg.decimation_factor as f32;
 
-        let resampler =
+	let resampler =
             if (output_sample_rate_hz - cfg.client_output_sample_rate_hz).abs() > 1.0 {
-                Some(AudioResampler::new(
+		Some(AudioResampler::new(
                     output_sample_rate_hz,
                     cfg.client_output_sample_rate_hz,
-                ))
+		))
             } else {
-                None
+		None
             };
 
-        let deemphasis = match cfg.mode {
-            DemodMode::Wfm => Some(DeemphasisFilter::new(
-                output_sample_rate_hz,
-                WFM_DEEMPHASIS_TAU_SECONDS,
-            )),
-            DemodMode::Nfm => Some(DeemphasisFilter::new(
-                output_sample_rate_hz,
-                NFM_DEEMPHASIS_TAU_SECONDS,
-            )),
-            _ => None,
-        };
+	let ssb_fir_taps = cfg.audio_fir_taps.max(31) | 1;
+	let ssb_pitch_hz = 0.0;
+	let cw_pitch_hz = 600.0;
+	let deemphasis_mode =
+            default_deemphasis_mode(cfg.mode).unwrap_or(DeemphasisMode::Off);
 
-        let audio_fir = if cfg.audio_cutoff_hz > 0.0 {
-            Some(AudioFir::new(
-                output_sample_rate_hz,
-                cfg.audio_cutoff_hz,
-                cfg.audio_fir_taps,
-            ))
-        } else {
-            None
-        };
+	let sideband = match cfg.mode {
+            DemodMode::Usb => Sideband::Usb,
+            DemodMode::Lsb => Sideband::Lsb,
+            _ => Sideband::Usb,
+	};
 
-        let ssb_bandwidth_hz = cfg.audio_cutoff_hz.max(300.0);
-        let ssb_fir_taps = cfg.audio_fir_taps.max(31) | 1;
-        let ssb_pitch_hz = 0.0;
-
-        let ssb_usb_fir = Some(ComplexSidebandFir::new(
-            output_sample_rate_hz,
-            ssb_bandwidth_hz,
-            ssb_pitch_hz,
-            ssb_fir_taps,
-            Sideband::Usb,
-        ));
-
-        let ssb_lsb_fir = Some(ComplexSidebandFir::new(
-            output_sample_rate_hz,
-            ssb_bandwidth_hz,
-            ssb_pitch_hz,
-            ssb_fir_taps,
-            Sideband::Lsb,
-        ));
-
-        Self {
+	let mut pipeline = Self {
             tuner: VirtualTuner::new(
-                cfg.center_freq_hz,
-                cfg.target_freq_hz,
-                cfg.input_sample_rate_hz,
+		cfg.center_freq_hz,
+		cfg.target_freq_hz,
+		cfg.input_sample_rate_hz,
             ),
             channelizer: PolyphaseDecimator::new(
-                cfg.input_sample_rate_hz,
-                cfg.channel_cutoff_hz,
-                cfg.fir_taps,
-                cfg.decimation_factor,
+		cfg.input_sample_rate_hz,
+		cfg.channel_cutoff_hz,
+		cfg.fir_taps,
+		cfg.decimation_factor,
             ),
             mode: cfg.mode,
-            sideband: Sideband::Usb,
-            ssb_demod: SsbDemodulator::new(Sideband::Usb),
-	    am_demod: AmDemodulator::new(),
-	    cw_demod: CwDemodulator::new(cfg.input_sample_rate_hz, 700.),
+            sideband,
+            ssb_demod: SsbDemodulator::new(sideband),
             fm_demod: FmDemodulator::new(),
+            am_demod: AmDemodulator::new(),
+            cw_demod: CwDemodulator::new(output_sample_rate_hz, cw_pitch_hz),
             dc_blocker: DcBlocker::new(0.995),
             agc: Agc::new(0.3, 0.9, 0.999, 20.0),
-            audio_fir,
-            deemphasis,
+            audio_fir: None,
+            deemphasis: None,
             resampler,
-            ssb_usb_fir,
-            ssb_lsb_fir,
-            ssb_bandwidth_hz,
+            ssb_usb_fir: None,
+            ssb_lsb_fir: None,
+            ssb_bandwidth_hz: cfg.audio_cutoff_hz.max(300.0),
             ssb_fir_taps,
             ssb_pitch_hz,
+            cw_pitch_hz,
+            deemphasis_mode,
+            filter_bandwidth_hz: clamp_filter_bandwidth(cfg.mode, cfg.audio_cutoff_hz),
             output_sample_rate_hz,
             client_output_sample_rate_hz: cfg.client_output_sample_rate_hz,
             tuned_iq_scratch: Vec::new(),
             channelized_iq_scratch: Vec::new(),
             ssb_filtered_scratch: Vec::new(),
-        }
+	};
+
+	pipeline.rebuild_audio_path_for_mode();
+	pipeline.reset_audio_state();
+	pipeline
+    }
+    
+    fn rebuild_audio_path_for_mode(&mut self) {
+	info!(
+	    "rebuild_audio_path_for_mode: demod={:?} deemphasis_mode={:?} tau={:?}",
+	    self.mode,
+	    self.deemphasis_mode,
+	    Self::deemphasis_tau_for(self.mode, self.deemphasis_mode)
+	);
+	let bandwidth_hz = clamp_filter_bandwidth(self.mode, self.filter_bandwidth_hz);
+	self.filter_bandwidth_hz = bandwidth_hz;
+
+	self.audio_fir = Some(AudioFir::new(
+            self.output_sample_rate_hz,
+            bandwidth_hz,
+            self.ssb_fir_taps,
+	));
+
+	self.deemphasis = match Self::deemphasis_tau_for(self.mode, self.deemphasis_mode) {
+            Some(tau_seconds) => Some(DeemphasisFilter::new(
+		self.output_sample_rate_hz,
+		tau_seconds,
+            )),
+            None => None,
+	};
+
+	match self.mode {
+            DemodMode::Usb | DemodMode::Lsb => {
+		self.rebuild_ssb_filters(bandwidth_hz, self.ssb_fir_taps);
+		self.ssb_demod = SsbDemodulator::new(self.sideband);
+            }
+            DemodMode::Cw => {
+		self.cw_demod =
+                    CwDemodulator::new(self.output_sample_rate_hz, self.cw_pitch_hz);
+            }
+            DemodMode::Am | DemodMode::Nfm | DemodMode::Wfm => {}
+	}
     }
 
     pub fn set_mode(&mut self, mode: DemodMode) {
-        self.mode = mode;
+	self.mode = mode;
 
-        self.deemphasis = match mode {
-            DemodMode::Wfm => Some(DeemphasisFilter::new(
-                self.output_sample_rate_hz,
-                WFM_DEEMPHASIS_TAU_SECONDS,
-            )),
-            DemodMode::Nfm => Some(DeemphasisFilter::new(
-                self.output_sample_rate_hz,
-                NFM_DEEMPHASIS_TAU_SECONDS,
-            )),
-            _ => None,
-        };
+	match mode {
+            DemodMode::Usb => self.sideband = Sideband::Usb,
+            DemodMode::Lsb => self.sideband = Sideband::Lsb,
+            _ => {}
+	}
 
-        self.reset_audio_state();
+	self.filter_bandwidth_hz =
+            clamp_filter_bandwidth(self.mode, self.filter_bandwidth_hz);
+
+	self.rebuild_audio_path_for_mode();
+	self.reset_audio_state();
     }
-
+ 
     pub fn set_sideband(&mut self, sideband: Sideband) {
         self.sideband = sideband;
         self.reset_audio_state();
+    }
+
+    fn deemphasis_tau_for(
+	demod_mode: DemodMode,
+	deemphasis_mode: DeemphasisMode,
+    ) -> Option<f32> {
+	match demod_mode {
+            DemodMode::Wfm | DemodMode::Nfm => deemphasis_mode.tau_seconds(),
+            _ => None,
+	}
+    }
+
+    pub fn set_deemphasis_mode(&mut self, mode: DeemphasisMode) {
+	info!("pipeline set_deemphasis_mode: {:?}", mode);
+	self.deemphasis_mode = mode;
+	self.rebuild_audio_path_for_mode();
+	self.reset_audio_state();
+	info!(
+	    "pipeline deemphasis after rebuild: mode={:?} tau={:?}",
+	    self.deemphasis_mode,
+	    Self::deemphasis_tau_for(self.mode, self.deemphasis_mode)
+	);
     }
 
     pub fn set_target_frequency(&mut self, target_freq_hz: f32) {
@@ -503,5 +541,28 @@ impl DspPipeline {
         info!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
         self.ssb_pitch_hz = pitch_hz;
         self.rebuild_ssb_filters(self.ssb_bandwidth_hz, self.ssb_fir_taps);
+	self.reset_audio_state();
     }
+
+    pub fn set_cw_pitch_hz(&mut self, pitch_hz: f32) {
+	self.cw_pitch_hz = pitch_hz;
+
+	if matches!(self.mode, DemodMode::Cw) {
+            self.cw_demod =
+		CwDemodulator::new(self.output_sample_rate_hz, self.cw_pitch_hz);
+	}
+
+	self.reset_audio_state();
+    }
+
+    pub fn set_filter_bandwidth_hz(&mut self, bandwidth_hz: f32) {
+	self.filter_bandwidth_hz = clamp_filter_bandwidth(self.mode, bandwidth_hz);
+	self.rebuild_audio_path_for_mode();
+	self.reset_audio_state();
+    }
+
+    pub fn filter_bandwidth_hz(&self) -> f32 {
+	self.filter_bandwidth_hz
+    }
+    
 }

@@ -1,4 +1,4 @@
-use rigflow_protocol::ClientMessage;
+use rigflow_protocol::ClientRadioMessage;
 
 /// Commands sent from the UI layer → WebSocket control task.
 ///
@@ -22,12 +22,6 @@ pub enum ControlCommand {
     /// Disconnect from the current server.
     Disconnect,
 
-    /// Forward a raw protocol message to the server.
-    ///
-    /// This is a transitional mechanism while migrating toward a
-    /// fully structured command system.
-    LegacyClientMessage(ClientMessage),
-
     /// Request to acquire a specific radio by ID.
     ///
     /// The WebSocket task will translate this into the appropriate
@@ -38,4 +32,6 @@ pub enum ControlCommand {
 
     /// Release the currently held radio.
     ReleaseRadio,
+
+    RadioMessage(ClientRadioMessage),
 }

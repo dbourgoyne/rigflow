@@ -31,7 +31,7 @@ use crate::{
 const LISTEN_ADDR: &str = "0.0.0.0:50000";
 
 /// Audio packet size (samples per packet)
-const PACKET_SAMPLES: usize = 480;
+const PACKET_SAMPLES: usize = 240; //480;
 
 /// Target jitter buffer size (latency control)
 /// 4800 samples @ 48kHz ≈ 100 ms
@@ -218,7 +218,7 @@ pub fn start_media_runtime(
             ) {
                 logger.maybe_log(
                     &mut media_stats,
-                    jb.buffered_samples(),
+                    &jb,
                     OUTPUT_SAMPLE_RATE as f32,
                 );
             }

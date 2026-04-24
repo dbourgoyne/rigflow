@@ -93,3 +93,110 @@ impl FromStr for Sideband {
         }
     }
 }
+
+pub struct PitchUiConfig {
+    pub min_hz: f32,
+    pub max_hz: f32,
+    pub default_hz: f32,
+    pub label: &'static str,
+    pub debounce_delta_hz: f32,
+    pub debounce_interval_ms: u64,
+}
+
+pub fn pitch_limits(mode: DemodMode) -> Option<PitchUiConfig> {
+    match mode {
+        DemodMode::Usb | DemodMode::Lsb => Some(PitchUiConfig {
+            min_hz: -1500.0,
+            max_hz: 1500.0,
+            default_hz: 0.0,
+            label: "SSB Pitch (Hz)",
+	    debounce_delta_hz: 5.0,
+	    debounce_interval_ms: 40,
+        }),
+        DemodMode::Cw => Some(PitchUiConfig {
+            min_hz: 300.0,
+            max_hz: 1200.0,
+            default_hz: 600.0,
+            label: "CW Pitch (Hz)",
+	    debounce_delta_hz: 10.0,
+	    debounce_interval_ms: 50,
+        }),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BandwidthLimits {
+     pub min_hz: f32,
+     pub max_hz: f32,
+     pub default_hz: f32,
+}
+
+pub fn filter_bandwidth_limits(mode: DemodMode) -> BandwidthLimits {
+    match mode {
+        DemodMode::Usb | DemodMode::Lsb => BandwidthLimits {
+            min_hz: 300.0,
+            max_hz: 4000.0,
+            default_hz: 2700.0,
+        },
+        DemodMode::Cw => BandwidthLimits {
+            min_hz: 100.0,
+            max_hz: 1500.0,
+            default_hz: 500.0,
+        },
+        DemodMode::Am => BandwidthLimits {
+            min_hz: 1000.0,
+            max_hz: 10000.0,
+            default_hz: 5000.0,
+        },
+        DemodMode::Nfm => BandwidthLimits {
+            min_hz: 1500.0,
+            max_hz: 8000.0,
+            default_hz: 4000.0,
+        },
+        DemodMode::Wfm => BandwidthLimits {
+            min_hz: 5000.0,
+            max_hz: 20000.0,
+            default_hz: 15000.0,
+        },
+    }
+}
+
+pub fn clamp_filter_bandwidth(mode: DemodMode, hz: f32) -> f32 {
+    let limits = filter_bandwidth_limits(mode);
+    hz.clamp(limits.min_hz, limits.max_hz)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeemphasisMode {
+    Off,
+    Tau50us,
+    Tau75us,
+}
+
+impl DeemphasisMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            DeemphasisMode::Off => "Off",
+            DeemphasisMode::Tau50us => "50 µs",
+            DeemphasisMode::Tau75us => "75 µs",
+        }
+    }
+
+    pub fn tau_seconds(self) -> Option<f32> {
+        match self {
+            DeemphasisMode::Off => None,
+            DeemphasisMode::Tau50us => Some(50e-6),
+            DeemphasisMode::Tau75us => Some(75e-6),
+        }
+    }
+}
+
+pub fn default_deemphasis_mode(mode: DemodMode) -> Option<DeemphasisMode> {
+    match mode {
+        DemodMode::Wfm => Some(DeemphasisMode::Tau75us),
+        DemodMode::Nfm => Some(DeemphasisMode::Tau75us),
+        _ => None,
+    }
+}

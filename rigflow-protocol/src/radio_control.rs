@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use rigflow_core::{
     radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId},
-    dsp::modes::{DemodMode, Sideband},
+    dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
 
 /// Messages sent from client → server over WebSocket.
@@ -40,6 +40,35 @@ pub enum ClientRadioMessage {
 
     /// Renew the current lease before expiration.
     RenewLease,
+
+    SetCenterFrequency {
+        center_freq_hz: u64,
+    },
+
+    SetTargetFrequency {
+        target_freq_hz: u64,
+    },
+
+    SetDemodMode {
+        mode: DemodMode,
+    },
+
+    SetSideband {
+        sideband: Sideband,
+    },
+
+    SetPitch {
+        pitch_hz: f32,
+    },
+
+    SetFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+
+    SetDeemphasisMode {
+    mode: DeemphasisMode,
+    },
+    
 }
 
 /// Messages sent from server → client over WebSocket.
@@ -103,7 +132,11 @@ pub enum ServerRadioMessage {
         /// Current demodulation state
         demod_mode: DemodMode,
         sideband: Sideband,
+	
         ssb_pitch_hz: f32,
+	cw_pitch_hz: f32,
+	filter_bandwidth_hz: f32,
+	deemphasis_mode: DeemphasisMode,
     },
 
     /// Incremental runtime update.
@@ -117,7 +150,11 @@ pub enum ServerRadioMessage {
 
         demod_mode: Option<DemodMode>,
         sideband: Option<Sideband>,
+
         ssb_pitch_hz: Option<f32>,
+	cw_pitch_hz: Option<f32>,
+	filter_bandwidth_hz: Option<f32>,
+	deemphasis_mode: Option<DeemphasisMode>,
     },
 
     /// Error message related to radio control or streaming.

@@ -35,7 +35,7 @@ impl RigflowApp {
 			if !state.bookmark_status.is_empty() {
 			    ui.add_space(8.0);
 			    ui.colored_label(
-				egui::Color32::YELLOW,
+				egui::Color32::RED,
 				&state.bookmark_status,
 			    );
 			}
@@ -192,7 +192,7 @@ impl RigflowApp {
 			if !state.persistence_status.is_empty() {
 			    ui.add_space(8.0);
 			    ui.colored_label(
-				egui::Color32::YELLOW,
+				egui::Color32::RED,
 				&state.persistence_status,
 			    );
 			}

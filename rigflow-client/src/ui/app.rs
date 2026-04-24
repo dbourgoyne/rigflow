@@ -75,9 +75,9 @@ impl RigflowApp {
 
             if let Some(hz) = send_center {
 		let _ = self.ws_cmd_tx.send(
-                    ControlCommand::LegacyClientMessage(
-			rigflow_protocol::ClientMessage::SetCenterFrequency {
-                            center_freq_hz: hz as f32,
+                    ControlCommand::RadioMessage(
+			rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+                            center_freq_hz: hz as u64,
 			},
                     ),
 		);
@@ -112,9 +112,9 @@ impl RigflowApp {
 
             if let Some(hz) = send_target {
 		let _ = self.ws_cmd_tx.send(
-                    ControlCommand::LegacyClientMessage(
-			rigflow_protocol::ClientMessage::SetFrequency {
-                            target_freq_hz: hz as f32,
+                    ControlCommand::RadioMessage(
+			rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                            target_freq_hz: hz as u64,
 			},
                     ),
 		);

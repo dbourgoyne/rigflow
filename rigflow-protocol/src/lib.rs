@@ -33,8 +33,13 @@ pub enum ClientMessage {
     },
 
     /// Adjust SSB pitch offset (Hz)
-    SetSsbPitch {
+    SetPitch {
         pitch_hz: f32,
+    },
+
+    /// Adjust filter bandwidth (Hz)
+    SetFilterBandwidth {
+	bandwidth_hz: f32
     },
 }
 

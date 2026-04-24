@@ -210,16 +210,16 @@ pub async fn websocket_control_task(
                         state.available_radios.clear();
                     }
 
-                    Some(ControlCommand::LegacyClientMessage(cmd)) => {
-                        info!("WEBSOCKET got LegacyClientMessage: {:?}", cmd);
+		    Some(ControlCommand::RadioMessage(cmd)) => {
+			info!("WEBSOCKET got RadioMessage: {:?}", cmd);
 
-                        if let Some(write) = write_opt.as_mut() {
-                            let text = serde_json::to_string(&cmd)?;
-                            info!("WEBSOCKET sending text: {}", text);
+			if let Some(write) = write_opt.as_mut() {
+			    let text = serde_json::to_string(&cmd)?;
+			    info!("WEBSOCKET sending text: {}", text);
 
-                            write.send(Message::Text(text.into())).await?;
-                        }
-                    }
+			    write.send(Message::Text(text.into())).await?;
+			}
+		    }
 
                     None => break,
                 }
@@ -338,6 +338,9 @@ pub fn apply_radio_server_message(
 		state.pending_apply_default_bookmark = true;
 	    }
 
+	    // Reapply current mode controls on every acquire.
+	    state.pending_apply_mode_controls = true;
+
 	    // Force client audio pipeline to reset on radio switch/acquire.
 	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
 	}
@@ -354,48 +357,55 @@ pub fn apply_radio_server_message(
             // No UI update currently required.
         }
 
-        ServerRadioMessage::RuntimeSnapshot {
-            radio_id: _,
-            center_freq_hz,
-            target_freq_hz,
-            input_sample_rate_hz,
-            demod_mode,
-            sideband,
-            ssb_pitch_hz,
-            ..
-        } => {
-            state.center_freq_hz = center_freq_hz as f32;
-            state.target_freq_hz = target_freq_hz as f32;
-            state.input_sample_rate_hz = input_sample_rate_hz;
-            state.demod_mode = demod_mode;
-            state.sideband = sideband;
-            state.ssb_pitch_hz = ssb_pitch_hz;
-        }
+	ServerRadioMessage::RuntimeSnapshot {
+	    radio_id: _,
+	    center_freq_hz,
+	    target_freq_hz,
+	    input_sample_rate_hz,
+	    demod_mode,
+	    sideband,
+	    ..
+	} => {
+	    state.center_freq_hz = center_freq_hz as f32;
+	    state.target_freq_hz = target_freq_hz as f32;
+	    state.input_sample_rate_hz = input_sample_rate_hz;
+	    state.demod_mode = demod_mode;
+	    state.sideband = sideband;
 
-        ServerRadioMessage::RuntimeChanged {
-            radio_id: _,
-            center_freq_hz,
-            target_freq_hz,
-            demod_mode,
-            sideband,
-            ssb_pitch_hz,
-        } => {
-            if let Some(value) = center_freq_hz {
-                state.center_freq_hz = value as f32;
-            }
-            if let Some(value) = target_freq_hz {
-                state.target_freq_hz = value as f32;
-            }
-            if let Some(ref value) = demod_mode {
-                state.demod_mode = value.clone();
-            }
-            if let Some(ref value) = sideband {
-                state.sideband = value.clone();
-            }
-            if let Some(value) = ssb_pitch_hz {
-                state.ssb_pitch_hz = value;
-            }
-        }
+	    // Do NOT overwrite persisted per-demod prefs here.
+	    state.pending_apply_mode_controls = true;
+	}
+
+	ServerRadioMessage::RuntimeChanged {
+	    radio_id: _,
+	    center_freq_hz,
+	    target_freq_hz,
+	    demod_mode,
+	    sideband,
+	    ..
+	} => {
+	    if let Some(value) = center_freq_hz {
+		state.center_freq_hz = value as f32;
+	    }
+
+	    if let Some(value) = target_freq_hz {
+		state.target_freq_hz = value as f32;
+	    }
+
+	    if let Some(value) = demod_mode {
+		let mode_changed = state.demod_mode != value;
+		state.demod_mode = value;
+
+		if mode_changed {
+		    state.pending_apply_mode_controls = true;
+		}
+	    }
+
+	    if let Some(ref value) = sideband {
+		state.sideband = *value;
+	    }
+
+	}
 
         ServerRadioMessage::RadioError { message, .. } => {
             state.runtime_error = format!("radio error: {}", message);
@@ -404,6 +414,7 @@ pub fn apply_radio_server_message(
 
     None
 }
+
 
 /// Build the UDP endpoint string that the client should advertise to the server.
 ///

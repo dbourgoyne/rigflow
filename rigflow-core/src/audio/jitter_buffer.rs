@@ -2,19 +2,27 @@ use std::collections::{BTreeMap, VecDeque};
 
 /// Packet-oriented audio jitter buffer.
 ///
-/// Responsibilities:
-/// - accept out-of-order packets
-/// - wait until enough contiguous audio is buffered before starting playout
-/// - move packets into a sample playout queue in sequence order
-/// - conceal missing audio with silence during playout underflow
-/// - trim excess queued audio to keep latency bounded
+/// Goals:
+/// - tolerate modest out-of-order delivery
+/// - tolerate packet loss without permanently stalling
+/// - start playback only after enough buffered audio exists
+/// - keep latency bounded
+///
+/// Design:
+/// - packets are stored by sequence number in `pending`
+/// - playout consumes from a sample FIFO
+/// - once started, the buffer expects `next_sequence`
+/// - if `next_sequence` is missing but later packets exist, the gap is
+///   concealed with silence and playout advances
+/// - if the buffer gets badly out of sync, it can resynchronize to the
+///   earliest available packet
 #[derive(Debug)]
 pub struct JitterBuffer {
     packet_samples: usize,
     target_buffer_samples: usize,
     max_buffer_samples: usize,
     max_observed_buffered_samples: usize,
-
+    
     started: bool,
     start_sequence: Option<u32>,
     next_sequence: Option<u32>,
@@ -25,11 +33,16 @@ pub struct JitterBuffer {
     /// Sample-level FIFO consumed by the audio callback.
     playout: VecDeque<f32>,
 
+    /// Number of consecutive concealed packets since the last real packet.
+    consecutive_conceals: usize,
+
     pub packets_received: u64,
     pub packets_inserted: u64,
     pub packets_missing_concealed: u64,
     pub packets_dropped_late: u64,
     pub packets_dropped_overflow: u64,
+    pub packets_dropped_invalid_size: u64,
+    pub resync_count: u64,
 }
 
 impl JitterBuffer {
@@ -53,16 +66,23 @@ impl JitterBuffer {
             target_buffer_samples,
             max_buffer_samples,
             max_observed_buffered_samples: 0,
-            started: false,
+
+	    started: false,
             start_sequence: None,
             next_sequence: None,
+
             pending: BTreeMap::new(),
             playout: VecDeque::new(),
+
+            consecutive_conceals: 0,
+
             packets_received: 0,
             packets_inserted: 0,
             packets_missing_concealed: 0,
             packets_dropped_late: 0,
             packets_dropped_overflow: 0,
+            packets_dropped_invalid_size: 0,
+            resync_count: 0,
         }
     }
 
@@ -72,11 +92,15 @@ impl JitterBuffer {
         self.next_sequence = None;
         self.pending.clear();
         self.playout.clear();
+        self.consecutive_conceals = 0;
+
         self.packets_received = 0;
         self.packets_inserted = 0;
         self.packets_missing_concealed = 0;
         self.packets_dropped_late = 0;
         self.packets_dropped_overflow = 0;
+        self.packets_dropped_invalid_size = 0;
+        self.resync_count = 0;
     }
 
     /// Total buffered audio, counting both queued playout samples and pending packets.
@@ -86,53 +110,6 @@ impl JitterBuffer {
 
     pub fn started(&self) -> bool {
         self.started
-    }
-
-    /// Insert one packet into the jitter buffer.
-    ///
-    /// Behavior:
-    /// - empty packets are ignored
-    /// - late packets are dropped once playout has advanced past them
-    /// - packets are dropped on overflow when total buffered audio is already too large
-    /// - startup begins once enough contiguous packets are available
-    pub fn push_packet(&mut self, sequence: u32, samples: Vec<f32>) {
-        self.packets_received += 1;
-
-        if samples.is_empty() {
-            return;
-        }
-
-        if let Some(next) = self.next_sequence && sequence < next {
-            self.packets_dropped_late += 1;
-            return;
-        }
-
-        if self.buffered_samples() >= self.max_buffer_samples {
-            self.packets_dropped_overflow += 1;
-            return;
-        }
-
-        self.pending.entry(sequence).or_insert(samples);
-        self.packets_inserted += 1;
-
-        if self.start_sequence.is_none() {
-            self.start_sequence = Some(sequence);
-        }
-
-        // Do not start playout until we have enough contiguous audio from the
-        // initial sequence onward. This avoids starting too early and then
-        // immediately starving.
-        if !self.started && self.has_enough_contiguous_packets() {
-            let start = self.start_sequence.unwrap();
-            self.next_sequence = Some(start);
-            self.started = true;
-        }
-
-        self.fill_playout();
-
-        let buffered = self.buffered_samples();
-        self.max_observed_buffered_samples =
-            self.max_observed_buffered_samples.max(buffered);
     }
 
     pub fn max_buffered_samples(&self) -> usize {
@@ -147,9 +124,76 @@ impl JitterBuffer {
         }
     }
 
+    /// Insert one packet into the jitter buffer.
+    ///
+    /// Behavior:
+    /// - empty packets are ignored
+    /// - wrong-sized packets are dropped
+    /// - late packets older than `next_sequence` are dropped once playout
+    ///   has advanced past them
+    /// - packets are dropped on overflow when total buffered audio is too large
+    pub fn push_packet(&mut self, sequence: u32, samples: Vec<f32>) {
+        self.packets_received += 1;
+
+        if samples.is_empty() {
+	    println!("Empty Packet");
+            return;
+        }
+
+        if samples.len() != self.packet_samples {
+	    println!("Wrong Size Packet");
+            self.packets_dropped_invalid_size += 1;
+            return;
+        }
+
+	if let Some(next) = self.next_sequence {
+            if sequence < next {
+		println!("Wrong Sequence Packet");
+                self.packets_dropped_late += 1;
+                return;
+            }
+        }
+
+        if self.buffered_samples() >= self.max_buffer_samples {
+	    println!("Dropping Packet, too many samples");
+            self.packets_dropped_overflow += 1;
+            return;
+        }
+
+        let inserted = self.pending.insert(sequence, samples).is_none();
+        if inserted {
+            self.packets_inserted += 1;
+        }
+
+        if self.start_sequence.is_none() {
+            self.start_sequence = Some(sequence);
+        }
+
+	// Start playback once we have enough buffered audio. We do not require
+        // a large perfect contiguous run forever; once playback has started,
+        // later gaps are handled by concealment.
+        if !self.started && self.can_start_playout() {
+            let first = self
+                .pending
+                .first_key_value()
+                .map(|(seq, _)| *seq)
+                .unwrap_or(sequence);
+
+            self.start_sequence = Some(first);
+            self.next_sequence = Some(first);
+            self.started = true;
+        }
+
+        self.fill_playout();
+
+        let buffered = self.buffered_samples();
+        self.max_observed_buffered_samples =
+            self.max_observed_buffered_samples.max(buffered);
+    }
+
     /// Pop audio into the output slice.
     ///
-    /// If the jitter buffer has not started yet, output silence.
+    /// If playback has not started yet, output silence.
     /// If playout underflows after startup, missing samples are concealed with silence.
     pub fn pop_samples(&mut self, out: &mut [f32]) {
         if !self.started {
@@ -161,37 +205,18 @@ impl JitterBuffer {
         self.apply_drift_correction();
 
         for sample in out.iter_mut() {
-            *sample = match self.playout.pop_front() {
-                Some(value) => value,
-                None => {
-                    self.packets_missing_concealed += 1;
-                    0.0
-                }
-            };
+            *sample = self.playout.pop_front().unwrap_or(0.0);
         }
     }
 
-    /// Check whether enough contiguous packets exist from `start_sequence`
-    /// to begin playout.
-    fn has_enough_contiguous_packets(&self) -> bool {
-        let mut count = 0usize;
-        let mut seq = match self.start_sequence {
-            Some(sequence) => sequence,
-            None => return false,
-        };
-
-        while self.pending.contains_key(&seq) {
-            count += self.packet_samples;
-            if count >= self.target_buffer_samples {
-                return true;
-            }
-            seq = seq.wrapping_add(1);
-        }
-
-        false
+    /// Start once we have enough total buffered audio to avoid instant starvation.
+    ///
+    /// We prefer robustness over requiring perfect startup contiguity forever.
+    fn can_start_playout(&self) -> bool {
+        self.pending.len() * self.packet_samples >= self.target_buffer_samples
     }
 
-    /// Move sequential packets from `pending` into the sample-level playout queue.
+    /// Move packets into the playout FIFO, concealing gaps when necessary.
     fn fill_playout(&mut self) {
         if !self.started {
             return;
@@ -203,14 +228,39 @@ impl JitterBuffer {
                 None => break,
             };
 
-            match self.pending.remove(&seq) {
-                Some(packet) => {
-                    self.playout.extend(packet);
+            if let Some(packet) = self.pending.remove(&seq) {
+                self.playout.extend(packet);
+                self.next_sequence = Some(seq.wrapping_add(1));
+                self.consecutive_conceals = 0;
+                continue;
+            }
+	    // If the exact expected packet is missing:
+            // - if no later packets are available, wait
+            // - if later packets are available, conceal one packet and advance
+            let earliest_pending = self.pending.first_key_value().map(|(k, _)| *k);
+
+	    match earliest_pending {
+                None => break,
+
+                Some(earliest) if earliest > seq => {
+                    // We have moved ahead of the missing packet. Conceal it so
+                    // playout can continue.
+                    self.playout
+                        .extend(std::iter::repeat_n(0.0, self.packet_samples));
+                    self.packets_missing_concealed += 1;
+                    self.consecutive_conceals += 1;
                     self.next_sequence = Some(seq.wrapping_add(1));
+
+		    // If we conceal repeatedly, we are probably badly out of sync.
+                    // Re-anchor to the earliest packet we actually have.
+                    if self.consecutive_conceals >= 3 {
+                        self.resync_to_earliest_pending();
+                    }
                 }
-                None => {
-                    // Stop once a packet is missing. Future packets remain pending
-                    // until this gap is resolved or concealed during playout.
+
+                Some(_) => {
+                    // earliest_pending < seq should normally not happen because
+                    // older packets are dropped in push_packet, but just wait.
                     break;
                 }
             }
@@ -221,10 +271,18 @@ impl JitterBuffer {
         }
     }
 
+    fn resync_to_earliest_pending(&mut self) {
+        if let Some((&earliest, _)) = self.pending.first_key_value() {
+            self.next_sequence = Some(earliest);
+            self.consecutive_conceals = 0;
+            self.resync_count += 1;
+        }
+    }
+
     /// Trim excess playout audio when latency grows above target.
     ///
-    /// The policy is intentionally staged:
-    /// - slightly above target: trim a very small amount
+    /// Policy:
+    /// - slightly above target: trim a tiny amount
     /// - moderately above target: trim more
     /// - far above target or near max: pull latency down quickly
     fn apply_drift_correction(&mut self) {
@@ -248,7 +306,7 @@ impl JitterBuffer {
             return;
         }
 
-        // Clearly above target: trim more aggressively.
+	// Clearly above target: trim more aggressively.
         if excess >= packet && excess < packet * 4 {
             let drop_count = (packet / 4).max(16).min(self.playout.len());
             for _ in 0..drop_count {

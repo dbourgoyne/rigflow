@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
+use rigflow_core::dsp::modes::{DeemphasisMode, default_deemphasis_mode};
 
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::config::{
@@ -37,6 +38,9 @@ struct SharedControlState {
     demod_mode: DemodMode,
     sideband: Sideband,
     ssb_pitch_hz: f32,
+    cw_pitch_hz: f32,
+    filter_bandwidth_hz: f32,
+    pub deemphasis_mode: DeemphasisMode,
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +237,9 @@ fn build_runtime_state(
         demod_mode: control.demod_mode,
         sideband: control.sideband,
         ssb_pitch_hz: control.ssb_pitch_hz,
+        cw_pitch_hz: control.cw_pitch_hz,
+        filter_bandwidth_hz: control.filter_bandwidth_hz,
+        deemphasis_mode: control.deemphasis_mode,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -299,6 +306,9 @@ fn run_iq_worker_threads(
         demod_mode: server_cfg.demod,
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
+	cw_pitch_hz: 600.0,
+	filter_bandwidth_hz: 3000.0, // sensible default
+	deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -462,16 +472,43 @@ fn spawn_command_thread(
                             control_state.sideband = sideband;
                         }
                     }
-                    WorkerCommand::SetSsbPitch { pitch_hz } => {
-                        if let Ok(mut control_state) = control.lock() {
-                            control_state.ssb_pitch_hz = pitch_hz.clamp(-1000.0, 1000.0);
-                        }
-                    }
+		    WorkerCommand::SetPitch { pitch_hz } => {
+			if let Ok(mut control_state) = control.lock() {
+			    match control_state.demod_mode {
+				DemodMode::Usb | DemodMode::Lsb => {
+				    control_state.ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
+				}
+				DemodMode::Cw => {
+				    control_state.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
+				}
+				_ => {}
+			    }
+			}
+		    }
                     WorkerCommand::Stop { reason } => {
                         set_stop_reason(&stop_reason, reason);
                         stop_flag.store(true, Ordering::Relaxed);
                         break;
                     }
+		    WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
+			}
+		    }
+		    WorkerCommand::SetDeemphasisMode { mode } => {
+			if let Ok(mut control_state) = control.lock() {
+			    //let before = control_state.deemphasis_mode;
+
+			    control_state.deemphasis_mode = mode;
+			    /*
+			    info!(
+				"[worker] SetDeemphasisMode: {:?} -> {:?}",
+				before,
+				control_state.deemphasis_mode
+			    );
+			    */
+			}
+		    }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => {
@@ -726,6 +763,8 @@ fn spawn_dsp_thread(
             startup_info.input_sample_rate_hz,
         ));
 
+	pipeline.set_filter_bandwidth_hz(startup_info.runtime.filter_bandwidth_hz);
+
         if matches!(
             startup_info.runtime.demod_mode,
             DemodMode::Usb | DemodMode::Lsb
@@ -760,20 +799,38 @@ fn spawn_dsp_thread(
                 break;
             }
 
-            let current = current_control(&control);
+	    let current = current_control(&control);
+	    
             let mut changed = false;
 
             if current.center_freq_hz != applied.center_freq_hz {
                 pipeline.set_center_frequency(current.center_freq_hz as f32);
-                applied.center_freq_hz = current.center_freq_hz;
                 changed = true;
             }
 
             if current.target_freq_hz != applied.target_freq_hz {
                 pipeline.set_target_frequency(current.target_freq_hz as f32);
-                applied.target_freq_hz = current.target_freq_hz;
                 changed = true;
             }
+
+	    /*
+	    info!(
+		"[worker] apply check: current={:?} applied={:?}",
+		current.deemphasis_mode,
+		applied.deemphasis_mode
+	    );
+	    */
+	    if current.deemphasis_mode != applied.deemphasis_mode {
+		/*
+		info!(
+		    "[worker] applying deemphasis change: {:?} -> {:?}",
+		    applied.deemphasis_mode,
+		    current.deemphasis_mode
+	        );
+		*/
+		pipeline.set_deemphasis_mode(current.deemphasis_mode);
+		changed = true;
+	    }
 
             if current.demod_mode != applied.demod_mode {
                 let cfg = ServerConfig {
@@ -789,17 +846,27 @@ fn spawn_dsp_thread(
                     startup_info.input_sample_rate_hz,
                 ));
 
-                if matches!(current.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
-                    pipeline.set_sideband(current.sideband);
-                    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-                }
+		pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
 
-                applied.demod_mode = current.demod_mode;
-                applied.sideband = current.sideband;
-                applied.ssb_pitch_hz = current.ssb_pitch_hz;
-                applied.center_freq_hz = current.center_freq_hz;
-                applied.target_freq_hz = current.target_freq_hz;
-                changed = true;
+		match current.demod_mode {
+		    DemodMode::Usb | DemodMode::Lsb => {
+			pipeline.set_sideband(current.sideband);
+			pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+		    }
+		    DemodMode::Cw => {
+			pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+		    }
+		    _ => {}
+		}
+
+		// Reapply deemphasis because its effective behavior depends on demod mode.
+		pipeline.set_deemphasis_mode(current.deemphasis_mode);
+
+//		if changed {
+//		    applied = current.clone();
+		//		}
+		changed = true;
+
             } else {
                 if current.sideband != applied.sideband {
                     pipeline.set_sideband(current.sideband);
@@ -807,14 +874,33 @@ fn spawn_dsp_thread(
                     changed = true;
                 }
 
-                if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
-                    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-                    applied.ssb_pitch_hz = current.ssb_pitch_hz;
-                    changed = true;
-                }
+		match current.demod_mode {
+		    DemodMode::Usb | DemodMode::Lsb => {
+			if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
+			    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+			    applied.ssb_pitch_hz = current.ssb_pitch_hz;
+			    changed = true;
+			}
+		    }
+		    DemodMode::Cw => {
+			if (current.cw_pitch_hz - applied.cw_pitch_hz).abs() > f32::EPSILON {
+			    pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+			    applied.cw_pitch_hz = current.cw_pitch_hz;
+			    changed = true;
+			}
+		    }
+		    _ => {}
+		}
+
+		if (current.filter_bandwidth_hz - applied.filter_bandwidth_hz).abs() > 1.0 {
+		    pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+		    applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
+		    changed = true;
+		}
             }
 
             if changed {
+		applied = current.clone();
                 let runtime = build_runtime_state(&current, startup_info.input_sample_rate_hz);
                 let _ = status_tx.send(WorkerStatus::Running { runtime });
             }
