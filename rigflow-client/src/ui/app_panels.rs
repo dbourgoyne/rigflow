@@ -385,7 +385,7 @@ impl RigflowApp {
 				    });
 
 				if ui
-				    .add_enabled(!at_default, egui::Button::new("Default"))
+				    .add_enabled(!at_default, egui::Button::new(RichText::new("Restore Default").size(8.0)))
 				    .clicked()
 				{
 				    state.deemphasis_mode = default_mode;
