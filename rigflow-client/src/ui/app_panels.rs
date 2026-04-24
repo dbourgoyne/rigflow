@@ -532,12 +532,24 @@ impl RigflowApp {
                         let is_selected =
                             selected.as_deref() == Some(&radio.id.0);
 
-                        if ui
-                            .selectable_label(is_selected, label)
-                            .clicked()
-                        {
-                            selected = Some(radio.id.0.clone());
-                        }
+			let response = ui.selectable_label(is_selected, label);
+
+			if response.double_clicked() {
+			    selected = Some(radio.id.0.clone());
+
+			    // trigger whatever you normally do to acquire/connect
+			    //self.acquire_radio(&radio.id);  // <-- adjust to your actual function
+			    if let Some(radio_id) = selected.clone() {
+			        let _ = self.ws_cmd_tx.send(
+                                    ControlCommand::AcquireRadio {
+					radio_id,
+                                    },
+                                );
+                            }
+
+			} else if response.clicked() {
+			    selected = Some(radio.id.0.clone());
+			}
                     }
 
                     if selected != snapshot.selected_radio_id {
@@ -827,7 +839,15 @@ impl RigflowApp {
 			label.push_str("  [default]");
 		    }
 
-		    if ui.selectable_label(selected, label).clicked() {
+		    let response = ui.selectable_label(selected, label);
+
+		    if response.double_clicked() {
+			if let Ok(mut state) = self.state.lock() {
+			    state.selected_bookmark_id = Some(bookmark.id.clone());
+			}
+
+			self.apply_bookmark(&bookmark.id);
+		    } else if response.clicked() {
 			if let Ok(mut state) = self.state.lock() {
 			    state.selected_bookmark_id = Some(bookmark.id.clone());
 			}
@@ -909,7 +929,7 @@ impl RigflowApp {
 
 	    if !snapshot.bookmark_status.is_empty() {
 		ui.add_space(6.0);
-		ui.colored_label(egui::Color32::YELLOW, &snapshot.bookmark_status);
+		ui.colored_label(egui::Color32::RED, &snapshot.bookmark_status);
 	    }
 
 	    let auto_apply_changed = if let Ok(mut state) = self.state.lock() {
