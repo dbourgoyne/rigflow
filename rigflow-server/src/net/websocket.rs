@@ -16,7 +16,7 @@ use crate::{
     radio::{
         api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
         session::SessionState,
-        types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus},
+        types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus, WorkerRuntimeState},
     },
 };
 
@@ -227,21 +227,36 @@ async fn handle_radio_message(
             let local_tx_clone = local_tx.clone();
             let radio_id_clone = acquire_result.radio_id.clone();
 
-            tokio::spawn(async move {
-                loop {
-                    if status_rx.changed().await.is_err() {
-                        break;
-                    }
+	    tokio::spawn(async move {
+		let mut last_runtime: Option<WorkerRuntimeState> = None;
 
-                    let status = status_rx.borrow().clone();
-                    if let Some(changed) =
-                        runtime_changed_from_status(radio_id_clone.clone(), &status)
-                    {
-                        log_runtime_changed(&changed);
-                        send_radio(&local_tx_clone, changed);
-                    }
-                }
-            });
+		loop {
+		    if status_rx.changed().await.is_err() {
+			break;
+		    }
+
+		    let status = status_rx.borrow().clone();
+
+		    let WorkerStatus::Running { runtime } = status else {
+			continue;
+		    };
+
+		    if let Some(previous) = &last_runtime {
+			if let Some(changed) =
+			    runtime_changed_from_runtime(radio_id_clone.clone(), previous, &runtime)
+			{
+			    log_runtime_changed(&changed);
+			    send_radio(&local_tx_clone, changed);
+			}
+		    } else {
+			// First update after snapshot: remember it, don't send duplicate full change.
+			last_runtime = Some(runtime);
+			continue;
+		    }
+
+		    last_runtime = Some(runtime);
+		}
+	    });
         }
 
         ClientRadioMessage::ReleaseRadio => {
@@ -470,6 +485,60 @@ fn radio_manager_error_string(err: RadioManagerError) -> String {
     }
 }
 
+fn runtime_changed_from_runtime(
+    radio_id: rigflow_core::radio::RadioId,
+    previous: &WorkerRuntimeState,
+    current: &WorkerRuntimeState,
+) -> Option<ServerRadioMessage> {
+    let center_freq_hz =
+        (current.center_freq_hz != previous.center_freq_hz).then_some(current.center_freq_hz);
+
+    let target_freq_hz =
+        (current.target_freq_hz != previous.target_freq_hz).then_some(current.target_freq_hz);
+
+    let demod_mode =
+        (current.demod_mode != previous.demod_mode).then_some(current.demod_mode);
+
+    let sideband =
+        (current.sideband != previous.sideband).then_some(current.sideband);
+
+    let ssb_pitch_hz =
+        (current.ssb_pitch_hz != previous.ssb_pitch_hz).then_some(current.ssb_pitch_hz);
+
+    let cw_pitch_hz =
+        (current.cw_pitch_hz != previous.cw_pitch_hz).then_some(current.cw_pitch_hz);
+
+    let filter_bandwidth_hz =
+        (current.filter_bandwidth_hz != previous.filter_bandwidth_hz)
+            .then_some(current.filter_bandwidth_hz);
+
+    let deemphasis_mode =
+        (current.deemphasis_mode != previous.deemphasis_mode)
+            .then_some(current.deemphasis_mode);
+
+    let has_change =
+        center_freq_hz.is_some()
+            || target_freq_hz.is_some()
+            || demod_mode.is_some()
+            || sideband.is_some()
+            || ssb_pitch_hz.is_some()
+            || cw_pitch_hz.is_some()
+            || filter_bandwidth_hz.is_some()
+            || deemphasis_mode.is_some();
+
+    has_change.then_some(ServerRadioMessage::RuntimeChanged {
+        radio_id,
+        center_freq_hz,
+        target_freq_hz,
+        demod_mode,
+        sideband,
+        ssb_pitch_hz,
+        cw_pitch_hz,
+        filter_bandwidth_hz,
+        deemphasis_mode,
+    })
+}
+
 /// Convert the current worker status into a full runtime snapshot for newly acquired clients.
 fn runtime_snapshot_from_status(
     radio_id: rigflow_core::radio::RadioId,
@@ -491,27 +560,6 @@ fn runtime_snapshot_from_status(
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
 	    deemphasis_mode: runtime.deemphasis_mode,
-        }),
-        _ => None,
-    }
-}
-
-/// Convert the current worker status into an incremental runtime-changed message.
-fn runtime_changed_from_status(
-    radio_id: rigflow_core::radio::RadioId,
-    status: &WorkerStatus,
-) -> Option<ServerRadioMessage> {
-    match status {
-        WorkerStatus::Running { runtime } => Some(ServerRadioMessage::RuntimeChanged {
-            radio_id,
-            center_freq_hz: Some(runtime.center_freq_hz),
-            target_freq_hz: Some(runtime.target_freq_hz),
-            demod_mode: Some(runtime.demod_mode),
-            sideband: Some(runtime.sideband),
-            ssb_pitch_hz: Some(runtime.ssb_pitch_hz),
-            cw_pitch_hz: Some(runtime.cw_pitch_hz),
-            filter_bandwidth_hz: Some(runtime.filter_bandwidth_hz),
-	    deemphasis_mode: Some(runtime.deemphasis_mode),
         }),
         _ => None,
     }

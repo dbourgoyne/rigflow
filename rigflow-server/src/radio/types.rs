@@ -69,7 +69,7 @@ pub enum StopReason {
 /// Runtime state snapshot of a worker.
 ///
 /// This is sent to clients via RuntimeSnapshot / RuntimeChanged.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerRuntimeState {
     pub center_freq_hz: u64,
     pub target_freq_hz: u64,
