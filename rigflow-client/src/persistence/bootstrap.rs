@@ -78,6 +78,14 @@ pub fn apply_operator_settings_to_ui_state(
 
     state.bookmarks = operator.bookmarks.clone();
 
+    state.display_zoom = operator.waterfall_display_preferences.display_zoom;
+    state.adaptive_waterfall_normalization =
+	operator.waterfall_display_preferences.adaptive_waterfall_normalization;
+    state.manual_waterfall_top_db =
+	operator.waterfall_display_preferences.manual_waterfall_top_db;
+    state.manual_waterfall_range_db =
+	operator.waterfall_display_preferences.manual_waterfall_range_db;
+
     // Keep selection stable if possible, otherwise clear it.
     let selected_still_exists = state
         .selected_bookmark_id
@@ -124,4 +132,12 @@ pub fn apply_ui_state_to_operator_settings(
 
     // --- NEW: persist per-demod preferences ---
     operator.demod_preferences = state.demod_preferences.clone();
+
+    operator.waterfall_display_preferences.display_zoom = state.display_zoom;
+    operator.waterfall_display_preferences.adaptive_waterfall_normalization =
+	state.adaptive_waterfall_normalization;
+    operator.waterfall_display_preferences.manual_waterfall_top_db =
+	state.manual_waterfall_top_db;
+    operator.waterfall_display_preferences.manual_waterfall_range_db =
+	state.manual_waterfall_range_db;
 }

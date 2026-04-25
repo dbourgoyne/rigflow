@@ -12,6 +12,78 @@ use crate::persistence::{normalize_operator_id,
 
 impl RigflowApp {
 
+    
+    pub(crate) fn save_waterfall_display_preferences_to_current_operator(
+	&mut self,
+    ) {
+	let snapshot = {
+            let state = self.state.lock().unwrap();
+            (
+		state.operator_id.clone(),
+		state.display_zoom,
+		state.adaptive_waterfall_normalization,
+		state.manual_waterfall_top_db,
+		state.manual_waterfall_range_db,
+            )
+	};
+
+	let (
+            operator_id,
+            display_zoom,
+            adaptive_waterfall_normalization,
+            manual_top_db,
+            manual_range_db,
+	) = snapshot;
+
+	if operator_id.trim().is_empty() {
+            return;
+	}
+
+	match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+	{
+            Ok(mut operator_settings) => {
+		operator_settings
+                    .waterfall_display_preferences
+                    .display_zoom = display_zoom;
+
+		operator_settings
+                    .waterfall_display_preferences
+                    .adaptive_waterfall_normalization =
+                    adaptive_waterfall_normalization;
+
+		operator_settings
+                    .waterfall_display_preferences
+                    .manual_waterfall_top_db = manual_top_db;
+
+		operator_settings
+                    .waterfall_display_preferences
+                    .manual_waterfall_range_db = manual_range_db;
+
+		if let Err(err) = self
+                    .persistence_store
+                    .save_operator_settings(&operator_settings)
+		{
+                    if let Ok(mut state) = self.state.lock() {
+			state.persistence_status =
+                            format!("failed to save waterfall prefs: {err}");
+                    }
+		} else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+		}
+            }
+
+            Err(err) => {
+		if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status =
+			format!("failed to load operator settings: {err}");
+		}
+            }
+	}
+    }
+
+
     pub(crate) fn save_demod_preferences_to_current_operator(&mut self) {
 	let snapshot = {
             let state = self.state.lock().unwrap();

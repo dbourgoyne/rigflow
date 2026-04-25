@@ -23,6 +23,25 @@ impl Default for AppStateFile {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaterfallDisplayPreferencesFile {
+    pub display_zoom: f32,
+    pub adaptive_waterfall_normalization: bool,
+    pub manual_waterfall_top_db: f32,
+    pub manual_waterfall_range_db: f32,
+}
+
+impl Default for WaterfallDisplayPreferencesFile {
+    fn default() -> Self {
+        Self {
+            display_zoom: 1.0,
+            adaptive_waterfall_normalization: true,
+            manual_waterfall_top_db: -35.0,
+            manual_waterfall_range_db: 70.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DemodPreferencesFile {
     pub filter_bandwidth_hz: f32,
@@ -101,6 +120,8 @@ pub struct OperatorSettingsFile {
     pub auto_apply_default_bookmark_on_acquire: bool,
 
     pub bookmarks: Vec<BookmarkFile>,
+
+    pub waterfall_display_preferences: WaterfallDisplayPreferencesFile,
 }
 
 impl OperatorSettingsFile {
@@ -114,6 +135,7 @@ impl OperatorSettingsFile {
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
             bookmarks: Vec::new(),
+	    waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
         }
     }
 }
