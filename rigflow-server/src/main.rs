@@ -1,3 +1,117 @@
+#![doc = include_str!("../README.md")]
+//! # rigflow-server
+//!
+//! `rigflow-server` is the backend service for the rigflow SDR system.
+//!
+//! It discovers SDR sources, manages radio leases, runs per-radio worker
+//! tasks, performs DSP processing, and exposes control/status over WebSocket.
+//! Audio and waterfall/spectrum data are streamed to clients over UDP.
+//!
+//! ## Responsibilities
+//!
+//! - Discover available radio sources
+//!   - RTL-SDR hardware
+//!   - WAV IQ files
+//!   - fake/test signal source
+//! - Manage radio acquisition and lease ownership
+//! - Start radio workers lazily when a client acquires a radio
+//! - Route control commands to the active worker
+//! - Stream audio and waterfall data over UDP
+//! - Publish runtime state over WebSocket
+//!
+//! ## Network Interfaces
+//!
+//! - WebSocket control endpoint:
+//!
+//!   ```text
+//!   ws://<server-ip>:9000/ws
+//!   ```
+//!
+//! - UDP registration listener:
+//!
+//!   ```text
+//!   0.0.0.0:9001
+//!   ```
+//!
+//! Clients connect over WebSocket for control and lease management, then
+//! provide UDP endpoints for audio and waterfall streaming.
+//!
+//! ## Protocol Model
+//!
+//! The server uses the shared `rigflow-protocol` crate.
+//!
+//! - Client → server:
+//!   - `ClientRadioMessage`
+//!   - examples: list radios, acquire radio, tune, change demod mode
+//!
+//! - Server → client:
+//!   - `ServerRadioMessage`
+//!   - examples: radio list, lease updates, runtime snapshots, runtime deltas
+//!
+//! `RuntimeSnapshot` is a full state sync.
+//! `RuntimeChanged` is a sparse delta containing only changed fields.
+//!
+//! ## Runtime Model
+//!
+//! The server uses a lazy worker model:
+//!
+//! 1. Radios are discovered at startup.
+//! 2. A client requests a radio lease.
+//! 3. The `RadioManager` starts or attaches to a worker for that radio.
+//! 4. The worker owns the source, DSP pipeline, and UDP streaming.
+//! 5. When the lease is released or expires, the worker is shut down.
+//!
+//! ## Example Usage
+//!
+//! Start with the fake source:
+//!
+//! ```bash
+//! cargo run -p rigflow-server -- --source fake
+//! ```
+//!
+//! Start with RTL-SDR:
+//!
+//! ```bash
+//! cargo run -p rigflow-server -- --source rtlsdr --rtl-device 0
+//! ```
+//!
+//! Start with WAV IQ input:
+//!
+//! ```bash
+//! cargo run -p rigflow-server -- --source wav --wav-file input_iq.wav
+//! ```
+//!
+//! ## Common Options
+//!
+//! ```text
+//! --source fake|wav|rtlsdr
+//! --center HZ
+//! --target HZ
+//! --demod wfm|nfm|am|usb|lsb|cw
+//!
+//! RTL-SDR:
+//! --rtl-device INDEX
+//! --rtl-sample-rate HZ
+//! --rtl-gain TENTHS_DB
+//! --rtl-auto-gain
+//! --rtl-ppm PPM
+//! --rtl-direct-sampling
+//!
+//! WAV:
+//! --wav-file PATH
+//! --wav-dir PATH
+//!
+//! Fake:
+//! --fake-sample-rate HZ
+//! --fake-tone HZ
+//! ```
+//!
+//! ## Related Crates
+//!
+//! - `rigflow-client` — egui desktop client
+//! - `rigflow-core` — shared DSP, radio, audio, and network utilities
+//! - `rigflow-protocol` — shared WebSocket protocol types
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
