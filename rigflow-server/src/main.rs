@@ -1,4 +1,3 @@
-#![doc = include_str!("../README.md")]
 //! # rigflow-server
 //!
 //! `rigflow-server` is the backend service for the rigflow SDR system.
