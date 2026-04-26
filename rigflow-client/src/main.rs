@@ -1,3 +1,111 @@
+//! # rigflow-client
+//!
+//! `rigflow-client` is the desktop UI for the rigflow SDR system.
+//!
+//! It connects to a `rigflow-server` instance over WebSocket for control,
+//! receives audio and waterfall data over UDP, and provides an interactive
+//! UI for tuning, demodulation, and visualization.
+//!
+//! ## Responsibilities
+//!
+//! - Connect to rigflow-server via WebSocket
+//! - Acquire and control radios (frequency, mode, filters, etc.)
+//! - Receive and play audio streams
+//! - Render spectrum and waterfall displays
+//! - Manage operator profiles and persistent settings
+//!
+//! ## Architecture
+//!
+//! The client is composed of three main subsystems:
+//!
+//! ### 1. UI (egui / eframe)
+//!
+//! - Immediate-mode UI built with egui
+//! - Renders spectrum, waterfall, and control panels
+//! - Sends control commands via channel to the networking layer
+//!
+//! ### 2. Control Plane (WebSocket)
+//!
+//! - Runs in a dedicated Tokio runtime
+//! - Sends `ClientRadioMessage` commands to the server
+//! - Receives `ServerRadioMessage` updates (radio list, runtime state, etc.)
+//!
+//! ### 3. Media Plane (UDP)
+//!
+//! - Audio and waterfall data are received via UDP
+//! - Audio is buffered and played via CPAL
+//! - Waterfall and spectrum data are rendered in real time
+//!
+//! ## Runtime Flow
+//!
+//! 1. Load persisted UI/operator state
+//! 2. Start media runtime (audio + waterfall processing)
+//! 3. Start WebSocket control task (async)
+//! 4. Launch egui UI
+//! 5. UI interacts with server through control channel
+//!
+//! ## Networking
+//!
+//! - WebSocket control:
+//!
+//!   ```text
+//!   ws://<server-ip>:9000/ws
+//!   ```
+//!
+//! - UDP media:
+//!
+//!   - Client registers its UDP address with the server
+//!   - Server streams:
+//!     - audio (i16 samples)
+//!     - waterfall/spectrum data (FFT bins)
+//!
+//! ## Persistence
+//!
+//! The client stores per-operator settings, including:
+//!
+//! - last server connection
+//! - demodulation preferences (bandwidth, pitch, etc.)
+//! - waterfall display settings (zoom, normalization)
+//! - bookmarks (frequency presets)
+//!
+//! Data is stored in a JSON file under the user config directory.
+//!
+//! ## Key Features
+//!
+//! - Click-to-tune spectrum display
+//! - Zoomable spectrum and waterfall
+//! - Multiple demod modes (WFM, NFM, AM, USB, LSB, CW)
+//! - Adaptive or manual waterfall normalization
+//! - Bookmark system with default auto-apply
+//! - Low-latency UDP audio streaming
+//!
+//! ## Example Usage
+//!
+//! Start the server first:
+//!
+//! ```bash
+//! cargo run -p rigflow-server -- --source rtlsdr
+//! ```
+//!
+//! Then run the client:
+//!
+//! ```bash
+//! cargo run -p rigflow-client
+//! ```
+//!
+//! In the UI:
+//!
+//! - Enter server IP
+//! - Click Connect
+//! - Select a radio
+//! - Tune and operate
+//!
+//! ## Related Crates
+//!
+//! - `rigflow-server` — SDR backend and DSP processing
+//! - `rigflow-core` — shared DSP, audio, and utilities
+//! - `rigflow-protocol` — shared WebSocket protocol types
+
 mod client_runtime;
 mod persistence;
 mod net;
