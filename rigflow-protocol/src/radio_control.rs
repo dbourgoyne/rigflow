@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use rigflow_core::{
-    radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId},
+    radio::{
+	HardwareKind,
+	LeaseId,
+	RadioCapabilities,
+	RadioId,
+	source_control::{
+            DirectSamplingMode,
+            GainMode,
+            SourceCapabilities,
+            SourceControlState,
+        },
+    },
     dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
 
@@ -67,6 +78,26 @@ pub enum ClientRadioMessage {
 
     SetDeemphasisMode {
     mode: DeemphasisMode,
+    },
+
+    SetSourceSampleRate {
+	sample_rate_hz: u32,
+    },
+
+    SetSourceGainMode {
+	mode: GainMode,
+    },
+
+    SetSourceGain {
+	gain_db: f32,
+    },
+
+    SetSourcePpmCorrection {
+	ppm: i32,
+    },
+
+    SetSourceDirectSampling {
+	mode: DirectSamplingMode,
     },
     
 }
@@ -137,6 +168,9 @@ pub enum ServerRadioMessage {
 	cw_pitch_hz: f32,
 	filter_bandwidth_hz: f32,
 	deemphasis_mode: DeemphasisMode,
+
+	source_capabilities: SourceCapabilities,
+	source_control: SourceControlState,
     },
 
     /// Incremental runtime update.

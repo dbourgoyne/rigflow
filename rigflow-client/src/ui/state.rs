@@ -1,6 +1,12 @@
 use std::time::Instant;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::source_control::{
+    DirectSamplingMode,
+    GainMode,
+    SourceCapabilities,
+    SourceControlState,
+};
 use crate::persistence::models::DemodPreferenceSetFile;
 use rigflow_core::dsp::modes::DeemphasisMode;
 
@@ -162,6 +168,12 @@ pub struct UiState {
     pub pending_bookmark_notes: String,
     pub bookmark_status: String,
     pub pending_apply_default_bookmark: bool,
+
+    // =====================================================================
+    // SOURCE
+    // =====================================================================
+    pub source_control: SourceControlState,
+    pub source_capabilities: SourceCapabilities,
 }
 
 
@@ -267,6 +279,13 @@ impl Default for UiState {
             pending_bookmark_notes: String::new(),
             bookmark_status: String::new(),
             pending_apply_default_bookmark: false,
+
+	    // =====================================================================
+	    // SOURCE
+	    // =====================================================================
+	    source_control: SourceControlState::default(),
+	    source_capabilities: SourceCapabilities::none(),
+	    
         };
 
 	let prefs = state.demod_preferences.get(state.demod_mode);

@@ -1,5 +1,12 @@
 use num_complex::Complex32;
 
+use rigflow_core::radio::source_control::{
+    SourceCapabilities,
+    SourceControlState,
+    GainMode,
+    DirectSamplingMode,
+};
+
 pub mod fake;
 pub mod factory;
 pub mod rtlsdr;
@@ -16,5 +23,37 @@ pub trait IqSource {
 
     fn is_realtime(&self) -> bool {
         false
+    }
+
+    // -----------------------------
+    // NEW: capabilities + control
+    // -----------------------------
+
+    fn source_capabilities(&self) -> SourceCapabilities {
+        SourceCapabilities::none()
+    }
+
+    fn source_control_state(&self) -> SourceControlState {
+        SourceControlState::default()
+    }
+
+    fn set_sample_rate(&mut self, _sample_rate_hz: u32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_gain_mode(&mut self, _mode: GainMode) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_gain_db(&mut self, _gain_db: f32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_ppm_correction(&mut self, _ppm: i32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn set_direct_sampling(&mut self, _mode: DirectSamplingMode) -> Result<(), String> {
+        Ok(())
     }
 }

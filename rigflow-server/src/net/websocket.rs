@@ -431,6 +431,87 @@ async fn handle_radio_message(
 		);
 	    }
 	}
+
+	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceSampleRate { sample_rate_hz },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_sample_rate_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourceGainMode { mode } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceGainMode { mode },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_gain_mode_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourceGain { gain_db } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceGain { gain_db },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_gain_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourcePpmCorrection { ppm } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourcePpmCorrection { ppm },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_ppm_correction_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourceDirectSampling { mode } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceDirectSampling { mode },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_direct_sampling_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+	
     }
 }
 
@@ -560,6 +641,8 @@ fn runtime_snapshot_from_status(
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
 	    deemphasis_mode: runtime.deemphasis_mode,
+	    source_capabilities: runtime.source_capabilities.clone(),
+	    source_control: runtime.source_control.clone(),
         }),
         _ => None,
     }
@@ -605,6 +688,8 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         cw_pitch_hz,
         filter_bandwidth_hz,
 	deemphasis_mode,
+	source_capabilities: _,
+	source_control: _,
     } = msg
     {
         debug!(

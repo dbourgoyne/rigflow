@@ -1,5 +1,11 @@
 use num_complex::Complex32;
 use rtl_sdr_rs::{RtlSdr, TunerGain};
+use rigflow_core::radio::source_control::{
+    DirectSamplingMode,
+    GainMode,
+    SourceCapabilities,
+    SourceControlState,
+};
 
 use crate::source::IqSource;
 
@@ -150,5 +156,49 @@ impl IqSource for RtlSdrSource {
 
     fn is_realtime(&self) -> bool {
         true
+    }
+
+    fn source_capabilities(&self) -> SourceCapabilities {
+	SourceCapabilities {
+            supports_sample_rate: true,
+            sample_rates_hz: vec![
+		1_024_000,
+		1_536_000,
+		2_048_000,
+		2_400_000,
+            ],
+
+            supports_gain_mode: true,
+            supports_gain: true,
+
+            // TODO: replace with device query later
+            gain_values_db: vec![
+		0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4,
+		15.7, 16.6, 19.7, 20.7, 22.9, 25.4, 28.0,
+		29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2,
+		42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
+            ],
+
+            supports_ppm_correction: true,
+            ppm_min: -100,
+            ppm_max: 100,
+
+            supports_direct_sampling: true,
+            direct_sampling_modes: vec![
+		DirectSamplingMode::Off,
+		DirectSamplingMode::I,
+		DirectSamplingMode::Q,
+            ],
+	}
+    }
+
+    fn source_control_state(&self) -> SourceControlState {
+	SourceControlState {
+            sample_rate_hz: self.sample_rate_hz as u32,
+            gain_mode: GainMode::Auto, // we don’t track this yet
+            gain_db: 0.0,              // TODO later
+            ppm_correction: 0,         // TODO later
+            direct_sampling: DirectSamplingMode::Off, // TODO later
+	}
     }
 }

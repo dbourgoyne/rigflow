@@ -7,7 +7,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -30,6 +30,8 @@ use crate::source::IqSource;
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::waterfall::generator::WaterfallGenerator;
+use rigflow_core::radio::source_control::SourceControlState;
+use rigflow_core::radio::source_control::SourceCapabilities;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -41,6 +43,7 @@ struct SharedControlState {
     cw_pitch_hz: f32,
     filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
+    pub source_control: SourceControlState,
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +233,7 @@ fn pipeline_cfg_for_source(
 fn build_runtime_state(
     control: &SharedControlState,
     input_sample_rate_hz: f32,
+    source_capabilities: SourceCapabilities,
 ) -> WorkerRuntimeState {
     WorkerRuntimeState {
         center_freq_hz: control.center_freq_hz,
@@ -240,6 +244,8 @@ fn build_runtime_state(
         cw_pitch_hz: control.cw_pitch_hz,
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
+	source_capabilities,
+	source_control: control.source_control.clone(),
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -309,6 +315,7 @@ fn run_iq_worker_threads(
 	cw_pitch_hz: 600.0,
 	filter_bandwidth_hz: 3000.0, // sensible default
 	deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
+	source_control: SourceControlState::default(),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -509,6 +516,35 @@ fn spawn_command_thread(
 			    */
 			}
 		    }
+		    WorkerCommand::SetSourceSampleRate { sample_rate_hz } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.source_control.sample_rate_hz = sample_rate_hz;
+			}
+		    }
+
+		    WorkerCommand::SetSourceGainMode { mode } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.source_control.gain_mode = mode;
+			}
+		    }
+
+		    WorkerCommand::SetSourceGain { gain_db } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.source_control.gain_db = gain_db;
+			}
+		    }
+
+		    WorkerCommand::SetSourcePpmCorrection { ppm } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.source_control.ppm_correction = ppm;
+			}
+		    }
+
+		    WorkerCommand::SetSourceDirectSampling { mode } => {
+			if let Ok(mut control_state) = control.lock() {
+			    control_state.source_control.direct_sampling = mode;
+			}
+		    }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => {
@@ -634,21 +670,28 @@ fn spawn_capture_thread(
             }
         };
 
+        // This thread owns the IQ source, so source-level controls are applied here.
+        let mut applied_source_control =
+            current_control(&control).source_control.clone();
+
         if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
             let _ = startup_info_tx.send(Err(reason.clone()));
             let _ = fatal_tx.send(WorkerExit::Failed { reason });
             return;
         }
 
-        let startup_runtime = build_runtime_state(&current_control(&control), source.sample_rate());
+        let startup_runtime =
+            build_runtime_state(
+		&current_control(&control),
+		source.sample_rate(),
+		source.source_capabilities(),
+	    );
 
         let _ = startup_info_tx.send(Ok(StartupInfo {
             input_sample_rate_hz: source.sample_rate(),
             runtime: startup_runtime,
         }));
 
-        // Wait until the coordinator has published startup state and spun up
-        // the downstream threads before capture begins feeding data.
         let _ = capture_start_rx.recv();
 
         let realtime = source.is_realtime();
@@ -672,6 +715,75 @@ fn spawn_capture_thread(
             }
 
             let control_snapshot = current_control(&control);
+            let current_source_control = control_snapshot.source_control.clone();
+
+            if current_source_control.sample_rate_hz
+                != applied_source_control.sample_rate_hz
+            {
+                match source.set_sample_rate(current_source_control.sample_rate_hz) {
+                    Ok(()) => {
+                        applied_source_control.sample_rate_hz =
+                            current_source_control.sample_rate_hz;
+                    }
+                    Err(reason) => {
+                        warn!("failed to set source sample rate: {reason}");
+                    }
+                }
+            }
+
+            if current_source_control.gain_mode != applied_source_control.gain_mode {
+                match source.set_gain_mode(current_source_control.gain_mode) {
+                    Ok(()) => {
+                        applied_source_control.gain_mode =
+                            current_source_control.gain_mode;
+                    }
+                    Err(reason) => {
+                        warn!("failed to set source gain mode: {reason}");
+                    }
+                }
+            }
+
+            if (current_source_control.gain_db - applied_source_control.gain_db).abs()
+                > f32::EPSILON
+            {
+                match source.set_gain_db(current_source_control.gain_db) {
+                    Ok(()) => {
+                        applied_source_control.gain_db =
+                            current_source_control.gain_db;
+                    }
+                    Err(reason) => {
+                        warn!("failed to set source gain: {reason}");
+                    }
+                }
+            }
+
+            if current_source_control.ppm_correction
+                != applied_source_control.ppm_correction
+            {
+                match source.set_ppm_correction(current_source_control.ppm_correction) {
+                    Ok(()) => {
+                        applied_source_control.ppm_correction =
+                            current_source_control.ppm_correction;
+                    }
+                    Err(reason) => {
+                        warn!("failed to set source ppm correction: {reason}");
+                    }
+                }
+            }
+
+            if current_source_control.direct_sampling
+                != applied_source_control.direct_sampling
+            {
+                match source.set_direct_sampling(current_source_control.direct_sampling) {
+                    Ok(()) => {
+                        applied_source_control.direct_sampling =
+                            current_source_control.direct_sampling;
+                    }
+                    Err(reason) => {
+                        warn!("failed to set source direct sampling: {reason}");
+                    }
+                }
+            }
 
             if control_snapshot.center_freq_hz != last_center_freq_hz {
                 if let Err(reason) =
@@ -706,7 +818,6 @@ fn spawn_capture_thread(
                 if realtime {
                     continue;
                 } else {
-                    // WAV EOF or similar: treat as a clean stop.
                     set_stop_reason(&stop_reason, StopReason::UserRequested);
                     stop_flag.store(true, Ordering::Relaxed);
                     break;
@@ -741,6 +852,7 @@ fn spawn_capture_thread(
         }
     })
 }
+
 
 fn spawn_dsp_thread(
     descriptor: RadioDescriptor,
@@ -901,7 +1013,11 @@ fn spawn_dsp_thread(
 
             if changed {
 		applied = current.clone();
-                let runtime = build_runtime_state(&current, startup_info.input_sample_rate_hz);
+                let runtime = build_runtime_state(
+		    &current,
+		    startup_info.input_sample_rate_hz,
+		    SourceCapabilities::none()
+		);
                 let _ = status_tx.send(WorkerStatus::Running { runtime });
             }
 
