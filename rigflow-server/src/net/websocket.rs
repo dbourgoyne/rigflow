@@ -595,17 +595,22 @@ fn runtime_changed_from_runtime(
 
     let deemphasis_mode =
         (current.deemphasis_mode != previous.deemphasis_mode)
-            .then_some(current.deemphasis_mode);
+        .then_some(current.deemphasis_mode);
+
+    let source_control =
+    (current.source_control != previous.source_control)
+        .then_some(current.source_control.clone());
 
     let has_change =
         center_freq_hz.is_some()
-            || target_freq_hz.is_some()
-            || demod_mode.is_some()
-            || sideband.is_some()
-            || ssb_pitch_hz.is_some()
-            || cw_pitch_hz.is_some()
-            || filter_bandwidth_hz.is_some()
-            || deemphasis_mode.is_some();
+        || target_freq_hz.is_some()
+        || demod_mode.is_some()
+        || sideband.is_some()
+        || ssb_pitch_hz.is_some()
+        || cw_pitch_hz.is_some()
+        || filter_bandwidth_hz.is_some()
+        || deemphasis_mode.is_some()
+	|| source_control.is_some();
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
@@ -617,6 +622,7 @@ fn runtime_changed_from_runtime(
         cw_pitch_hz,
         filter_bandwidth_hz,
         deemphasis_mode,
+	source_control,
     })
 }
 
@@ -724,10 +730,11 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         cw_pitch_hz,
         filter_bandwidth_hz,
 	deemphasis_mode,
+	source_control,
     } = msg
     {
         info!(
-            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?} deemphasis_mode={:?}",
+            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?} deemphasis_mode={:?} source_control={:?}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
@@ -737,6 +744,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
             cw_pitch_hz,
             filter_bandwidth_hz,
 	    deemphasis_mode,
+	    source_control,
         );
     }
 }
