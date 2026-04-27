@@ -189,6 +189,8 @@ pub enum ServerRadioMessage {
 	cw_pitch_hz: Option<f32>,
 	filter_bandwidth_hz: Option<f32>,
 	deemphasis_mode: Option<DeemphasisMode>,
+
+	source_control: Option<SourceControlState>
     },
 
     /// Error message related to radio control or streaming.

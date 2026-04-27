@@ -382,6 +382,7 @@ pub fn apply_radio_server_message(
 	    target_freq_hz,
 	    demod_mode,
 	    sideband,
+	    source_control,
 	    ..
 	} => {
 	    if let Some(value) = center_freq_hz {
@@ -403,6 +404,10 @@ pub fn apply_radio_server_message(
 
 	    if let Some(ref value) = sideband {
 		state.sideband = *value;
+	    }
+
+	    if let Some(value) = source_control {
+		state.source_control = value;
 	    }
 
 	}
