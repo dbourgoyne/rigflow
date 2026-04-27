@@ -675,6 +675,17 @@ impl RigflowApp {
                     if selected != snapshot.selected_radio_id {
                         if let Ok(mut state) = self.state.lock() {
                             state.selected_radio_id = selected.clone();
+
+			    if let Some(selected_id) = selected.as_deref() {
+				if let Some(radio) = state
+				    .available_radios
+				    .iter()
+				    .find(|radio| radio.id.0 == selected_id)
+				{
+				    state.source_capabilities = radio.source_capabilities.clone();
+				}
+			    }
+			    
                         }
                     }
 

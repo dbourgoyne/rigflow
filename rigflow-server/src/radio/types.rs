@@ -9,7 +9,6 @@ use rigflow_core::radio::{
     source_control::{
         DirectSamplingMode,
         GainMode,
-        SourceCapabilities,
         SourceControlState,
     },
 };
@@ -89,7 +88,6 @@ pub struct WorkerRuntimeState {
     pub cw_pitch_hz: f32,
     pub filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
-    pub source_capabilities: SourceCapabilities,
     pub source_control: SourceControlState,
 
     pub input_sample_rate_hz: f32,

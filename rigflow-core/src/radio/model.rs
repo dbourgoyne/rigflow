@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::radio::source_control::SourceCapabilities;
+
 /// Unique identifier for a radio instance.
 ///
 /// This is a stable, opaque identifier used across:
@@ -87,5 +89,8 @@ pub struct RadioDescriptor {
     pub serial: Option<String>,
 
     /// Capabilities of this radio
-    pub capabilities: RadioCapabilities,
+    pub radio_capabilities: RadioCapabilities,
+
+    /// Capabilities of the source
+    pub source_capabilities: SourceCapabilities,
 }

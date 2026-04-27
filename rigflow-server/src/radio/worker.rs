@@ -31,7 +31,6 @@ use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::source_control::SourceControlState;
-use rigflow_core::radio::source_control::SourceCapabilities;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -233,7 +232,6 @@ fn pipeline_cfg_for_source(
 fn build_runtime_state(
     control: &SharedControlState,
     input_sample_rate_hz: f32,
-    source_capabilities: SourceCapabilities,
 ) -> WorkerRuntimeState {
     WorkerRuntimeState {
         center_freq_hz: control.center_freq_hz,
@@ -244,7 +242,6 @@ fn build_runtime_state(
         cw_pitch_hz: control.cw_pitch_hz,
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
-	source_capabilities,
 	source_control: control.source_control.clone(),
 
         input_sample_rate_hz,
@@ -684,7 +681,6 @@ fn spawn_capture_thread(
             build_runtime_state(
 		&current_control(&control),
 		source.sample_rate(),
-		source.source_capabilities(),
 	    );
 
         let _ = startup_info_tx.send(Ok(StartupInfo {
@@ -1016,7 +1012,6 @@ fn spawn_dsp_thread(
                 let runtime = build_runtime_state(
 		    &current,
 		    startup_info.input_sample_rate_hz,
-		    SourceCapabilities::none()
 		);
                 let _ = status_tx.send(WorkerStatus::Running { runtime });
             }

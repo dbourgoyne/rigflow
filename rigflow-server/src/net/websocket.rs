@@ -647,7 +647,6 @@ fn runtime_snapshot_from_status(
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
 	    deemphasis_mode: runtime.deemphasis_mode,
-	    source_capabilities: runtime.source_capabilities.clone(),
 	    source_control: runtime.source_control.clone(),
         }),
         _ => None,
@@ -694,7 +693,6 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         cw_pitch_hz,
         filter_bandwidth_hz,
 	deemphasis_mode,
-	source_capabilities: _,
 	source_control: _,
     } = msg
     {

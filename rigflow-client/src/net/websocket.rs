@@ -316,7 +316,13 @@ pub fn apply_radio_server_message(
 
     match msg {
         ServerRadioMessage::RadiosListed { radios } => {
-            state.available_radios = radios.clone();
+	    state.available_radios = radios.clone();
+
+	    if let Some(selected_id) = state.selected_radio_id.as_deref() {
+		if let Some(radio) = radios.iter().find(|r| r.id.0 == selected_id) {
+		    state.source_capabilities = radio.source_capabilities.clone();
+		}
+	    }
 
             if radios.is_empty() {
                 state.server_status = "connected, no radios available".to_string();
@@ -330,6 +336,14 @@ pub fn apply_radio_server_message(
 	    state.radio_acquired = true;
 	    state.selected_radio_id = Some(radio_id.0.clone());
 	    state.server_status = format!("radio acquired: {}", radio_id.0);
+
+	    if let Some(radio) = state
+		.available_radios
+		.iter()
+		.find(|radio| radio.id == radio_id)
+	    {
+		state.source_capabilities = radio.source_capabilities.clone();
+	    }
 
 	    if state.auto_apply_default_bookmark_on_acquire
 		&& state.default_bookmark_id.is_some()
@@ -364,6 +378,7 @@ pub fn apply_radio_server_message(
 	    input_sample_rate_hz,
 	    demod_mode,
 	    sideband,
+	    source_control,
 	    ..
 	} => {
 	    state.center_freq_hz = center_freq_hz as f32;
@@ -371,6 +386,7 @@ pub fn apply_radio_server_message(
 	    state.input_sample_rate_hz = input_sample_rate_hz;
 	    state.demod_mode = demod_mode;
 	    state.sideband = sideband;
+	    state.source_control = source_control;
 
 	    // Do NOT overwrite persisted per-demod prefs here.
 	    state.pending_apply_mode_controls = true;

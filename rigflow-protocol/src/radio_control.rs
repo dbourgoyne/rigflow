@@ -169,7 +169,6 @@ pub enum ServerRadioMessage {
 	filter_bandwidth_hz: f32,
 	deemphasis_mode: DeemphasisMode,
 
-	source_capabilities: SourceCapabilities,
 	source_control: SourceControlState,
     },
 
@@ -224,7 +223,10 @@ pub struct RadioInfo {
     pub serial: Option<String>,
 
     /// Static capabilities
-    pub capabilities: RadioCapabilities,
+    pub radio_capabilities: RadioCapabilities,
+
+    /// Source capabilities
+    pub source_capabilities: SourceCapabilities,
 
     /// Current availability state
     pub state: RadioAvailability,

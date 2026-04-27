@@ -2,8 +2,6 @@ use std::time::Instant;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{
-    DirectSamplingMode,
-    GainMode,
     SourceCapabilities,
     SourceControlState,
 };

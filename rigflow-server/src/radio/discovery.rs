@@ -5,6 +5,10 @@ use log::{error,info};
 use rigflow_core::radio::{
     HardwareKind, RadioCapabilities, RadioDescriptor, RadioId,
 };
+use rigflow_core::radio::source_control::{
+    DirectSamplingMode,
+    SourceCapabilities,
+};
 
 use crate::config::ServerConfig;
 
@@ -42,7 +46,8 @@ fn discover_rtl_radios() -> Vec<RadioDescriptor> {
                     hardware_kind: HardwareKind::RtlSdr,
                     index: idx as u32,
                     serial: None,
-                    capabilities: default_radio_capabilities(),
+                    radio_capabilities: default_radio_capabilities(),
+		    source_capabilities: rtl_source_capabilities(),
                 });
             }
         }
@@ -100,7 +105,8 @@ fn discover_wav_radios(dir: &Path) -> Vec<RadioDescriptor> {
                 hardware_kind: HardwareKind::WavFile,
                 index: idx as u32,
                 serial: Some(path.display().to_string()),
-                capabilities: default_radio_capabilities(),
+                radio_capabilities: default_radio_capabilities(),
+		source_capabilities: SourceCapabilities::none(),
             }
         })
         .collect()
@@ -128,7 +134,8 @@ fn build_fake_tone_radio() -> RadioDescriptor {
         hardware_kind: HardwareKind::FakeTone,
         index: 0,
         serial: None,
-        capabilities: default_radio_capabilities(),
+        radio_capabilities: default_radio_capabilities(),
+	source_capabilities: SourceCapabilities::none(),
     }
 }
 
@@ -152,6 +159,38 @@ fn default_radio_capabilities() -> RadioCapabilities {
     }
 }
 
+fn rtl_source_capabilities() -> SourceCapabilities {
+    SourceCapabilities {
+        supports_sample_rate: true,
+        sample_rates_hz: vec![
+            1_024_000,
+            1_536_000,
+            2_048_000,
+            2_400_000,
+        ],
+
+        supports_gain_mode: true,
+        supports_gain: true,
+        gain_values_db: vec![
+            0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4,
+            15.7, 16.6, 19.7, 20.7, 22.9, 25.4, 28.0,
+            29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2,
+            42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
+        ],
+
+        supports_ppm_correction: true,
+        ppm_min: -100,
+        ppm_max: 100,
+
+        supports_direct_sampling: true,
+        direct_sampling_modes: vec![
+            DirectSamplingMode::Off,
+            DirectSamplingMode::I,
+            DirectSamplingMode::Q,
+        ],
+    }
+}
+
 //
 // ============================
 // Debug
@@ -171,3 +210,4 @@ pub fn debug_print_discovered_radios(radios: &[RadioDescriptor]) {
         );
     }
 }
+
