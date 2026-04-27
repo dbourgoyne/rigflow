@@ -17,6 +17,11 @@ pub struct RtlSdrSource {
     sample_rate_hz: f32,
     center_freq_hz: u32,
     raw_buf: Vec<u8>,
+
+    gain_mode: GainMode,
+    gain_db: f32,
+    ppm_correction: i32,
+    direct_sampling: DirectSamplingMode,
 }
 
 impl RtlSdrSource {
@@ -65,11 +70,27 @@ impl RtlSdrSource {
 
         let raw_len = block_complex_samples * 2;
 
+	let (gain_mode, gain_db) = match gain_tenths_db {
+	    Some(gain) => (GainMode::Manual, gain as f32 / 10.0),
+	    None => (GainMode::Auto, 0.0),
+	};
+
+	let direct_sampling_mode = if direct_sampling {
+	    DirectSamplingMode::I
+	} else {
+	    DirectSamplingMode::Off
+	};
+
         Ok(Self {
             dev,
             sample_rate_hz: sample_rate_hz as f32,
             center_freq_hz,
             raw_buf: vec![0u8; raw_len],
+
+	    gain_mode,
+	    gain_db,
+	    ppm_correction,
+	    direct_sampling: direct_sampling_mode,
         })
     }
 
@@ -195,10 +216,58 @@ impl IqSource for RtlSdrSource {
     fn source_control_state(&self) -> SourceControlState {
 	SourceControlState {
             sample_rate_hz: self.sample_rate_hz as u32,
-            gain_mode: GainMode::Auto, // we don’t track this yet
-            gain_db: 0.0,              // TODO later
-            ppm_correction: 0,         // TODO later
-            direct_sampling: DirectSamplingMode::Off, // TODO later
+            gain_mode: self.gain_mode,
+            gain_db: self.gain_db,
+            ppm_correction: self.ppm_correction,
+            direct_sampling: self.direct_sampling,
 	}
     }
+
+    fn set_gain_mode(&mut self, mode: GainMode) -> Result<(), String> {
+	match mode {
+            GainMode::Auto => {
+		self.dev
+                    .set_tuner_gain(TunerGain::Auto)
+                    .map_err(|e| format!("failed to enable RTL-SDR automatic gain: {e}"))?;
+
+		self.gain_mode = GainMode::Auto;
+		Ok(())
+            }
+
+            GainMode::Manual => {
+		let gain_tenths_db = (self.gain_db * 10.0).round() as i32;
+
+		self.dev
+                    .set_tuner_gain(TunerGain::Manual(gain_tenths_db))
+                    .map_err(|e| {
+			format!(
+                            "failed to enable RTL-SDR manual gain at {:.1} dB: {e}",
+                            self.gain_db
+			)
+                    })?;
+
+		self.gain_mode = GainMode::Manual;
+		Ok(())
+            }
+	}
+    }
+
+    fn set_gain_db(&mut self, gain_db: f32) -> Result<(), String> {
+	let gain_tenths_db = (gain_db * 10.0).round() as i32;
+
+	self.dev
+            .set_tuner_gain(TunerGain::Manual(gain_tenths_db))
+            .map_err(|e| {
+		format!(
+                    "failed to set RTL-SDR gain to {:.1} dB: {e}",
+                    gain_db
+		)
+            })?;
+
+	self.gain_mode = GainMode::Manual;
+	self.gain_db = gain_db;
+
+	Ok(())
+    }
+
 }

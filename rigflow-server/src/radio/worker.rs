@@ -668,8 +668,13 @@ fn spawn_capture_thread(
         };
 
         // This thread owns the IQ source, so source-level controls are applied here.
-        let mut applied_source_control =
-            current_control(&control).source_control.clone();
+	let initial_source_control = source.source_control_state();
+
+	if let Ok(mut control_state) = control.lock() {
+	    control_state.source_control = initial_source_control.clone();
+	}
+
+	let mut applied_source_control = initial_source_control;
 
         if let Err(reason) = source.set_center_frequency(initial_center_freq_hz as f32) {
             let _ = startup_info_tx.send(Err(reason.clone()));
@@ -910,6 +915,11 @@ fn spawn_dsp_thread(
 	    let current = current_control(&control);
 	    
             let mut changed = false;
+
+	    if current.source_control != applied.source_control {
+		applied.source_control = current.source_control.clone();
+		changed = true;
+	    }
 
             if current.center_freq_hz != applied.center_freq_hz {
                 pipeline.set_center_frequency(current.center_freq_hz as f32);
