@@ -37,10 +37,10 @@ impl RigflowApp {
                         ui.separator();
 			self.draw_server_panel(ui, snapshot, config_mode);
 			ui.separator();
-			self.draw_source_panel(ui);
-			ui.separator();
 			self.draw_radios_panel(ui, snapshot);
 			self.draw_radio_control_panel(ui, snapshot);
+			ui.separator();
+			self.draw_source_control_panel(ui, snapshot);
 			ui.separator();
 			self.draw_waterfall_control_panel(ui);
 			ui.separator();
@@ -534,97 +534,102 @@ impl RigflowApp {
         }
     }
 
-    pub(crate) fn draw_source_panel(
+
+    pub(crate) fn draw_source_control_panel(
         &mut self,
-        ui: &mut egui::Ui,
+	ui: &mut egui::Ui,
+        snapshot: &UiState,
     ) {
+	if snapshot.radio_acquired {
+            egui::CollapsingHeader::new("Source Control")
+                .default_open(true)
+                .show(ui, |ui| {
+		    if let Ok(mut state) = self.state.lock() {
 
-	ui.collapsing("Source", |ui| {
-	    if let Ok(mut state) = self.state.lock() {
+			// -----------------------------
+			// Gain mode: Auto / Manual
+			// -----------------------------
+			if state.source_capabilities.supports_gain_mode {
+			    ui.horizontal(|ui| {
+				ui.label("Gain Mode");
 
-		// -----------------------------
-		// Gain mode: Auto / Manual
-		// -----------------------------
-		if state.source_capabilities.supports_gain_mode {
-		    ui.horizontal(|ui| {
-			ui.label("Gain Mode");
+				let mut gain_mode = state.source_control.gain_mode;
 
-			let mut gain_mode = state.source_control.gain_mode;
+				let auto_changed = ui
+				    .radio_value(&mut gain_mode, GainMode::Auto, "Auto")
+				    .changed();
 
-			let auto_changed = ui
-			    .radio_value(&mut gain_mode, GainMode::Auto, "Auto")
-			    .changed();
+				let manual_changed = ui
+				    .radio_value(&mut gain_mode, GainMode::Manual, "Manual")
+				    .changed();
 
-			let manual_changed = ui
-			    .radio_value(&mut gain_mode, GainMode::Manual, "Manual")
-			    .changed();
-
-			if auto_changed || manual_changed {
-			    state.source_control.gain_mode = gain_mode;
-
-			    let _ = self.ws_cmd_tx.send(
-				ControlCommand::RadioMessage(
-				    ClientRadioMessage::SetSourceGainMode {
-					mode: gain_mode,
-				    },
-				),
-			    );
-			}
-		    });
-		}
-		// -----------------------------
-		// Gain value
-		// -----------------------------
-		if state.source_capabilities.supports_gain {
-		    let manual_gain = state.source_control.gain_mode == GainMode::Manual;
-
-		    ui.add_enabled_ui(manual_gain, |ui| {
-			let gains = &state.source_capabilities.gain_values_db;
-
-			if !gains.is_empty() {
-			    let min_gain = gains.first().copied().unwrap_or(0.0);
-			    let max_gain = gains.last().copied().unwrap_or(50.0);
-
-			    let mut gain_db = state.source_control.gain_db;
-
-			    let response = ui.add(
-				egui::Slider::new(
-				    &mut gain_db,
-				    min_gain..=max_gain,
-				)
-				    .text(format!("Gain ({:.1} dB)", state.source_control.gain_db)),
-			    );
-			    if response.changed() {
-				let snapped_gain = gains
-				    .iter()
-				    .copied()
-				    .min_by(|a, b| {
-					(gain_db - *a)
-					    .abs()
-					    .partial_cmp(&(gain_db - *b).abs())
-					    .unwrap_or(std::cmp::Ordering::Equal)
-				    })
-				    .unwrap_or(gain_db);
-
-				if (snapped_gain - state.source_control.gain_db).abs() > f32::EPSILON {
-				    state.source_control.gain_db = snapped_gain;
+				if auto_changed || manual_changed {
+				    state.source_control.gain_mode = gain_mode;
 
 				    let _ = self.ws_cmd_tx.send(
 					ControlCommand::RadioMessage(
-					    ClientRadioMessage::SetSourceGain {
-						gain_db: snapped_gain,
+					    ClientRadioMessage::SetSourceGainMode {
+						mode: gain_mode,
 					    },
 					),
 				    );
 				}
-			    }
-			} else {
-			    ui.label("Gain values unavailable");
+			    });
 			}
-		    });
-		}
-	    }
-	});
+			// -----------------------------
+			// Gain value
+			// -----------------------------
+			if state.source_capabilities.supports_gain {
+			    let manual_gain = state.source_control.gain_mode == GainMode::Manual;
+
+			    ui.add_enabled_ui(manual_gain, |ui| {
+				let gains = &state.source_capabilities.gain_values_db;
+
+				if !gains.is_empty() {
+				    let min_gain = gains.first().copied().unwrap_or(0.0);
+				    let max_gain = gains.last().copied().unwrap_or(50.0);
+
+				    let mut gain_db = state.source_control.gain_db;
+
+				    let response = ui.add(
+					egui::Slider::new(
+					    &mut gain_db,
+					    min_gain..=max_gain,
+					)
+					    .text(format!("Gain ({:.1} dB)", state.source_control.gain_db)),
+				    );
+				    if response.changed() {
+					let snapped_gain = gains
+					    .iter()
+					    .copied()
+					    .min_by(|a, b| {
+						(gain_db - *a)
+						    .abs()
+						    .partial_cmp(&(gain_db - *b).abs())
+						    .unwrap_or(std::cmp::Ordering::Equal)
+					    })
+					    .unwrap_or(gain_db);
+
+					if (snapped_gain - state.source_control.gain_db).abs() > f32::EPSILON {
+					    state.source_control.gain_db = snapped_gain;
+
+					    let _ = self.ws_cmd_tx.send(
+						ControlCommand::RadioMessage(
+						    ClientRadioMessage::SetSourceGain {
+							gain_db: snapped_gain,
+						    },
+						),
+					    );
+					}
+				    }
+				} else {
+				    ui.label("Gain values unavailable");
+				}
+			    });
+			}
+		    }
+		});
+	}
     }
 
     pub(crate) fn draw_radios_panel(
