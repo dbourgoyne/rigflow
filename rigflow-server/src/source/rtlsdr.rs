@@ -286,4 +286,19 @@ impl IqSource for RtlSdrSource {
 	Ok(())
     }
 
+    fn set_direct_sampling(&mut self, mode: DirectSamplingMode) -> Result<(), String> {
+        let rtl_mode = match mode {
+            DirectSamplingMode::Off => rtl_sdr_rs::DirectSampleMode::Off,
+            DirectSamplingMode::I   => rtl_sdr_rs::DirectSampleMode::On,
+            DirectSamplingMode::Q   => rtl_sdr_rs::DirectSampleMode::OnSwap,
+        };
+
+        self.dev
+            .set_direct_sampling(rtl_mode)
+            .map_err(|e| format!("failed to set RTL-SDR direct sampling to {mode:?}: {e}"))?;
+
+        self.direct_sampling = mode;
+        Ok(())
+    }
+
 }

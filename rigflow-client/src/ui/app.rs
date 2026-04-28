@@ -4,6 +4,7 @@ use eframe::egui;
 use tokio::sync::mpsc;
 
 use crate::net::control::ControlCommand;
+use rigflow_protocol::radio_control::ClientRadioMessage;
 
 use crate::persistence::PersistenceStore;
 
@@ -39,6 +40,10 @@ impl RigflowApp {
     fn snapshot_state(&self) -> UiState {
 	let state = self.state.lock().unwrap();
 	state.clone()
+    }
+
+    pub(crate) fn send_radio_msg(&self, msg: ClientRadioMessage) {
+	let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
     }
 
         
