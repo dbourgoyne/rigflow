@@ -718,19 +718,30 @@ fn spawn_capture_thread(
             let control_snapshot = current_control(&control);
             let current_source_control = control_snapshot.source_control.clone();
 
-            if current_source_control.sample_rate_hz
-                != applied_source_control.sample_rate_hz
-            {
-                match source.set_sample_rate(current_source_control.sample_rate_hz) {
-                    Ok(()) => {
-                        applied_source_control.sample_rate_hz =
-                            current_source_control.sample_rate_hz;
-                    }
-                    Err(reason) => {
-                        warn!("failed to set source sample rate: {reason}");
-                    }
-                }
-            }
+	    if current_source_control.sample_rate_hz
+		!= applied_source_control.sample_rate_hz
+	    {
+		if let Err(err) =
+		    source.set_sample_rate(current_source_control.sample_rate_hz)
+		{
+		    log::error!(
+			"[radio-worker {}] failed to set source sample rate to {} Hz: {}",
+			descriptor.id.0,
+			current_source_control.sample_rate_hz,
+			err
+		    );
+		} else {
+		    applied_source_control.sample_rate_hz =
+			current_source_control.sample_rate_hz;
+
+		    log::info!(
+			"[radio-worker {}] source sample rate set to {} Hz",
+			descriptor.id.0,
+			current_source_control.sample_rate_hz
+		    );
+		}
+	    }
+
 
             if current_source_control.gain_mode != applied_source_control.gain_mode {
                 match source.set_gain_mode(current_source_control.gain_mode) {

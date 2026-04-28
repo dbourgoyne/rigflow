@@ -270,4 +270,20 @@ impl IqSource for RtlSdrSource {
 	Ok(())
     }
 
+    fn set_sample_rate(&mut self, sample_rate_hz: u32) -> Result<(), String> {
+	self.dev
+            .set_sample_rate(sample_rate_hz)
+            .map_err(|e| {
+		format!("failed to set RTL-SDR sample rate to {sample_rate_hz} Hz: {e}")
+            })?;
+
+	self.sample_rate_hz = sample_rate_hz as f32;
+
+	self.dev
+            .reset_buffer()
+            .map_err(|e| format!("failed to reset RTL-SDR buffer after sample rate change: {e}"))?;
+
+	Ok(())
+    }
+
 }
