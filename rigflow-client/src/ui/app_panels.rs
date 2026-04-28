@@ -547,6 +547,43 @@ impl RigflowApp {
 		    if let Ok(mut state) = self.state.lock() {
 
 			// -----------------------------
+			// Sample rate
+			// -----------------------------
+			if state.source_capabilities.supports_sample_rate {
+			    let sample_rates = state.source_capabilities.sample_rates_hz.clone();
+
+			    if !sample_rates.is_empty() {
+				let mut selected_sample_rate = state.source_control.sample_rate_hz;
+
+				egui::ComboBox::from_id_salt("source_sample_rate_combo")
+				    .selected_text(format_sample_rate(selected_sample_rate))
+				    .show_ui(ui, |ui| {
+					for sample_rate_hz in sample_rates {
+					    ui.selectable_value(
+						&mut selected_sample_rate,
+						sample_rate_hz,
+						format_sample_rate(sample_rate_hz),
+					    );
+					}
+				    });
+
+				if selected_sample_rate != state.source_control.sample_rate_hz {
+				    state.source_control.sample_rate_hz = selected_sample_rate;
+
+				    let _ = self.ws_cmd_tx.send(
+					ControlCommand::RadioMessage(
+					    ClientRadioMessage::SetSourceSampleRate {
+						sample_rate_hz: selected_sample_rate,
+					    },
+					),
+				    );
+				}
+			    } else {
+				ui.label("Sample rates unavailable");
+			    }
+			}
+
+			// -----------------------------
 			// Gain mode: Auto / Manual
 			// -----------------------------
 			if state.source_capabilities.supports_gain_mode {
@@ -1096,4 +1133,14 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
     state.pitch_debounce = DebounceState::new(state.pitch_hz);
 
     state.last_demod_mode_for_controls = Some(mode);
+}
+
+fn format_sample_rate(sample_rate_hz: u32) -> String {
+    if sample_rate_hz >= 1_000_000 {
+        format!("{:.3} MSPS", sample_rate_hz as f32 / 1_000_000.0)
+    } else if sample_rate_hz >= 1_000 {
+        format!("{:.1} kSPS", sample_rate_hz as f32 / 1_000.0)
+    } else {
+        format!("{sample_rate_hz} SPS")
+    }
 }
