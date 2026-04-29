@@ -286,6 +286,15 @@ impl IqSource for RtlSdrSource {
 	Ok(())
     }
 
+    fn set_ppm_correction(&mut self, ppm: i32) -> Result<(), String> {
+        self.dev
+            .set_freq_correction(ppm)
+            .map_err(|e| format!("failed to set RTL-SDR PPM correction to {ppm}: {e}"))?;
+
+        self.ppm_correction = ppm;
+        Ok(())
+    }
+
     fn set_direct_sampling(&mut self, mode: DirectSamplingMode) -> Result<(), String> {
         let rtl_mode = match mode {
             DirectSamplingMode::Off => rtl_sdr_rs::DirectSampleMode::Off,

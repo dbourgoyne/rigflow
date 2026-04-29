@@ -125,6 +125,41 @@ impl RigflowApp {
                         }
 
                         // -----------------------------
+                        // PPM correction
+                        // -----------------------------
+                        if state.source_capabilities.supports_ppm_correction {
+                            let ppm_min = state.source_capabilities.ppm_min;
+                            let ppm_max = state.source_capabilities.ppm_max;
+                            let mut ppm = state.source_control.ppm_correction;
+
+                            ui.label("PPM Correction");
+                            ui.horizontal(|ui| {
+                                let slider = ui.add(
+                                    egui::Slider::new(&mut ppm, ppm_min..=ppm_max)
+                                        .integer()
+                                        .show_value(false),
+                                );
+
+                                let sign = if ppm > 0 { "+" } else { "" };
+                                ui.label(format!("{sign}{ppm} ppm"));
+
+                                let reset = ui
+                                    .add_enabled(ppm != 0, egui::Button::new("Reset"))
+                                    .clicked();
+
+                                if slider.changed() || reset {
+                                    if reset {
+                                        ppm = 0;
+                                    }
+                                    state.source_control.ppm_correction = ppm;
+                                    self.send_radio_msg(
+                                        ClientRadioMessage::SetSourcePpmCorrection { ppm },
+                                    );
+                                }
+                            });
+                        }
+
+                        // -----------------------------
                         // Direct sampling mode
                         // -----------------------------
                         if state.source_capabilities.supports_direct_sampling {
