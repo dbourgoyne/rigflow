@@ -49,8 +49,7 @@ impl RigflowApp {
 
                     save_demod_prefs |=
                         self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |=
-                        self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
+                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
                     save_demod_prefs |=
                         self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
                 }
@@ -72,8 +71,7 @@ impl RigflowApp {
         let mut save = false;
         let bw_limits = filter_bandwidth_limits(demod_mode);
 
-        state.filter_bandwidth_hz =
-            clamp_filter_bandwidth(demod_mode, state.filter_bandwidth_hz);
+        state.filter_bandwidth_hz = clamp_filter_bandwidth(demod_mode, state.filter_bandwidth_hz);
 
         let at_default = (state.filter_bandwidth_hz - bw_limits.default_hz).abs() < 1.0;
 
@@ -98,7 +96,10 @@ impl RigflowApp {
             {
                 let default_hz = bw_limits.default_hz;
                 state.filter_bandwidth_hz = default_hz;
-                state.demod_preferences.get_mut(demod_mode).filter_bandwidth_hz = default_hz;
+                state
+                    .demod_preferences
+                    .get_mut(demod_mode)
+                    .filter_bandwidth_hz = default_hz;
                 state.filter_bw_debounce = DebounceState::new(default_hz);
                 self.send_radio_msg(ClientRadioMessage::SetFilterBandwidth {
                     bandwidth_hz: default_hz,
@@ -106,8 +107,10 @@ impl RigflowApp {
                 save = true;
             }
 
-            state.demod_preferences.get_mut(demod_mode).filter_bandwidth_hz =
-                state.filter_bandwidth_hz;
+            state
+                .demod_preferences
+                .get_mut(demod_mode)
+                .filter_bandwidth_hz = state.filter_bandwidth_hz;
 
             let now = Instant::now();
 
@@ -132,7 +135,10 @@ impl RigflowApp {
                     .clamp(bw_limits.min_hz, bw_limits.max_hz);
 
                 state.filter_bandwidth_hz = final_hz;
-                state.demod_preferences.get_mut(demod_mode).filter_bandwidth_hz = final_hz;
+                state
+                    .demod_preferences
+                    .get_mut(demod_mode)
+                    .filter_bandwidth_hz = final_hz;
                 state.filter_bw_debounce.last_sent_value = final_hz;
                 state.filter_bw_debounce.last_send_time = now;
                 self.send_radio_msg(ClientRadioMessage::SetFilterBandwidth {
@@ -180,7 +186,9 @@ impl RigflowApp {
                 state.pitch_hz = default_hz;
                 state.demod_preferences.get_mut(demod_mode).pitch_hz = default_hz;
                 state.pitch_debounce = DebounceState::new(default_hz);
-                self.send_radio_msg(ClientRadioMessage::SetPitch { pitch_hz: default_hz });
+                self.send_radio_msg(ClientRadioMessage::SetPitch {
+                    pitch_hz: default_hz,
+                });
                 save = true;
             }
 

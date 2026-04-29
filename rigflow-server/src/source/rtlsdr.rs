@@ -1,11 +1,8 @@
 use num_complex::Complex32;
-use rtl_sdr_rs::{RtlSdr, TunerGain};
 use rigflow_core::radio::source_control::{
-    DirectSamplingMode,
-    GainMode,
-    SourceCapabilities,
-    SourceControlState,
+    DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState,
 };
+use rtl_sdr_rs::{RtlSdr, TunerGain};
 
 use crate::source::IqSource;
 
@@ -57,9 +54,7 @@ impl RtlSdrSource {
         match gain_tenths_db {
             Some(gain) => dev
                 .set_tuner_gain(TunerGain::Manual(gain))
-                .map_err(|e| {
-                    format!("failed to set manual tuner gain to {gain} tenths dB: {e}")
-                })?,
+                .map_err(|e| format!("failed to set manual tuner gain to {gain} tenths dB: {e}"))?,
             None => dev
                 .set_tuner_gain(TunerGain::Auto)
                 .map_err(|e| format!("failed to enable automatic tuner gain: {e}"))?,
@@ -70,16 +65,16 @@ impl RtlSdrSource {
 
         let raw_len = block_complex_samples * 2;
 
-	let (gain_mode, gain_db) = match gain_tenths_db {
-	    Some(gain) => (GainMode::Manual, gain as f32 / 10.0),
-	    None => (GainMode::Auto, 0.0),
-	};
+        let (gain_mode, gain_db) = match gain_tenths_db {
+            Some(gain) => (GainMode::Manual, gain as f32 / 10.0),
+            None => (GainMode::Auto, 0.0),
+        };
 
-	let direct_sampling_mode = if direct_sampling {
-	    DirectSamplingMode::I
-	} else {
-	    DirectSamplingMode::Off
-	};
+        let direct_sampling_mode = if direct_sampling {
+            DirectSamplingMode::I
+        } else {
+            DirectSamplingMode::Off
+        };
 
         Ok(Self {
             dev,
@@ -87,10 +82,10 @@ impl RtlSdrSource {
             center_freq_hz,
             raw_buf: vec![0u8; raw_len],
 
-	    gain_mode,
-	    gain_db,
-	    ppm_correction,
-	    direct_sampling: direct_sampling_mode,
+            gain_mode,
+            gain_db,
+            ppm_correction,
+            direct_sampling: direct_sampling_mode,
         })
     }
 
@@ -172,7 +167,16 @@ impl IqSource for RtlSdrSource {
     }
 
     fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
-        self.set_center_frequency_hz(center_freq_hz.round() as u32)
+        let hz = center_freq_hz.round() as u32;
+
+        if self.direct_sampling == DirectSamplingMode::Off {
+            self.dev
+                .set_center_freq(hz)
+                .map_err(|e| format!("failed to retune RTL-SDR to {hz} Hz: {e}"))?;
+        }
+
+        self.center_freq_hz = hz;
+        Ok(())
     }
 
     fn is_realtime(&self) -> bool {
@@ -180,24 +184,17 @@ impl IqSource for RtlSdrSource {
     }
 
     fn source_capabilities(&self) -> SourceCapabilities {
-	SourceCapabilities {
+        SourceCapabilities {
             supports_sample_rate: true,
-            sample_rates_hz: vec![
-		1_024_000,
-		1_536_000,
-		2_048_000,
-		2_400_000,
-            ],
+            sample_rates_hz: vec![1_024_000, 1_536_000, 2_048_000, 2_400_000],
 
             supports_gain_mode: true,
             supports_gain: true,
 
             // TODO: replace with device query later
             gain_values_db: vec![
-		0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4,
-		15.7, 16.6, 19.7, 20.7, 22.9, 25.4, 28.0,
-		29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2,
-		42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
+                0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4, 15.7, 16.6, 19.7, 20.7, 22.9, 25.4,
+                28.0, 29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
             ],
 
             supports_ppm_correction: true,
@@ -206,84 +203,81 @@ impl IqSource for RtlSdrSource {
 
             supports_direct_sampling: true,
             direct_sampling_modes: vec![
-		DirectSamplingMode::Off,
-		DirectSamplingMode::I,
-		DirectSamplingMode::Q,
+                DirectSamplingMode::Off,
+                DirectSamplingMode::I,
+                DirectSamplingMode::Q,
             ],
-	}
+            direct_sampling_freq_hz_max: 30_000_000,
+
+            tuner_freq_hz_min: 24_000_000,
+            tuner_freq_hz_max: 1_766_000_000,
+        }
     }
 
     fn source_control_state(&self) -> SourceControlState {
-	SourceControlState {
+        SourceControlState {
             sample_rate_hz: self.sample_rate_hz as u32,
             gain_mode: self.gain_mode,
             gain_db: self.gain_db,
             ppm_correction: self.ppm_correction,
             direct_sampling: self.direct_sampling,
-	}
+        }
     }
 
     fn set_gain_mode(&mut self, mode: GainMode) -> Result<(), String> {
-	match mode {
+        match mode {
             GainMode::Auto => {
-		self.dev
+                self.dev
                     .set_tuner_gain(TunerGain::Auto)
                     .map_err(|e| format!("failed to enable RTL-SDR automatic gain: {e}"))?;
 
-		self.gain_mode = GainMode::Auto;
-		Ok(())
+                self.gain_mode = GainMode::Auto;
+                Ok(())
             }
 
             GainMode::Manual => {
-		let gain_tenths_db = (self.gain_db * 10.0).round() as i32;
+                let gain_tenths_db = (self.gain_db * 10.0).round() as i32;
 
-		self.dev
+                self.dev
                     .set_tuner_gain(TunerGain::Manual(gain_tenths_db))
                     .map_err(|e| {
-			format!(
+                        format!(
                             "failed to enable RTL-SDR manual gain at {:.1} dB: {e}",
                             self.gain_db
-			)
+                        )
                     })?;
 
-		self.gain_mode = GainMode::Manual;
-		Ok(())
+                self.gain_mode = GainMode::Manual;
+                Ok(())
             }
-	}
+        }
     }
 
     fn set_gain_db(&mut self, gain_db: f32) -> Result<(), String> {
-	let gain_tenths_db = (gain_db * 10.0).round() as i32;
+        let gain_tenths_db = (gain_db * 10.0).round() as i32;
 
-	self.dev
+        self.dev
             .set_tuner_gain(TunerGain::Manual(gain_tenths_db))
-            .map_err(|e| {
-		format!(
-                    "failed to set RTL-SDR gain to {:.1} dB: {e}",
-                    gain_db
-		)
-            })?;
+            .map_err(|e| format!("failed to set RTL-SDR gain to {:.1} dB: {e}", gain_db))?;
 
-	self.gain_mode = GainMode::Manual;
-	self.gain_db = gain_db;
+        self.gain_mode = GainMode::Manual;
+        self.gain_db = gain_db;
 
-	Ok(())
+        Ok(())
     }
 
     fn set_sample_rate(&mut self, sample_rate_hz: u32) -> Result<(), String> {
-	self.dev
-            .set_sample_rate(sample_rate_hz)
-            .map_err(|e| {
-		format!("failed to set RTL-SDR sample rate to {sample_rate_hz} Hz: {e}")
-            })?;
+        self.dev.set_sample_rate(sample_rate_hz).map_err(|e| {
+            format!("failed to set RTL-SDR sample rate to {sample_rate_hz} Hz: {e}")
+        })?;
 
-	self.sample_rate_hz = sample_rate_hz as f32;
+        self.sample_rate_hz = sample_rate_hz as f32;
 
-	self.dev
+        self.dev
             .reset_buffer()
             .map_err(|e| format!("failed to reset RTL-SDR buffer after sample rate change: {e}"))?;
 
-	Ok(())
+        Ok(())
     }
 
     fn set_ppm_correction(&mut self, ppm: i32) -> Result<(), String> {
@@ -298,8 +292,8 @@ impl IqSource for RtlSdrSource {
     fn set_direct_sampling(&mut self, mode: DirectSamplingMode) -> Result<(), String> {
         let rtl_mode = match mode {
             DirectSamplingMode::Off => rtl_sdr_rs::DirectSampleMode::Off,
-            DirectSamplingMode::I   => rtl_sdr_rs::DirectSampleMode::On,
-            DirectSamplingMode::Q   => rtl_sdr_rs::DirectSampleMode::OnSwap,
+            DirectSamplingMode::I => rtl_sdr_rs::DirectSampleMode::On,
+            DirectSamplingMode::Q => rtl_sdr_rs::DirectSampleMode::OnSwap,
         };
 
         self.dev
@@ -307,7 +301,26 @@ impl IqSource for RtlSdrSource {
             .map_err(|e| format!("failed to set RTL-SDR direct sampling to {mode:?}: {e}"))?;
 
         self.direct_sampling = mode;
+
+        // Restore the tuner LO when leaving direct sampling so center_freq_hz
+        // is accurate on the hardware again.
+        if mode == DirectSamplingMode::Off {
+            self.dev.set_center_freq(self.center_freq_hz).map_err(|e| {
+                format!(
+                    "failed to restore RTL-SDR LO to {} Hz after disabling direct sampling: {e}",
+                    self.center_freq_hz
+                )
+            })?;
+        }
+
+        // DC spike note: direct sampling produces a large DC artifact at the
+        // spectrum center (0 Hz offset). No DC blocker is applied; the spike
+        // is expected and visible on the waterfall. A future IIR DC blocker
+        // gated on direct_sampling != Off would suppress it.
+        self.dev.reset_buffer().map_err(|e| {
+            format!("failed to reset RTL-SDR buffer after direct sampling change: {e}")
+        })?;
+
         Ok(())
     }
-
 }

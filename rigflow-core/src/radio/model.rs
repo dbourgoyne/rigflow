@@ -46,7 +46,7 @@ pub enum HardwareKind {
 /// These are used by the client to:
 /// - constrain UI controls (frequency limits, modes)
 /// - enable/disable demodulation options
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RadioCapabilities {
     /// Minimum tunable frequency (Hz)
     pub min_freq_hz: u64,

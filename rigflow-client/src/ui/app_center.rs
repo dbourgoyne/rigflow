@@ -1,29 +1,15 @@
-use log::warn;
 use super::app::RigflowApp;
-use eframe::egui;
-use crate::UiState;
-use crate::ControlCommand;
+use crate::ui::layout::{LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH};
 use crate::ui::spectrum_view::{
-    SpectrumInteraction,
-    draw_spectrum_plot,
-    zoomed_visible_freq_range_hz,
-    x_frac_to_frequency_hz,
+    draw_spectrum_plot, x_frac_to_frequency_hz, zoomed_visible_freq_range_hz, SpectrumInteraction,
 };
-use crate::ui::layout::{
-    WATERFALL_IMAGE_WIDTH,
-    WATERFALL_IMAGE_HEIGHT,
-    LEFT_GUTTER,
-    RIGHT_GUTTER,
-};
+use crate::ControlCommand;
+use crate::UiState;
+use eframe::egui;
+use log::warn;
 
 impl RigflowApp {
-
-    pub(crate) fn draw_center_panel(
-        &mut self,
-        ctx: &egui::Context,
-        snapshot: &UiState,
-    ) {
-	
+    pub(crate) fn draw_center_panel(&mut self, ctx: &egui::Context, snapshot: &UiState) {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::NONE
                 .fill(egui::Color32::BLACK)
@@ -72,7 +58,12 @@ impl RigflowApp {
                                     state_snapshot.center_freq_hz.max(0.0) as u64,
                                 )
                             {
-                                new_center_freq_hz = Some(new_center_hz as f32);
+                                let limits =
+                                    crate::ui::freq_limits::active_freq_limits(&state_snapshot);
+                                new_center_freq_hz = Some(crate::ui::freq_limits::clamp_center(
+                                    new_center_hz as f32,
+                                    &limits,
+                                ));
                             }
 
                             let lo_offset_hz = (state_snapshot.target_freq_hz
@@ -86,11 +77,17 @@ impl RigflowApp {
                                     lo_offset_hz,
                                 )
                             {
-                                let new_target = (state_snapshot.center_freq_hz.round()
-						  as i64
-						  + new_offset_hz)
+                                let raw_target = (state_snapshot.center_freq_hz.round() as i64
+                                    + new_offset_hz)
                                     .max(0) as f32;
-                                new_target_freq_hz = Some(new_target);
+                                let limits =
+                                    crate::ui::freq_limits::active_freq_limits(&state_snapshot);
+                                new_target_freq_hz = Some(crate::ui::freq_limits::clamp_target(
+                                    raw_target,
+                                    state_snapshot.center_freq_hz,
+                                    state_snapshot.input_sample_rate_hz,
+                                    &limits,
+                                ));
                             }
 
                             if let Some(new_center_hz) = new_center_freq_hz {
@@ -150,10 +147,18 @@ impl RigflowApp {
 			    if let Some(bookmark_id) = interaction.clicked_bookmark_id {
 				self.apply_bookmark(&bookmark_id);
 			    } else if let Some(clicked_freq_hz) = interaction.clicked_target_freq_hz {
+				let limits =
+				    crate::ui::freq_limits::active_freq_limits(snapshot);
+				let clamped = crate::ui::freq_limits::clamp_target(
+				    clicked_freq_hz,
+				    snapshot.center_freq_hz,
+				    snapshot.input_sample_rate_hz,
+				    &limits,
+				);
 				let _ = self.ws_cmd_tx.send(
 				    ControlCommand::RadioMessage(
 					rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-					    target_freq_hz: clicked_freq_hz as u64,
+					    target_freq_hz: clamped as u64,
 					},
 				    ),
 				);
@@ -244,14 +249,21 @@ impl RigflowApp {
                                                 .to_string();
                                         }
                                     } else {
+                                        let limits =
+                                            crate::ui::freq_limits::active_freq_limits(snapshot);
+                                        let clamped = crate::ui::freq_limits::clamp_target(
+                                            clicked_freq_hz,
+                                            snapshot.center_freq_hz,
+                                            snapshot.input_sample_rate_hz,
+                                            &limits,
+                                        );
                                         if let Ok(mut state) = self.state.lock() {
-                                            state.target_freq_hz = clicked_freq_hz;
+                                            state.target_freq_hz = clamped;
                                         }
-
                                         let _ = self.ws_cmd_tx.send(
                                             ControlCommand::RadioMessage(
                                                 rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                                                    target_freq_hz: clicked_freq_hz as u64,
+                                                    target_freq_hz: clamped as u64,
                                                 },
                                             ),
                                         );
@@ -264,13 +276,7 @@ impl RigflowApp {
         });
     }
 
-    
-    fn update_waterfall_texture(
-        &mut self,
-        ctx: &egui::Context,
-        wf_width: usize,
-        wf_height: usize,
-    ) {
+    fn update_waterfall_texture(&mut self, ctx: &egui::Context, wf_width: usize, wf_height: usize) {
         let pixels = {
             let guard = self.waterfall_buffer.lock().unwrap();
             guard.clone()
@@ -285,8 +291,7 @@ impl RigflowApp {
             return;
         }
 
-        let mut image =
-            egui::ColorImage::new([wf_width, wf_height], egui::Color32::BLACK);
+        let mut image = egui::ColorImage::new([wf_width, wf_height], egui::Color32::BLACK);
 
         for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
             let rgb = *src;
@@ -301,14 +306,10 @@ impl RigflowApp {
                 texture.set(image, egui::TextureOptions::NEAREST);
             }
             None => {
-                let texture = ctx.load_texture(
-                    "waterfall_texture",
-                    image,
-                    egui::TextureOptions::NEAREST,
-                );
+                let texture =
+                    ctx.load_texture("waterfall_texture", image, egui::TextureOptions::NEAREST);
                 self.waterfall_texture = Some(texture);
             }
         }
-    }    
+    }
 }
-

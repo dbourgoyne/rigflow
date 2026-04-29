@@ -1,5 +1,6 @@
 pub mod app;
 pub mod bands;
+pub mod freq_limits;
 pub mod frequency_view;
 pub mod layout;
 pub mod om_bands;

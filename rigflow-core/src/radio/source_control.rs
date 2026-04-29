@@ -49,6 +49,10 @@ pub struct SourceCapabilities {
 
     pub supports_direct_sampling: bool,
     pub direct_sampling_modes: Vec<DirectSamplingMode>,
+    pub direct_sampling_freq_hz_max: u32,
+
+    pub tuner_freq_hz_min: u32,
+    pub tuner_freq_hz_max: u32,
 }
 
 impl SourceCapabilities {
@@ -64,6 +68,10 @@ impl SourceCapabilities {
             ppm_max: 0,
             supports_direct_sampling: false,
             direct_sampling_modes: Vec::new(),
+            direct_sampling_freq_hz_max: 0,
+
+            tuner_freq_hz_min: 0,
+            tuner_freq_hz_max: 0,
         }
     }
 }

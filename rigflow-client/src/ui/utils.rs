@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use crate::ui::state::DebounceState;
+use std::time::{Duration, Instant};
 
 pub fn should_send_debounced(
     now: Instant,
@@ -21,4 +21,3 @@ pub fn should_send_debounced(
         None
     }
 }
-

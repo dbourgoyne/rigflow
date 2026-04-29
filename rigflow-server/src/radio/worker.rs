@@ -1,8 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
-    mpsc as std_mpsc,
-    Arc, Mutex,
+    mpsc as std_mpsc, Arc, Mutex,
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,26 +10,26 @@ use log::{debug, info, trace, warn};
 use num_complex::Complex32;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use rigflow_core::dsp::modes::{default_deemphasis_mode, DeemphasisMode};
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
-use rigflow_core::dsp::modes::{DeemphasisMode, default_deemphasis_mode};
 
-use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ,
 };
+use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
+use crate::net::udp::udp_audio::UdpAudioSender;
+use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::radio::types::{
-    AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
-    WorkerRuntimeState, WorkerStartResult, WorkerStatus,
+    AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo, WorkerRuntimeState,
+    WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
-use crate::net::udp::udp_audio::UdpAudioSender;
-use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::waterfall::generator::WaterfallGenerator;
-use rigflow_core::radio::source_control::SourceControlState;
+use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -207,8 +206,8 @@ fn pipeline_cfg_for_source(
         DemodMode::Nfm => (12_500.0, 5_000.0),
         DemodMode::Usb => (4_000.0, 3_000.0),
         DemodMode::Lsb => (4_000.0, 3_000.0),
-	DemodMode::Am => (6_000.0, 5_000.0),
-	DemodMode::Cw => (1_200.0, 900.0),
+        DemodMode::Am => (6_000.0, 5_000.0),
+        DemodMode::Cw => (1_200.0, 900.0),
     };
 
     DspPipelineConfig {
@@ -241,7 +240,7 @@ fn build_runtime_state(
         cw_pitch_hz: control.cw_pitch_hz,
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
-	source_control: control.source_control.clone(),
+        source_control: control.source_control.clone(),
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -308,10 +307,10 @@ fn run_iq_worker_threads(
         demod_mode: server_cfg.demod,
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
-	cw_pitch_hz: 600.0,
-	filter_bandwidth_hz: 3000.0, // sensible default
-	deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
-	source_control: SourceControlState::default(),
+        cw_pitch_hz: 600.0,
+        filter_bandwidth_hz: 3000.0, // sensible default
+        deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
+        source_control: SourceControlState::default(),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -480,72 +479,72 @@ fn spawn_command_thread(
                             control_state.sideband = sideband;
                         }
                     }
-		    WorkerCommand::SetPitch { pitch_hz } => {
-			if let Ok(mut control_state) = control.lock() {
-			    match control_state.demod_mode {
-				DemodMode::Usb | DemodMode::Lsb => {
-				    control_state.ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
-				}
-				DemodMode::Cw => {
-				    control_state.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
-				}
-				_ => {}
-			    }
-			}
-		    }
+                    WorkerCommand::SetPitch { pitch_hz } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            match control_state.demod_mode {
+                                DemodMode::Usb | DemodMode::Lsb => {
+                                    control_state.ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
+                                }
+                                DemodMode::Cw => {
+                                    control_state.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     WorkerCommand::Stop { reason } => {
                         set_stop_reason(&stop_reason, reason);
                         stop_flag.store(true, Ordering::Relaxed);
                         break;
                     }
-		    WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
-			if let Ok(mut control_state) = control.lock() {
-			    control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
-			}
-		    }
-		    WorkerCommand::SetDeemphasisMode { mode } => {
-			if let Ok(mut control_state) = control.lock() {
-			    //let before = control_state.deemphasis_mode;
+                    WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
+                        }
+                    }
+                    WorkerCommand::SetDeemphasisMode { mode } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            //let before = control_state.deemphasis_mode;
 
-			    control_state.deemphasis_mode = mode;
-			    /*
-			    info!(
-				"[worker] SetDeemphasisMode: {:?} -> {:?}",
-				before,
-				control_state.deemphasis_mode
-			    );
-			    */
-			}
-		    }
-		    WorkerCommand::SetSourceSampleRate { sample_rate_hz } => {
-			if let Ok(mut control_state) = control.lock() {
-			    control_state.source_control.sample_rate_hz = sample_rate_hz;
-			}
-		    }
+                            control_state.deemphasis_mode = mode;
+                            /*
+                            info!(
+                            "[worker] SetDeemphasisMode: {:?} -> {:?}",
+                            before,
+                            control_state.deemphasis_mode
+                            );
+                            */
+                        }
+                    }
+                    WorkerCommand::SetSourceSampleRate { sample_rate_hz } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.sample_rate_hz = sample_rate_hz;
+                        }
+                    }
 
-		    WorkerCommand::SetSourceGainMode { mode } => {
-			if let Ok(mut control_state) = control.lock() {
-			    control_state.source_control.gain_mode = mode;
-			}
-		    }
+                    WorkerCommand::SetSourceGainMode { mode } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.gain_mode = mode;
+                        }
+                    }
 
-		    WorkerCommand::SetSourceGain { gain_db } => {
-			if let Ok(mut control_state) = control.lock() {
-			    control_state.source_control.gain_db = gain_db;
-			}
-		    }
+                    WorkerCommand::SetSourceGain { gain_db } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.gain_db = gain_db;
+                        }
+                    }
 
-		    WorkerCommand::SetSourcePpmCorrection { ppm } => {
-			if let Ok(mut control_state) = control.lock() {
-			    control_state.source_control.ppm_correction = ppm;
-			}
-		    }
+                    WorkerCommand::SetSourcePpmCorrection { ppm } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.ppm_correction = ppm;
+                        }
+                    }
 
-		    WorkerCommand::SetSourceDirectSampling { mode } => {
-			if let Ok(mut control_state) = control.lock() {
-			    control_state.source_control.direct_sampling = mode;
-			}
-		    }
+                    WorkerCommand::SetSourceDirectSampling { mode } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.direct_sampling = mode;
+                        }
+                    }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => {
@@ -613,13 +612,13 @@ fn spawn_waterfall_thread(
                         fft_input.push(*sample);
                     }
 
-		    let row_db = waterfall_gen.generate_row_db(&fft_input);
-		    if !row_db.is_empty() {
-			let min_db = row_db.iter().copied().fold(f32::INFINITY, f32::min);
-			let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-			let avg_db = row_db.iter().copied().sum::<f32>() / row_db.len() as f32;
+                    let row_db = waterfall_gen.generate_row_db(&fft_input);
+                    if !row_db.is_empty() {
+                        let min_db = row_db.iter().copied().fold(f32::INFINITY, f32::min);
+                        let max_db = row_db.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+                        let avg_db = row_db.iter().copied().sum::<f32>() / row_db.len() as f32;
 
-			trace!(
+                        trace!(
 			    "[radio-worker {}] waterfall row: bins={} min={:.1} max={:.1} avg={:.1}",
 			    descriptor.id.0,
 			    row_db.len(),
@@ -628,8 +627,8 @@ fn spawn_waterfall_thread(
 			    avg_db
 			);
 
-			waterfall.send_row_db_to(wf_target, &row_db);
-		    }
+                        waterfall.send_row_db_to(wf_target, &row_db);
+                    }
                 }
 
                 next_waterfall_tick += waterfall_period;
@@ -638,7 +637,10 @@ fn spawn_waterfall_thread(
             }
         }
 
-        debug!("[radio-worker {}] waterfall thread exiting", descriptor.id.0);
+        debug!(
+            "[radio-worker {}] waterfall thread exiting",
+            descriptor.id.0
+        );
     })
 }
 
@@ -673,13 +675,13 @@ fn spawn_capture_thread(
         };
 
         // This thread owns the IQ source, so source-level controls are applied here.
-	let initial_source_control = source.source_control_state();
+        let initial_source_control = source.source_control_state();
 
-	if let Ok(mut control_state) = control.lock() {
-	    control_state.source_control = initial_source_control.clone();
-	}
+        if let Ok(mut control_state) = control.lock() {
+            control_state.source_control = initial_source_control.clone();
+        }
 
-	let mut applied_source_control = initial_source_control;
+        let mut applied_source_control = initial_source_control;
 
         confirmed_sample_rate_hz.store(source.sample_rate() as u32, Ordering::Release);
 
@@ -689,11 +691,7 @@ fn spawn_capture_thread(
             return;
         }
 
-        let startup_runtime =
-            build_runtime_state(
-		&current_control(&control),
-		source.sample_rate(),
-	    );
+        let startup_runtime = build_runtime_state(&current_control(&control), source.sample_rate());
 
         let _ = startup_info_tx.send(Ok(StartupInfo {
             input_sample_rate_hz: source.sample_rate(),
@@ -725,42 +723,35 @@ fn spawn_capture_thread(
             let control_snapshot = current_control(&control);
             let current_source_control = control_snapshot.source_control.clone();
 
-	    if current_source_control.sample_rate_hz
-		!= applied_source_control.sample_rate_hz
-	    {
-		if let Err(err) =
-		    source.set_sample_rate(current_source_control.sample_rate_hz)
-		{
-		    log::error!(
-			"[radio-worker {}] failed to set source sample rate to {} Hz: {}",
-			descriptor.id.0,
-			current_source_control.sample_rate_hz,
-			err
-		    );
-		} else {
-		    applied_source_control.sample_rate_hz =
-			current_source_control.sample_rate_hz;
-		    source_block_period = Duration::from_secs_f32(
-			(block_size as f32 / source.sample_rate()).max(0.001),
-		    );
-		    next_source_tick = Instant::now();
-		    // Signal the DSP thread that the hardware rate has changed.
-		    confirmed_sample_rate_hz.store(source.sample_rate() as u32, Ordering::Release);
+            if current_source_control.sample_rate_hz != applied_source_control.sample_rate_hz {
+                if let Err(err) = source.set_sample_rate(current_source_control.sample_rate_hz) {
+                    log::error!(
+                        "[radio-worker {}] failed to set source sample rate to {} Hz: {}",
+                        descriptor.id.0,
+                        current_source_control.sample_rate_hz,
+                        err
+                    );
+                } else {
+                    applied_source_control.sample_rate_hz = current_source_control.sample_rate_hz;
+                    source_block_period = Duration::from_secs_f32(
+                        (block_size as f32 / source.sample_rate()).max(0.001),
+                    );
+                    next_source_tick = Instant::now();
+                    // Signal the DSP thread that the hardware rate has changed.
+                    confirmed_sample_rate_hz.store(source.sample_rate() as u32, Ordering::Release);
 
-		    log::info!(
-			"[radio-worker {}] source sample rate set to {} Hz",
-			descriptor.id.0,
-			source.sample_rate(),
-		    );
-		}
-	    }
-
+                    log::info!(
+                        "[radio-worker {}] source sample rate set to {} Hz",
+                        descriptor.id.0,
+                        source.sample_rate(),
+                    );
+                }
+            }
 
             if current_source_control.gain_mode != applied_source_control.gain_mode {
                 match source.set_gain_mode(current_source_control.gain_mode) {
                     Ok(()) => {
-                        applied_source_control.gain_mode =
-                            current_source_control.gain_mode;
+                        applied_source_control.gain_mode = current_source_control.gain_mode;
                     }
                     Err(reason) => {
                         warn!("failed to set source gain mode: {reason}");
@@ -773,8 +764,7 @@ fn spawn_capture_thread(
             {
                 match source.set_gain_db(current_source_control.gain_db) {
                     Ok(()) => {
-                        applied_source_control.gain_db =
-                            current_source_control.gain_db;
+                        applied_source_control.gain_db = current_source_control.gain_db;
                     }
                     Err(reason) => {
                         warn!("failed to set source gain: {reason}");
@@ -782,9 +772,7 @@ fn spawn_capture_thread(
                 }
             }
 
-            if current_source_control.ppm_correction
-                != applied_source_control.ppm_correction
-            {
+            if current_source_control.ppm_correction != applied_source_control.ppm_correction {
                 match source.set_ppm_correction(current_source_control.ppm_correction) {
                     Ok(()) => {
                         applied_source_control.ppm_correction =
@@ -796,13 +784,50 @@ fn spawn_capture_thread(
                 }
             }
 
-            if current_source_control.direct_sampling
-                != applied_source_control.direct_sampling
-            {
-                match source.set_direct_sampling(current_source_control.direct_sampling) {
+            if current_source_control.direct_sampling != applied_source_control.direct_sampling {
+                let caps = source.source_capabilities();
+                let sr = source.sample_rate();
+                let new_mode = current_source_control.direct_sampling;
+                let half_bw = (sr / 2.0) as u64;
+
+                let (center_min, center_max) = if new_mode == DirectSamplingMode::Off {
+                    (caps.tuner_freq_hz_min as u64, caps.tuner_freq_hz_max as u64)
+                } else {
+                    (0u64, caps.direct_sampling_freq_hz_max as u64)
+                };
+
+                let clamped_center = if center_max > 0 {
+                    control_snapshot
+                        .center_freq_hz
+                        .clamp(center_min, center_max)
+                } else {
+                    control_snapshot.center_freq_hz
+                };
+
+                let clamped_target = if center_max > 0 {
+                    let target_lo = clamped_center.saturating_sub(half_bw);
+                    let target_hi = clamped_center.saturating_add(half_bw);
+                    control_snapshot
+                        .target_freq_hz
+                        .clamp(target_lo, target_hi)
+                        .clamp(center_min, center_max)
+                } else {
+                    control_snapshot.target_freq_hz
+                };
+
+                if let Ok(mut state) = control.lock() {
+                    state.center_freq_hz = clamped_center;
+                    state.target_freq_hz = clamped_target;
+                }
+
+                // Pre-load clamped center into the source so that set_direct_sampling(Off)'s
+                // LO-restore targets the clamped value rather than a stale or out-of-range one.
+                let _ = source.set_center_frequency(clamped_center as f32);
+
+                match source.set_direct_sampling(new_mode) {
                     Ok(()) => {
-                        applied_source_control.direct_sampling =
-                            current_source_control.direct_sampling;
+                        applied_source_control.direct_sampling = new_mode;
+                        last_center_freq_hz = clamped_center;
                     }
                     Err(reason) => {
                         warn!("failed to set source direct sampling: {reason}");
@@ -878,7 +903,6 @@ fn spawn_capture_thread(
     })
 }
 
-
 fn spawn_dsp_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -900,7 +924,7 @@ fn spawn_dsp_thread(
             pipeline_sample_rate_hz,
         ));
 
-	pipeline.set_filter_bandwidth_hz(startup_info.runtime.filter_bandwidth_hz);
+        pipeline.set_filter_bandwidth_hz(startup_info.runtime.filter_bandwidth_hz);
 
         if matches!(
             startup_info.runtime.demod_mode,
@@ -936,44 +960,44 @@ fn spawn_dsp_thread(
                 break;
             }
 
-	    let current = current_control(&control);
-	    
+            let current = current_control(&control);
+
             let mut changed = false;
 
-	    let confirmed_rate = confirmed_sample_rate_hz.load(Ordering::Acquire);
-	    if confirmed_rate != pipeline_sample_rate_hz as u32 {
-		pipeline_sample_rate_hz = confirmed_rate as f32;
-		let cfg = ServerConfig {
-		    demod: current.demod_mode,
-		    ..server_cfg.clone()
-		};
-		pipeline = DspPipeline::new(pipeline_cfg_for_source(
-		    &cfg,
-		    current.center_freq_hz,
-		    current.target_freq_hz,
-		    pipeline_sample_rate_hz,
-		));
-		pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
-		match current.demod_mode {
-		    DemodMode::Usb | DemodMode::Lsb => {
-			pipeline.set_sideband(current.sideband);
-			pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-		    }
-		    DemodMode::Cw => {
-			pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
-		    }
-		    _ => {}
-		}
-		pipeline.set_deemphasis_mode(current.deemphasis_mode);
-		// Drain IQ blocks that were captured at the old sample rate.
-		while iq_audio_rx.try_recv().is_ok() {}
-		changed = true;
-	    }
+            let confirmed_rate = confirmed_sample_rate_hz.load(Ordering::Acquire);
+            if confirmed_rate != pipeline_sample_rate_hz as u32 {
+                pipeline_sample_rate_hz = confirmed_rate as f32;
+                let cfg = ServerConfig {
+                    demod: current.demod_mode,
+                    ..server_cfg.clone()
+                };
+                pipeline = DspPipeline::new(pipeline_cfg_for_source(
+                    &cfg,
+                    current.center_freq_hz,
+                    current.target_freq_hz,
+                    pipeline_sample_rate_hz,
+                ));
+                pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                match current.demod_mode {
+                    DemodMode::Usb | DemodMode::Lsb => {
+                        pipeline.set_sideband(current.sideband);
+                        pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+                    }
+                    DemodMode::Cw => {
+                        pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+                    }
+                    _ => {}
+                }
+                pipeline.set_deemphasis_mode(current.deemphasis_mode);
+                // Drain IQ blocks that were captured at the old sample rate.
+                while iq_audio_rx.try_recv().is_ok() {}
+                changed = true;
+            }
 
-	    if current.source_control != applied.source_control {
-		applied.source_control = current.source_control.clone();
-		changed = true;
-	    }
+            if current.source_control != applied.source_control {
+                applied.source_control = current.source_control.clone();
+                changed = true;
+            }
 
             if current.center_freq_hz != applied.center_freq_hz {
                 pipeline.set_center_frequency(current.center_freq_hz as f32);
@@ -985,24 +1009,24 @@ fn spawn_dsp_thread(
                 changed = true;
             }
 
-	    /*
-	    info!(
-		"[worker] apply check: current={:?} applied={:?}",
-		current.deemphasis_mode,
-		applied.deemphasis_mode
-	    );
-	    */
-	    if current.deemphasis_mode != applied.deemphasis_mode {
-		/*
-		info!(
-		    "[worker] applying deemphasis change: {:?} -> {:?}",
-		    applied.deemphasis_mode,
-		    current.deemphasis_mode
-	        );
-		*/
-		pipeline.set_deemphasis_mode(current.deemphasis_mode);
-		changed = true;
-	    }
+            /*
+            info!(
+            "[worker] apply check: current={:?} applied={:?}",
+            current.deemphasis_mode,
+            applied.deemphasis_mode
+            );
+            */
+            if current.deemphasis_mode != applied.deemphasis_mode {
+                /*
+                info!(
+                    "[worker] applying deemphasis change: {:?} -> {:?}",
+                    applied.deemphasis_mode,
+                    current.deemphasis_mode
+                    );
+                */
+                pipeline.set_deemphasis_mode(current.deemphasis_mode);
+                changed = true;
+            }
 
             if current.demod_mode != applied.demod_mode {
                 let cfg = ServerConfig {
@@ -1017,27 +1041,26 @@ fn spawn_dsp_thread(
                     pipeline_sample_rate_hz,
                 ));
 
-		pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
 
-		match current.demod_mode {
-		    DemodMode::Usb | DemodMode::Lsb => {
-			pipeline.set_sideband(current.sideband);
-			pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-		    }
-		    DemodMode::Cw => {
-			pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
-		    }
-		    _ => {}
-		}
+                match current.demod_mode {
+                    DemodMode::Usb | DemodMode::Lsb => {
+                        pipeline.set_sideband(current.sideband);
+                        pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+                    }
+                    DemodMode::Cw => {
+                        pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+                    }
+                    _ => {}
+                }
 
-		// Reapply deemphasis because its effective behavior depends on demod mode.
-		pipeline.set_deemphasis_mode(current.deemphasis_mode);
+                // Reapply deemphasis because its effective behavior depends on demod mode.
+                pipeline.set_deemphasis_mode(current.deemphasis_mode);
 
-//		if changed {
-//		    applied = current.clone();
-		//		}
-		changed = true;
-
+                //		if changed {
+                //		    applied = current.clone();
+                //		}
+                changed = true;
             } else {
                 if current.sideband != applied.sideband {
                     pipeline.set_sideband(current.sideband);
@@ -1045,37 +1068,34 @@ fn spawn_dsp_thread(
                     changed = true;
                 }
 
-		match current.demod_mode {
-		    DemodMode::Usb | DemodMode::Lsb => {
-			if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
-			    pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
-			    applied.ssb_pitch_hz = current.ssb_pitch_hz;
-			    changed = true;
-			}
-		    }
-		    DemodMode::Cw => {
-			if (current.cw_pitch_hz - applied.cw_pitch_hz).abs() > f32::EPSILON {
-			    pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
-			    applied.cw_pitch_hz = current.cw_pitch_hz;
-			    changed = true;
-			}
-		    }
-		    _ => {}
-		}
+                match current.demod_mode {
+                    DemodMode::Usb | DemodMode::Lsb => {
+                        if (current.ssb_pitch_hz - applied.ssb_pitch_hz).abs() > f32::EPSILON {
+                            pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
+                            applied.ssb_pitch_hz = current.ssb_pitch_hz;
+                            changed = true;
+                        }
+                    }
+                    DemodMode::Cw => {
+                        if (current.cw_pitch_hz - applied.cw_pitch_hz).abs() > f32::EPSILON {
+                            pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
+                            applied.cw_pitch_hz = current.cw_pitch_hz;
+                            changed = true;
+                        }
+                    }
+                    _ => {}
+                }
 
-		if (current.filter_bandwidth_hz - applied.filter_bandwidth_hz).abs() > 1.0 {
-		    pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
-		    applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
-		    changed = true;
-		}
+                if (current.filter_bandwidth_hz - applied.filter_bandwidth_hz).abs() > 1.0 {
+                    pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                    applied.filter_bandwidth_hz = current.filter_bandwidth_hz;
+                    changed = true;
+                }
             }
 
             if changed {
-		applied = current.clone();
-                let runtime = build_runtime_state(
-		    &current,
-		    pipeline_sample_rate_hz,
-		);
+                applied = current.clone();
+                let runtime = build_runtime_state(&current, pipeline_sample_rate_hz);
                 let _ = status_tx.send(WorkerStatus::Running { runtime });
             }
 
@@ -1085,8 +1105,7 @@ fn spawn_dsp_thread(
 
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
                     for sample in audio_f32 {
-                        let value =
-                            (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                        let value = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
                         audio_i16.push(value);
                     }
 
@@ -1115,7 +1134,7 @@ fn normalize_initial_frequencies(
     debug!("wav_center_freq_hz = {:?}", wav_center_freq_hz);
 
     let mut initial_center_freq_hz = server_cfg.center_freq_hz;
-    
+
     if src_kind == HardwareKind::FakeTone {
         debug!("In FakeTone");
         initial_center_freq_hz = server_cfg.fake_center_freq_hz;
@@ -1139,8 +1158,5 @@ fn normalize_initial_frequencies(
         initial_center_freq_hz, initial_target_freq_hz
     );
 
-    (
-        initial_center_freq_hz as u64,
-        initial_target_freq_hz as u64,
-    )
+    (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
 }

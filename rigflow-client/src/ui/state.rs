@@ -1,12 +1,10 @@
-use std::time::Instant;
-use crate::ui::om_bands::LicenseClass;
-use rigflow_core::dsp::modes::{DemodMode, Sideband};
-use rigflow_core::radio::source_control::{
-    SourceCapabilities,
-    SourceControlState,
-};
 use crate::persistence::models::DemodPreferenceSetFile;
+use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
+use rigflow_core::radio::RadioCapabilities;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DebounceState {
@@ -27,7 +25,6 @@ pub struct UiState {
     // =====================================================================
     // RADIO STATE (Operator-facing, synchronized with server)
     // =====================================================================
-
     /// Center frequency (LO), in Hz
     pub center_freq_hz: f32,
 
@@ -55,7 +52,6 @@ pub struct UiState {
     // RADIO-DERIVED UI STATE
     // (depends on demod mode or radio state)
     // =====================================================================
-
     /// Tracks last demod mode for applying defaults (e.g. bandwidth)
     pub last_demod_mode_for_controls: Option<DemodMode>,
 
@@ -65,7 +61,6 @@ pub struct UiState {
     // =====================================================================
     // UI RUNTIME / HELPER STATE (non-persistent, non-radio)
     // =====================================================================
-
     /// Last filter bandwidth value sent to server (for debounce)
     pub filter_bw_debounce: DebounceState,
 
@@ -75,7 +70,6 @@ pub struct UiState {
     // =====================================================================
     // CONNECTION / SERVER STATE
     // =====================================================================
-
     /// Server IP address entered by the user
     pub rigflow_server_ip: String,
 
@@ -106,7 +100,6 @@ pub struct UiState {
     // =====================================================================
     // UI STATE (Rendering / Interaction)
     // =====================================================================
-
     pub runtime_error: String,
 
     pub selected_license: Option<LicenseClass>,
@@ -116,7 +109,6 @@ pub struct UiState {
     // =====================================================================
     // WATERFALL / DISPLAY
     // =====================================================================
-
     pub adaptive_waterfall_normalization: bool,
 
     // persisted manual controls
@@ -133,7 +125,6 @@ pub struct UiState {
     // =====================================================================
     // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
     // =====================================================================
-
     pub operator_id: String,
     pub known_operator_ids: Vec<String>,
 
@@ -149,13 +140,11 @@ pub struct UiState {
     // =====================================================================
     // PER-DEMOD OPERATOR PREFERENCES
     // =====================================================================
-
     pub demod_preferences: DemodPreferenceSetFile,
 
     // =====================================================================
     // BOOKMARKS
     // =====================================================================
-
     pub bookmarks: Vec<crate::persistence::BookmarkFile>,
     pub selected_bookmark_id: Option<String>,
     pub default_bookmark_id: Option<String>,
@@ -172,8 +161,8 @@ pub struct UiState {
     // =====================================================================
     pub source_control: SourceControlState,
     pub source_capabilities: SourceCapabilities,
+    pub radio_capabilities: RadioCapabilities,
 }
-
 
 impl Default for UiState {
     fn default() -> Self {
@@ -181,37 +170,33 @@ impl Default for UiState {
             // =================================================================
             // RADIO STATE
             // =================================================================
-
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,
 
-	    demod_preferences: DemodPreferenceSetFile::default(),
+            demod_preferences: DemodPreferenceSetFile::default(),
             pitch_hz: 0.0,
             filter_bandwidth_hz: 3000.0,
-	    deemphasis_mode: DeemphasisMode::Off,
+            deemphasis_mode: DeemphasisMode::Off,
             input_sample_rate_hz: 0.0,
 
             // =================================================================
             // RADIO-DERIVED UI STATE
             // =================================================================
-
             last_demod_mode_for_controls: None,
-	    pending_apply_mode_controls: false,
+            pending_apply_mode_controls: false,
 
             // =================================================================
             // UI RUNTIME / HELPER STATE
             // =================================================================
+            filter_bw_debounce: DebounceState::new(0.0),
 
-	    filter_bw_debounce: DebounceState::new(0.0),
-	    
-	    pitch_debounce: DebounceState::new(0.0),
+            pitch_debounce: DebounceState::new(0.0),
 
             // =================================================================
             // CONNECTION / SERVER STATE
             // =================================================================
-
             rigflow_server_ip: "192.168.0.225".to_string(),
             rigflow_server_ws_port: 9000,
             rigflow_server_udp_port: 9001,
@@ -225,10 +210,9 @@ impl Default for UiState {
             available_radios: Vec::new(),
             selected_radio_id: None,
 
-	    // =================================================================
+            // =================================================================
             // UI STATE
             // =================================================================
-
             runtime_error: String::new(),
             selected_license: None,
             spectrum_zoom_x: 1.0,
@@ -236,22 +220,20 @@ impl Default for UiState {
             // =================================================================
             // WATERFALL / DISPLAY
             // =================================================================
-
-	    manual_waterfall_top_db: -35.0,
-	    manual_waterfall_range_db: -105.0,
+            manual_waterfall_top_db: -35.0,
+            manual_waterfall_range_db: -105.0,
 
             adaptive_waterfall_normalization: true,
             adaptive_top_db_estimate: -35.0,
             adaptive_floor_db_estimate: -105.0,
-	    adaptive_range_db_estimate: -70.0,
+            adaptive_range_db_estimate: -70.0,
 
             display_zoom: 1.0,
 
             // =================================================================
             // OPERATOR / PERSISTENCE
             // =================================================================
-
-	    operator_id: String::new(),
+            operator_id: String::new(),
             known_operator_ids: Vec::new(),
 
             show_add_operator_dialog: false,
@@ -266,34 +248,33 @@ impl Default for UiState {
             // =================================================================
             // BOOKMARKS
             // =================================================================
-
             bookmarks: Vec::new(),
             selected_bookmark_id: None,
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
 
-	    show_add_bookmark_dialog: false,
+            show_add_bookmark_dialog: false,
             pending_bookmark_name: String::new(),
             pending_bookmark_notes: String::new(),
             bookmark_status: String::new(),
             pending_apply_default_bookmark: false,
 
-	    // =====================================================================
-	    // SOURCE
-	    // =====================================================================
-	    source_control: SourceControlState::default(),
-	    source_capabilities: SourceCapabilities::none(),
-	    
+            // =====================================================================
+            // SOURCE
+            // =====================================================================
+            source_control: SourceControlState::default(),
+            source_capabilities: SourceCapabilities::none(),
+            radio_capabilities: RadioCapabilities::default(),
         };
 
-	let prefs = state.demod_preferences.get(state.demod_mode);
+        let prefs = state.demod_preferences.get(state.demod_mode);
 
-	state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
-	state.pitch_hz = prefs.pitch_hz;
+        state.filter_bandwidth_hz = prefs.filter_bandwidth_hz;
+        state.pitch_hz = prefs.pitch_hz;
 
-	state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
-	state.pitch_debounce = DebounceState::new(state.pitch_hz);
+        state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
+        state.pitch_debounce = DebounceState::new(state.pitch_hz);
 
-	state
+        state
     }
 }

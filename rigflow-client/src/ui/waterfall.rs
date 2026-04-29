@@ -35,7 +35,7 @@ pub fn draw_row_db(
     let visible_len = end - start;
 
     for x in 0..wf_width {
-	let src_idx = start + (x * visible_len / wf_width).min(visible_len - 1);
+        let src_idx = start + (x * visible_len / wf_width).min(visible_len - 1);
         let db = row_db[src_idx];
         let value = db_to_u8(db, top_db, range_db);
         buffer[x] = color_map(value);

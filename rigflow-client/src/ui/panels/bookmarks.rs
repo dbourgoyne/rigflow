@@ -29,7 +29,29 @@ impl RigflowApp {
                         label.push_str("  [default]");
                     }
 
-                    let response = ui.selectable_label(selected, label);
+                    let invalid = snapshot.radio_acquired
+                        && !crate::ui::freq_limits::is_freq_valid(bookmark.frequency_hz, &snapshot);
+
+                    let text = if invalid {
+                        egui::RichText::new(&label).color(egui::Color32::from_rgb(100, 100, 100))
+                    } else {
+                        egui::RichText::new(&label)
+                    };
+
+                    let response = ui.selectable_label(selected, text);
+
+                    let response = if invalid {
+                        if let Some(msg) = crate::ui::freq_limits::bookmark_rejection_message(
+                            bookmark.frequency_hz,
+                            &snapshot,
+                        ) {
+                            response.on_hover_text(msg)
+                        } else {
+                            response
+                        }
+                    } else {
+                        response
+                    };
 
                     if response.double_clicked() {
                         if let Ok(mut state) = self.state.lock() {

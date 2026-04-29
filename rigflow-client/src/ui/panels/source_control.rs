@@ -47,27 +47,34 @@ impl RigflowApp {
                         // -----------------------------
                         // Gain mode: Auto / Manual
                         // -----------------------------
+                        let ds_active =
+                            state.source_control.direct_sampling != DirectSamplingMode::Off;
+
                         if state.source_capabilities.supports_gain_mode {
-                            ui.horizontal(|ui| {
-                                ui.label("Gain Mode");
+                            ui.add_enabled_ui(!ds_active, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Gain Mode");
 
-                                let mut gain_mode = state.source_control.gain_mode;
+                                    let mut gain_mode = state.source_control.gain_mode;
 
-                                let auto_changed = ui
-                                    .radio_value(&mut gain_mode, GainMode::Auto, "Auto")
-                                    .changed();
+                                    let auto_changed = ui
+                                        .radio_value(&mut gain_mode, GainMode::Auto, "Auto")
+                                        .changed();
 
-                                let manual_changed = ui
-                                    .radio_value(&mut gain_mode, GainMode::Manual, "Manual")
-                                    .changed();
+                                    let manual_changed = ui
+                                        .radio_value(&mut gain_mode, GainMode::Manual, "Manual")
+                                        .changed();
 
-                                if auto_changed || manual_changed {
-                                    state.source_control.gain_mode = gain_mode;
+                                    if auto_changed || manual_changed {
+                                        state.source_control.gain_mode = gain_mode;
 
-                                    self.send_radio_msg(ClientRadioMessage::SetSourceGainMode {
-                                        mode: gain_mode,
-                                    });
-                                }
+                                        self.send_radio_msg(
+                                            ClientRadioMessage::SetSourceGainMode {
+                                                mode: gain_mode,
+                                            },
+                                        );
+                                    }
+                                });
                             });
                         }
 
@@ -75,7 +82,8 @@ impl RigflowApp {
                         // Gain value
                         // -----------------------------
                         if state.source_capabilities.supports_gain {
-                            let manual_gain = state.source_control.gain_mode == GainMode::Manual;
+                            let manual_gain =
+                                !ds_active && state.source_control.gain_mode == GainMode::Manual;
 
                             ui.add_enabled_ui(manual_gain, |ui| {
                                 let gains = &state.source_capabilities.gain_values_db;
@@ -122,6 +130,13 @@ impl RigflowApp {
                                     ui.label("Gain values unavailable");
                                 }
                             });
+                        }
+
+                        if ds_active
+                            && (state.source_capabilities.supports_gain_mode
+                                || state.source_capabilities.supports_gain)
+                        {
+                            ui.label("Gain is not applicable in direct sampling mode.");
                         }
 
                         // -----------------------------

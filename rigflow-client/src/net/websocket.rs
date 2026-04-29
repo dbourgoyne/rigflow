@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use log::{debug, error, info};
@@ -10,17 +10,14 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use tokio_tungstenite::{
-    tungstenite::Message,
-    MaybeTlsStream, WebSocketStream,
-};
+use tokio_tungstenite::{tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 use rigflow_protocol::radio_control::{ClientRadioMessage, ServerRadioMessage};
 use rigflow_protocol::ServerMessage;
 
-use crate::ui::state::UiState;
 use crate::client_runtime::MediaCommand;
 use crate::net::control::ControlCommand;
+use crate::ui::state::UiState;
 
 // --- Type aliases ----------------------------------------------------------
 
@@ -210,16 +207,16 @@ pub async fn websocket_control_task(
                         state.available_radios.clear();
                     }
 
-		    Some(ControlCommand::RadioMessage(cmd)) => {
-			info!("WEBSOCKET got RadioMessage: {:?}", cmd);
+            Some(ControlCommand::RadioMessage(cmd)) => {
+            info!("WEBSOCKET got RadioMessage: {:?}", cmd);
 
-			if let Some(write) = write_opt.as_mut() {
-			    let text = serde_json::to_string(&cmd)?;
-			    info!("WEBSOCKET sending text: {}", text);
+            if let Some(write) = write_opt.as_mut() {
+                let text = serde_json::to_string(&cmd)?;
+                info!("WEBSOCKET sending text: {}", text);
 
-			    write.send(Message::Text(text.into())).await?;
-			}
-		    }
+                write.send(Message::Text(text.into())).await?;
+            }
+            }
 
                     None => break,
                 }
@@ -316,48 +313,55 @@ pub fn apply_radio_server_message(
 
     match msg {
         ServerRadioMessage::RadiosListed { radios } => {
-	    state.available_radios = radios.clone();
+            state.available_radios = radios.clone();
 
-	    if let Some(selected_id) = state.selected_radio_id.as_deref() {
-		if let Some(radio) = radios.iter().find(|r| r.id.0 == selected_id) {
-		    state.source_capabilities = radio.source_capabilities.clone();
-		}
-	    }
+            let caps = state
+                .selected_radio_id
+                .as_deref()
+                .and_then(|selected_id| radios.iter().find(|r| r.id.0 == selected_id))
+                .map(|r| (r.source_capabilities.clone(), r.radio_capabilities.clone()));
+
+            if let Some((sc, rc)) = caps {
+                state.source_capabilities = sc;
+                state.radio_capabilities = rc;
+            }
 
             if radios.is_empty() {
                 state.server_status = "connected, no radios available".to_string();
             } else {
-                state.server_status =
-                    format!("connected, {} radios available", radios.len());
+                state.server_status = format!("connected, {} radios available", radios.len());
             }
         }
 
-	ServerRadioMessage::RadioAcquired { radio_id, .. } => {
-	    state.radio_acquired = true;
-	    state.selected_radio_id = Some(radio_id.0.clone());
-	    state.server_status = format!("radio acquired: {}", radio_id.0);
+        ServerRadioMessage::RadioAcquired { radio_id, .. } => {
+            state.radio_acquired = true;
+            state.selected_radio_id = Some(radio_id.0.clone());
+            state.server_status = format!("radio acquired: {}", radio_id.0);
 
-	    if let Some(radio) = state
-		.available_radios
-		.iter()
-		.find(|radio| radio.id == radio_id)
-	    {
-		state.source_capabilities = radio.source_capabilities.clone();
-	    }
+            let caps = state
+                .available_radios
+                .iter()
+                .find(|radio| radio.id == radio_id)
+                .map(|r| (r.source_capabilities.clone(), r.radio_capabilities.clone()));
 
-	    if state.auto_apply_default_bookmark_on_acquire
-		&& state.default_bookmark_id.is_some()
-		&& !state.bookmarks.is_empty()
-	    {
-		state.pending_apply_default_bookmark = true;
-	    }
+            if let Some((sc, rc)) = caps {
+                state.source_capabilities = sc;
+                state.radio_capabilities = rc;
+            }
 
-	    // Reapply current mode controls on every acquire.
-	    state.pending_apply_mode_controls = true;
+            if state.auto_apply_default_bookmark_on_acquire
+                && state.default_bookmark_id.is_some()
+                && !state.bookmarks.is_empty()
+            {
+                state.pending_apply_default_bookmark = true;
+            }
 
-	    // Force client audio pipeline to reset on radio switch/acquire.
-	    audio_session_generation.fetch_add(1, Ordering::Relaxed);
-	}
+            // Reapply current mode controls on every acquire.
+            state.pending_apply_mode_controls = true;
+
+            // Force client audio pipeline to reset on radio switch/acquire.
+            audio_session_generation.fetch_add(1, Ordering::Relaxed);
+        }
 
         ServerRadioMessage::RadioReleased { .. } => {
             state.radio_acquired = false;
@@ -371,65 +375,64 @@ pub fn apply_radio_server_message(
             // No UI update currently required.
         }
 
-	ServerRadioMessage::RuntimeSnapshot {
-	    radio_id: _,
-	    center_freq_hz,
-	    target_freq_hz,
-	    input_sample_rate_hz,
-	    demod_mode,
-	    sideband,
-	    source_control,
-	    ..
-	} => {
-	    state.center_freq_hz = center_freq_hz as f32;
-	    state.target_freq_hz = target_freq_hz as f32;
-	    state.input_sample_rate_hz = input_sample_rate_hz;
-	    state.demod_mode = demod_mode;
-	    state.sideband = sideband;
-	    state.source_control = source_control;
+        ServerRadioMessage::RuntimeSnapshot {
+            radio_id: _,
+            center_freq_hz,
+            target_freq_hz,
+            input_sample_rate_hz,
+            demod_mode,
+            sideband,
+            source_control,
+            ..
+        } => {
+            state.center_freq_hz = center_freq_hz as f32;
+            state.target_freq_hz = target_freq_hz as f32;
+            state.input_sample_rate_hz = input_sample_rate_hz;
+            state.demod_mode = demod_mode;
+            state.sideband = sideband;
+            state.source_control = source_control;
 
-	    // Do NOT overwrite persisted per-demod prefs here.
-	    state.pending_apply_mode_controls = true;
-	}
+            // Do NOT overwrite persisted per-demod prefs here.
+            state.pending_apply_mode_controls = true;
+        }
 
-	ServerRadioMessage::RuntimeChanged {
-	    radio_id: _,
-	    center_freq_hz,
-	    target_freq_hz,
-	    demod_mode,
-	    sideband,
-	    source_control,
-	    ..
-	} => {
-	    if let Some(value) = center_freq_hz {
-		state.center_freq_hz = value as f32;
-	    }
+        ServerRadioMessage::RuntimeChanged {
+            radio_id: _,
+            center_freq_hz,
+            target_freq_hz,
+            demod_mode,
+            sideband,
+            source_control,
+            ..
+        } => {
+            if let Some(value) = center_freq_hz {
+                state.center_freq_hz = value as f32;
+            }
 
-	    if let Some(value) = target_freq_hz {
-		state.target_freq_hz = value as f32;
-	    }
+            if let Some(value) = target_freq_hz {
+                state.target_freq_hz = value as f32;
+            }
 
-	    if let Some(value) = demod_mode {
-		let mode_changed = state.demod_mode != value;
-		state.demod_mode = value;
+            if let Some(value) = demod_mode {
+                let mode_changed = state.demod_mode != value;
+                state.demod_mode = value;
 
-		if mode_changed {
-		    state.pending_apply_mode_controls = true;
-		}
-	    }
+                if mode_changed {
+                    state.pending_apply_mode_controls = true;
+                }
+            }
 
-	    if let Some(ref value) = sideband {
-		state.sideband = *value;
-	    }
+            if let Some(ref value) = sideband {
+                state.sideband = *value;
+            }
 
-	    if let Some(value) = source_control {
-		if value.sample_rate_hz != state.source_control.sample_rate_hz {
-		    audio_session_generation.fetch_add(1, Ordering::Relaxed);
-		}
-		state.source_control = value;
-	    }
-
-	}
+            if let Some(value) = source_control {
+                if value.sample_rate_hz != state.source_control.sample_rate_hz {
+                    audio_session_generation.fetch_add(1, Ordering::Relaxed);
+                }
+                state.source_control = value;
+            }
+        }
 
         ServerRadioMessage::RadioError { message, .. } => {
             state.runtime_error = format!("radio error: {}", message);
@@ -438,7 +441,6 @@ pub fn apply_radio_server_message(
 
     None
 }
-
 
 /// Build the UDP endpoint string that the client should advertise to the server.
 ///
