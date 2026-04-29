@@ -423,6 +423,9 @@ pub fn apply_radio_server_message(
 	    }
 
 	    if let Some(value) = source_control {
+		if value.sample_rate_hz != state.source_control.sample_rate_hz {
+		    audio_session_generation.fetch_add(1, Ordering::Relaxed);
+		}
 		state.source_control = value;
 	    }
 
