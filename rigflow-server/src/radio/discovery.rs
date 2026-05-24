@@ -6,6 +6,7 @@ use rigflow_core::radio::source_control::{DirectSamplingMode, SourceCapabilities
 use rigflow_core::radio::{HardwareKind, RadioCapabilities, RadioDescriptor, RadioId};
 
 use crate::config::ServerConfig;
+use crate::radio::hl2_discovery;
 
 /// Discover all radios available to the server.
 ///
@@ -13,7 +14,7 @@ use crate::config::ServerConfig;
 /// - RTL-SDR devices
 /// - WAV file sources (from configured directory)
 /// - Fake tone generator
-/// - Hermes Lite 2 devices (stub — real UDP discovery comes in step 3)
+/// - Hermes Lite 2 devices (Protocol 1 UDP broadcast)
 pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
 
@@ -142,19 +143,21 @@ fn build_fake_tone_radio() -> RadioDescriptor {
 // ============================
 //
 
-/// Stub: returns a single placeholder HL2 radio.
-///
-/// Step 3 will replace this with real UDP broadcast discovery.
 fn discover_hl2_radios() -> Vec<RadioDescriptor> {
-    vec![RadioDescriptor {
-        id: RadioId("hl2:0".to_string()),
-        display_name: "Hermes Lite 2 #0".to_string(),
-        hardware_kind: HardwareKind::HermesLite2,
-        index: 0,
-        serial: None,
-        radio_capabilities: hl2_radio_capabilities(),
-        source_capabilities: SourceCapabilities::none(),
-    }]
+    hl2_discovery::discover_hl2_devices()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, dev)| RadioDescriptor {
+            id: RadioId(format!("hl2:{}", dev.mac_hex())),
+            display_name: format!("Hermes Lite 2 ({})", dev.addr.ip()),
+            hardware_kind: HardwareKind::HermesLite2,
+            index: idx as u32,
+            // serial carries the IP:port so the worker can connect in step 4.
+            serial: Some(dev.addr.to_string()),
+            radio_capabilities: hl2_radio_capabilities(),
+            source_capabilities: SourceCapabilities::none(),
+        })
+        .collect()
 }
 
 fn hl2_radio_capabilities() -> RadioCapabilities {

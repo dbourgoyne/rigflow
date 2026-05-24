@@ -154,6 +154,8 @@ fn source_kind_for_descriptor(descriptor: &RadioDescriptor) -> Result<SourceKind
         Ok(SourceKind::RtlSdr)
     } else if descriptor.id.0.starts_with("wav:") {
         Ok(SourceKind::Wav)
+    } else if descriptor.id.0.starts_with("hl2:") {
+        Ok(SourceKind::HermesLite2)
     } else {
         Err(format!("unsupported radio id '{}'", descriptor.id.0))
     }
@@ -188,6 +190,14 @@ fn create_worker_source(
             .clone();
 
         SourceConfig::WavFile { path: wav_path }
+    } else if descriptor.id.0.starts_with("hl2:") {
+        // serial holds the "ip:port" string stored during discovery.
+        // Step 4 will open a real UDP connection here; for now the stub
+        // source returns silence so the worker starts cleanly.
+        SourceConfig::HermesLite2 {
+            sample_rate_hz: server_cfg.hl2_sample_rate_hz as f32,
+            center_freq_hz: initial_center_freq_hz as f32,
+        }
     } else {
         return Err(format!("source for {} not implemented", descriptor.id.0));
     };
