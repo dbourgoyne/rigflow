@@ -7,6 +7,7 @@ use rigflow_core::radio::{HardwareKind, RadioCapabilities, RadioDescriptor, Radi
 
 use crate::config::ServerConfig;
 use crate::radio::hl2_discovery;
+use crate::source::hermeslite2::hl2_source_capabilities;
 
 /// Discover all radios available to the server.
 ///
@@ -155,7 +156,7 @@ fn discover_hl2_radios() -> Vec<RadioDescriptor> {
             // serial carries the IP:port so the worker can connect in step 4.
             serial: Some(dev.addr.to_string()),
             radio_capabilities: hl2_radio_capabilities(),
-            source_capabilities: SourceCapabilities::none(),
+            source_capabilities: hl2_source_capabilities(),
         })
         .collect()
 }

@@ -23,6 +23,7 @@ pub enum SourceConfig {
         block_complex_samples: usize,
     },
     HermesLite2 {
+        addr: String,
         sample_rate_hz: f32,
         center_freq_hz: f32,
     },
@@ -67,10 +68,11 @@ pub fn create_source(config: SourceConfig) -> Result<Box<dyn IqSource>, String> 
         }
 
         SourceConfig::HermesLite2 {
+            addr,
             sample_rate_hz,
             center_freq_hz,
         } => {
-            let source = HermesLite2Source::new(sample_rate_hz, center_freq_hz);
+            let source = HermesLite2Source::open(&addr, sample_rate_hz, center_freq_hz)?;
             Ok(Box::new(source))
         }
     }

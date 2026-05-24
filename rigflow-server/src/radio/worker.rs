@@ -191,10 +191,13 @@ fn create_worker_source(
 
         SourceConfig::WavFile { path: wav_path }
     } else if descriptor.id.0.starts_with("hl2:") {
-        // serial holds the "ip:port" string stored during discovery.
-        // Step 4 will open a real UDP connection here; for now the stub
-        // source returns silence so the worker starts cleanly.
+        let addr = descriptor
+            .serial
+            .as_ref()
+            .ok_or_else(|| "HL2 radio missing device address in serial field".to_string())?
+            .clone();
         SourceConfig::HermesLite2 {
+            addr,
             sample_rate_hz: server_cfg.hl2_sample_rate_hz as f32,
             center_freq_hz: initial_center_freq_hz as f32,
         }

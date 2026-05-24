@@ -239,6 +239,7 @@ pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig
             block_complex_samples: block_size,
         },
         SourceKind::HermesLite2 => SourceConfig::HermesLite2 {
+            addr: String::new(),
             sample_rate_hz: cfg.hl2_sample_rate_hz as f32,
             center_freq_hz: cfg.center_freq_hz,
         },
