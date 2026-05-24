@@ -57,4 +57,8 @@ pub trait IqSource {
     fn set_direct_sampling(&mut self, _mode: DirectSamplingMode) -> Result<(), String> {
         Ok(())
     }
+
+    /// Send a periodic keepalive to hardware that would otherwise time out.
+    /// Default is a no-op; override for sources that require it (e.g. HL2).
+    fn keepalive(&mut self) {}
 }

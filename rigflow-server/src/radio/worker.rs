@@ -32,8 +32,8 @@ use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 
 /// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
-/// The HL2 stops streaming after ~60 s of host silence; 30 s gives comfortable margin.
-const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
+const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -871,9 +871,7 @@ fn spawn_capture_thread(
                 last_center_freq_hz = control_snapshot.center_freq_hz;
                 last_cc_sent = Instant::now();
             } else if needs_cc_keepalive && last_cc_sent.elapsed() >= HL2_CC_KEEPALIVE_INTERVAL {
-                if let Err(e) = source.set_center_frequency(last_center_freq_hz as f32) {
-                    warn!("HL2: keepalive C&C failed: {e}");
-                }
+                source.keepalive();
                 last_cc_sent = Instant::now();
             }
 

@@ -159,8 +159,14 @@ impl IqSource for HermesLite2Source {
 
     fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
         self.center_freq_hz = center_freq_hz;
-        info!("HL2: tuning NCO to {} Hz", center_freq_hz as u32);
+        info!("HL2: NCO → {} Hz", center_freq_hz as u32);
         self.send_cc()
+    }
+
+    fn keepalive(&mut self) {
+        if let Err(e) = self.send_cc() {
+            warn!("HL2: keepalive C&C failed: {e}");
+        }
     }
 
     fn set_sample_rate(&mut self, sample_rate_hz: u32) -> Result<(), String> {
