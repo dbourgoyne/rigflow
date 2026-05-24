@@ -159,6 +159,7 @@ impl IqSource for HermesLite2Source {
 
     fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
         self.center_freq_hz = center_freq_hz;
+        info!("HL2: tuning NCO to {} Hz", center_freq_hz as u32);
         self.send_cc()
     }
 
@@ -238,6 +239,8 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
     SourceCapabilities {
         supports_sample_rate: true,
         sample_rates_hz: vec![48_000, 96_000, 192_000, 384_000],
+        tuner_freq_hz_min: 10_000,
+        tuner_freq_hz_max: 30_000_000,
         ..SourceCapabilities::none()
     }
 }

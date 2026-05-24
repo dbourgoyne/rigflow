@@ -31,6 +31,10 @@ use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 
+/// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
+/// The HL2 stops streaming after ~60 s of host silence; 30 s gives comfortable margin.
+const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 struct SharedControlState {
     center_freq_hz: u64,
@@ -337,12 +341,18 @@ fn run_iq_worker_threads(
     // thread. Using AtomicU32 avoids a mutex on the hot path.
     let confirmed_sample_rate_hz = Arc::new(AtomicU32::new(0));
 
+    // HL2 has a ~48 kHz passband — center and target must stay equal so the
+    // hardware NCO tracks every tune command.  Sending SetTargetFrequency also
+    // drives the C&C packet that resets the HL2 idle-stream timer.
+    let center_tracks_target = matches!(source_kind, SourceKind::HermesLite2);
+
     let cmd_thread = spawn_command_thread(
         cmd_rx,
         control.clone(),
         stop_flag.clone(),
         stop_reason.clone(),
         fatal_tx.clone(),
+        center_tracks_target,
     );
 
     let capture_thread = spawn_capture_thread(
@@ -359,6 +369,7 @@ fn run_iq_worker_threads(
         block_size,
         initial_center_freq_hz,
         confirmed_sample_rate_hz.clone(),
+        center_tracks_target,
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -467,6 +478,7 @@ fn spawn_command_thread(
     stop_flag: Arc<AtomicBool>,
     stop_reason: Arc<Mutex<StopReason>>,
     fatal_tx: std_mpsc::Sender<WorkerExit>,
+    center_tracks_target: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop_requested(&stop_flag) {
@@ -475,6 +487,9 @@ fn spawn_command_thread(
                     WorkerCommand::SetTargetFrequency { hz } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.target_freq_hz = hz;
+                            if center_tracks_target {
+                                control_state.center_freq_hz = hz;
+                            }
                         }
                     }
                     WorkerCommand::SetCenterFrequency { hz } => {
@@ -671,6 +686,7 @@ fn spawn_capture_thread(
     block_size: usize,
     initial_center_freq_hz: u64,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
+    needs_cc_keepalive: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut source = match create_worker_source(
@@ -719,6 +735,7 @@ fn spawn_capture_thread(
         let mut next_source_tick = Instant::now();
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
+        let mut last_cc_sent = Instant::now();
 
         debug!(
             "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
@@ -858,6 +875,12 @@ fn spawn_capture_thread(
                 }
 
                 last_center_freq_hz = control_snapshot.center_freq_hz;
+                last_cc_sent = Instant::now();
+            } else if needs_cc_keepalive && last_cc_sent.elapsed() >= HL2_CC_KEEPALIVE_INTERVAL {
+                if let Err(e) = source.set_center_frequency(last_center_freq_hz as f32) {
+                    warn!("HL2: keepalive C&C failed: {e}");
+                }
+                last_cc_sent = Instant::now();
             }
 
             if !realtime {
