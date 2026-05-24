@@ -68,12 +68,13 @@ impl ClientStatsLogger {
             0.0
         };
 
-        let conceal_delta =
-            jb.packets_missing_concealed.saturating_sub(self.last_jb_concealed);
-        let jb_late_delta =
-            jb.packets_dropped_late.saturating_sub(self.last_jb_late);
-        let jb_overflow_delta =
-            jb.packets_dropped_overflow.saturating_sub(self.last_jb_overflow);
+        let conceal_delta = jb
+            .packets_missing_concealed
+            .saturating_sub(self.last_jb_concealed);
+        let jb_late_delta = jb.packets_dropped_late.saturating_sub(self.last_jb_late);
+        let jb_overflow_delta = jb
+            .packets_dropped_overflow
+            .saturating_sub(self.last_jb_overflow);
         let jb_invalid_delta = jb
             .packets_dropped_invalid_size
             .saturating_sub(self.last_jb_invalid);

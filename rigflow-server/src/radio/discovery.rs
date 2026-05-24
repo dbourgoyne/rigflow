@@ -1,10 +1,9 @@
+use log::{error, info};
 use std::fs;
 use std::path::{Path, PathBuf};
-use log::{error,info};
 
-use rigflow_core::radio::{
-    HardwareKind, RadioCapabilities, RadioDescriptor, RadioId,
-};
+use rigflow_core::radio::source_control::{DirectSamplingMode, SourceCapabilities};
+use rigflow_core::radio::{HardwareKind, RadioCapabilities, RadioDescriptor, RadioId};
 
 use crate::config::ServerConfig;
 
@@ -42,7 +41,8 @@ fn discover_rtl_radios() -> Vec<RadioDescriptor> {
                     hardware_kind: HardwareKind::RtlSdr,
                     index: idx as u32,
                     serial: None,
-                    capabilities: default_radio_capabilities(),
+                    radio_capabilities: default_radio_capabilities(),
+                    source_capabilities: rtl_source_capabilities(),
                 });
             }
         }
@@ -100,7 +100,8 @@ fn discover_wav_radios(dir: &Path) -> Vec<RadioDescriptor> {
                 hardware_kind: HardwareKind::WavFile,
                 index: idx as u32,
                 serial: Some(path.display().to_string()),
-                capabilities: default_radio_capabilities(),
+                radio_capabilities: default_radio_capabilities(),
+                source_capabilities: SourceCapabilities::none(),
             }
         })
         .collect()
@@ -128,7 +129,8 @@ fn build_fake_tone_radio() -> RadioDescriptor {
         hardware_kind: HardwareKind::FakeTone,
         index: 0,
         serial: None,
-        capabilities: default_radio_capabilities(),
+        radio_capabilities: default_radio_capabilities(),
+        source_capabilities: SourceCapabilities::none(),
     }
 }
 
@@ -145,10 +147,39 @@ fn default_radio_capabilities() -> RadioCapabilities {
         max_sample_rate_hz: 2_400_000,
         supports_wfm: true,
         supports_nfm: true,
-	supports_am: true,
-	supports_cw: true,
+        supports_am: true,
+        supports_cw: true,
         supports_usb: true,
         supports_lsb: true,
+    }
+}
+
+fn rtl_source_capabilities() -> SourceCapabilities {
+    SourceCapabilities {
+        supports_sample_rate: true,
+        sample_rates_hz: vec![1_024_000, 1_536_000, 2_048_000, 2_400_000],
+
+        supports_gain_mode: true,
+        supports_gain: true,
+        gain_values_db: vec![
+            0.0, 0.9, 1.4, 2.7, 3.7, 7.7, 8.7, 12.5, 14.4, 15.7, 16.6, 19.7, 20.7, 22.9, 25.4,
+            28.0, 29.7, 32.8, 33.8, 36.4, 37.2, 38.6, 40.2, 42.1, 43.4, 43.9, 44.5, 48.0, 49.6,
+        ],
+
+        supports_ppm_correction: true,
+        ppm_min: -100,
+        ppm_max: 100,
+
+        supports_direct_sampling: true,
+        direct_sampling_modes: vec![
+            DirectSamplingMode::Off,
+            DirectSamplingMode::I,
+            DirectSamplingMode::Q,
+        ],
+        direct_sampling_freq_hz_max: 30_000_000,
+
+        tuner_freq_hz_min: 24_000_000,
+        tuner_freq_hz_max: 1_766_000_000,
     }
 }
 
@@ -164,10 +195,7 @@ pub fn debug_print_discovered_radios(radios: &[RadioDescriptor]) {
     for radio in radios {
         info!(
             "  id={} kind={:?} name='{}' serial={:?}",
-            radio.id.0,
-            radio.hardware_kind,
-            radio.display_name,
-            radio.serial
+            radio.id.0, radio.hardware_kind, radio.display_name, radio.serial
         );
     }
 }

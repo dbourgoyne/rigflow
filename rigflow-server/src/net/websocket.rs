@@ -431,6 +431,87 @@ async fn handle_radio_message(
 		);
 	    }
 	}
+
+	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceSampleRate { sample_rate_hz },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_sample_rate_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourceGainMode { mode } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceGainMode { mode },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_gain_mode_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourceGain { gain_db } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceGain { gain_db },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_gain_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourcePpmCorrection { ppm } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourcePpmCorrection { ppm },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_ppm_correction_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSourceDirectSampling { mode } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceDirectSampling { mode },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_direct_sampling_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+	
     }
 }
 
@@ -514,17 +595,22 @@ fn runtime_changed_from_runtime(
 
     let deemphasis_mode =
         (current.deemphasis_mode != previous.deemphasis_mode)
-            .then_some(current.deemphasis_mode);
+        .then_some(current.deemphasis_mode);
+
+    let source_control =
+    (current.source_control != previous.source_control)
+        .then_some(current.source_control.clone());
 
     let has_change =
         center_freq_hz.is_some()
-            || target_freq_hz.is_some()
-            || demod_mode.is_some()
-            || sideband.is_some()
-            || ssb_pitch_hz.is_some()
-            || cw_pitch_hz.is_some()
-            || filter_bandwidth_hz.is_some()
-            || deemphasis_mode.is_some();
+        || target_freq_hz.is_some()
+        || demod_mode.is_some()
+        || sideband.is_some()
+        || ssb_pitch_hz.is_some()
+        || cw_pitch_hz.is_some()
+        || filter_bandwidth_hz.is_some()
+        || deemphasis_mode.is_some()
+	|| source_control.is_some();
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
@@ -536,6 +622,7 @@ fn runtime_changed_from_runtime(
         cw_pitch_hz,
         filter_bandwidth_hz,
         deemphasis_mode,
+	source_control,
     })
 }
 
@@ -560,6 +647,7 @@ fn runtime_snapshot_from_status(
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
 	    deemphasis_mode: runtime.deemphasis_mode,
+	    source_control: runtime.source_control.clone(),
         }),
         _ => None,
     }
@@ -605,6 +693,7 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         cw_pitch_hz,
         filter_bandwidth_hz,
 	deemphasis_mode,
+	source_control: _,
     } = msg
     {
         debug!(
@@ -639,10 +728,11 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         cw_pitch_hz,
         filter_bandwidth_hz,
 	deemphasis_mode,
+	source_control,
     } = msg
     {
         info!(
-            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?} deemphasis_mode={:?}",
+            "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?} deemphasis_mode={:?} source_control={:?}",
             radio_id.0,
             center_freq_hz,
             target_freq_hz,
@@ -652,6 +742,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
             cw_pitch_hz,
             filter_bandwidth_hz,
 	    deemphasis_mode,
+	    source_control,
         );
     }
 }

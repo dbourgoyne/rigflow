@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use rigflow_core::{
-    radio::{HardwareKind, LeaseId, RadioCapabilities, RadioId},
+    radio::{
+	HardwareKind,
+	LeaseId,
+	RadioCapabilities,
+	RadioId,
+	source_control::{
+            DirectSamplingMode,
+            GainMode,
+            SourceCapabilities,
+            SourceControlState,
+        },
+    },
     dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
 
@@ -67,6 +78,26 @@ pub enum ClientRadioMessage {
 
     SetDeemphasisMode {
     mode: DeemphasisMode,
+    },
+
+    SetSourceSampleRate {
+	sample_rate_hz: u32,
+    },
+
+    SetSourceGainMode {
+	mode: GainMode,
+    },
+
+    SetSourceGain {
+	gain_db: f32,
+    },
+
+    SetSourcePpmCorrection {
+	ppm: i32,
+    },
+
+    SetSourceDirectSampling {
+	mode: DirectSamplingMode,
     },
     
 }
@@ -137,6 +168,8 @@ pub enum ServerRadioMessage {
 	cw_pitch_hz: f32,
 	filter_bandwidth_hz: f32,
 	deemphasis_mode: DeemphasisMode,
+
+	source_control: SourceControlState,
     },
 
     /// Incremental runtime update.
@@ -155,6 +188,8 @@ pub enum ServerRadioMessage {
 	cw_pitch_hz: Option<f32>,
 	filter_bandwidth_hz: Option<f32>,
 	deemphasis_mode: Option<DeemphasisMode>,
+
+	source_control: Option<SourceControlState>
     },
 
     /// Error message related to radio control or streaming.
@@ -188,7 +223,10 @@ pub struct RadioInfo {
     pub serial: Option<String>,
 
     /// Static capabilities
-    pub capabilities: RadioCapabilities,
+    pub radio_capabilities: RadioCapabilities,
+
+    /// Source capabilities
+    pub source_capabilities: SourceCapabilities,
 
     /// Current availability state
     pub state: RadioAvailability,

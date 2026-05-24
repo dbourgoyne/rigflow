@@ -59,8 +59,7 @@ pub fn update_spectrum_db(spectrum: &mut Vec<f32>, row_db: &[f32]) {
     }
 
     for (dst, &src) in spectrum.iter_mut().zip(row_db.iter()) {
-        *dst = (1.0 - SPECTRUM_SMOOTHING_ALPHA) * *dst
-            + SPECTRUM_SMOOTHING_ALPHA * src;
+        *dst = (1.0 - SPECTRUM_SMOOTHING_ALPHA) * *dst + SPECTRUM_SMOOTHING_ALPHA * src;
     }
 }
 
@@ -77,11 +76,7 @@ pub fn estimate_row_floor_and_top_db(row_db: &[f32]) -> Option<(f32, f32)> {
         return None;
     }
 
-    let mut values: Vec<f32> = row_db
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite())
-        .collect();
+    let mut values: Vec<f32> = row_db.iter().copied().filter(|v| v.is_finite()).collect();
 
     if values.is_empty() {
         return None;

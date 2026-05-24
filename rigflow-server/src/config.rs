@@ -235,15 +235,10 @@ pub fn choose_block_size(source: &SourceKind) -> usize {
     }
 }
 
-pub fn choose_decimation(source: &SourceKind) -> usize {
-    match source {
-	// Chosen so fake source lands at roughly the same post-decimation
-	// sample rate as RTL-SDR (~170.7 kHz), which avoids current WFM
-	// cutoff/assert issues in the pipeline.
-        SourceKind::Fake => 6,
-        SourceKind::Wav => 16,
-        SourceKind::RtlSdr => 12,
-    }
+/// Choose decimation to target ~170 kHz post-decimation bandwidth regardless
+/// of input sample rate. Keeps WFM/NFM channel widths consistent across rates.
+pub fn choose_decimation(sample_rate_hz: f32) -> usize {
+    ((sample_rate_hz / 170_000.0).round() as usize).max(1)
 }
 
 fn next_arg(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {

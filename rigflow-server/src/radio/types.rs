@@ -2,7 +2,16 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
-use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
+use rigflow_core::radio::{
+    LeaseId,
+    RadioDescriptor,
+    RadioId,
+    source_control::{
+        DirectSamplingMode,
+        GainMode,
+        SourceControlState,
+    },
+};
 use rigflow_core::dsp::modes::DeemphasisMode;
 
 /// Unique identifier for a connected client/session.
@@ -79,6 +88,7 @@ pub struct WorkerRuntimeState {
     pub cw_pitch_hz: f32,
     pub filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
+    pub source_control: SourceControlState,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,
@@ -98,6 +108,11 @@ pub enum WorkerCommand {
     SetFilterBandwidth { bandwidth_hz: f32 },
     SetDeemphasisMode { mode: DeemphasisMode },
     Stop { reason: StopReason },
+    SetSourceSampleRate { sample_rate_hz: u32 },
+    SetSourceGainMode { mode: GainMode },
+    SetSourceGain { gain_db: f32 },
+    SetSourcePpmCorrection { ppm: i32 },
+    SetSourceDirectSampling { mode: DirectSamplingMode },
 }
 
 /// Worker lifecycle/status updates.

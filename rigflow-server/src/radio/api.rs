@@ -44,7 +44,8 @@ pub fn radio_summary_to_protocol(summary: RadioSummary) -> RadioInfo {
         hardware_kind: descriptor.hardware_kind,
         index: descriptor.index,
         serial: descriptor.serial,
-        capabilities: descriptor.capabilities,
+        radio_capabilities: descriptor.radio_capabilities,
+	source_capabilities: descriptor.source_capabilities,
         state: radio_state_to_protocol(&state),
         is_leased,
     }
