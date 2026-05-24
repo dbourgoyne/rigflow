@@ -341,10 +341,9 @@ fn run_iq_worker_threads(
     // thread. Using AtomicU32 avoids a mutex on the hot path.
     let confirmed_sample_rate_hz = Arc::new(AtomicU32::new(0));
 
-    // HL2 has a ~48 kHz passband — center and target must stay equal so the
-    // hardware NCO tracks every tune command.  Sending SetTargetFrequency also
-    // drives the C&C packet that resets the HL2 idle-stream timer.
-    let center_tracks_target = matches!(source_kind, SourceKind::HermesLite2);
+    // HL2 has a watchdog: if no C&C packets arrive in ~60 s it stops streaming.
+    // The capture thread sends a keepalive C&C every 30 s to prevent this.
+    let needs_cc_keepalive = matches!(source_kind, SourceKind::HermesLite2);
 
     let cmd_thread = spawn_command_thread(
         cmd_rx,
@@ -352,7 +351,6 @@ fn run_iq_worker_threads(
         stop_flag.clone(),
         stop_reason.clone(),
         fatal_tx.clone(),
-        center_tracks_target,
     );
 
     let capture_thread = spawn_capture_thread(
@@ -369,7 +367,7 @@ fn run_iq_worker_threads(
         block_size,
         initial_center_freq_hz,
         confirmed_sample_rate_hz.clone(),
-        center_tracks_target,
+        needs_cc_keepalive,
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -478,7 +476,6 @@ fn spawn_command_thread(
     stop_flag: Arc<AtomicBool>,
     stop_reason: Arc<Mutex<StopReason>>,
     fatal_tx: std_mpsc::Sender<WorkerExit>,
-    center_tracks_target: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop_requested(&stop_flag) {
@@ -487,9 +484,6 @@ fn spawn_command_thread(
                     WorkerCommand::SetTargetFrequency { hz } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.target_freq_hz = hz;
-                            if center_tracks_target {
-                                control_state.center_freq_hz = hz;
-                            }
                         }
                     }
                     WorkerCommand::SetCenterFrequency { hz } => {

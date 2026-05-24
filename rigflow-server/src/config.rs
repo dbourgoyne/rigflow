@@ -73,7 +73,7 @@ impl Default for ServerConfig {
             rtlsdr_ppm_correction: 0,
             rtlsdr_direct_sampling: false,
 
-            hl2_sample_rate_hz: 48_000,
+            hl2_sample_rate_hz: 384_000,
 
             center_freq_hz: 101_100_000.0,
             target_freq_hz: 101_100_000.0,
@@ -210,7 +210,7 @@ RTL-SDR source:
   --rtl-direct-sampling
 
 Hermes Lite 2 source:
-  --hl2-sample-rate HZ   (default: 48000)
+  --hl2-sample-rate HZ   (default: 384000)
 "#
         .to_string()
     }
