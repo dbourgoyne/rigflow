@@ -13,12 +13,14 @@ use crate::config::ServerConfig;
 /// - RTL-SDR devices
 /// - WAV file sources (from configured directory)
 /// - Fake tone generator
+/// - Hermes Lite 2 devices (stub — real UDP discovery comes in step 3)
 pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
 
     radios.extend(discover_rtl_radios());
     radios.extend(discover_wav_radios(Path::new(&config.wav_dir)));
     radios.push(build_fake_tone_radio());
+    radios.extend(discover_hl2_radios());
 
     radios
 }
@@ -131,6 +133,41 @@ fn build_fake_tone_radio() -> RadioDescriptor {
         serial: None,
         radio_capabilities: default_radio_capabilities(),
         source_capabilities: SourceCapabilities::none(),
+    }
+}
+
+//
+// ============================
+// Hermes Lite 2 Discovery
+// ============================
+//
+
+/// Stub: returns a single placeholder HL2 radio.
+///
+/// Step 3 will replace this with real UDP broadcast discovery.
+fn discover_hl2_radios() -> Vec<RadioDescriptor> {
+    vec![RadioDescriptor {
+        id: RadioId("hl2:0".to_string()),
+        display_name: "Hermes Lite 2 #0".to_string(),
+        hardware_kind: HardwareKind::HermesLite2,
+        index: 0,
+        serial: None,
+        radio_capabilities: hl2_radio_capabilities(),
+        source_capabilities: SourceCapabilities::none(),
+    }]
+}
+
+fn hl2_radio_capabilities() -> RadioCapabilities {
+    RadioCapabilities {
+        min_freq_hz: 10_000,
+        max_freq_hz: 30_000_000,
+        max_sample_rate_hz: 384_000,
+        supports_wfm: false,
+        supports_nfm: true,
+        supports_am: true,
+        supports_cw: true,
+        supports_usb: true,
+        supports_lsb: true,
     }
 }
 

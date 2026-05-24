@@ -15,6 +15,7 @@ pub enum SourceKind {
     Fake,
     Wav,
     RtlSdr,
+    HermesLite2,
 }
 
 /// Server-wide startup configuration.
@@ -40,6 +41,8 @@ pub struct ServerConfig {
     pub rtlsdr_gain_tenths_db: Option<i32>,
     pub rtlsdr_ppm_correction: i32,
     pub rtlsdr_direct_sampling: bool,
+
+    pub hl2_sample_rate_hz: u32,
 
     pub center_freq_hz: f32,
     pub target_freq_hz: f32,
@@ -69,6 +72,8 @@ impl Default for ServerConfig {
             rtlsdr_gain_tenths_db: None,
             rtlsdr_ppm_correction: 0,
             rtlsdr_direct_sampling: false,
+
+            hl2_sample_rate_hz: 48_000,
 
             center_freq_hz: 101_100_000.0,
             target_freq_hz: 101_100_000.0,
@@ -148,6 +153,11 @@ impl ServerConfig {
                     cfg.rtlsdr_direct_sampling = true;
                 }
 
+                "--hl2-sample-rate" => {
+                    cfg.hl2_sample_rate_hz =
+                        parse_next_arg(&mut args, "--hl2-sample-rate", "invalid --hl2-sample-rate")?;
+                }
+
                 "--center" => {
                     cfg.center_freq_hz =
                         parse_next_arg(&mut args, "--center", "invalid --center")?;
@@ -176,6 +186,7 @@ impl ServerConfig {
   rigflow_server --source fake [options]
   rigflow_server --source wav --wav-file input_iq.wav [options]
   rigflow_server --source rtlsdr [options]
+  rigflow_server --source hermeslite2 [options]
 
 Common options:
   --center HZ
@@ -197,6 +208,9 @@ RTL-SDR source:
   --rtl-auto-gain
   --rtl-ppm PPM
   --rtl-direct-sampling
+
+Hermes Lite 2 source:
+  --hl2-sample-rate HZ   (default: 48000)
 "#
         .to_string()
     }
@@ -224,14 +238,19 @@ pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig
             direct_sampling: cfg.rtlsdr_direct_sampling,
             block_complex_samples: block_size,
         },
+        SourceKind::HermesLite2 => SourceConfig::HermesLite2 {
+            sample_rate_hz: cfg.hl2_sample_rate_hz as f32,
+            center_freq_hz: cfg.center_freq_hz,
+        },
     }
 }
 
 pub fn choose_block_size(source: &SourceKind) -> usize {
     match source {
         SourceKind::Fake => 8192,
-	SourceKind::Wav => 8192,
+        SourceKind::Wav => 8192,
         SourceKind::RtlSdr => 16384,
+        SourceKind::HermesLite2 => 4096,
     }
 }
 
@@ -263,6 +282,7 @@ fn parse_source_kind(value: &str) -> Option<SourceKind> {
         "fake" => Some(SourceKind::Fake),
         "wav" => Some(SourceKind::Wav),
         "rtlsdr" => Some(SourceKind::RtlSdr),
+        "hermeslite2" => Some(SourceKind::HermesLite2),
         _ => None,
     }
 }

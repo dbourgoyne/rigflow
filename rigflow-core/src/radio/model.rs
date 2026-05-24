@@ -37,7 +37,12 @@ pub enum HardwareKind {
     /// Synthetic tone generator (test/debug)
     FakeTone,
 
-    /// Unknown or unsupported hardware
+    /// Hermes Lite 2 (OpenHPSDR Protocol 1 over UDP)
+    HermesLite2,
+
+    /// Unknown or unsupported hardware — also catches any variant an old client
+    /// doesn't recognise, preventing the whole message from failing to parse.
+    #[serde(other)]
     Unknown,
 }
 

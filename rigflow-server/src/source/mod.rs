@@ -9,6 +9,7 @@ use rigflow_core::radio::source_control::{
 
 pub mod fake;
 pub mod factory;
+pub mod hermeslite2;
 pub mod rtlsdr;
 pub mod wav;
 pub mod wav_metadata;

@@ -1,6 +1,7 @@
-use crate::source::wav::IqWavReader;
 use crate::source::fake::FakeIqSource;
+use crate::source::hermeslite2::HermesLite2Source;
 use crate::source::rtlsdr::RtlSdrSource;
+use crate::source::wav::IqWavReader;
 use crate::source::IqSource;
 
 /// Configuration used to construct a concrete IQ source.
@@ -20,6 +21,10 @@ pub enum SourceConfig {
         ppm_correction: i32,
         direct_sampling: bool,
         block_complex_samples: usize,
+    },
+    HermesLite2 {
+        sample_rate_hz: f32,
+        center_freq_hz: f32,
     },
 }
 
@@ -58,6 +63,14 @@ pub fn create_source(config: SourceConfig) -> Result<Box<dyn IqSource>, String> 
                 block_complex_samples,
             )?;
 
+            Ok(Box::new(source))
+        }
+
+        SourceConfig::HermesLite2 {
+            sample_rate_hz,
+            center_freq_hz,
+        } => {
+            let source = HermesLite2Source::new(sample_rate_hz, center_freq_hz);
             Ok(Box::new(source))
         }
     }
