@@ -903,6 +903,7 @@ fn spawn_capture_thread(
             }
 
             blocks_read += 1;
+
             if blocks_read % 20 == 0 {
                 trace!(
                     "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
@@ -1177,6 +1178,21 @@ fn normalize_initial_frequencies(
         } else {
             server_cfg.center_freq_hz as f32
         };
+    }
+
+    if src_kind == HardwareKind::HermesLite2 {
+        let caps = crate::source::hermeslite2::hl2_source_capabilities();
+        let min = caps.tuner_freq_hz_min as f32;
+        let max = caps.tuner_freq_hz_max as f32;
+        let clamped = initial_center_freq_hz.clamp(min, max);
+        if (clamped - initial_center_freq_hz).abs() > 1.0 {
+            warn!(
+                "HL2: initial center {:.0} Hz is outside hardware range \
+                 [{:.0}, {:.0}] Hz — clamping to {:.0} Hz",
+                initial_center_freq_hz, min, max, clamped
+            );
+        }
+        initial_center_freq_hz = clamped;
     }
 
     let initial_target_freq_hz = initial_center_freq_hz;

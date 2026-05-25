@@ -134,13 +134,22 @@ impl RigflowApp {
                                 state.clone()
                             };
 
+                            let (spectrum_db_min, spectrum_db_max) =
+                                if state_snapshot.adaptive_waterfall_normalization {
+                                    let top = state_snapshot.adaptive_top_db_estimate + 3.0;
+                                    (top - state_snapshot.adaptive_range_db_estimate, top)
+                                } else {
+                                    let top = state_snapshot.manual_waterfall_top_db;
+                                    (top - state_snapshot.manual_waterfall_range_db, top)
+                                };
+
                             let interaction: SpectrumInteraction =
                                 draw_spectrum_plot(
                                     ui,
                                     egui::vec2(ui.available_width(), spectrum_height),
                                     &spectrum_snapshot,
-                                    -120.0,
-                                    0.0,
+                                    spectrum_db_min,
+                                    spectrum_db_max,
                                     &state_snapshot,
                                 );
 

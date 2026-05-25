@@ -5,7 +5,7 @@ use std::time::Duration;
 use log::{debug, info, warn};
 use num_complex::Complex32;
 
-use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
+use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceControlState};
 
 use crate::source::IqSource;
 
@@ -21,10 +21,17 @@ const P1_SUBFRAME_OFFSETS: [usize; 2] = [8, 520];
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 
+// HL2 LNA gain at P1 address 0x0A (C0=0x14), extended-range mode (C1[6]=1).
+// gain_db = code - 12 (code 0 = -12 dB, code 60 = +48 dB, 1 dB/step).
+// Set C1 = 0x40 | code to enable extended range; without 0x40 the HL2 uses
+// a backward-compat attenuator-only mode capped at +19 dB.
+const DEFAULT_LNA_GAIN_CODE: u8 = 32; // 20 dB
+
 pub struct HermesLite2Source {
     socket: UdpSocket,
     sample_rate_hz: f32,
     center_freq_hz: f32,
+    lna_gain_code: u8,
     tx_seq: u32,
     pending: VecDeque<Complex32>,
 }
@@ -50,15 +57,19 @@ impl HermesLite2Source {
             socket,
             sample_rate_hz,
             center_freq_hz,
+            lna_gain_code: DEFAULT_LNA_GAIN_CODE,
             tx_seq: 0,
             pending: VecDeque::new(),
         };
 
         src.send_run(true)?;
         src.send_cc()?;
+        src.send_gain_cc()?;
         info!(
             "HL2: P1 stream started from {device_addr} — \
-             sample_rate={sample_rate_hz} Hz  center={center_freq_hz} Hz"
+             sample_rate={sample_rate_hz} Hz  center={center_freq_hz} Hz  \
+             lna_gain={:.1} dB",
+            DEFAULT_LNA_GAIN_CODE as f32 - 12.0
         );
 
         Ok(src)
@@ -103,6 +114,29 @@ impl HermesLite2Source {
         self.socket
             .send(&pkt)
             .map_err(|e| format!("HL2: send C&C failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Send a C&C packet carrying the current LNA gain code (address 9, C0=0x12).
+    /// Repeats the NCO frequency in subframe 1 as an implicit keepalive.
+    fn send_gain_cc(&mut self) -> Result<(), String> {
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        // Subframe 1: repeat NCO freq so hardware LO stays current
+        write_subframe(&mut pkt[8..520], 0x02, (self.center_freq_hz as u32).to_be_bytes());
+        // Subframe 2: RX LNA gain — address 0x0A (C0=0x14).
+        // The 32-bit data word is big-endian: C1=MSB, C4=LSB.
+        // Bit 6 and bits 5:0 of the DATA word live in C4 (the LSB byte).
+        // C4[6]=1 enables extended range; C4[5:0] = gain code.
+        write_subframe(&mut pkt[520..1032], 0x14, [0, 0, 0, 0x40 | (self.lna_gain_code & 0x3F)]);
+
+        self.socket
+            .send(&pkt)
+            .map_err(|e| format!("HL2: send gain C&C failed: {e}"))?;
         Ok(())
     }
 
@@ -160,18 +194,32 @@ impl IqSource for HermesLite2Source {
     fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
         self.center_freq_hz = center_freq_hz;
         info!("HL2: NCO → {} Hz", center_freq_hz as u32);
-        self.send_cc()
+        // send_gain_cc carries both the NCO freq and the current gain code so
+        // the gain register is always in sync after every tune.
+        self.send_gain_cc()
     }
 
     fn keepalive(&mut self) {
-        if let Err(e) = self.send_cc() {
+        // Use send_gain_cc so the gain register is refreshed on every keepalive,
+        // not just when the user explicitly changes it.
+        if let Err(e) = self.send_gain_cc() {
             warn!("HL2: keepalive C&C failed: {e}");
         }
     }
 
     fn set_sample_rate(&mut self, sample_rate_hz: u32) -> Result<(), String> {
         self.sample_rate_hz = sample_rate_hz as f32;
-        self.send_cc()
+        // send_cc sets the speed code; follow with send_gain_cc to also apply
+        // the current gain to the updated configuration.
+        self.send_cc()?;
+        self.send_gain_cc()
+    }
+
+    fn set_gain_db(&mut self, gain_db: f32) -> Result<(), String> {
+        // code = gain_db + 12: code 0 = -12 dB, code 60 = +48 dB
+        self.lna_gain_code = (gain_db + 12.0).round().clamp(0.0, 60.0) as u8;
+        info!("HL2: LNA gain → {:.1} dB (code {})", gain_db, self.lna_gain_code);
+        self.send_gain_cc()
     }
 
     fn is_realtime(&self) -> bool {
@@ -185,6 +233,8 @@ impl IqSource for HermesLite2Source {
     fn source_control_state(&self) -> SourceControlState {
         SourceControlState {
             sample_rate_hz: self.sample_rate_hz as u32,
+            gain_mode: GainMode::Manual,
+            gain_db: self.lna_gain_code as f32 - 12.0,
             ..SourceControlState::default()
         }
     }
@@ -245,6 +295,9 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
     SourceCapabilities {
         supports_sample_rate: true,
         sample_rates_hz: vec![48_000, 96_000, 192_000, 384_000],
+        supports_gain: true,
+        // HL2 AD9866 extended range: -12 dB to +48 dB in 1 dB steps
+        gain_values_db: (-12..=48).map(|i| i as f32).collect(),
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
         ..SourceCapabilities::none()

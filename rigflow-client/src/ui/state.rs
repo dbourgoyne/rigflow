@@ -221,12 +221,12 @@ impl Default for UiState {
             // WATERFALL / DISPLAY
             // =================================================================
             manual_waterfall_top_db: -35.0,
-            manual_waterfall_range_db: -105.0,
+            manual_waterfall_range_db: 80.0,
 
             adaptive_waterfall_normalization: true,
             adaptive_top_db_estimate: -35.0,
-            adaptive_floor_db_estimate: -105.0,
-            adaptive_range_db_estimate: -70.0,
+            adaptive_floor_db_estimate: -140.0,
+            adaptive_range_db_estimate: 100.0,
 
             display_zoom: 1.0,
 
