@@ -6,6 +6,7 @@ use log::{debug, info, warn};
 use num_complex::Complex32;
 
 use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceControlState};
+use rigflow_core::radio::source_status::SourceStatus;
 
 use crate::source::IqSource;
 
@@ -21,6 +22,46 @@ const P1_SUBFRAME_OFFSETS: [usize; 2] = [8, 520];
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 
+// HL2 P1 D2H status register accumulator.
+//
+// The HL2 sends status data in the C0/C1-C4 bytes of every DDC sub-frame,
+// cycling through register addresses on successive packets.
+//
+// RADDR 0x00 (C0 = 0x00):
+//   bits [7:0]   = firmware version
+//   bits [14:8]  = TX IQ FIFO count MSBs
+//   bit  [15]    = under/overflow recovery
+//   bit  [24]    = RF ADC overload (active high)
+//   bit  [25]    = TX inhibit (active low: 0 = inhibited)
+//
+// RADDR 0x01 (C0 = 0x02):
+//   bits [15:0]  = forward power (raw ADC)
+//   bits [31:16] = temperature (raw ADC)
+//
+// RADDR 0x02 (C0 = 0x04):
+//   bits [15:0]  = current (raw ADC)
+//   bits [31:16] = reverse power (raw ADC)
+#[derive(Debug, Clone, Default)]
+struct Hl2StatusRegs {
+    // RADDR 0x00
+    firmware_version: u8,
+    adc_overload: bool,
+    tx_inhibited: bool,
+    /// 2-bit under/overflow recovery field from bits [15:14] of the status word.
+    recovery_bits: u8,
+    raddr0_valid: bool,
+
+    // RADDR 0x01
+    temperature_raw: u16,
+    forward_power_raw: u16,
+    raddr1_valid: bool,
+
+    // RADDR 0x02
+    reverse_power_raw: u16,
+    current_raw: u16,
+    raddr2_valid: bool,
+}
+
 // HL2 LNA gain at P1 address 0x0A (C0=0x14), extended-range mode (C1[6]=1).
 // gain_db = code - 12 (code 0 = -12 dB, code 60 = +48 dB, 1 dB/step).
 // Set C1 = 0x40 | code to enable extended range; without 0x40 the HL2 uses
@@ -34,6 +75,8 @@ pub struct HermesLite2Source {
     lna_gain_code: u8,
     tx_seq: u32,
     pending: VecDeque<Complex32>,
+    /// Accumulated status registers decoded from incoming DDC packet headers.
+    status_regs: Hl2StatusRegs,
 }
 
 impl HermesLite2Source {
@@ -60,6 +103,7 @@ impl HermesLite2Source {
             lna_gain_code: DEFAULT_LNA_GAIN_CODE,
             tx_seq: 0,
             pending: VecDeque::new(),
+            status_regs: Hl2StatusRegs::default(),
         };
 
         src.send_run(true)?;
@@ -170,7 +214,7 @@ impl IqSource for HermesLite2Source {
             let mut buf = [0u8; P1_PACKET_LEN];
             match self.socket.recv(&mut buf) {
                 Ok(len) if len == P1_PACKET_LEN => {
-                    parse_ddc_packet(&buf, &mut self.pending);
+                    parse_ddc_packet(&buf, &mut self.pending, &mut self.status_regs);
                 }
                 Ok(len) => {
                     debug!("HL2: short packet ({len} bytes), discarding");
@@ -238,6 +282,10 @@ impl IqSource for HermesLite2Source {
             ..SourceControlState::default()
         }
     }
+
+    fn source_status(&self) -> SourceStatus {
+        hl2_status_regs_to_source_status(&self.status_regs)
+    }
 }
 
 /// Write a 512-byte sub-frame into `sf`: sync, C0, C1–C4, then zeros for TX IQ.
@@ -259,13 +307,22 @@ fn i24_be(b: &[u8]) -> i32 {
     }
 }
 
-/// Parse one 1032-byte DDC packet into Complex32 samples appended to `out`.
+/// Parse one 1032-byte DDC packet into Complex32 samples appended to `out`,
+/// and update `status` with any status register data found in sub-frame headers.
 ///
-/// Each 512-byte sub-frame carries 63 × 8-byte samples:
-///   bytes 0–2: I (24-bit signed big-endian)
-///   bytes 3–5: Q (24-bit signed big-endian)
-///   bytes 6–7: microphone (16-bit, ignored)
-fn parse_ddc_packet(pkt: &[u8; P1_PACKET_LEN], out: &mut VecDeque<Complex32>) {
+/// Each 512-byte sub-frame layout:
+///   bytes 0–2:  sub-frame sync 0x7F 0x7F 0x7F
+///   byte  3:    C0 — D2H register address encoding: RADDR = C0 >> 1
+///   bytes 4–7:  C1..C4 — status word (C1=MSB, C4=LSB)
+///   bytes 8–511: 63 × 8-byte DDC samples
+///     [0..3]: I sample (24-bit signed big-endian)
+///     [3..6]: Q sample (24-bit signed big-endian)
+///     [6..8]: microphone (16-bit, ignored)
+fn parse_ddc_packet(
+    pkt: &[u8; P1_PACKET_LEN],
+    out: &mut VecDeque<Complex32>,
+    status: &mut Hl2StatusRegs,
+) {
     if pkt[0..3] != P1_OUTER_SYNC || pkt[3] != P1_ENDPOINT_D2H {
         warn!(
             "HL2: unexpected packet header {:02x} {:02x} {:02x} {:02x}",
@@ -280,6 +337,39 @@ fn parse_ddc_packet(pkt: &[u8; P1_PACKET_LEN], out: &mut VecDeque<Complex32>) {
             warn!("HL2: bad sub-frame sync at offset {sf_base}");
             continue;
         }
+
+        // Decode status header (C0 / C1–C4).
+        let c0 = sf[3];
+        let word = ((sf[4] as u32) << 24)
+            | ((sf[5] as u32) << 16)
+            | ((sf[6] as u32) << 8)
+            | (sf[7] as u32);
+        let raddr = c0 >> 1; // bits [7:1] encode the register address
+
+        match raddr {
+            0x00 => {
+                status.firmware_version = (word & 0xFF) as u8;
+                // Bits [15:14]: 2-bit under/overflow recovery code.
+                status.recovery_bits = ((word >> 14) & 0x3) as u8;
+                status.adc_overload = (word >> 24) & 1 == 1;
+                // Tx inhibit is active-low: bit=0 means TX is inhibited.
+                status.tx_inhibited = (word >> 25) & 1 == 0;
+                status.raddr0_valid = true;
+            }
+            0x01 => {
+                status.forward_power_raw = (word & 0xFFFF) as u16;
+                status.temperature_raw = ((word >> 16) & 0xFFFF) as u16;
+                status.raddr1_valid = true;
+            }
+            0x02 => {
+                status.current_raw = (word & 0xFFFF) as u16;
+                status.reverse_power_raw = ((word >> 16) & 0xFFFF) as u16;
+                status.raddr2_valid = true;
+            }
+            _ => {}
+        }
+
+        // Decode IQ samples.
         for i in 0..P1_SAMPLES_PER_SUBFRAME {
             let b = 8 + i * 8;
             let i_f = i24_be(&sf[b..b + 3]) as f32 / (1u32 << 23) as f32;
@@ -287,6 +377,119 @@ fn parse_ddc_packet(pkt: &[u8; P1_PACKET_LEN], out: &mut VecDeque<Complex32>) {
             out.push_back(Complex32::new(i_f, q_f));
         }
     }
+}
+
+/// Convert accumulated HL2 status register snapshot into a generic `SourceStatus`.
+///
+/// Calibration notes:
+/// - `firmware_version`: exact binary version reported by HL2 firmware.
+/// - `temperature_c`: approximated from the raw 16-bit ADC reading using
+///   a linear formula typical for HPSDR-class hardware.  The exact slope
+///   depends on your HL2 board revision — treat this as indicative (±5 °C).
+///   TODO: verify formula against your hardware and adjust if needed.
+/// - `forward_power_w` / `reverse_power_w` / `current_a`: hardware-specific
+///   calibration constants are not yet known.  These fields are left as `None`
+///   and the raw ADC values are logged at TRACE level for future calibration.
+///   TODO: add calibration once forward-power detector and current-shunt
+///   specs are confirmed for your HL2 board revision.
+fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
+    let firmware_version = if r.raddr0_valid {
+        let major = r.firmware_version / 10;
+        let minor = r.firmware_version % 10;
+        Some(format!("{major}.{minor}"))
+    } else {
+        None
+    };
+
+    let adc_overload = r.raddr0_valid.then_some(r.adc_overload);
+    let tx_inhibited = r.raddr0_valid.then_some(r.tx_inhibited);
+    let recovery_status = if r.raddr0_valid {
+        let label = match r.recovery_bits {
+            0b00 => "OK",
+            0b10 => "UNDERFLOW",
+            0b11 => "OVERFLOW",
+            _    => "UNKNOWN",
+        };
+        Some(label.to_string())
+    } else {
+        None
+    };
+
+    // Temperature: approximate formula for HPSDR-class hardware.
+    // raw is a 16-bit value; we use an affine mapping calibrated roughly
+    // around typical AD9866 / LM19 analog paths.
+    // TODO: verify with your HL2 board revision.
+    let temperature_c = if r.raddr1_valid {
+        let raw = r.temperature_raw as f32;
+        // Approximate: maps ~20 °C at raw≈2800 and ~70 °C at raw≈3500
+        Some((raw / 65536.0) * 3.3 / 0.01 - 50.0)
+    } else {
+        None
+    };
+
+    // Forward / reverse power and current require board-specific calibration.
+    // Log raw values at TRACE for future calibration work.
+    if r.raddr1_valid {
+        log::trace!(
+            "HL2 status: fwd_raw={} temp_raw={}",
+            r.forward_power_raw,
+            r.temperature_raw
+        );
+    }
+    if r.raddr2_valid {
+        log::trace!(
+            "HL2 status: rev_raw={} cur_raw={}",
+            r.reverse_power_raw,
+            r.current_raw
+        );
+    }
+
+    // TODO: add board-specific calibration for forward_power_w, reverse_power_w,
+    // current_a once hardware constants are confirmed.
+    let forward_power_w: Option<f32> = None;
+    let reverse_power_w: Option<f32> = None;
+    let current_a: Option<f32> = None;
+
+    // SWR is only valid when forward power is above a minimal threshold.
+    let swr = compute_swr(forward_power_w, reverse_power_w);
+
+    SourceStatus {
+        firmware_version,
+        adc_overload,
+        temperature_c,
+        current_a,
+        forward_power_w,
+        reverse_power_w,
+        swr,
+        tx_inhibited,
+        recovery_status,
+    }
+}
+
+/// Compute SWR from forward and reverse power (both in watts).
+///
+/// Returns `None` when:
+/// - either power value is `None`
+/// - forward power is below 0.1 W (not transmitting / noise floor)
+/// - reverse power is negative or >= forward power (invalid reading)
+///
+/// Formula: SWR = (1 + √(Pr/Pf)) / (1 − √(Pr/Pf))
+fn compute_swr(forward_w: Option<f32>, reverse_w: Option<f32>) -> Option<f32> {
+    let fwd = forward_w?;
+    let rev = reverse_w?;
+
+    const MIN_FORWARD_W: f32 = 0.1;
+    if fwd < MIN_FORWARD_W || rev < 0.0 || rev >= fwd {
+        return None;
+    }
+
+    let gamma = (rev / fwd).sqrt();
+    let denominator = 1.0 - gamma;
+    if denominator.abs() < f32::EPSILON {
+        return None;
+    }
+
+    Some(((1.0 + gamma) / denominator).clamp(1.0, 999.0))
 }
 
 /// Static source capabilities for the Hermes Lite 2.

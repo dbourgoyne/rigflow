@@ -6,6 +6,7 @@ use rigflow_core::radio::source_control::{
     GainMode,
     DirectSamplingMode,
 };
+use rigflow_core::radio::source_status::SourceStatus;
 
 pub mod fake;
 pub mod factory;
@@ -61,4 +62,12 @@ pub trait IqSource {
     /// Send a periodic keepalive to hardware that would otherwise time out.
     /// Default is a no-op; override for sources that require it (e.g. HL2).
     fn keepalive(&mut self) {}
+
+    /// Return the latest read-only telemetry from this source.
+    ///
+    /// Default returns an empty `SourceStatus` (all fields `None`).
+    /// Override for sources that expose hardware telemetry (e.g. HL2).
+    fn source_status(&self) -> SourceStatus {
+        SourceStatus::default()
+    }
 }

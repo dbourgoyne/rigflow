@@ -11,6 +11,7 @@ use rigflow_core::{
             SourceCapabilities,
             SourceControlState,
         },
+        source_status::SourceStatus,
     },
     dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
@@ -170,6 +171,9 @@ pub enum ServerRadioMessage {
 	deemphasis_mode: DeemphasisMode,
 
 	source_control: SourceControlState,
+
+        /// Current source telemetry / status fields.
+        source_status: SourceStatus,
     },
 
     /// Incremental runtime update.
@@ -189,7 +193,10 @@ pub enum ServerRadioMessage {
 	filter_bandwidth_hz: Option<f32>,
 	deemphasis_mode: Option<DeemphasisMode>,
 
-	source_control: Option<SourceControlState>
+	source_control: Option<SourceControlState>,
+
+        /// Changed source telemetry; `None` means no change since last update.
+        source_status: Option<SourceStatus>,
     },
 
     /// Error message related to radio control or streaming.

@@ -383,6 +383,7 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             source_control,
+            source_status,
             ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
@@ -391,6 +392,7 @@ pub fn apply_radio_server_message(
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.source_control = source_control;
+            state.source_status = source_status;
 
             // Do NOT overwrite persisted per-demod prefs here.
             state.pending_apply_mode_controls = true;
@@ -403,6 +405,7 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             source_control,
+            source_status,
             ..
         } => {
             if let Some(value) = center_freq_hz {
@@ -431,6 +434,10 @@ pub fn apply_radio_server_message(
                     audio_session_generation.fetch_add(1, Ordering::Relaxed);
                 }
                 state.source_control = value;
+            }
+
+            if let Some(value) = source_status {
+                state.source_status = value;
             }
         }
 

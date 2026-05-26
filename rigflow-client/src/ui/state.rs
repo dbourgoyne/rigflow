@@ -3,6 +3,7 @@ use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
+use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::RadioCapabilities;
 use std::time::Instant;
 
@@ -162,6 +163,9 @@ pub struct UiState {
     pub source_control: SourceControlState,
     pub source_capabilities: SourceCapabilities,
     pub radio_capabilities: RadioCapabilities,
+    /// Latest read-only telemetry from the active source.
+    /// Empty (`SourceStatus::default()`) when the source does not report status.
+    pub source_status: SourceStatus,
 }
 
 impl Default for UiState {
@@ -265,6 +269,7 @@ impl Default for UiState {
             source_control: SourceControlState::default(),
             source_capabilities: SourceCapabilities::none(),
             radio_capabilities: RadioCapabilities::default(),
+            source_status: SourceStatus::default(),
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

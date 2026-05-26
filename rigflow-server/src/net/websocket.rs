@@ -601,6 +601,10 @@ fn runtime_changed_from_runtime(
     (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
 
+    let source_status =
+        (current.source_status != previous.source_status)
+            .then_some(current.source_status.clone());
+
     let has_change =
         center_freq_hz.is_some()
         || target_freq_hz.is_some()
@@ -610,7 +614,8 @@ fn runtime_changed_from_runtime(
         || cw_pitch_hz.is_some()
         || filter_bandwidth_hz.is_some()
         || deemphasis_mode.is_some()
-	|| source_control.is_some();
+        || source_control.is_some()
+        || source_status.is_some();
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
@@ -622,7 +627,8 @@ fn runtime_changed_from_runtime(
         cw_pitch_hz,
         filter_bandwidth_hz,
         deemphasis_mode,
-	source_control,
+        source_control,
+        source_status,
     })
 }
 
@@ -646,8 +652,9 @@ fn runtime_snapshot_from_status(
             ssb_pitch_hz: runtime.ssb_pitch_hz,
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
-	    deemphasis_mode: runtime.deemphasis_mode,
-	    source_control: runtime.source_control.clone(),
+            deemphasis_mode: runtime.deemphasis_mode,
+            source_control: runtime.source_control.clone(),
+            source_status: runtime.source_status.clone(),
         }),
         _ => None,
     }
@@ -692,8 +699,9 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         ssb_pitch_hz,
         cw_pitch_hz,
         filter_bandwidth_hz,
-	deemphasis_mode,
-	source_control: _,
+        deemphasis_mode,
+        source_control: _,
+        source_status: _,
     } = msg
     {
         debug!(
@@ -727,8 +735,9 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         ssb_pitch_hz,
         cw_pitch_hz,
         filter_bandwidth_hz,
-	deemphasis_mode,
-	source_control,
+        deemphasis_mode,
+        source_control,
+        source_status: _,
     } = msg
     {
         info!(

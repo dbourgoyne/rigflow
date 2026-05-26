@@ -30,6 +30,7 @@ use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
+use rigflow_core::radio::source_status::SourceStatus;
 
 /// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
 /// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
@@ -46,6 +47,8 @@ struct SharedControlState {
     filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
     pub source_control: SourceControlState,
+    /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
+    pub source_status: SourceStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +261,7 @@ fn build_runtime_state(
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
         source_control: control.source_control.clone(),
+        source_status: control.source_status.clone(),
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -328,6 +332,7 @@ fn run_iq_worker_threads(
         filter_bandwidth_hz: 3000.0, // sensible default
         deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
         source_control: SourceControlState::default(),
+        source_status: SourceStatus::default(),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -730,6 +735,9 @@ fn spawn_capture_thread(
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
         let mut last_cc_sent = Instant::now();
+        // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
+        let status_poll_interval = Duration::from_millis(250);
+        let mut last_status_poll = Instant::now();
 
         debug!(
             "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
@@ -873,6 +881,16 @@ fn spawn_capture_thread(
             } else if needs_cc_keepalive && last_cc_sent.elapsed() >= HL2_CC_KEEPALIVE_INTERVAL {
                 source.keepalive();
                 last_cc_sent = Instant::now();
+            }
+
+            // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState
+            // so the DSP thread can include it in WorkerStatus updates.
+            if last_status_poll.elapsed() >= status_poll_interval {
+                let new_status = source.source_status();
+                if let Ok(mut cs) = control.lock() {
+                    cs.source_status = new_status;
+                }
+                last_status_poll = Instant::now();
             }
 
             if !realtime {
@@ -1025,6 +1043,11 @@ fn spawn_dsp_thread(
 
             if current.source_control != applied.source_control {
                 applied.source_control = current.source_control.clone();
+                changed = true;
+            }
+
+            if current.source_status != applied.source_status {
+                applied.source_status = current.source_status.clone();
                 changed = true;
             }
 
