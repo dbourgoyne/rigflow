@@ -8,6 +8,57 @@ use crate::ControlCommand;
 use crate::UiState;
 
 impl RigflowApp {
+    /// Persist the current `source_control` state for the active radio into the
+    /// operator's settings file.
+    ///
+    /// This is a no-op when no operator is active or no radio is acquired.
+    pub(crate) fn save_source_control_prefs_to_current_operator(&mut self) {
+        let (operator_id, radio_id, source_control) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.operator_id.clone(),
+                state.selected_radio_id.clone(),
+                state.source_control.clone(),
+            )
+        };
+
+        let Some(radio_id) = radio_id else { return; };
+        if operator_id.trim().is_empty() { return; }
+
+        // Update the in-memory mirror so subsequent acquire-apply uses the
+        // latest value even before the file is re-read.
+        if let Ok(mut state) = self.state.lock() {
+            state.source_control_preferences.insert(radio_id.clone(), source_control.clone());
+        }
+
+        // Load-modify-save: update only the source_control_preferences entry
+        // so no other operator data is lost.
+        let mut settings = match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(s) => s,
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status =
+                        format!("failed to load operator settings: {err}");
+                }
+                return;
+            }
+        };
+
+        settings.source_control_preferences.insert(radio_id, source_control);
+
+        if let Err(err) = self.persistence_store.save_operator_settings(&settings) {
+            if let Ok(mut state) = self.state.lock() {
+                state.persistence_status =
+                    format!("failed to save source control prefs: {err}");
+            }
+        }
+    }
+}
+
+impl RigflowApp {
     pub(crate) fn save_waterfall_display_preferences_to_current_operator(&mut self) {
         let snapshot = {
             let state = self.state.lock().unwrap();

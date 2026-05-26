@@ -7,6 +7,8 @@ pub enum PersistenceError {
     NoConfigDirectory,
     InvalidOperatorId,
     InvalidPath(PathBuf),
+    /// Schema version is newer than this build understands.
+    Migration(String),
 }
 
 impl fmt::Display for PersistenceError {
@@ -21,6 +23,7 @@ impl fmt::Display for PersistenceError {
             Self::InvalidPath(path) => {
                 write!(f, "invalid persistence path: {}", path.display())
             }
+            Self::Migration(msg) => write!(f, "migration error: {msg}"),
         }
     }
 }

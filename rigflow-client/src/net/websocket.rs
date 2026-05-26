@@ -376,7 +376,7 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::RuntimeSnapshot {
-            radio_id: _,
+            radio_id,
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
@@ -391,7 +391,12 @@ pub fn apply_radio_server_message(
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
+            // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
+            if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
+                state.source_control = saved;
+                state.pending_apply_source_control = true;
+            }
             state.source_status = source_status;
 
             // Do NOT overwrite persisted per-demod prefs here.
