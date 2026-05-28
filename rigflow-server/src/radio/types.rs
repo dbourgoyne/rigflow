@@ -12,6 +12,7 @@ use rigflow_core::radio::{
         SourceControlState,
     },
     source_status::SourceStatus,
+    tx_tune::TxTuneResult,
 };
 use rigflow_core::dsp::modes::DeemphasisMode;
 
@@ -91,6 +92,9 @@ pub struct WorkerRuntimeState {
     pub deemphasis_mode: DeemphasisMode,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
+    /// Result of the most recent TX tune test executed by this worker.
+    /// `None` until a RequestTxTuneTest command has been processed.
+    pub last_tx_tune_result: Option<TxTuneResult>,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,
@@ -115,6 +119,8 @@ pub enum WorkerCommand {
     SetSourceGain { gain_db: f32 },
     SetSourcePpmCorrection { ppm: i32 },
     SetSourceDirectSampling { mode: DirectSamplingMode },
+    /// Request a TX tune test dry run (no RF produced).
+    RequestTxTuneTest { duration_ms: u32, drive: f32 },
 }
 
 /// Worker lifecycle/status updates.

@@ -31,6 +31,7 @@ use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::tx_tune::TxTuneResult;
 
 /// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
 /// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
@@ -49,6 +50,14 @@ struct SharedControlState {
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
+
+    /// Set by command thread when a TX tune test arrives; consumed (taken) by
+    /// the capture thread which owns the IQ source.
+    pending_tx_tune_test: Option<(u32, f32)>,  // (duration_ms, drive)
+
+    /// Written by capture thread after executing a TX tune test dry run;
+    /// read by DSP thread to detect changes and publish RuntimeChanged.
+    last_tx_tune_result: Option<TxTuneResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -262,6 +271,7 @@ fn build_runtime_state(
         deemphasis_mode: control.deemphasis_mode,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
+        last_tx_tune_result: control.last_tx_tune_result.clone(),
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -333,6 +343,8 @@ fn run_iq_worker_threads(
         deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
+        pending_tx_tune_test: None,
+        last_tx_tune_result: None,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -570,6 +582,18 @@ fn spawn_command_thread(
                     WorkerCommand::SetSourceDirectSampling { mode } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.source_control.direct_sampling = mode;
+                        }
+                    }
+
+                    WorkerCommand::RequestTxTuneTest { duration_ms, drive } => {
+                        info!(
+                            "[radio-worker] RequestTxTuneTest queued: duration_ms={} drive={:.3}",
+                            duration_ms, drive
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            // Replace any previous pending request; only one
+                            // test runs at a time.
+                            cs.pending_tx_tune_test = Some((duration_ms, drive));
                         }
                     }
                 },
@@ -893,6 +917,40 @@ fn spawn_capture_thread(
                 last_status_poll = Instant::now();
             }
 
+            // Execute any pending TX tune test dry run.
+            //
+            // The capture thread owns the IQ source exclusively, so
+            // tx_tune_test_dry_run() must run here.  The result is stored in
+            // SharedControlState; the DSP thread detects the change and
+            // publishes a RuntimeChanged message to the client.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .and_then(|mut cs| cs.pending_tx_tune_test.take());
+
+                if let Some((duration_ms, drive)) = pending {
+                    let center_freq_hz = control_snapshot.center_freq_hz;
+                    info!(
+                        "[radio-worker {}] TX tune test dry run: freq={} dur_ms={} drive={:.3} \
+                         — entering dry-run path (no RF)",
+                        descriptor.id.0, center_freq_hz, duration_ms, drive
+                    );
+
+                    let result =
+                        source.tx_tune_test_dry_run(center_freq_hz, duration_ms, drive);
+
+                    info!(
+                        "[radio-worker {}] TX tune test dry run complete: result={:?}",
+                        descriptor.id.0, result.message
+                    );
+
+                    if let Ok(mut cs) = control.lock() {
+                        cs.last_tx_tune_result = Some(result);
+                    }
+                }
+            }
+
             if !realtime {
                 let now = Instant::now();
                 if now < next_source_tick {
@@ -1048,6 +1106,11 @@ fn spawn_dsp_thread(
 
             if current.source_status != applied.source_status {
                 applied.source_status = current.source_status.clone();
+                changed = true;
+            }
+
+            if current.last_tx_tune_result != applied.last_tx_tune_result {
+                applied.last_tx_tune_result = current.last_tx_tune_result.clone();
                 changed = true;
             }
 

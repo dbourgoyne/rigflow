@@ -27,7 +27,9 @@ impl Default for TxTuneState {
 /// All fields are `Option` because the result is only populated after a
 /// successful tune-test exchange with the server. They remain `None` until
 /// a real TX tune test is implemented in a future task.
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// Serialisable so it can be carried in `RuntimeChanged` / `RuntimeSnapshot`.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TxTuneResult {
     /// Forward power measured during the pulse (Watts).
     pub forward_power_w: Option<f32>,

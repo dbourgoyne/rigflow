@@ -12,6 +12,7 @@ use rigflow_core::{
             SourceControlState,
         },
         source_status::SourceStatus,
+        tx_tune::TxTuneResult,
     },
     dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
@@ -100,7 +101,16 @@ pub enum ClientRadioMessage {
     SetSourceDirectSampling {
 	mode: DirectSamplingMode,
     },
-    
+
+    /// Request a TX tune test (a short low-power carrier pulse for SWR
+    /// measurement). For this implementation the server executes a dry run
+    /// only — no RF is transmitted.
+    RequestTxTuneTest {
+        /// Pulse duration in milliseconds; server clamps to a safe maximum.
+        duration_ms: u32,
+        /// Drive level in [0.0, 1.0]; server may override with a safer value.
+        drive: f32,
+    },
 }
 
 /// Messages sent from server → client over WebSocket.
@@ -174,6 +184,10 @@ pub enum ServerRadioMessage {
 
         /// Current source telemetry / status fields.
         source_status: SourceStatus,
+
+        /// Result of the most recent TX tune test, if any.
+        /// `None` means no test has been run since acquisition.
+        tx_tune_result: Option<TxTuneResult>,
     },
 
     /// Incremental runtime update.
@@ -197,6 +211,9 @@ pub enum ServerRadioMessage {
 
         /// Changed source telemetry; `None` means no change since last update.
         source_status: Option<SourceStatus>,
+
+        /// New TX tune test result; `None` means no change since last update.
+        tx_tune_result: Option<TxTuneResult>,
     },
 
     /// Error message related to radio control or streaming.

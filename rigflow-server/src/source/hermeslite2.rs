@@ -7,6 +7,7 @@ use num_complex::Complex32;
 
 use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::tx_tune::TxTuneResult;
 
 use crate::source::IqSource;
 
@@ -286,6 +287,74 @@ impl IqSource for HermesLite2Source {
     fn source_status(&self) -> SourceStatus {
         hl2_status_regs_to_source_status(&self.status_regs)
     }
+
+    /// HL2 TX tune test — dry run only.
+    ///
+    /// # Safety — NO RF IS PRODUCED
+    ///
+    /// PTT is NEVER asserted (`PTT_FORCED_FALSE = false`).
+    /// TX drive is ALWAYS zero (`EFFECTIVE_DRIVE = 0.0`).
+    /// No C&C frame with TX-enabling bits is written to the socket.
+    /// No TX IQ samples are generated or sent.
+    ///
+    /// This function validates parameters and logs what a real tune test
+    /// would have done, then returns immediately without touching hardware.
+    fn tx_tune_test_dry_run(
+        &mut self,
+        center_freq_hz: u64,
+        duration_ms: u32,
+        drive: f32,
+    ) -> TxTuneResult {
+        // ── Hard safety constants ────────────────────────────────────────
+        // These values are unconditional and cannot be overridden by the
+        // caller.  Changing them requires a dedicated RF-enable task.
+        const PTT_FORCED_FALSE: bool = false;
+        const EFFECTIVE_DRIVE: f32 = 0.0;
+        const MAX_DURATION_MS: u32 = 500;
+
+        // ── Parameter clamping ───────────────────────────────────────────
+        let clamped_duration_ms = duration_ms.min(MAX_DURATION_MS);
+
+        // ── Frequency validation ─────────────────────────────────────────
+        // HL2 HF TX band: 1.8–30 MHz.
+        const HF_MIN_HZ: u64 = 1_800_000;
+        const HF_MAX_HZ: u64 = 30_000_000;
+        if center_freq_hz < HF_MIN_HZ || center_freq_hz > HF_MAX_HZ {
+            warn!(
+                "[hl2 tx-tune-dry-run] rejected: {} Hz outside HF range ({}-{} Hz)",
+                center_freq_hz, HF_MIN_HZ, HF_MAX_HZ
+            );
+            return TxTuneResult {
+                message: Some("rejected:frequency_out_of_hf_range".to_string()),
+                ..TxTuneResult::default()
+            };
+        }
+
+        // ── Dry-run audit log ────────────────────────────────────────────
+        info!(
+            "[hl2 tx-tune-dry-run] DRY RUN ONLY — NO RF TRANSMITTED\n  \
+             frequency       : {} Hz\n  \
+             duration        : {} ms (requested {} ms, clamped to {} ms max)\n  \
+             requested_drive : {:.3}\n  \
+             effective_drive : {:.3}  (FORCED — no RF)\n  \
+             ptt             : {}  (FORCED — PTT never asserted)\n  \
+             result          : dry_run_completed",
+            center_freq_hz,
+            clamped_duration_ms, duration_ms, MAX_DURATION_MS,
+            drive,
+            EFFECTIVE_DRIVE,
+            PTT_FORCED_FALSE,
+        );
+
+        // ── Return dry-run result ────────────────────────────────────────
+        // Power measurements are None because no RF was transmitted.
+        TxTuneResult {
+            forward_power_w: None,
+            reverse_power_w: None,
+            swr: None,
+            message: Some("dry_run_completed".to_string()),
+        }
+    }
 }
 
 /// Write a 512-byte sub-frame into `sf`: sync, C0, C1–C4, then zeros for TX IQ.
@@ -503,6 +572,8 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         gain_values_db: (-12..=48).map(|i| i as f32).collect(),
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
+        // TX tune test is wired for dry-run validation; no RF is produced.
+        supports_tx_tune_test: true,
         ..SourceCapabilities::none()
     }
 }

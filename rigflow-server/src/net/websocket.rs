@@ -511,7 +511,26 @@ async fn handle_radio_message(
 		);
 	    }
 	}
-	
+
+        ClientRadioMessage::RequestTxTuneTest { duration_ms, drive } => {
+            info!(
+                "[websocket] RequestTxTuneTest: duration_ms={} drive={:.3}",
+                duration_ms, drive
+            );
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::RequestTxTuneTest { duration_ms, drive },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "tx_tune_test_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
     }
 }
 
@@ -605,6 +624,15 @@ fn runtime_changed_from_runtime(
         (current.source_status != previous.source_status)
             .then_some(current.source_status.clone());
 
+    // `last_tx_tune_result` is itself an `Option<TxTuneResult>`, so we cannot
+    // use `.then_some(…)` here — that would produce `Option<Option<…>>`.
+    // A plain if/else gives the `Option<TxTuneResult>` the protocol expects.
+    let tx_tune_result = if current.last_tx_tune_result != previous.last_tx_tune_result {
+        current.last_tx_tune_result.clone()
+    } else {
+        None
+    };
+
     let has_change =
         center_freq_hz.is_some()
         || target_freq_hz.is_some()
@@ -615,7 +643,8 @@ fn runtime_changed_from_runtime(
         || filter_bandwidth_hz.is_some()
         || deemphasis_mode.is_some()
         || source_control.is_some()
-        || source_status.is_some();
+        || source_status.is_some()
+        || tx_tune_result.is_some();
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
@@ -629,6 +658,7 @@ fn runtime_changed_from_runtime(
         deemphasis_mode,
         source_control,
         source_status,
+        tx_tune_result,
     })
 }
 
@@ -655,6 +685,7 @@ fn runtime_snapshot_from_status(
             deemphasis_mode: runtime.deemphasis_mode,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
+            tx_tune_result: runtime.last_tx_tune_result.clone(),
         }),
         _ => None,
     }
@@ -702,6 +733,7 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         deemphasis_mode,
         source_control: _,
         source_status: _,
+        tx_tune_result: _,
     } = msg
     {
         debug!(
@@ -738,6 +770,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         deemphasis_mode,
         source_control,
         source_status: _,
+        tx_tune_result: _,
     } = msg
     {
         info!(

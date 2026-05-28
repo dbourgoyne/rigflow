@@ -1,21 +1,20 @@
 use crate::ui::app::RigflowApp;
 use crate::UiState;
 use eframe::egui;
+use rigflow_protocol::radio_control::ClientRadioMessage;
 
 impl RigflowApp {
     /// Draw the "TX Tune Test" panel.
     ///
-    /// The panel is only shown when the active source advertises
-    /// `supports_tx_tune_test = true` in its `SourceCapabilities`.
-    /// All sources currently return `false`, so this panel is hidden
-    /// until a TX-capable source enables it.
+    /// Only shown when the active source advertises `supports_tx_tune_test`.
     ///
     /// # Safety invariants
     ///
-    /// - The "Measure SWR" button is always disabled (`add_enabled(false, …)`).
-    /// - The arm checkbox changes only `UiState::tx_tune_armed` — no
-    ///   `ClientRadioMessage` is sent and no RF is produced.
-    /// - `tx_tune_armed` always starts `false` (see `UiState::default`).
+    /// - "Measure SWR" is enabled only when the arm checkbox is checked.
+    /// - Clicking "Measure SWR" sends `RequestTxTuneTest { duration_ms: 250,
+    ///   drive: 0.0 }`.  The server executes a dry run: PTT is never asserted,
+    ///   drive is forced to 0, no RF is produced.
+    /// - `tx_tune_armed` defaults to `false` and is never persisted.
     pub(crate) fn draw_tx_tune_test_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
         if !snapshot.radio_acquired {
             return;
@@ -37,11 +36,16 @@ impl RigflowApp {
                     .color(egui::Color32::from_rgb(255, 160, 40))
                     .small(),
                 );
+
+                // ── Dry-run mode notice ──────────────────────────────────────
+                ui.label(
+                    egui::RichText::new("Dry run only — RF disabled")
+                        .color(egui::Color32::from_rgb(120, 180, 255))
+                        .small(),
+                );
                 ui.add_space(4.0);
 
                 // ── Arm checkbox ─────────────────────────────────────────────
-                // Changing the checkbox updates only local UiState.
-                // No server message is sent; no RF is produced.
                 let mut armed = snapshot.tx_tune_armed;
                 if ui.checkbox(&mut armed, "Arm TX tune test").changed() {
                     if let Ok(mut state) = self.state.lock() {
@@ -50,7 +54,7 @@ impl RigflowApp {
                 }
                 ui.add_space(4.0);
 
-                // ── Parameters (static for now; not yet interactive) ─────────
+                // ── Parameters ───────────────────────────────────────────────
                 egui::Grid::new("tx_tune_params_grid")
                     .num_columns(2)
                     .spacing([8.0, 2.0])
@@ -65,8 +69,18 @@ impl RigflowApp {
                     });
                 ui.add_space(4.0);
 
-                // ── Measure SWR — always disabled until TX is implemented ────
-                ui.add_enabled(false, egui::Button::new("Measure SWR"));
+                // ── Measure SWR — enabled only when armed ────────────────────
+                let can_measure = snapshot.tx_tune_armed;
+                let clicked = ui
+                    .add_enabled(can_measure, egui::Button::new("Measure SWR"))
+                    .clicked();
+
+                if clicked {
+                    self.send_radio_msg(ClientRadioMessage::RequestTxTuneTest {
+                        duration_ms: 250,
+                        drive: 0.0,
+                    });
+                }
                 ui.add_space(4.0);
 
                 // ── Last result ──────────────────────────────────────────────
@@ -90,7 +104,7 @@ impl RigflowApp {
                         ui.end_row();
 
                         ui.label("Result");
-                        ui.label(result.message.as_deref().unwrap_or("--"));
+                        ui.label(format_result_message(result.message.as_deref()));
                         ui.end_row();
                     });
             });
@@ -108,5 +122,22 @@ fn format_swr(swr: Option<f32>) -> String {
     match swr {
         Some(s) => format!("{s:.1}:1"),
         None => "--".to_string(),
+    }
+}
+
+fn format_result_message(msg: Option<&str>) -> &str {
+    match msg {
+        None => "--",
+        Some("dry_run_completed") => "Dry run completed (no RF)",
+        Some("not_supported") => "Not supported",
+        Some(m) if m.starts_with("rejected:") => {
+            // Strip the prefix for display; fall through returns the raw string
+            // for unknown rejection codes.
+            match m {
+                "rejected:frequency_out_of_hf_range" => "Rejected: frequency out of HF range",
+                other => other,
+            }
+        }
+        Some(other) => other,
     }
 }

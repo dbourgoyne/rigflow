@@ -7,6 +7,7 @@ use rigflow_core::radio::source_control::{
     DirectSamplingMode,
 };
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::tx_tune::TxTuneResult;
 
 pub mod fake;
 pub mod factory;
@@ -69,5 +70,31 @@ pub trait IqSource {
     /// Override for sources that expose hardware telemetry (e.g. HL2).
     fn source_status(&self) -> SourceStatus {
         SourceStatus::default()
+    }
+
+    /// Perform a TX tune test.
+    ///
+    /// # Safety invariants — MUST be honoured by every override
+    ///
+    /// This function is called from the capture thread, which owns the IQ
+    /// source exclusively.  Any override MUST:
+    /// - Never assert PTT until a future task explicitly enables it.
+    /// - Never generate non-zero TX IQ samples.
+    /// - Never write TX-enabling bits into hardware control frames.
+    ///
+    /// For this task all implementations are dry-run only: they validate
+    /// parameters and log what would happen, then return immediately.
+    ///
+    /// The default rejects the request with `"not_supported"`.
+    fn tx_tune_test_dry_run(
+        &mut self,
+        _center_freq_hz: u64,
+        _duration_ms: u32,
+        _drive: f32,
+    ) -> TxTuneResult {
+        TxTuneResult {
+            message: Some("not_supported".to_string()),
+            ..TxTuneResult::default()
+        }
     }
 }
