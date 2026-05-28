@@ -6,6 +6,7 @@ use std::{
 
 use crate::persistence::{
     error::PersistenceError,
+    migrations::migrate_operator_settings_value,
     models::{AppStateFile, OperatorSettingsFile},
     paths::{app_state_path, normalize_operator_id, operator_file_path, operators_dir},
 };
@@ -68,7 +69,32 @@ impl PersistenceStore {
             return Ok(default);
         }
 
-        read_json_file(&path)
+        // Load as raw JSON value, run the migration chain, then deserialize.
+        let text = fs::read_to_string(&path)?;
+        let raw: serde_json::Value = serde_json::from_str(&text)?;
+        let (migrated, did_migrate) = migrate_operator_settings_value(raw)?;
+
+        let settings: OperatorSettingsFile = serde_json::from_value(migrated)?;
+
+        if did_migrate {
+            // Best-effort write-back: log but don't fail the load if the
+            // upgraded file can't be saved (e.g. read-only filesystem).
+            if let Err(err) = self.save_operator_settings(&settings) {
+                log::warn!(
+                    "operator settings migrated successfully but could not \
+                     be saved back to disk ({}): {err}",
+                    path.display()
+                );
+            } else {
+                log::info!(
+                    "operator settings migrated to v{} and saved: {}",
+                    crate::persistence::models::OPERATOR_SETTINGS_FILE_VERSION,
+                    path.display()
+                );
+            }
+        }
+
+        Ok(settings)
     }
 
     pub fn save_operator_settings(

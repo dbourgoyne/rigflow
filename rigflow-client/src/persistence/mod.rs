@@ -1,5 +1,6 @@
 pub mod bootstrap;
 pub mod error;
+pub mod migrations;
 pub mod models;
 pub mod paths;
 pub mod store;

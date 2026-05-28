@@ -11,6 +11,7 @@ use rigflow_core::radio::{
         GainMode,
         SourceControlState,
     },
+    source_status::SourceStatus,
 };
 use rigflow_core::dsp::modes::DeemphasisMode;
 
@@ -89,6 +90,7 @@ pub struct WorkerRuntimeState {
     pub filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
     pub source_control: SourceControlState,
+    pub source_status: SourceStatus,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,

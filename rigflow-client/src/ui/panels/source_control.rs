@@ -10,7 +10,50 @@ impl RigflowApp {
             egui::CollapsingHeader::new("Source Control")
                 .default_open(true)
                 .show(ui, |ui| {
+                    let mut save_source_control = false;
+
                     if let Ok(mut state) = self.state.lock() {
+                        // Apply saved source-control preferences to hardware after
+                        // a radio acquire if persisted settings were found.
+                        if state.pending_apply_source_control {
+                            state.pending_apply_source_control = false;
+                            if state.source_capabilities.supports_sample_rate {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourceSampleRate {
+                                        sample_rate_hz: state.source_control.sample_rate_hz,
+                                    },
+                                );
+                            }
+                            if state.source_capabilities.supports_gain_mode {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourceGainMode {
+                                        mode: state.source_control.gain_mode,
+                                    },
+                                );
+                            }
+                            if state.source_capabilities.supports_gain {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourceGain {
+                                        gain_db: state.source_control.gain_db,
+                                    },
+                                );
+                            }
+                            if state.source_capabilities.supports_ppm_correction {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourcePpmCorrection {
+                                        ppm: state.source_control.ppm_correction,
+                                    },
+                                );
+                            }
+                            if state.source_capabilities.supports_direct_sampling {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourceDirectSampling {
+                                        mode: state.source_control.direct_sampling,
+                                    },
+                                );
+                            }
+                        }
+
                         // -----------------------------
                         // Sample rate
                         // -----------------------------
@@ -34,10 +77,10 @@ impl RigflowApp {
 
                                 if selected_sample_rate != state.source_control.sample_rate_hz {
                                     state.source_control.sample_rate_hz = selected_sample_rate;
-
                                     self.send_radio_msg(ClientRadioMessage::SetSourceSampleRate {
                                         sample_rate_hz: selected_sample_rate,
                                     });
+                                    save_source_control = true;
                                 }
                             } else {
                                 ui.label("Sample rates unavailable");
@@ -67,12 +110,12 @@ impl RigflowApp {
 
                                     if auto_changed || manual_changed {
                                         state.source_control.gain_mode = gain_mode;
-
                                         self.send_radio_msg(
                                             ClientRadioMessage::SetSourceGainMode {
                                                 mode: gain_mode,
                                             },
                                         );
+                                        save_source_control = true;
                                     }
                                 });
                             });
@@ -118,12 +161,12 @@ impl RigflowApp {
                                             > f32::EPSILON
                                         {
                                             state.source_control.gain_db = snapped_gain;
-
                                             self.send_radio_msg(
                                                 ClientRadioMessage::SetSourceGain {
                                                     gain_db: snapped_gain,
                                                 },
                                             );
+                                            save_source_control = true;
                                         }
                                     }
                                 } else {
@@ -170,6 +213,7 @@ impl RigflowApp {
                                     self.send_radio_msg(
                                         ClientRadioMessage::SetSourcePpmCorrection { ppm },
                                     );
+                                    save_source_control = true;
                                 }
                             });
                         }
@@ -201,15 +245,19 @@ impl RigflowApp {
 
                                 if selected != state.source_control.direct_sampling {
                                     state.source_control.direct_sampling = selected;
-
                                     self.send_radio_msg(
                                         ClientRadioMessage::SetSourceDirectSampling {
                                             mode: selected,
                                         },
                                     );
+                                    save_source_control = true;
                                 }
                             }
                         }
+                    }
+
+                    if save_source_control {
+                        self.save_source_control_prefs_to_current_operator();
                     }
                 });
         }

@@ -1,5 +1,6 @@
 pub mod api;
 pub mod discovery;
+pub mod hl2_discovery;
 pub mod manager;
 pub mod session;
 pub mod types;

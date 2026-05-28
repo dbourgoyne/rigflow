@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+use std::time::Instant;
+
 use crate::persistence::models::DemodPreferenceSetFile;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
+use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::RadioCapabilities;
-use std::time::Instant;
 
 #[derive(Debug, Clone, Copy)]
 pub struct DebounceState {
@@ -162,6 +165,18 @@ pub struct UiState {
     pub source_control: SourceControlState,
     pub source_capabilities: SourceCapabilities,
     pub radio_capabilities: RadioCapabilities,
+    /// Latest read-only telemetry from the active source.
+    /// Empty (`SourceStatus::default()`) when the source does not report status.
+    pub source_status: SourceStatus,
+
+    /// Persisted source-control settings keyed by radio ID string.
+    /// Mirrors `OperatorSettingsFile::source_control_preferences`.
+    pub source_control_preferences: HashMap<String, SourceControlState>,
+
+    /// When `true`, `draw_source_control_panel` should re-send all source
+    /// control values to the server (used after applying saved preferences
+    /// on radio acquire).
+    pub pending_apply_source_control: bool,
 }
 
 impl Default for UiState {
@@ -221,12 +236,12 @@ impl Default for UiState {
             // WATERFALL / DISPLAY
             // =================================================================
             manual_waterfall_top_db: -35.0,
-            manual_waterfall_range_db: -105.0,
+            manual_waterfall_range_db: 80.0,
 
             adaptive_waterfall_normalization: true,
             adaptive_top_db_estimate: -35.0,
-            adaptive_floor_db_estimate: -105.0,
-            adaptive_range_db_estimate: -70.0,
+            adaptive_floor_db_estimate: -140.0,
+            adaptive_range_db_estimate: 100.0,
 
             display_zoom: 1.0,
 
@@ -265,6 +280,9 @@ impl Default for UiState {
             source_control: SourceControlState::default(),
             source_capabilities: SourceCapabilities::none(),
             radio_capabilities: RadioCapabilities::default(),
+            source_status: SourceStatus::default(),
+            source_control_preferences: HashMap::new(),
+            pending_apply_source_control: false,
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

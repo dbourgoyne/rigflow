@@ -114,6 +114,11 @@ pub fn apply_operator_settings_to_ui_state(
     state.pitch_debounce = crate::ui::state::DebounceState::new(state.pitch_hz);
 
     state.last_demod_mode_for_controls = Some(state.demod_mode);
+
+    // Mirror the per-radio source-control preferences into UiState so the
+    // WebSocket handler can apply them on radio acquire without needing to
+    // touch the persistence store.
+    state.source_control_preferences = operator.source_control_preferences.clone();
 }
 
 pub fn apply_ui_state_to_operator_settings(
@@ -139,5 +144,8 @@ pub fn apply_ui_state_to_operator_settings(
     operator.waterfall_display_preferences.manual_waterfall_top_db =
 	state.manual_waterfall_top_db;
     operator.waterfall_display_preferences.manual_waterfall_range_db =
-	state.manual_waterfall_range_db;
+        state.manual_waterfall_range_db;
+
+    // Write the current per-radio source-control preferences back to the file.
+    operator.source_control_preferences = state.source_control_preferences.clone();
 }

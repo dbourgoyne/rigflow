@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DemodMode, Sideband, DeemphasisMode};
+use rigflow_core::radio::source_control::SourceControlState;
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
-pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 2;
+pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
@@ -122,6 +125,14 @@ pub struct OperatorSettingsFile {
     pub bookmarks: Vec<BookmarkFile>,
 
     pub waterfall_display_preferences: WaterfallDisplayPreferencesFile,
+
+    /// Persisted source-control settings, keyed by radio ID string
+    /// (e.g. `"hl2:192.168.1.116"`, `"rtl:0"`).
+    ///
+    /// Added in schema v3.  Deserialization falls back to an empty map so
+    /// that a migrated file that is somehow missing this field still loads.
+    #[serde(default)]
+    pub source_control_preferences: HashMap<String, SourceControlState>,
 }
 
 impl OperatorSettingsFile {
@@ -135,7 +146,8 @@ impl OperatorSettingsFile {
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
             bookmarks: Vec::new(),
-	    waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
+            waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
+            source_control_preferences: HashMap::new(),
         }
     }
 }

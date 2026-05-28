@@ -376,13 +376,14 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::RuntimeSnapshot {
-            radio_id: _,
+            radio_id,
             center_freq_hz,
             target_freq_hz,
             input_sample_rate_hz,
             demod_mode,
             sideband,
             source_control,
+            source_status,
             ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
@@ -390,7 +391,13 @@ pub fn apply_radio_server_message(
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
+            // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
+            if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
+                state.source_control = saved;
+                state.pending_apply_source_control = true;
+            }
+            state.source_status = source_status;
 
             // Do NOT overwrite persisted per-demod prefs here.
             state.pending_apply_mode_controls = true;
@@ -403,6 +410,7 @@ pub fn apply_radio_server_message(
             demod_mode,
             sideband,
             source_control,
+            source_status,
             ..
         } => {
             if let Some(value) = center_freq_hz {
@@ -431,6 +439,10 @@ pub fn apply_radio_server_message(
                     audio_session_generation.fetch_add(1, Ordering::Relaxed);
                 }
                 state.source_control = value;
+            }
+
+            if let Some(value) = source_status {
+                state.source_status = value;
             }
         }
 

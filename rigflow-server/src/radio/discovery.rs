@@ -6,6 +6,8 @@ use rigflow_core::radio::source_control::{DirectSamplingMode, SourceCapabilities
 use rigflow_core::radio::{HardwareKind, RadioCapabilities, RadioDescriptor, RadioId};
 
 use crate::config::ServerConfig;
+use crate::radio::hl2_discovery;
+use crate::source::hermeslite2::hl2_source_capabilities;
 
 /// Discover all radios available to the server.
 ///
@@ -13,12 +15,14 @@ use crate::config::ServerConfig;
 /// - RTL-SDR devices
 /// - WAV file sources (from configured directory)
 /// - Fake tone generator
+/// - Hermes Lite 2 devices (Protocol 1 UDP broadcast)
 pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
 
     radios.extend(discover_rtl_radios());
     radios.extend(discover_wav_radios(Path::new(&config.wav_dir)));
     radios.push(build_fake_tone_radio());
+    radios.extend(discover_hl2_radios());
 
     radios
 }
@@ -131,6 +135,43 @@ fn build_fake_tone_radio() -> RadioDescriptor {
         serial: None,
         radio_capabilities: default_radio_capabilities(),
         source_capabilities: SourceCapabilities::none(),
+    }
+}
+
+//
+// ============================
+// Hermes Lite 2 Discovery
+// ============================
+//
+
+fn discover_hl2_radios() -> Vec<RadioDescriptor> {
+    hl2_discovery::discover_hl2_devices()
+        .into_iter()
+        .enumerate()
+        .map(|(idx, dev)| RadioDescriptor {
+            id: RadioId(format!("hl2:{}", dev.mac_hex())),
+            display_name: format!("Hermes Lite 2 ({})", dev.addr.ip()),
+            hardware_kind: HardwareKind::HermesLite2,
+            index: idx as u32,
+            // serial carries the IP:port so the worker can connect in step 4.
+            serial: Some(dev.addr.to_string()),
+            radio_capabilities: hl2_radio_capabilities(),
+            source_capabilities: hl2_source_capabilities(),
+        })
+        .collect()
+}
+
+fn hl2_radio_capabilities() -> RadioCapabilities {
+    RadioCapabilities {
+        min_freq_hz: 10_000,
+        max_freq_hz: 30_000_000,
+        max_sample_rate_hz: 384_000,
+        supports_wfm: false,
+        supports_nfm: true,
+        supports_am: true,
+        supports_cw: true,
+        supports_usb: true,
+        supports_lsb: true,
     }
 }
 

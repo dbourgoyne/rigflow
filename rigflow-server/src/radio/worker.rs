@@ -30,6 +30,11 @@ use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
+use rigflow_core::radio::source_status::SourceStatus;
+
+/// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
+/// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
+const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -42,6 +47,8 @@ struct SharedControlState {
     filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
     pub source_control: SourceControlState,
+    /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
+    pub source_status: SourceStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +161,8 @@ fn source_kind_for_descriptor(descriptor: &RadioDescriptor) -> Result<SourceKind
         Ok(SourceKind::RtlSdr)
     } else if descriptor.id.0.starts_with("wav:") {
         Ok(SourceKind::Wav)
+    } else if descriptor.id.0.starts_with("hl2:") {
+        Ok(SourceKind::HermesLite2)
     } else {
         Err(format!("unsupported radio id '{}'", descriptor.id.0))
     }
@@ -188,6 +197,17 @@ fn create_worker_source(
             .clone();
 
         SourceConfig::WavFile { path: wav_path }
+    } else if descriptor.id.0.starts_with("hl2:") {
+        let addr = descriptor
+            .serial
+            .as_ref()
+            .ok_or_else(|| "HL2 radio missing device address in serial field".to_string())?
+            .clone();
+        SourceConfig::HermesLite2 {
+            addr,
+            sample_rate_hz: server_cfg.hl2_sample_rate_hz as f32,
+            center_freq_hz: initial_center_freq_hz as f32,
+        }
     } else {
         return Err(format!("source for {} not implemented", descriptor.id.0));
     };
@@ -241,6 +261,7 @@ fn build_runtime_state(
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
         source_control: control.source_control.clone(),
+        source_status: control.source_status.clone(),
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -311,6 +332,7 @@ fn run_iq_worker_threads(
         filter_bandwidth_hz: 3000.0, // sensible default
         deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
         source_control: SourceControlState::default(),
+        source_status: SourceStatus::default(),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -323,6 +345,10 @@ fn run_iq_worker_threads(
     // Written by capture thread (after hardware confirms the rate), read by DSP
     // thread. Using AtomicU32 avoids a mutex on the hot path.
     let confirmed_sample_rate_hz = Arc::new(AtomicU32::new(0));
+
+    // HL2 has a watchdog: if no C&C packets arrive in ~60 s it stops streaming.
+    // The capture thread sends a keepalive C&C every 30 s to prevent this.
+    let needs_cc_keepalive = matches!(source_kind, SourceKind::HermesLite2);
 
     let cmd_thread = spawn_command_thread(
         cmd_rx,
@@ -346,6 +372,7 @@ fn run_iq_worker_threads(
         block_size,
         initial_center_freq_hz,
         confirmed_sample_rate_hz.clone(),
+        needs_cc_keepalive,
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -658,6 +685,7 @@ fn spawn_capture_thread(
     block_size: usize,
     initial_center_freq_hz: u64,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
+    needs_cc_keepalive: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut source = match create_worker_source(
@@ -706,6 +734,10 @@ fn spawn_capture_thread(
         let mut next_source_tick = Instant::now();
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
+        let mut last_cc_sent = Instant::now();
+        // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
+        let status_poll_interval = Duration::from_millis(250);
+        let mut last_status_poll = Instant::now();
 
         debug!(
             "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
@@ -845,6 +877,20 @@ fn spawn_capture_thread(
                 }
 
                 last_center_freq_hz = control_snapshot.center_freq_hz;
+                last_cc_sent = Instant::now();
+            } else if needs_cc_keepalive && last_cc_sent.elapsed() >= HL2_CC_KEEPALIVE_INTERVAL {
+                source.keepalive();
+                last_cc_sent = Instant::now();
+            }
+
+            // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState
+            // so the DSP thread can include it in WorkerStatus updates.
+            if last_status_poll.elapsed() >= status_poll_interval {
+                let new_status = source.source_status();
+                if let Ok(mut cs) = control.lock() {
+                    cs.source_status = new_status;
+                }
+                last_status_poll = Instant::now();
             }
 
             if !realtime {
@@ -875,6 +921,7 @@ fn spawn_capture_thread(
             }
 
             blocks_read += 1;
+
             if blocks_read % 20 == 0 {
                 trace!(
                     "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
@@ -996,6 +1043,11 @@ fn spawn_dsp_thread(
 
             if current.source_control != applied.source_control {
                 applied.source_control = current.source_control.clone();
+                changed = true;
+            }
+
+            if current.source_status != applied.source_status {
+                applied.source_status = current.source_status.clone();
                 changed = true;
             }
 
@@ -1149,6 +1201,21 @@ fn normalize_initial_frequencies(
         } else {
             server_cfg.center_freq_hz as f32
         };
+    }
+
+    if src_kind == HardwareKind::HermesLite2 {
+        let caps = crate::source::hermeslite2::hl2_source_capabilities();
+        let min = caps.tuner_freq_hz_min as f32;
+        let max = caps.tuner_freq_hz_max as f32;
+        let clamped = initial_center_freq_hz.clamp(min, max);
+        if (clamped - initial_center_freq_hz).abs() > 1.0 {
+            warn!(
+                "HL2: initial center {:.0} Hz is outside hardware range \
+                 [{:.0}, {:.0}] Hz — clamping to {:.0} Hz",
+                initial_center_freq_hz, min, max, clamped
+            );
+        }
+        initial_center_freq_hz = clamped;
     }
 
     let initial_target_freq_hz = initial_center_freq_hz;

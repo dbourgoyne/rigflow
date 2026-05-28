@@ -20,7 +20,7 @@ use crate::{
 /// Smoothing factor for adaptive waterfall normalization.
 ///
 /// Lower values react more slowly and look more stable.
-const ADAPTIVE_NORMALIZATION_ALPHA: f32 = 0.02;
+const ADAPTIVE_NORMALIZATION_ALPHA: f32 = 0.05;
 
 /// Extra headroom above the estimated top so strong peaks do not pin
 /// the display ceiling too aggressively.
