@@ -53,6 +53,14 @@ pub struct SourceCapabilities {
 
     pub tuner_freq_hz_min: u32,
     pub tuner_freq_hz_max: u32,
+
+    /// Whether the source supports a TX tune test (short low-power carrier
+    /// pulse used to measure forward/reverse power and SWR).
+    ///
+    /// This is a capability flag only. The actual TX tune test protocol
+    /// is not yet implemented; the UI skeleton is always disabled while
+    /// this is `false`.
+    pub supports_tx_tune_test: bool,
 }
 
 impl SourceCapabilities {
@@ -72,6 +80,8 @@ impl SourceCapabilities {
 
             tuner_freq_hz_min: 0,
             tuner_freq_hz_max: 0,
+
+            supports_tx_tune_test: false,
         }
     }
 }

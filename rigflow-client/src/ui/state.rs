@@ -7,6 +7,7 @@ use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::tx_tune::TxTuneResult;
 use rigflow_core::radio::RadioCapabilities;
 
 #[derive(Debug, Clone, Copy)]
@@ -177,6 +178,19 @@ pub struct UiState {
     /// control values to the server (used after applying saved preferences
     /// on radio acquire).
     pub pending_apply_source_control: bool,
+
+    // =====================================================================
+    // TX TUNE TEST (client-local; never persisted; never sent to server)
+    // =====================================================================
+    /// Whether the operator has armed the TX tune test checkbox.
+    ///
+    /// Always starts `false`. Never persisted. The only effect today is
+    /// enabling the "Measure SWR" button once that is implemented.
+    pub tx_tune_armed: bool,
+
+    /// Cached result from the most recent TX tune test measurement.
+    /// All fields `None` until an actual tune test is executed.
+    pub last_tx_tune_result: TxTuneResult,
 }
 
 impl Default for UiState {
@@ -283,6 +297,9 @@ impl Default for UiState {
             source_status: SourceStatus::default(),
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
+
+            tx_tune_armed: false,
+            last_tx_tune_result: TxTuneResult::default(),
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

@@ -211,6 +211,8 @@ impl IqSource for RtlSdrSource {
 
             tuner_freq_hz_min: 24_000_000,
             tuner_freq_hz_max: 1_766_000_000,
+
+            supports_tx_tune_test: false,
         }
     }
 
