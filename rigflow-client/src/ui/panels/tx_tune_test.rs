@@ -12,8 +12,9 @@ impl RigflowApp {
     ///
     /// - "Measure SWR" is enabled only when the arm checkbox is checked.
     /// - Clicking "Measure SWR" sends `RequestTxTuneTest { duration_ms: 250,
-    ///   drive: 0.0 }`.  The server executes a dry run: PTT is never asserted,
-    ///   drive is forced to 0, no RF is produced.
+    ///   drive: 0.0 }`.  The server emits a short low-power carrier pulse.
+    /// - The UI auto-disarms immediately after clicking so the button cannot
+    ///   be fired twice without re-arming.
     /// - `tx_tune_armed` defaults to `false` and is never persisted.
     pub(crate) fn draw_tx_tune_test_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
         if !snapshot.radio_acquired {
@@ -36,14 +37,6 @@ impl RigflowApp {
                     .color(egui::Color32::from_rgb(255, 160, 40))
                     .small(),
                 );
-
-                // ── Dry-run mode notice ──────────────────────────────────────
-                ui.label(
-                    egui::RichText::new("Dry run only — RF disabled")
-                        .color(egui::Color32::from_rgb(120, 180, 255))
-                        .small(),
-                );
-                ui.add_space(4.0);
 
                 // ── Arm checkbox ─────────────────────────────────────────────
                 let mut armed = snapshot.tx_tune_armed;
@@ -80,6 +73,10 @@ impl RigflowApp {
                         duration_ms: 250,
                         drive: 0.0,
                     });
+                    // Auto-disarm after firing: the test is now running.
+                    if let Ok(mut state) = self.state.lock() {
+                        state.tx_tune_armed = false;
+                    }
                 }
                 ui.add_space(4.0);
 
@@ -128,16 +125,15 @@ fn format_swr(swr: Option<f32>) -> String {
 fn format_result_message(msg: Option<&str>) -> &str {
     match msg {
         None => "--",
+        Some("ok") => "OK",
+        Some("fault") => "Fault",
         Some("dry_run_completed") => "Dry run completed (no RF)",
         Some("not_supported") => "Not supported",
-        Some(m) if m.starts_with("rejected:") => {
-            // Strip the prefix for display; fall through returns the raw string
-            // for unknown rejection codes.
-            match m {
-                "rejected:frequency_out_of_hf_range" => "Rejected: frequency out of HF range",
-                other => other,
-            }
-        }
+        Some(m) if m.starts_with("rejected:") => match m {
+            "rejected:frequency_out_of_hf_range" => "Rejected: frequency out of HF range",
+            "rejected:tx_inhibited" => "Rejected: TX inhibited",
+            other => other,
+        },
         Some(other) => other,
     }
 }

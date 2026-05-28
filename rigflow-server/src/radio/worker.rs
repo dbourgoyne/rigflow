@@ -917,10 +917,10 @@ fn spawn_capture_thread(
                 last_status_poll = Instant::now();
             }
 
-            // Execute any pending TX tune test dry run.
+            // Execute any pending TX tune test.
             //
             // The capture thread owns the IQ source exclusively, so
-            // tx_tune_test_dry_run() must run here.  The result is stored in
+            // tx_tune_test() must run here.  The result is stored in
             // SharedControlState; the DSP thread detects the change and
             // publishes a RuntimeChanged message to the client.
             {
@@ -932,16 +932,14 @@ fn spawn_capture_thread(
                 if let Some((duration_ms, drive)) = pending {
                     let center_freq_hz = control_snapshot.center_freq_hz;
                     info!(
-                        "[radio-worker {}] TX tune test dry run: freq={} dur_ms={} drive={:.3} \
-                         — entering dry-run path (no RF)",
+                        "[radio-worker {}] TX tune test: freq={} dur_ms={} drive={:.3}",
                         descriptor.id.0, center_freq_hz, duration_ms, drive
                     );
 
-                    let result =
-                        source.tx_tune_test_dry_run(center_freq_hz, duration_ms, drive);
+                    let result = source.tx_tune_test(center_freq_hz, duration_ms, drive);
 
                     info!(
-                        "[radio-worker {}] TX tune test dry run complete: result={:?}",
+                        "[radio-worker {}] TX tune test complete: result={:?}",
                         descriptor.id.0, result.message
                     );
 

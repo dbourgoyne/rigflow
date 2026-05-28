@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::net::{SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 use num_complex::Complex32;
@@ -185,6 +186,68 @@ impl HermesLite2Source {
         Ok(())
     }
 
+    /// Send one 1032-byte H2D TX packet with PTT asserted (C0[0]=1) and a
+    /// constant carrier (I = `amplitude_fs` × 0x7FFFFF, Q = 0) in every TX IQ
+    /// slot.
+    ///
+    /// Mirrors `send_gain_cc` for the C&C portion (NCO freq + LNA gain), but
+    /// with the PTT bit set in both sub-frame C0 bytes.
+    ///
+    /// # Safety contract
+    ///
+    /// This function ASSERTS PTT.  The caller MUST call `send_gain_cc()` on
+    /// every exit path — including error paths — to release PTT.
+    fn send_tx_packet(&mut self, amplitude_fs: f32) -> Result<(), String> {
+        // Convert normalised amplitude to a 24-bit signed big-endian value.
+        let i_code = (amplitude_fs.clamp(0.0, 1.0) * 0x7F_FFFF as f32) as i32;
+        let i_b = [(i_code >> 16) as u8, (i_code >> 8) as u8, i_code as u8];
+
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        let freq_bytes = (self.center_freq_hz as u32).to_be_bytes();
+        let gain_byte = 0x40 | (self.lna_gain_code & 0x3F);
+
+        // Sub-frame 1 (offset 8): NCO freq register (address 0x01) + PTT.
+        // C0 = (0x01 << 1) | 0x01 = 0x03
+        {
+            let sf = &mut pkt[8..520];
+            sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
+            sf[3] = 0x03;
+            sf[4..8].copy_from_slice(&freq_bytes);
+            for i in 0..P1_SAMPLES_PER_SUBFRAME {
+                let b = 8 + i * 8;
+                sf[b..b + 3].copy_from_slice(&i_b);
+                // Q bytes [b+3..b+6] remain 0 (pkt initialised to zero).
+                // Mic bytes [b+6..b+8] remain 0.
+            }
+        }
+
+        // Sub-frame 2 (offset 520): LNA gain register (address 0x0A) + PTT.
+        // C0 = (0x0A << 1) | 0x01 = 0x15
+        {
+            let sf = &mut pkt[520..1032];
+            sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
+            sf[3] = 0x15;
+            sf[4] = 0;
+            sf[5] = 0;
+            sf[6] = 0;
+            sf[7] = gain_byte;
+            for i in 0..P1_SAMPLES_PER_SUBFRAME {
+                let b = 8 + i * 8;
+                sf[b..b + 3].copy_from_slice(&i_b);
+            }
+        }
+
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send TX packet failed: {e}"))
+    }
+
     fn speed_code(&self) -> u8 {
         match self.sample_rate_hz as u32 {
             96_000 => 0x01,
@@ -288,29 +351,26 @@ impl IqSource for HermesLite2Source {
         hl2_status_regs_to_source_status(&self.status_regs)
     }
 
-    /// HL2 TX tune test — dry run only.
+    /// HL2 TX tune test — short carrier pulse for SWR measurement.
     ///
-    /// # Safety — NO RF IS PRODUCED
+    /// # Safety invariants
     ///
-    /// PTT is NEVER asserted (`PTT_FORCED_FALSE = false`).
-    /// TX drive is ALWAYS zero (`EFFECTIVE_DRIVE = 0.0`).
-    /// No C&C frame with TX-enabling bits is written to the socket.
-    /// No TX IQ samples are generated or sent.
-    ///
-    /// This function validates parameters and logs what a real tune test
-    /// would have done, then returns immediately without touching hardware.
-    fn tx_tune_test_dry_run(
+    /// - PTT is released on **every** exit path via `send_gain_cc()`.
+    /// - Amplitude is hard-clamped to `TX_TUNE_AMPLITUDE_FS` (5% FS, ≈ -26 dBFS).
+    /// - Duration is hard-clamped to `MAX_DURATION_MS` (500 ms).
+    /// - The caller-supplied `drive` parameter is ignored; drive is not
+    ///   user-configurable in this revision.
+    fn tx_tune_test(
         &mut self,
         center_freq_hz: u64,
         duration_ms: u32,
-        drive: f32,
+        _drive: f32,
     ) -> TxTuneResult {
         // ── Hard safety constants ────────────────────────────────────────
-        // These values are unconditional and cannot be overridden by the
-        // caller.  Changing them requires a dedicated RF-enable task.
-        const PTT_FORCED_FALSE: bool = false;
-        const EFFECTIVE_DRIVE: f32 = 0.0;
+        const TX_TUNE_AMPLITUDE_FS: f32 = 0.05; // 5% FS (~-26 dBFS), hard-coded
         const MAX_DURATION_MS: u32 = 500;
+        const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
+        const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
 
         // ── Parameter clamping ───────────────────────────────────────────
         let clamped_duration_ms = duration_ms.min(MAX_DURATION_MS);
@@ -321,7 +381,7 @@ impl IqSource for HermesLite2Source {
         const HF_MAX_HZ: u64 = 30_000_000;
         if center_freq_hz < HF_MIN_HZ || center_freq_hz > HF_MAX_HZ {
             warn!(
-                "[hl2 tx-tune-dry-run] rejected: {} Hz outside HF range ({}-{} Hz)",
+                "[hl2 tx-tune] rejected: {} Hz outside HF range ({}-{} Hz)",
                 center_freq_hz, HF_MIN_HZ, HF_MAX_HZ
             );
             return TxTuneResult {
@@ -330,29 +390,87 @@ impl IqSource for HermesLite2Source {
             };
         }
 
-        // ── Dry-run audit log ────────────────────────────────────────────
+        // ── TX inhibit check ─────────────────────────────────────────────
+        if self.status_regs.raddr0_valid && self.status_regs.tx_inhibited {
+            warn!("[hl2 tx-tune] rejected: TX inhibited by hardware");
+            return TxTuneResult {
+                message: Some("rejected:tx_inhibited".to_string()),
+                ..TxTuneResult::default()
+            };
+        }
+
         info!(
-            "[hl2 tx-tune-dry-run] DRY RUN ONLY — NO RF TRANSMITTED\n  \
-             frequency       : {} Hz\n  \
-             duration        : {} ms (requested {} ms, clamped to {} ms max)\n  \
-             requested_drive : {:.3}\n  \
-             effective_drive : {:.3}  (FORCED — no RF)\n  \
-             ptt             : {}  (FORCED — PTT never asserted)\n  \
-             result          : dry_run_completed",
-            center_freq_hz,
-            clamped_duration_ms, duration_ms, MAX_DURATION_MS,
-            drive,
-            EFFECTIVE_DRIVE,
-            PTT_FORCED_FALSE,
+            "[hl2 tx-tune] starting: freq={} Hz  duration={} ms  amplitude={:.3} FS",
+            center_freq_hz, clamped_duration_ms, TX_TUNE_AMPLITUDE_FS
         );
 
-        // ── Return dry-run result ────────────────────────────────────────
-        // Power measurements are None because no RF was transmitted.
+        // ── TX loop ──────────────────────────────────────────────────────
+        // recv() is intentionally skipped during TX — the HL2 may stop
+        // sending DDC while PTT is asserted, causing recv to time out and
+        // distort TX packet timing.
+        let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+        let deadline = Instant::now() + Duration::from_millis(clamped_duration_ms as u64);
+        let mut next_tick = Instant::now();
+        let mut fault: Option<String> = None;
+
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+
+            if now < next_tick {
+                thread::sleep(next_tick - now);
+            }
+            next_tick += packet_period;
+
+            if let Err(e) = self.send_tx_packet(TX_TUNE_AMPLITUDE_FS) {
+                fault = Some(e);
+                break;
+            }
+        }
+
+        // ── PTT release — unconditional on ALL exit paths ─────────────────
+        // send_gain_cc has C0[0]=0 in both sub-frames → PTT released.
+        if let Err(e) = self.send_gain_cc() {
+            warn!("[hl2 tx-tune] PTT release (send_gain_cc) failed: {e}");
+        }
+
+        // ── Handle TX fault ───────────────────────────────────────────────
+        if let Some(err) = fault {
+            warn!("[hl2 tx-tune] fault during TX loop: {err}");
+            return TxTuneResult {
+                message: Some("fault".to_string()),
+                ..TxTuneResult::default()
+            };
+        }
+
+        // ── Post-TX status drain (~60 ms) ─────────────────────────────────
+        // Read DDC packets briefly to refresh status registers with
+        // post-TX telemetry (forward/reverse power, temperature, etc.).
+        let _ = self.socket.set_read_timeout(Some(Duration::from_millis(20)));
+        let drain_end = Instant::now() + Duration::from_millis(60);
+        let mut drain_buf = [0u8; P1_PACKET_LEN];
+        while Instant::now() < drain_end {
+            match self.socket.recv(&mut drain_buf) {
+                Ok(len) if len == P1_PACKET_LEN => {
+                    let mut discard = VecDeque::new();
+                    parse_ddc_packet(&drain_buf, &mut discard, &mut self.status_regs);
+                }
+                _ => {} // timeout or short packet — keep draining until drain_end
+            }
+        }
+        let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
+
+        info!("[hl2 tx-tune] complete");
+
+        // Forward/reverse power are None until calibration constants are known.
+        // TODO: add calibration once hardware constants are confirmed.
         TxTuneResult {
             forward_power_w: None,
             reverse_power_w: None,
             swr: None,
-            message: Some("dry_run_completed".to_string()),
+            message: Some("ok".to_string()),
         }
     }
 }
@@ -572,7 +690,6 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         gain_values_db: (-12..=48).map(|i| i as f32).collect(),
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
-        // TX tune test is wired for dry-run validation; no RF is produced.
         supports_tx_tune_test: true,
         ..SourceCapabilities::none()
     }

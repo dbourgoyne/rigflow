@@ -72,21 +72,18 @@ pub trait IqSource {
         SourceStatus::default()
     }
 
-    /// Perform a TX tune test.
+    /// Perform a TX tune test (short carrier pulse for SWR measurement).
     ///
-    /// # Safety invariants — MUST be honoured by every override
+    /// Called from the capture thread, which owns the IQ source exclusively.
     ///
-    /// This function is called from the capture thread, which owns the IQ
-    /// source exclusively.  Any override MUST:
-    /// - Never assert PTT until a future task explicitly enables it.
-    /// - Never generate non-zero TX IQ samples.
-    /// - Never write TX-enabling bits into hardware control frames.
+    /// # Safety contract for overrides
     ///
-    /// For this task all implementations are dry-run only: they validate
-    /// parameters and log what would happen, then return immediately.
+    /// - PTT MUST be released on all exit paths, including error paths.
+    /// - Duration MUST be clamped to a safe maximum (≤ 500 ms).
+    /// - Drive/amplitude MUST be clamped to a safe minimum.
     ///
     /// The default rejects the request with `"not_supported"`.
-    fn tx_tune_test_dry_run(
+    fn tx_tune_test(
         &mut self,
         _center_freq_hz: u64,
         _duration_ms: u32,
