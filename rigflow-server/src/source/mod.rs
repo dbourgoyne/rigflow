@@ -7,7 +7,7 @@ use rigflow_core::radio::source_control::{
     DirectSamplingMode,
 };
 use rigflow_core::radio::source_status::SourceStatus;
-use rigflow_core::radio::tx_tune::TxTuneResult;
+use rigflow_core::radio::tx_tune::{TxTuneResult, TxTuneStatus};
 
 pub mod fake;
 pub mod factory;
@@ -90,6 +90,7 @@ pub trait IqSource {
         _drive: f32,
     ) -> TxTuneResult {
         TxTuneResult {
+            status: TxTuneStatus::Fault,
             message: Some("not_supported".to_string()),
             ..TxTuneResult::default()
         }

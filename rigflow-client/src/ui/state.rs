@@ -184,12 +184,17 @@ pub struct UiState {
     // =====================================================================
     /// Whether the operator has armed the TX tune test checkbox.
     ///
-    /// Always starts `false`. Never persisted. The only effect today is
-    /// enabling the "Measure SWR" button once that is implemented.
+    /// Always starts `false`. Never persisted. Cleared automatically when
+    /// "Measure SWR" is clicked.
     pub tx_tune_armed: bool,
 
+    /// True while a TX tune test request has been sent and no result has
+    /// arrived yet.  Used to disable the "Measure SWR" button and show a
+    /// running indicator.  Never persisted.
+    pub tx_tune_running: bool,
+
     /// Cached result from the most recent TX tune test measurement.
-    /// All fields `None` until an actual tune test is executed.
+    /// `status = NotRun` until an actual tune test is executed.
     pub last_tx_tune_result: TxTuneResult,
 }
 
@@ -299,6 +304,7 @@ impl Default for UiState {
             pending_apply_source_control: false,
 
             tx_tune_armed: false,
+            tx_tune_running: false,
             last_tx_tune_result: TxTuneResult::default(),
         };
 

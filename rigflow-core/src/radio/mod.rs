@@ -7,4 +7,4 @@ pub use model::{
     HardwareKind, LeaseId, RadioCapabilities, RadioDescriptor, RadioId,
 };
 pub use source_status::SourceStatus;
-pub use tx_tune::{TxTuneResult, TxTuneState};
+pub use tx_tune::{compute_swr, TxTuneResult, TxTuneState, TxTuneStatus};

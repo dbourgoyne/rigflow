@@ -8,7 +8,7 @@ use num_complex::Complex32;
 
 use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
-use rigflow_core::radio::tx_tune::TxTuneResult;
+use rigflow_core::radio::tx_tune::{compute_swr, TxTuneResult, TxTuneStatus};
 
 use crate::source::IqSource;
 
@@ -355,7 +355,11 @@ impl IqSource for HermesLite2Source {
     ///
     /// # Safety invariants
     ///
-    /// - PTT is released on **every** exit path via `send_gain_cc()`.
+    /// - PTT is asserted only after frequency and TX-inhibit checks pass.
+    /// - PTT is released via `send_gain_cc()` on **every** exit path that
+    ///   asserts PTT, including underflow/overflow and socket fault paths.
+    ///   Paths that reject before TX (invalid freq, TX inhibited) never
+    ///   assert PTT and do not need a release.
     /// - Amplitude is hard-clamped to `TX_TUNE_AMPLITUDE_FS` (5% FS, ≈ -26 dBFS).
     /// - Duration is hard-clamped to `MAX_DURATION_MS` (500 ms).
     /// - The caller-supplied `drive` parameter is ignored; drive is not
@@ -371,6 +375,11 @@ impl IqSource for HermesLite2Source {
         const MAX_DURATION_MS: u32 = 500;
         const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
         const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
+        // SWR above this threshold is reported as HighSwr.
+        const SWR_ALARM_THRESHOLD: f32 = 3.0;
+        // Forward power below this threshold means NoForwardPower
+        // (only meaningful once calibration constants are available).
+        const MIN_FORWARD_W: f32 = 0.1;
 
         // ── Parameter clamping ───────────────────────────────────────────
         let clamped_duration_ms = duration_ms.min(MAX_DURATION_MS);
@@ -381,11 +390,18 @@ impl IqSource for HermesLite2Source {
         const HF_MAX_HZ: u64 = 30_000_000;
         if center_freq_hz < HF_MIN_HZ || center_freq_hz > HF_MAX_HZ {
             warn!(
-                "[hl2 tx-tune] rejected: {} Hz outside HF range ({}-{} Hz)",
-                center_freq_hz, HF_MIN_HZ, HF_MAX_HZ
+                "[hl2 tx-tune] rejected freq={center_freq_hz}: \
+                 outside HF range ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
             );
             return TxTuneResult {
-                message: Some("rejected:frequency_out_of_hf_range".to_string()),
+                status: TxTuneStatus::InvalidFrequency,
+                frequency_hz: center_freq_hz,
+                duration_ms: clamped_duration_ms,
+                drive: TX_TUNE_AMPLITUDE_FS,
+                message: Some(format!(
+                    "{center_freq_hz} Hz is outside HF TX range \
+                     ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
+                )),
                 ..TxTuneResult::default()
             };
         }
@@ -394,24 +410,30 @@ impl IqSource for HermesLite2Source {
         if self.status_regs.raddr0_valid && self.status_regs.tx_inhibited {
             warn!("[hl2 tx-tune] rejected: TX inhibited by hardware");
             return TxTuneResult {
-                message: Some("rejected:tx_inhibited".to_string()),
+                status: TxTuneStatus::TxInhibited,
+                frequency_hz: center_freq_hz,
+                duration_ms: clamped_duration_ms,
+                drive: TX_TUNE_AMPLITUDE_FS,
+                message: Some("TX inhibited by hardware".to_string()),
                 ..TxTuneResult::default()
             };
         }
 
         info!(
-            "[hl2 tx-tune] starting: freq={} Hz  duration={} ms  amplitude={:.3} FS",
-            center_freq_hz, clamped_duration_ms, TX_TUNE_AMPLITUDE_FS
+            "[hl2 tx-tune] PTT asserted: freq={center_freq_hz} Hz  \
+             duration={clamped_duration_ms} ms  amplitude={TX_TUNE_AMPLITUDE_FS:.3} FS"
         );
 
         // ── TX loop ──────────────────────────────────────────────────────
-        // recv() is intentionally skipped during TX — the HL2 may stop
-        // sending DDC while PTT is asserted, causing recv to time out and
-        // distort TX packet timing.
+        // The socket is switched to non-blocking mode so we can poll for D2H
+        // status packets (underflow/overflow detection) without stalling TX
+        // packet timing.  WouldBlock is treated as "no packet yet, continue".
         let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
         let deadline = Instant::now() + Duration::from_millis(clamped_duration_ms as u64);
         let mut next_tick = Instant::now();
-        let mut fault: Option<String> = None;
+        let mut fault_status: Option<TxTuneStatus> = None;
+
+        let _ = self.socket.set_nonblocking(true);
 
         loop {
             let now = Instant::now();
@@ -419,28 +441,73 @@ impl IqSource for HermesLite2Source {
                 break;
             }
 
-            if now < next_tick {
-                thread::sleep(next_tick - now);
+            // Poll for a D2H status packet (non-blocking).
+            let mut rx_buf = [0u8; P1_PACKET_LEN];
+            match self.socket.recv(&mut rx_buf) {
+                Ok(len) if len == P1_PACKET_LEN => {
+                    let mut discard = VecDeque::new();
+                    parse_ddc_packet(&rx_buf, &mut discard, &mut self.status_regs);
+                    // Check for FIFO anomaly (recovery_bits ≠ 0 means not OK).
+                    if self.status_regs.raddr0_valid && self.status_regs.recovery_bits != 0 {
+                        let bits = self.status_regs.recovery_bits;
+                        warn!(
+                            "[hl2 tx-tune] FIFO anomaly during TX: \
+                             recovery_bits={bits:#02b}"
+                        );
+                        fault_status = Some(if bits == 0b10 {
+                            TxTuneStatus::Underflow
+                        } else {
+                            TxTuneStatus::Overflow
+                        });
+                        break;
+                    }
+                }
+                _ => {} // WouldBlock or short packet — continue
+            }
+
+            // Pace TX to 48 kHz (one packet per 2.625 ms).
+            let now2 = Instant::now();
+            if now2 < next_tick {
+                thread::sleep(next_tick - now2);
             }
             next_tick += packet_period;
 
             if let Err(e) = self.send_tx_packet(TX_TUNE_AMPLITUDE_FS) {
-                fault = Some(e);
+                warn!("[hl2 tx-tune] send_tx_packet failed: {e}");
+                fault_status = Some(TxTuneStatus::Fault);
                 break;
             }
         }
 
-        // ── PTT release — unconditional on ALL exit paths ─────────────────
-        // send_gain_cc has C0[0]=0 in both sub-frames → PTT released.
+        // ── Restore blocking mode ─────────────────────────────────────────
+        let _ = self.socket.set_nonblocking(false);
+        let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
+
+        // ── PTT release — unconditional on all paths that asserted PTT ────
+        // send_gain_cc has C0[0]=0 in both sub-frames → PTT cleared.
         if let Err(e) = self.send_gain_cc() {
             warn!("[hl2 tx-tune] PTT release (send_gain_cc) failed: {e}");
+            if fault_status.is_none() {
+                fault_status = Some(TxTuneStatus::Fault);
+            }
+        } else {
+            info!("[hl2 tx-tune] PTT released");
         }
 
-        // ── Handle TX fault ───────────────────────────────────────────────
-        if let Some(err) = fault {
-            warn!("[hl2 tx-tune] fault during TX loop: {err}");
+        // ── Early return on TX fault ───────────────────────────────────────
+        if let Some(status) = fault_status {
+            let msg = match status {
+                TxTuneStatus::Underflow => "TX IQ FIFO underflow",
+                TxTuneStatus::Overflow => "TX IQ FIFO overflow",
+                _ => "socket or hardware fault",
+            };
+            warn!("[hl2 tx-tune] fault: {msg}");
             return TxTuneResult {
-                message: Some("fault".to_string()),
+                status,
+                frequency_hz: center_freq_hz,
+                duration_ms: clamped_duration_ms,
+                drive: TX_TUNE_AMPLITUDE_FS,
+                message: Some(msg.to_string()),
                 ..TxTuneResult::default()
             };
         }
@@ -457,20 +524,47 @@ impl IqSource for HermesLite2Source {
                     let mut discard = VecDeque::new();
                     parse_ddc_packet(&drain_buf, &mut discard, &mut self.status_regs);
                 }
-                _ => {} // timeout or short packet — keep draining until drain_end
+                _ => {} // timeout or short packet — keep draining
             }
         }
         let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
 
-        info!("[hl2 tx-tune] complete");
+        // ── Compute result telemetry ──────────────────────────────────────
+        // Power readings remain None until board-specific calibration
+        // constants are confirmed.
+        // TODO: apply forward_power_raw / reverse_power_raw calibration.
+        let forward_power_w: Option<f32> = None;
+        let reverse_power_w: Option<f32> = None;
+        let swr = compute_swr(forward_power_w, reverse_power_w);
 
-        // Forward/reverse power are None until calibration constants are known.
-        // TODO: add calibration once hardware constants are confirmed.
+        // ── Determine result status ───────────────────────────────────────
+        let status = if let Some(fwd) = forward_power_w {
+            if fwd < MIN_FORWARD_W {
+                TxTuneStatus::NoForwardPower
+            } else if swr.map_or(false, |s| s > SWR_ALARM_THRESHOLD) {
+                TxTuneStatus::HighSwr
+            } else {
+                TxTuneStatus::Ok
+            }
+        } else {
+            // No power calibration yet — test ran to completion without fault.
+            TxTuneStatus::Ok
+        };
+
+        info!(
+            "[hl2 tx-tune] done: status={:?}  fwd={:?} W  rev={:?} W  swr={:?}",
+            status, forward_power_w, reverse_power_w, swr
+        );
+
         TxTuneResult {
-            forward_power_w: None,
-            reverse_power_w: None,
-            swr: None,
-            message: Some("ok".to_string()),
+            status,
+            forward_power_w,
+            reverse_power_w,
+            swr,
+            frequency_hz: center_freq_hz,
+            duration_ms: clamped_duration_ms,
+            drive: TX_TUNE_AMPLITUDE_FS,
+            message: None,
         }
     }
 }
@@ -651,32 +745,6 @@ fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
         tx_inhibited,
         recovery_status,
     }
-}
-
-/// Compute SWR from forward and reverse power (both in watts).
-///
-/// Returns `None` when:
-/// - either power value is `None`
-/// - forward power is below 0.1 W (not transmitting / noise floor)
-/// - reverse power is negative or >= forward power (invalid reading)
-///
-/// Formula: SWR = (1 + √(Pr/Pf)) / (1 − √(Pr/Pf))
-fn compute_swr(forward_w: Option<f32>, reverse_w: Option<f32>) -> Option<f32> {
-    let fwd = forward_w?;
-    let rev = reverse_w?;
-
-    const MIN_FORWARD_W: f32 = 0.1;
-    if fwd < MIN_FORWARD_W || rev < 0.0 || rev >= fwd {
-        return None;
-    }
-
-    let gamma = (rev / fwd).sqrt();
-    let denominator = 1.0 - gamma;
-    if denominator.abs() < f32::EPSILON {
-        return None;
-    }
-
-    Some(((1.0 + gamma) / denominator).clamp(1.0, 999.0))
 }
 
 /// Static source capabilities for the Hermes Lite 2.

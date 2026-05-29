@@ -359,6 +359,9 @@ pub fn apply_radio_server_message(
             // Reapply current mode controls on every acquire.
             state.pending_apply_mode_controls = true;
 
+            // No test is running on a fresh acquire.
+            state.tx_tune_running = false;
+
             // Force client audio pipeline to reset on radio switch/acquire.
             audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
@@ -452,6 +455,8 @@ pub fn apply_radio_server_message(
 
             if let Some(result) = tx_tune_result {
                 state.last_tx_tune_result = result;
+                // Test completed (ok or fault) — clear the running indicator.
+                state.tx_tune_running = false;
             }
         }
 
