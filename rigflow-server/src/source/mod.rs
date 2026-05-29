@@ -85,7 +85,7 @@ pub trait IqSource {
     /// The default rejects the request with `"not_supported"`.
     fn tx_tune_test(
         &mut self,
-        _center_freq_hz: u64,
+        _target_freq_hz: u64,
         _duration_ms: u32,
         _drive: f32,
     ) -> TxTuneResult {

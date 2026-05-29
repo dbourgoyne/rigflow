@@ -122,6 +122,44 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the TX Tune Amplitude (%FS) for the current operator.
+    pub(crate) fn save_tx_tune_amplitude_to_current_operator(&mut self) {
+        let (operator_id, tx_tune_amplitude_pct) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.tx_tune_amplitude_pct)
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(mut operator_settings) => {
+                operator_settings.tx_tune_amplitude_pct = tx_tune_amplitude_pct;
+
+                if let Err(err) = self
+                    .persistence_store
+                    .save_operator_settings(&operator_settings)
+                {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.persistence_status = format!("failed to save tx tune amplitude: {err}");
+                    }
+                } else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+                }
+            }
+
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator settings: {err}");
+                }
+            }
+        }
+    }
+
     pub(crate) fn save_demod_preferences_to_current_operator(&mut self) {
         let snapshot = {
             let state = self.state.lock().unwrap();

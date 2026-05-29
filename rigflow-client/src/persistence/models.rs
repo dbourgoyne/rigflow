@@ -133,6 +133,16 @@ pub struct OperatorSettingsFile {
     /// that a migrated file that is somehow missing this field still loads.
     #[serde(default)]
     pub source_control_preferences: HashMap<String, SourceControlState>,
+
+    /// TX Tune Amplitude in percent of full scale (0.5–10.0, default 5.0).
+    /// Per-operator.  Affects only the TX tune test.  Uses a serde default so
+    /// older settings files (which predate this field) load without migration.
+    #[serde(default = "default_tx_tune_amplitude_pct")]
+    pub tx_tune_amplitude_pct: f32,
+}
+
+pub fn default_tx_tune_amplitude_pct() -> f32 {
+    5.0
 }
 
 impl OperatorSettingsFile {
@@ -148,6 +158,7 @@ impl OperatorSettingsFile {
             bookmarks: Vec::new(),
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
+            tx_tune_amplitude_pct: default_tx_tune_amplitude_pct(),
         }
     }
 }

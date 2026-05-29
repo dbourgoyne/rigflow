@@ -930,13 +930,15 @@ fn spawn_capture_thread(
                     .and_then(|mut cs| cs.pending_tx_tune_test.take());
 
                 if let Some((duration_ms, drive)) = pending {
-                    let center_freq_hz = control_snapshot.center_freq_hz;
+                    // TX tune transmits on the operator's target frequency, not
+                    // the RX DDC centre.  Pass target_freq_hz through to the source.
+                    let target_freq_hz = control_snapshot.target_freq_hz;
                     info!(
-                        "[radio-worker {}] TX tune test: freq={} dur_ms={} drive={:.3}",
-                        descriptor.id.0, center_freq_hz, duration_ms, drive
+                        "[radio-worker {}] TX tune test: target_freq={} dur_ms={} drive={:.3}",
+                        descriptor.id.0, target_freq_hz, duration_ms, drive
                     );
 
-                    let result = source.tx_tune_test(center_freq_hz, duration_ms, drive);
+                    let result = source.tx_tune_test(target_freq_hz, duration_ms, drive);
 
                     info!(
                         "[radio-worker {}] TX tune test complete: result={:?}",

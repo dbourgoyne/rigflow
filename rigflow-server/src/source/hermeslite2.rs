@@ -27,20 +27,24 @@ const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 // HL2 P1 D2H status register accumulator.
 //
 // The HL2 sends status data in the C0/C1-C4 bytes of every DDC sub-frame,
-// cycling through register addresses on successive packets.
+// auto-cycling through register addresses on successive packets.
 //
-// RADDR 0x00 (C0 = 0x00):
+// The device-to-host address is encoded in C0[7:3] (RADDR = C0 >> 3); the
+// low three bits C0[2:0] are the PTT/DASH/DOT hardware inputs.  This is NOT
+// the same as host-to-device writes, where C0 = (addr << 1) | MOX.
+//
+// RADDR 0x00 (C0[7:3] = 0 → C0 = 0x00):
 //   bits [7:0]   = firmware version
 //   bits [14:8]  = TX IQ FIFO count MSBs
 //   bit  [15]    = under/overflow recovery
 //   bit  [24]    = RF ADC overload (active high)
 //   bit  [25]    = TX inhibit (active low: 0 = inhibited)
 //
-// RADDR 0x01 (C0 = 0x02):
+// RADDR 0x01 (C0[7:3] = 1 → C0 = 0x08):
 //   bits [15:0]  = forward power (raw ADC)
 //   bits [31:16] = temperature (raw ADC)
 //
-// RADDR 0x02 (C0 = 0x04):
+// RADDR 0x02 (C0[7:3] = 2 → C0 = 0x10):
 //   bits [15:0]  = current (raw ADC)
 //   bits [31:16] = reverse power (raw ADC)
 #[derive(Debug, Clone, Default)]
@@ -51,6 +55,8 @@ struct Hl2StatusRegs {
     tx_inhibited: bool,
     /// 2-bit under/overflow recovery field from bits [15:14] of the status word.
     recovery_bits: u8,
+    /// TX IQ FIFO occupancy from bits [14:8] of the RADDR 0x00 status word.
+    tx_fifo_count: u16,
     raddr0_valid: bool,
 
     // RADDR 0x01
@@ -186,21 +192,50 @@ impl HermesLite2Source {
         Ok(())
     }
 
-    /// Send one 1032-byte H2D TX packet with PTT asserted (C0[0]=1) and a
-    /// constant carrier (I = `amplitude_fs` × 0x7FFFFF, Q = 0) in every TX IQ
-    /// slot.
+    /// Program both the TX1 NCO (register 0x01 → C0=0x02) and the RX1 NCO
+    /// (register 0x02 → C0=0x04) to `freq_hz` in a single C&C packet.
     ///
-    /// Mirrors `send_gain_cc` for the C&C portion (NCO freq + LNA gain), but
-    /// with the PTT bit set in both sub-frame C0 bytes.
+    /// Used by the TX tune test so the transmit carrier and receiver land on
+    /// the same (simplex) frequency.  The normal RX path never writes RX1
+    /// (register 0x02); it programs only register 0x01 with `center_freq_hz`.
+    fn send_tx_rx_nco(&mut self, freq_hz: u32) -> Result<(), String> {
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        // Sub-frame 1: TX1 NCO (register 0x01 → C0 = 0x02).
+        write_subframe(&mut pkt[8..520], 0x02, freq_hz.to_be_bytes());
+        // Sub-frame 2: RX1 NCO (register 0x02 → C0 = 0x04).
+        write_subframe(&mut pkt[520..1032], 0x04, freq_hz.to_be_bytes());
+
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send TX/RX NCO failed: {e}"))
+    }
+
+    /// Send one 1032-byte H2D TX packet carrying a constant carrier
+    /// (I = `amplitude_fs` × 0x7FFF, Q = 0) in every TX IQ slot.
     ///
-    /// # Safety contract
+    /// Protocol 1 host-to-device sample groups are 8 bytes of **four 16-bit
+    /// signed big-endian** values — `[L_hi L_lo][R_hi R_lo][I_hi I_lo][Q_hi
+    /// Q_lo]`: left audio, right audio, TX I, TX Q.  (This differs from the
+    /// device-to-host DDC layout, which is 24-bit I + 24-bit Q + 16-bit mic.)
+    /// For the tune carrier: L = R = 0, I = amplitude, Q = 0.
     ///
-    /// This function ASSERTS PTT.  The caller MUST call `send_gain_cc()` on
-    /// every exit path — including error paths — to release PTT.
-    fn send_tx_packet(&mut self, amplitude_fs: f32) -> Result<(), String> {
-        // Convert normalised amplitude to a 24-bit signed big-endian value.
-        let i_code = (amplitude_fs.clamp(0.0, 1.0) * 0x7F_FFFF as f32) as i32;
-        let i_b = [(i_code >> 16) as u8, (i_code >> 8) as u8, i_code as u8];
+    /// `ptt` controls the PTT bit (C0[0]) in both sub-frames:
+    /// - `ptt = false` — feeds TX IQ into the FIFO **without** asserting PTT.
+    ///   Used for pre-filling the FIFO before transmission begins.
+    /// - `ptt = true`  — feeds TX IQ **and** asserts PTT.  The caller MUST
+    ///   call `send_gain_cc()` on every exit path to release PTT.
+    fn send_tx_packet(&mut self, nco_freq_hz: u32, amplitude_fs: f32, ptt: bool) -> Result<(), String> {
+        // TX I as a 16-bit signed big-endian sample; Q stays 0 (carrier).
+        let i_code = (amplitude_fs.clamp(0.0, 1.0) * 0x7FFF as f32) as i32 as i16;
+        let i_b = i_code.to_be_bytes();
+
+        let ptt_bit = ptt as u8; // 0 or 1 — OR'd into both C0 bytes
 
         let mut pkt = [0u8; P1_PACKET_LEN];
         pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
@@ -208,37 +243,40 @@ impl HermesLite2Source {
         pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
         self.tx_seq = self.tx_seq.wrapping_add(1);
 
-        let freq_bytes = (self.center_freq_hz as u32).to_be_bytes();
+        // TX1 NCO register is repeated in every packet's sub-frame 1; use the
+        // caller-supplied tune target, NOT self.center_freq_hz (the RX centre).
+        let freq_bytes = nco_freq_hz.to_be_bytes();
         let gain_byte = 0x40 | (self.lna_gain_code & 0x3F);
 
-        // Sub-frame 1 (offset 8): NCO freq register (address 0x01) + PTT.
-        // C0 = (0x01 << 1) | 0x01 = 0x03
+        // Sub-frame 1 (offset 8): NCO freq register (address 0x01) ± PTT.
+        // C0 = (0x01 << 1) | ptt_bit = 0x02 | ptt_bit
         {
             let sf = &mut pkt[8..520];
             sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
-            sf[3] = 0x03;
+            sf[3] = 0x02 | ptt_bit;
             sf[4..8].copy_from_slice(&freq_bytes);
             for i in 0..P1_SAMPLES_PER_SUBFRAME {
                 let b = 8 + i * 8;
-                sf[b..b + 3].copy_from_slice(&i_b);
-                // Q bytes [b+3..b+6] remain 0 (pkt initialised to zero).
-                // Mic bytes [b+6..b+8] remain 0.
+                // L audio [b..b+2] and R audio [b+2..b+4] remain 0.
+                sf[b + 4..b + 6].copy_from_slice(&i_b); // TX I (16-bit BE)
+                // Q bytes [b+6..b+8] remain 0 (pkt initialised to zero).
             }
         }
 
-        // Sub-frame 2 (offset 520): LNA gain register (address 0x0A) + PTT.
-        // C0 = (0x0A << 1) | 0x01 = 0x15
+        // Sub-frame 2 (offset 520): LNA gain register (address 0x0A) ± PTT.
+        // C0 = (0x0A << 1) | ptt_bit = 0x14 | ptt_bit
         {
             let sf = &mut pkt[520..1032];
             sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
-            sf[3] = 0x15;
+            sf[3] = 0x14 | ptt_bit;
             sf[4] = 0;
             sf[5] = 0;
             sf[6] = 0;
             sf[7] = gain_byte;
             for i in 0..P1_SAMPLES_PER_SUBFRAME {
                 let b = 8 + i * 8;
-                sf[b..b + 3].copy_from_slice(&i_b);
+                // L/R audio [b..b+4] remain 0; TX I at [b+4..b+6]; Q [b+6..b+8] = 0.
+                sf[b + 4..b + 6].copy_from_slice(&i_b);
             }
         }
 
@@ -355,51 +393,84 @@ impl IqSource for HermesLite2Source {
     ///
     /// # Safety invariants
     ///
-    /// - PTT is asserted only after frequency and TX-inhibit checks pass.
+    /// - PTT is asserted only after all pre-checks pass AND the TX FIFO
+    ///   has been pre-filled (see below).
     /// - PTT is released via `send_gain_cc()` on **every** exit path that
-    ///   asserts PTT, including underflow/overflow and socket fault paths.
-    ///   Paths that reject before TX (invalid freq, TX inhibited) never
-    ///   assert PTT and do not need a release.
-    /// - Amplitude is hard-clamped to `TX_TUNE_AMPLITUDE_FS` (5% FS, ≈ -26 dBFS).
+    ///   asserts PTT: normal completion, underflow/overflow, socket fault.
+    ///   Pre-check rejections (invalid freq, TX inhibited) never assert PTT.
+    /// - Amplitude defaults to 0.05 FS and is hard-clamped to a 0.10 FS ceiling.
     /// - Duration is hard-clamped to `MAX_DURATION_MS` (500 ms).
-    /// - The caller-supplied `drive` parameter is ignored; drive is not
-    ///   user-configurable in this revision.
+    /// - The caller-supplied `drive` parameter is logged but overridden;
+    ///   drive is not user-configurable in this revision.
+    ///
+    /// # TX FIFO pre-fill
+    ///
+    /// The HL2 TX IQ FIFO must contain samples before PTT is asserted.
+    /// Asserting PTT on an empty FIFO causes an immediate underflow fault.
+    /// `TX_FIFO_PREFILL_PACKETS` packets (≈ 52 ms) are sent **without PTT**
+    /// first.  After pre-fill the socket receive buffer is drained and any
+    /// stale `recovery_bits` from before TX started are cleared, so only
+    /// genuine in-flight anomalies trigger the underflow/overflow guard.
     fn tx_tune_test(
         &mut self,
-        center_freq_hz: u64,
+        target_freq_hz: u64,
         duration_ms: u32,
-        _drive: f32,
+        drive: f32,
     ) -> TxTuneResult {
         // ── Hard safety constants ────────────────────────────────────────
-        const TX_TUNE_AMPLITUDE_FS: f32 = 0.05; // 5% FS (~-26 dBFS), hard-coded
+        const TX_TUNE_DEFAULT_AMPLITUDE_FS: f32 = 0.05; // 5% FS (~-26 dBFS)
+        const TX_TUNE_MIN_AMPLITUDE_FS: f32 = 0.005; // 0.5% FS floor
+        const TX_TUNE_MAX_AMPLITUDE_FS: f32 = 0.10; // hard ceiling (~-20 dBFS)
         const MAX_DURATION_MS: u32 = 500;
         const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
         const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
+        // Pre-fill: send IQ without PTT to fill the HL2 TX FIFO before asserting PTT.
+        // 20 packets × 126 samples / 48 kHz ≈ 52 ms of buffering.
+        const TX_FIFO_PREFILL_PACKETS: usize = 20;
         // SWR above this threshold is reported as HighSwr.
         const SWR_ALARM_THRESHOLD: f32 = 3.0;
-        // Forward power below this threshold means NoForwardPower
-        // (only meaningful once calibration constants are available).
+        // Forward power below this threshold means NoForwardPower.
         const MIN_FORWARD_W: f32 = 0.1;
 
         // ── Parameter clamping ───────────────────────────────────────────
         let clamped_duration_ms = duration_ms.min(MAX_DURATION_MS);
 
+        // Effective TX amplitude: the client sends the configured TX Tune
+        // Amplitude (%FS) as `drive` in FS units (e.g. 5.0% → 0.050).  Honor a
+        // positive value, clamped to [0.005, 0.100] FS; fall back to the 0.05
+        // default when no drive is supplied (legacy clients).  The server clamp
+        // is the last line of defense — neither UI nor server may exceed 0.10 FS.
+        //
+        // HL2 TX-drive AUDIT (2026-05-29): RF output here is governed ONLY by
+        // this digital IQ amplitude.  HPSDR P1 also defines a TX drive-level
+        // register at address 0x09 (C0 = 0x12, C1 = 0..255 PWM) which Quisk and
+        // pihpsdr program; Rigflow does NOT (we only write 0x00/0x01/0x02/0x0A),
+        // so it sits at the firmware default.  We deliberately do not program it
+        // yet — it affects PA output power and needs a safety review.  If the
+        // amplitude sweep below shows raw telemetry that does NOT scale with
+        // amplitude, the drive-level register is the prime suspect.
+        let effective_amplitude = if drive > 0.0 {
+            drive.clamp(TX_TUNE_MIN_AMPLITUDE_FS, TX_TUNE_MAX_AMPLITUDE_FS)
+        } else {
+            TX_TUNE_DEFAULT_AMPLITUDE_FS
+        };
+
         // ── Frequency validation ─────────────────────────────────────────
         // HL2 HF TX band: 1.8–30 MHz.
         const HF_MIN_HZ: u64 = 1_800_000;
         const HF_MAX_HZ: u64 = 30_000_000;
-        if center_freq_hz < HF_MIN_HZ || center_freq_hz > HF_MAX_HZ {
+        if target_freq_hz < HF_MIN_HZ || target_freq_hz > HF_MAX_HZ {
             warn!(
-                "[hl2 tx-tune] rejected freq={center_freq_hz}: \
+                "[hl2 tx-tune] rejected freq={target_freq_hz}: \
                  outside HF range ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
             );
             return TxTuneResult {
                 status: TxTuneStatus::InvalidFrequency,
-                frequency_hz: center_freq_hz,
+                frequency_hz: target_freq_hz,
                 duration_ms: clamped_duration_ms,
-                drive: TX_TUNE_AMPLITUDE_FS,
+                drive: effective_amplitude,
                 message: Some(format!(
-                    "{center_freq_hz} Hz is outside HF TX range \
+                    "{target_freq_hz} Hz is outside HF TX range \
                      ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
                 )),
                 ..TxTuneResult::default()
@@ -411,80 +482,295 @@ impl IqSource for HermesLite2Source {
             warn!("[hl2 tx-tune] rejected: TX inhibited by hardware");
             return TxTuneResult {
                 status: TxTuneStatus::TxInhibited,
-                frequency_hz: center_freq_hz,
+                frequency_hz: target_freq_hz,
                 duration_ms: clamped_duration_ms,
-                drive: TX_TUNE_AMPLITUDE_FS,
+                drive: effective_amplitude,
                 message: Some("TX inhibited by hardware".to_string()),
                 ..TxTuneResult::default()
             };
         }
 
+        // ── Program TX1 + RX1 NCO to the tune target (simplex) ────────────
+        // Register 0x01 (C0=0x02) = TX1 NCO; register 0x02 (C0=0x04) = RX1 NCO.
+        // For simplex TX tune both must sit on the operator's target freq.
+        // NOTE: the RX path (send_cc/send_gain_cc/set_center_frequency) only
+        // ever programs register 0x01 with self.center_freq_hz and never
+        // writes RX1 (register 0x02); this is the first place RX1 is set.
+        // We deliberately do NOT use self.center_freq_hz here — the carrier
+        // must land on the tune target, not the RX DDC centre.
+        let target_u32 = target_freq_hz as u32;
+        if let Err(e) = self.send_tx_rx_nco(target_u32) {
+            warn!("[hl2 tx-tune] NCO program failed: {e}");
+            return TxTuneResult {
+                status: TxTuneStatus::Fault,
+                frequency_hz: target_freq_hz,
+                duration_ms: clamped_duration_ms,
+                drive: effective_amplitude,
+                message: Some(format!("NCO program failed: {e}")),
+                ..TxTuneResult::default()
+            };
+        }
         info!(
-            "[hl2 tx-tune] PTT asserted: freq={center_freq_hz} Hz  \
-             duration={clamped_duration_ms} ms  amplitude={TX_TUNE_AMPLITUDE_FS:.3} FS"
+            "[hl2 tx-tune] NCO programmed (before PTT): \
+             TX1_NCO={target_u32} Hz (reg 0x01)  RX1_NCO={target_u32} Hz (reg 0x02)"
         );
 
-        // ── TX loop ──────────────────────────────────────────────────────
-        // The socket is switched to non-blocking mode so we can poll for D2H
-        // status packets (underflow/overflow detection) without stalling TX
-        // packet timing.  WouldBlock is treated as "no packet yet, continue".
         let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
-        let deadline = Instant::now() + Duration::from_millis(clamped_duration_ms as u64);
-        let mut next_tick = Instant::now();
-        let mut fault_status: Option<TxTuneStatus> = None;
 
+        // ── Capture a fresh TX FIFO reading before pre-fill ───────────────
+        // Switch to non-blocking and drain+parse any queued DDC packets so
+        // `tx_fifo_count` reflects the device's state immediately before we
+        // start feeding TX IQ.  The socket stays non-blocking through the
+        // main TX loop and is restored to blocking on exit.
         let _ = self.socket.set_nonblocking(true);
+        {
+            let mut buf = [0u8; P1_PACKET_LEN];
+            let mut discard = VecDeque::new();
+            while let Ok(len) = self.socket.recv(&mut buf) {
+                if len == P1_PACKET_LEN {
+                    parse_ddc_packet(&buf, &mut discard, &mut self.status_regs);
+                }
+            }
+        }
+        let fifo_before = self.status_regs.tx_fifo_count;
+        info!(
+            "[hl2 tx-tune] TX FIFO count before pre-fill: {fifo_before} \
+             (raddr0_valid={})  local={:?}  peer={:?}",
+            self.status_regs.raddr0_valid,
+            self.socket.local_addr().ok(),
+            self.socket.peer_addr().ok(),
+        );
 
-        loop {
+        // ── TX FIFO pre-fill (PTT=0) ──────────────────────────────────────
+        // Feed TX IQ into the HL2 FIFO without asserting PTT.  This prevents
+        // an immediate underflow when PTT is asserted in the main loop.
+        info!(
+            "[hl2 tx-tune] pre-fill: {} packets (~{:.0} ms)  \
+             requested_drive={drive:.3}  effective_amplitude={effective_amplitude:.3} FS",
+            TX_FIFO_PREFILL_PACKETS,
+            TX_FIFO_PREFILL_PACKETS as f32 * (SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ) * 1000.0,
+        );
+        {
+            let mut tick = Instant::now();
+            for _ in 0..TX_FIFO_PREFILL_PACKETS {
+                let now = Instant::now();
+                if now < tick {
+                    thread::sleep(tick - now);
+                }
+                tick += packet_period;
+                if let Err(e) = self.send_tx_packet(target_u32, effective_amplitude, false) {
+                    warn!("[hl2 tx-tune] pre-fill failed: {e}");
+                    // PTT was never asserted — no release needed.
+                    return TxTuneResult {
+                        status: TxTuneStatus::Fault,
+                        frequency_hz: target_freq_hz,
+                        duration_ms: clamped_duration_ms,
+                        drive: effective_amplitude,
+                        message: Some(format!("pre-fill failed: {e}")),
+                        ..TxTuneResult::default()
+                    };
+                }
+            }
+        }
+
+        // ── Drain DDC packets after pre-fill and read the TX FIFO count ───
+        // After pre-fill the socket buffer holds DDC packets received during
+        // pre-fill.  Parse them so `tx_fifo_count` reflects the freshest
+        // post-pre-fill reading: if our TX IQ packets are being accepted the
+        // count should have risen above `fifo_before`.  The recovery field
+        // may carry a value set by a prior event unrelated to this TX, so we
+        // explicitly zero it afterwards — only anomalies that occur AFTER PTT
+        // is asserted should be treated as faults.  (Socket is already
+        // non-blocking from the before-pre-fill drain above.)
+        {
+            let mut stale_buf = [0u8; P1_PACKET_LEN];
+            let mut discard = VecDeque::new();
+            while let Ok(len) = self.socket.recv(&mut stale_buf) {
+                if len == P1_PACKET_LEN {
+                    parse_ddc_packet(&stale_buf, &mut discard, &mut self.status_regs);
+                }
+            }
+        }
+        let fifo_after = self.status_regs.tx_fifo_count;
+        info!(
+            "[hl2 tx-tune] TX FIFO count after pre-fill: {fifo_after} \
+             (before={fifo_before}  delta={})",
+            fifo_after as i32 - fifo_before as i32
+        );
+        self.status_regs.recovery_bits = 0;
+
+        // ── Main TX loop (PTT=1) ──────────────────────────────────────────
+        // PTT is now asserted in every packet.  The socket remains in
+        // non-blocking mode so D2H status packets can be polled between TX
+        // sends without stalling packet timing.  WouldBlock = no packet yet.
+        info!(
+            "[hl2 tx-tune] PTT asserted: freq={target_freq_hz} Hz  \
+             duration={clamped_duration_ms} ms  amplitude={effective_amplitude:.3} FS"
+        );
+        // PTT warmup: assert PTT and seed the TX FIFO with a *minimal* number
+        // of ptt=true frames before the paced loop takes over.  Kept tiny (2)
+        // because a large burst overfills the FIFO toward overflow; the paced
+        // loop then maintains the level at the 48 kHz consumption rate.  The
+        // earlier ptt=false pre-fill does not load the TX FIFO (the HL2 appears
+        // to consume H2D TX IQ only while MOX/PTT is asserted).
+        const PTT_WARMUP_PACKETS: usize = 2;
+        // Grace window after PTT assert during which a reported FIFO anomaly is
+        // logged but NOT treated as fatal, giving the FIFO time to prime.
+        const PTT_GRACE_MS: u128 = 50;
+
+        let tx_start = Instant::now();
+        let deadline = tx_start + Duration::from_millis(clamped_duration_ms as u64);
+        let mut fault_status: Option<TxTuneStatus> = None;
+        let mut packets_sent_with_ptt: u32 = 0;
+
+        for _ in 0..PTT_WARMUP_PACKETS {
+            if let Err(e) = self.send_tx_packet(target_u32, effective_amplitude, true) {
+                warn!("[hl2 tx-tune] warmup send failed: {e}");
+                fault_status = Some(TxTuneStatus::Fault);
+                break;
+            }
+            packets_sent_with_ptt += 1;
+        }
+        info!(
+            "[hl2 tx-tune] PTT warmup: {packets_sent_with_ptt} ptt=true frames sent back-to-back"
+        );
+
+        // Paced main loop: SEND a ptt=true TX IQ packet first, THEN poll status
+        // — so the FIFO is fed every iteration before we inspect it.
+        let mut next_tick = Instant::now();
+        let mut last_log = Instant::now();
+        // Last status addresses observed in a polled D2H packet (C0[7:3] of the
+        // two sub-frames), for telemetry visibility into the RADDR rotation.
+        let mut last_raddrs: [u8; 2] = [0xFF, 0xFF];
+        // Latch the peak raw detector readings seen WHILE PTT is asserted.  The
+        // result reports these maxima, never the post-release value (which has
+        // already decayed by the time we drain after key-up).  `None` until the
+        // matching RADDR is actually observed during the pulse.
+        let mut max_forward_raw: Option<u16> = None;
+        let mut max_reverse_raw: Option<u16> = None;
+        let mut max_current_raw: Option<u16> = None;
+
+        while fault_status.is_none() {
             let now = Instant::now();
             if now >= deadline {
                 break;
             }
 
-            // Poll for a D2H status packet (non-blocking).
-            let mut rx_buf = [0u8; P1_PACKET_LEN];
-            match self.socket.recv(&mut rx_buf) {
-                Ok(len) if len == P1_PACKET_LEN => {
-                    let mut discard = VecDeque::new();
-                    parse_ddc_packet(&rx_buf, &mut discard, &mut self.status_regs);
-                    // Check for FIFO anomaly (recovery_bits ≠ 0 means not OK).
-                    if self.status_regs.raddr0_valid && self.status_regs.recovery_bits != 0 {
-                        let bits = self.status_regs.recovery_bits;
-                        warn!(
-                            "[hl2 tx-tune] FIFO anomaly during TX: \
-                             recovery_bits={bits:#02b}"
-                        );
-                        fault_status = Some(if bits == 0b10 {
-                            TxTuneStatus::Underflow
-                        } else {
-                            TxTuneStatus::Overflow
-                        });
-                        break;
-                    }
-                }
-                _ => {} // WouldBlock or short packet — continue
+            // Deadline-based pacer: exactly one packet per `packet_period`
+            // (126 samples / 48 kHz = 2.625 ms).  Accumulate the next send
+            // instant so timing does not drift, BUT if we have fallen behind
+            // schedule, resync to `now` instead of firing catch-up bursts —
+            // bursting is what drove the FIFO into overflow.
+            if now < next_tick {
+                thread::sleep(next_tick - now);
+                next_tick += packet_period;
+            } else {
+                next_tick = now + packet_period;
             }
 
-            // Pace TX to 48 kHz (one packet per 2.625 ms).
-            let now2 = Instant::now();
-            if now2 < next_tick {
-                thread::sleep(next_tick - now2);
-            }
-            next_tick += packet_period;
-
-            if let Err(e) = self.send_tx_packet(TX_TUNE_AMPLITUDE_FS) {
+            if let Err(e) = self.send_tx_packet(target_u32, effective_amplitude, true) {
                 warn!("[hl2 tx-tune] send_tx_packet failed: {e}");
                 fault_status = Some(TxTuneStatus::Fault);
                 break;
             }
+            packets_sent_with_ptt += 1;
+
+            // Poll for a D2H status packet (non-blocking) AFTER feeding the FIFO.
+            let mut rx_buf = [0u8; P1_PACKET_LEN];
+            if let Ok(len) = self.socket.recv(&mut rx_buf) {
+                if len == P1_PACKET_LEN {
+                    // Record which status addresses this packet carried (C0[7:3]
+                    // of each sub-frame) so the telemetry log shows the actual
+                    // RADDR rotation, not just the valid flags.
+                    last_raddrs = [
+                        (rx_buf[P1_SUBFRAME_OFFSETS[0] + 3] >> 3) & 0x1F,
+                        (rx_buf[P1_SUBFRAME_OFFSETS[1] + 3] >> 3) & 0x1F,
+                    ];
+                    let mut discard = VecDeque::new();
+                    parse_ddc_packet(&rx_buf, &mut discard, &mut self.status_regs);
+
+                    // Latch peak forward/reverse/current seen during PTT.
+                    if self.status_regs.raddr1_valid {
+                        let f = self.status_regs.forward_power_raw;
+                        max_forward_raw = Some(max_forward_raw.map_or(f, |m| m.max(f)));
+                    }
+                    if self.status_regs.raddr2_valid {
+                        let r = self.status_regs.reverse_power_raw;
+                        max_reverse_raw = Some(max_reverse_raw.map_or(r, |m| m.max(r)));
+                        let c = self.status_regs.current_raw;
+                        max_current_raw = Some(max_current_raw.map_or(c, |m| m.max(c)));
+                    }
+                }
+            }
+
+            let elapsed_ms = tx_start.elapsed().as_millis();
+
+            // Telemetry every 25 ms.
+            if last_log.elapsed() >= Duration::from_millis(25) {
+                info!(
+                    "[hl2 tx-tune] PTT active: packets_sent_with_ptt={packets_sent_with_ptt} \
+                     elapsed_ms={elapsed_ms} amp={effective_amplitude:.3} FS fifo_count={} \
+                     recovery_bits={:#02b} last_raddrs={last_raddrs:?} \
+                     fwd_raw={} rev_raw={} cur_raw={} \
+                     max_fwd_raw={max_forward_raw:?} max_rev_raw={max_reverse_raw:?} \
+                     max_cur_raw={max_current_raw:?} (raddr1={} raddr2={})",
+                    self.status_regs.tx_fifo_count,
+                    self.status_regs.recovery_bits,
+                    self.status_regs.forward_power_raw,
+                    self.status_regs.reverse_power_raw,
+                    self.status_regs.current_raw,
+                    self.status_regs.raddr1_valid,
+                    self.status_regs.raddr2_valid,
+                );
+                last_log = Instant::now();
+            }
+
+            // FIFO anomaly: fatal only after the grace window has elapsed.
+            if self.status_regs.raddr0_valid && self.status_regs.recovery_bits != 0 {
+                let bits = self.status_regs.recovery_bits;
+                if elapsed_ms < PTT_GRACE_MS {
+                    debug!(
+                        "[hl2 tx-tune] FIFO anomaly within grace ({elapsed_ms} ms): \
+                         recovery_bits={bits:#02b} — not fatal, continuing to feed"
+                    );
+                } else {
+                    warn!(
+                        "[hl2 tx-tune] FIFO anomaly during TX at {elapsed_ms} ms: \
+                         recovery_bits={bits:#02b}"
+                    );
+                    fault_status = Some(if bits == 0b10 {
+                        TxTuneStatus::Underflow
+                    } else {
+                        TxTuneStatus::Overflow
+                    });
+                    break;
+                }
+            }
         }
+        info!(
+            "[hl2 tx-tune] TX loop done: packets_sent_with_ptt={packets_sent_with_ptt} \
+             elapsed_ms={}",
+            tx_start.elapsed().as_millis()
+        );
 
         // ── Restore blocking mode ─────────────────────────────────────────
         let _ = self.socket.set_nonblocking(false);
         let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
 
         // ── PTT release — unconditional on all paths that asserted PTT ────
-        // send_gain_cc has C0[0]=0 in both sub-frames → PTT cleared.
+        // Send several ptt=false TX frames (C0[0]=0 → MOX/PTT cleared) so the
+        // release survives a single dropped packet, with zero amplitude so no
+        // carrier rides the release.  Then send_gain_cc to restore the RX NCO
+        // centre and gain register (it too has C0[0]=0 → PTT cleared).
+        const PTT_RELEASE_FRAMES: usize = 5;
+        let mut release_frames_sent = 0u32;
+        for _ in 0..PTT_RELEASE_FRAMES {
+            if self.send_tx_packet(target_u32, 0.0, false).is_ok() {
+                release_frames_sent += 1;
+            }
+        }
+        info!("[hl2 tx-tune] PTT release frames sent: {release_frames_sent}");
+
         if let Err(e) = self.send_gain_cc() {
             warn!("[hl2 tx-tune] PTT release (send_gain_cc) failed: {e}");
             if fault_status.is_none() {
@@ -504,9 +790,9 @@ impl IqSource for HermesLite2Source {
             warn!("[hl2 tx-tune] fault: {msg}");
             return TxTuneResult {
                 status,
-                frequency_hz: center_freq_hz,
+                frequency_hz: target_freq_hz,
                 duration_ms: clamped_duration_ms,
-                drive: TX_TUNE_AMPLITUDE_FS,
+                drive: effective_amplitude,
                 message: Some(msg.to_string()),
                 ..TxTuneResult::default()
             };
@@ -537,6 +823,16 @@ impl IqSource for HermesLite2Source {
         let reverse_power_w: Option<f32> = None;
         let swr = compute_swr(forward_power_w, reverse_power_w);
 
+        // Raw detector counts to surface in the result.  Use the PEAK values
+        // latched WHILE PTT was asserted, NOT the post-release `status_regs`
+        // (which has already decayed by the time the post-TX drain runs).
+        // Calibrated watts are not yet available (so result watts and SWR stay
+        // None); these raw counts prove telemetry is arriving and let us judge
+        // whether drive is too low.  TEMPORARY: remove once watts calibrated.
+        let fwd_raw = max_forward_raw;
+        let rev_raw = max_reverse_raw;
+        let cur_raw = max_current_raw;
+
         // ── Determine result status ───────────────────────────────────────
         let status = if let Some(fwd) = forward_power_w {
             if fwd < MIN_FORWARD_W {
@@ -552,7 +848,9 @@ impl IqSource for HermesLite2Source {
         };
 
         info!(
-            "[hl2 tx-tune] done: status={:?}  fwd={:?} W  rev={:?} W  swr={:?}",
+            "[hl2 tx-tune] done: status={:?}  fwd={:?} W  rev={:?} W  swr={:?}  \
+             amp={effective_amplitude:.3} FS  max_fwd_raw={fwd_raw:?}  \
+             max_rev_raw={rev_raw:?}  max_cur_raw={cur_raw:?}",
             status, forward_power_w, reverse_power_w, swr
         );
 
@@ -561,10 +859,15 @@ impl IqSource for HermesLite2Source {
             forward_power_w,
             reverse_power_w,
             swr,
-            frequency_hz: center_freq_hz,
+            frequency_hz: target_freq_hz,
             duration_ms: clamped_duration_ms,
-            drive: TX_TUNE_AMPLITUDE_FS,
-            message: None,
+            drive: effective_amplitude,
+            // TEMPORARY: surface peak in-pulse raw detector counts until watts
+            // are calibrated.
+            message: Some(format!(
+                "max raw fwd={fwd_raw:?} rev={rev_raw:?} cur={cur_raw:?} \
+                 @ {effective_amplitude:.3} FS (uncalibrated)"
+            )),
         }
     }
 }
@@ -625,13 +928,17 @@ fn parse_ddc_packet(
             | ((sf[5] as u32) << 16)
             | ((sf[6] as u32) << 8)
             | (sf[7] as u32);
-        let raddr = c0 >> 1; // bits [7:1] encode the register address
+        // Device-to-host status address is C0[7:3]; C0[2:0] are PTT/DASH/DOT.
+        // (This differs from host-to-device writes, where C0 = addr<<1 | MOX.)
+        let raddr = (c0 >> 3) & 0x1F;
 
         match raddr {
             0x00 => {
                 status.firmware_version = (word & 0xFF) as u8;
                 // Bits [15:14]: 2-bit under/overflow recovery code.
                 status.recovery_bits = ((word >> 14) & 0x3) as u8;
+                // Bits [14:8]: TX IQ FIFO occupancy (per HL2 RADDR 0x00 layout).
+                status.tx_fifo_count = ((word >> 8) & 0x7F) as u16;
                 status.adc_overload = (word >> 24) & 1 == 1;
                 // Tx inhibit is active-low: bit=0 means TX is inhibited.
                 status.tx_inhibited = (word >> 25) & 1 == 0;

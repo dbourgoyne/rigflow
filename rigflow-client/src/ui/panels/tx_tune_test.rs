@@ -14,8 +14,10 @@ impl RigflowApp {
     /// - "Measure SWR" is enabled only when the arm checkbox is checked AND
     ///   no test is currently running.
     /// - Clicking "Measure SWR" sends `RequestTxTuneTest { duration_ms: 250,
-    ///   drive: 0.0 }` and immediately disarms + sets `tx_tune_running = true`.
-    /// - `tx_tune_armed` and `tx_tune_running` are never persisted.
+    ///   drive: tx_tune_amplitude_pct / 100 }` (FS) and immediately disarms +
+    ///   sets `tx_tune_running = true`.
+    /// - `tx_tune_armed` and `tx_tune_running` are never persisted;
+    ///   `tx_tune_amplitude_pct` IS persisted per-operator.
     pub(crate) fn draw_tx_tune_test_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
         if !snapshot.radio_acquired {
             return;
@@ -58,6 +60,27 @@ impl RigflowApp {
                 }
                 ui.add_space(4.0);
 
+                // ── TX Tune Amplitude (%FS) ──────────────────────────────────
+                // Per-operator, persisted.  0.5–10.0% in 0.5% steps.  Editable
+                // even while connected because it governs only this test, not
+                // the locked operator settings.  Sent as `drive` (FS = pct/100).
+                let mut amp_pct = snapshot.tx_tune_amplitude_pct;
+                let amp_resp = ui.add(
+                    egui::Slider::new(&mut amp_pct, 0.5..=10.0)
+                        .step_by(0.5)
+                        .fixed_decimals(1)
+                        .suffix(" %FS")
+                        .text("TX Tune Amplitude"),
+                );
+                if amp_resp.changed() {
+                    let snapped = (amp_pct.clamp(0.5, 10.0) * 2.0).round() / 2.0;
+                    if let Ok(mut state) = self.state.lock() {
+                        state.tx_tune_amplitude_pct = snapped;
+                    }
+                    self.save_tx_tune_amplitude_to_current_operator();
+                }
+                ui.add_space(4.0);
+
                 // ── Parameters ───────────────────────────────────────────────
                 egui::Grid::new("tx_tune_params_grid")
                     .num_columns(2)
@@ -68,7 +91,11 @@ impl RigflowApp {
                         ui.end_row();
 
                         ui.label("Drive");
-                        ui.label("minimum (~-26 dBFS)");
+                        ui.label(format!(
+                            "{:.1}% ({:.3} FS)",
+                            snapshot.tx_tune_amplitude_pct,
+                            snapshot.tx_tune_amplitude_pct / 100.0
+                        ));
                         ui.end_row();
                     });
                 ui.add_space(4.0);
@@ -83,7 +110,7 @@ impl RigflowApp {
                 if clicked {
                     self.send_radio_msg(ClientRadioMessage::RequestTxTuneTest {
                         duration_ms: 250,
-                        drive: 0.0,
+                        drive: snapshot.tx_tune_amplitude_pct / 100.0,
                     });
                     // Disarm and mark running immediately — the result will
                     // arrive via RuntimeChanged once the test completes.

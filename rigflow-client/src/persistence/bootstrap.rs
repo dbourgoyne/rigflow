@@ -119,6 +119,8 @@ pub fn apply_operator_settings_to_ui_state(
     // WebSocket handler can apply them on radio acquire without needing to
     // touch the persistence store.
     state.source_control_preferences = operator.source_control_preferences.clone();
+
+    state.tx_tune_amplitude_pct = operator.tx_tune_amplitude_pct;
 }
 
 pub fn apply_ui_state_to_operator_settings(
@@ -148,4 +150,6 @@ pub fn apply_ui_state_to_operator_settings(
 
     // Write the current per-radio source-control preferences back to the file.
     operator.source_control_preferences = state.source_control_preferences.clone();
+
+    operator.tx_tune_amplitude_pct = state.tx_tune_amplitude_pct;
 }

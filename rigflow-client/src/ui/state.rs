@@ -196,6 +196,12 @@ pub struct UiState {
     /// Cached result from the most recent TX tune test measurement.
     /// `status = NotRun` until an actual tune test is executed.
     pub last_tx_tune_result: TxTuneResult,
+
+    /// TX Tune Amplitude in percent of full scale (0.5–10.0%, step 0.5,
+    /// default 5.0).  Persisted per-operator.  Sent as `drive` (FS = pct/100)
+    /// in `RequestTxTuneTest`.  Affects ONLY the TX tune test, not any future
+    /// voice/data transmit path.
+    pub tx_tune_amplitude_pct: f32,
 }
 
 impl Default for UiState {
@@ -306,6 +312,7 @@ impl Default for UiState {
             tx_tune_armed: false,
             tx_tune_running: false,
             last_tx_tune_result: TxTuneResult::default(),
+            tx_tune_amplitude_pct: 5.0,
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);
