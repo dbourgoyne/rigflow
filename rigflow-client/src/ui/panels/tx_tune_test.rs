@@ -129,16 +129,16 @@ impl RigflowApp {
                     .num_columns(2)
                     .spacing([8.0, 2.0])
                     .show(ui, |ui| {
-                        ui.label("Forward");
-                        ui.label(format_power_w(result.forward_power_w));
-                        ui.end_row();
-
-                        ui.label("Reverse");
-                        ui.label(format_power_w(result.reverse_power_w));
-                        ui.end_row();
-
                         ui.label("SWR");
                         ui.label(format_swr(result.swr));
+                        ui.end_row();
+
+                        ui.label("Forward Raw");
+                        ui.label(format_raw(result.forward_raw));
+                        ui.end_row();
+
+                        ui.label("Reverse Raw");
+                        ui.label(format_raw(result.reverse_raw));
                         ui.end_row();
 
                         ui.label("Status");
@@ -160,16 +160,16 @@ impl RigflowApp {
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
-fn format_power_w(power: Option<f32>) -> String {
-    match power {
-        Some(w) => format!("{w:.1} W"),
+fn format_raw(raw: Option<u16>) -> String {
+    match raw {
+        Some(n) => n.to_string(),
         None => "--".to_string(),
     }
 }
 
 fn format_swr(swr: Option<f32>) -> String {
     match swr {
-        Some(s) => format!("{s:.1}:1"),
+        Some(s) => format!("{s:.2}:1"),
         None => "--".to_string(),
     }
 }

@@ -81,6 +81,16 @@ pub struct TxTuneResult {
     /// `None` when power readings are not available or are invalid.
     pub swr: Option<f32>,
 
+    /// Peak raw forward-power detector count captured during the pulse
+    /// (uncalibrated ADC units). `None` if not measured.
+    #[serde(default)]
+    pub forward_raw: Option<u16>,
+
+    /// Peak raw reverse-power detector count captured during the pulse
+    /// (uncalibrated ADC units). `None` if not measured.
+    #[serde(default)]
+    pub reverse_raw: Option<u16>,
+
     /// Frequency the test was run at (Hz). Zero if no test has been run.
     #[serde(default)]
     pub frequency_hz: u64,
@@ -129,6 +139,36 @@ pub fn compute_swr(forward_w: Option<f32>, reverse_w: Option<f32>) -> Option<f32
     Some(swr.clamp(1.0, 999.0))
 }
 
+/// Compute SWR from peak raw forward/reverse detector counts captured during
+/// a TX tune pulse (uncalibrated ADC units — no watts conversion needed since
+/// SWR depends only on the *ratio* of reflected to forward).
+///
+/// `gamma = √(rev / fwd)`, `SWR = (1 + gamma) / (1 − gamma)`.
+///
+/// Returns `None` (SWR unavailable) when:
+/// - `max_fwd_raw == 0` (no forward reading)
+/// - `max_rev_raw > max_fwd_raw` (invalid: more reflected than forward)
+/// - `gamma >= 1.0` (open/short — SWR would be infinite/invalid)
+/// - the result is non-finite
+pub fn compute_swr_from_raw(max_fwd_raw: u16, max_rev_raw: u16) -> Option<f32> {
+    if max_fwd_raw == 0 || max_rev_raw > max_fwd_raw {
+        return None;
+    }
+
+    let gamma = (max_rev_raw as f32 / max_fwd_raw as f32).sqrt();
+    if !(gamma < 1.0) {
+        // catches gamma >= 1.0 and NaN
+        return None;
+    }
+
+    let swr = (1.0 + gamma) / (1.0 - gamma);
+    if !swr.is_finite() {
+        return None;
+    }
+
+    Some(swr.clamp(1.0, 999.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +209,30 @@ mod tests {
         assert_eq!(compute_swr(Some(1.0), Some(1.0)), None);
         // Negative reverse
         assert_eq!(compute_swr(Some(1.0), Some(-0.1)), None);
+    }
+
+    // ── compute_swr_from_raw ───────────────────────────────────────────────
+
+    #[test]
+    fn swr_from_raw_matches_field_example() {
+        // fwd=55, rev=12 → gamma=√(0.218)=0.467 → SWR≈2.75 (TinyVNA 2.58–2.87)
+        let swr = compute_swr_from_raw(55, 12).expect("should compute");
+        assert!((swr - 2.75).abs() < 0.05, "expected ~2.75, got {swr}");
+    }
+
+    #[test]
+    fn swr_from_raw_perfect_match() {
+        // rev=0 → gamma=0 → SWR=1.0
+        let swr = compute_swr_from_raw(100, 0).expect("should compute");
+        assert!((swr - 1.0).abs() < 0.001, "expected 1.0, got {swr}");
+    }
+
+    #[test]
+    fn swr_from_raw_unavailable_cases() {
+        assert_eq!(compute_swr_from_raw(0, 0), None); // no forward
+        assert_eq!(compute_swr_from_raw(0, 5), None); // no forward
+        assert_eq!(compute_swr_from_raw(10, 20), None); // rev > fwd
+        assert_eq!(compute_swr_from_raw(10, 10), None); // gamma == 1.0
     }
 
     #[test]
@@ -229,6 +293,8 @@ mod tests {
             forward_power_w: Some(1.5),
             reverse_power_w: Some(0.1),
             swr: Some(1.8),
+            forward_raw: Some(55),
+            reverse_raw: Some(12),
             frequency_hz: 14_200_000,
             duration_ms: 250,
             drive: 0.05,

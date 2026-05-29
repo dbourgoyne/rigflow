@@ -8,7 +8,9 @@ use num_complex::Complex32;
 
 use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
-use rigflow_core::radio::tx_tune::{compute_swr, TxTuneResult, TxTuneStatus};
+use rigflow_core::radio::tx_tune::{
+    compute_swr, compute_swr_from_raw, TxTuneResult, TxTuneStatus,
+};
 
 use crate::source::IqSource;
 
@@ -68,6 +70,13 @@ struct Hl2StatusRegs {
     reverse_power_raw: u16,
     current_raw: u16,
     raddr2_valid: bool,
+
+    /// Raw 32-bit RDATA word (C1<<24|C2<<16|C3<<8|C4) last seen for each
+    /// device-to-host status address 0..=4.  Diagnostic only — lets us inspect
+    /// the actual register contents (incl. RADDR 3/4, which Quisk does not
+    /// decode) without interpreting them.
+    rdata: [u32; 5],
+    rdata_seen: [bool; 5],
 }
 
 // HL2 LNA gain at P1 address 0x0A (C0=0x14), extended-range mode (C1[6]=1).
@@ -214,6 +223,40 @@ impl HermesLite2Source {
             .send(&pkt)
             .map(|_| ())
             .map_err(|e| format!("HL2: send TX/RX NCO failed: {e}"))
+    }
+
+    /// Program the HL2 TX drive-level + PA-enable register (address 0x09,
+    /// C0 = 0x12) in a single C&C packet.  Used only by the TX tune test.
+    ///
+    /// Register 0x09 data word (C1=[31:24] … C4=[7:0]):
+    /// - C1 [7:0]  = TX drive level (0–255 PWM).  HL2 RF output scales with
+    ///   this AND the digital IQ amplitude; unprogrammed it defaults to 0,
+    ///   which is why forward/reverse telemetry reads ~0 regardless of IQ.
+    /// - C2 bit 3  = PA enable (overall bit 19).  The forward/reverse power
+    ///   detectors sit after the PA, so it must be enabled to read power.
+    /// - C3/C4     = Alex Rx/Tx filter bytes — left 0 (no Alex on a basic HL2).
+    ///   Antenna-tuner bits 17/20 are likewise left 0 (no external ATU).
+    ///
+    /// Both sub-frames carry register 0x09 (idempotent) so this packet never
+    /// disturbs the TX/RX NCO programmed separately.  The value is sticky on
+    /// the HL2, so a single pre-TX write holds for the whole pulse.
+    fn send_tx_drive_cc(&mut self, drive_level: u8, pa_enable: bool) -> Result<(), String> {
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        let c2 = if pa_enable { 0x08 } else { 0x00 }; // bit 19 = C2 bit 3
+        let data = [drive_level, c2, 0x00, 0x00];
+        // Register 0x09 → C0 = 0x12 (addr 9 << 1, MOX = 0 for this setup write).
+        write_subframe(&mut pkt[8..520], 0x12, data);
+        write_subframe(&mut pkt[520..1032], 0x12, data);
+
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send TX drive C&C failed: {e}"))
     }
 
     /// Send one 1032-byte H2D TX packet carrying a constant carrier
@@ -421,6 +464,12 @@ impl IqSource for HermesLite2Source {
         const TX_TUNE_DEFAULT_AMPLITUDE_FS: f32 = 0.05; // 5% FS (~-26 dBFS)
         const TX_TUNE_MIN_AMPLITUDE_FS: f32 = 0.005; // 0.5% FS floor
         const TX_TUNE_MAX_AMPLITUDE_FS: f32 = 0.10; // hard ceiling (~-20 dBFS)
+        // HL2 TX drive level (register 0x09 C1, 0–255).  RF output scales with
+        // this AND the digital IQ amplitude; left unprogrammed it defaults to 0
+        // (no RF).  Conservative starting value, hard-capped well below Quisk's
+        // default of 63.  Raise only after bench validation.
+        const TX_TUNE_DRIVE_LEVEL: u8 = 20;
+        const TX_TUNE_DRIVE_LEVEL_MAX: u8 = 63; // never exceed Quisk's default
         const MAX_DURATION_MS: u32 = 500;
         const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
         const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
@@ -441,14 +490,13 @@ impl IqSource for HermesLite2Source {
         // default when no drive is supplied (legacy clients).  The server clamp
         // is the last line of defense — neither UI nor server may exceed 0.10 FS.
         //
-        // HL2 TX-drive AUDIT (2026-05-29): RF output here is governed ONLY by
-        // this digital IQ amplitude.  HPSDR P1 also defines a TX drive-level
-        // register at address 0x09 (C0 = 0x12, C1 = 0..255 PWM) which Quisk and
-        // pihpsdr program; Rigflow does NOT (we only write 0x00/0x01/0x02/0x0A),
-        // so it sits at the firmware default.  We deliberately do not program it
-        // yet — it affects PA output power and needs a safety review.  If the
-        // amplitude sweep below shows raw telemetry that does NOT scale with
-        // amplitude, the drive-level register is the prime suspect.
+        // HL2 TX-drive (per Quisk audit 2026-05-29): RF output scales with BOTH
+        // this digital IQ amplitude AND the HL2 TX drive-level register at
+        // address 0x09 (C0 = 0x12, C1 = 0..255 PWM).  Left unprogrammed the
+        // drive level defaults to 0 → no RF, so telemetry read ~0 regardless of
+        // IQ.  We now program 0x09 (drive level + PA enable) before PTT and
+        // safe it off on exit (see send_tx_drive_cc below).  Quisk defaults the
+        // drive level to 63/255; we start far lower and hard-cap it.
         let effective_amplitude = if drive > 0.0 {
             drive.clamp(TX_TUNE_MIN_AMPLITUDE_FS, TX_TUNE_MAX_AMPLITUDE_FS)
         } else {
@@ -515,6 +563,31 @@ impl IqSource for HermesLite2Source {
              TX1_NCO={target_u32} Hz (reg 0x01)  RX1_NCO={target_u32} Hz (reg 0x02)"
         );
 
+        // ── Program TX drive level + PA enable (register 0x09) ────────────
+        // Without this the HL2 drive level sits at 0 and produces no RF, so
+        // forward/reverse telemetry reads ~0 regardless of IQ amplitude.  Set
+        // a conservative, hard-capped drive level and enable the PA so the
+        // post-PA forward/reverse detectors register power.  Disabled again on
+        // every exit path below.
+        let drive_level = TX_TUNE_DRIVE_LEVEL.min(TX_TUNE_DRIVE_LEVEL_MAX);
+        if let Err(e) = self.send_tx_drive_cc(drive_level, true) {
+            warn!("[hl2 tx-tune] drive-level program failed: {e}");
+            // PA may be partially set — attempt a safe-off before returning.
+            let _ = self.send_tx_drive_cc(0, false);
+            return TxTuneResult {
+                status: TxTuneStatus::Fault,
+                frequency_hz: target_freq_hz,
+                duration_ms: clamped_duration_ms,
+                drive: effective_amplitude,
+                message: Some(format!("drive-level program failed: {e}")),
+                ..TxTuneResult::default()
+            };
+        }
+        info!(
+            "[hl2 tx-tune] TX drive programmed (before PTT): \
+             drive_level={drive_level}/255 (reg 0x09 C1)  pa_enable=true (bit 19)"
+        );
+
         let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
 
         // ── Capture a fresh TX FIFO reading before pre-fill ───────────────
@@ -560,7 +633,9 @@ impl IqSource for HermesLite2Source {
                 tick += packet_period;
                 if let Err(e) = self.send_tx_packet(target_u32, effective_amplitude, false) {
                     warn!("[hl2 tx-tune] pre-fill failed: {e}");
-                    // PTT was never asserted — no release needed.
+                    // PTT was never asserted, but drive level + PA are enabled —
+                    // turn them back off before returning.
+                    let _ = self.send_tx_drive_cc(0, false);
                     return TxTuneResult {
                         status: TxTuneStatus::Fault,
                         frequency_hz: target_freq_hz,
@@ -675,9 +750,12 @@ impl IqSource for HermesLite2Source {
             }
             packets_sent_with_ptt += 1;
 
-            // Poll for a D2H status packet (non-blocking) AFTER feeding the FIFO.
+            // Poll for D2H status packets (non-blocking) AFTER feeding the FIFO.
+            // Drain ALL queued packets each iteration (status readback only —
+            // does not touch send pacing) so the address rotation does not cause
+            // us to miss RADDR 1/2/3 between sparse single-packet polls.
             let mut rx_buf = [0u8; P1_PACKET_LEN];
-            if let Ok(len) = self.socket.recv(&mut rx_buf) {
+            while let Ok(len) = self.socket.recv(&mut rx_buf) {
                 if len == P1_PACKET_LEN {
                     // Record which status addresses this packet carried (C0[7:3]
                     // of each sub-frame) so the telemetry log shows the actual
@@ -707,13 +785,16 @@ impl IqSource for HermesLite2Source {
 
             // Telemetry every 25 ms.
             if last_log.elapsed() >= Duration::from_millis(25) {
+                let r = &self.status_regs.rdata;
                 info!(
                     "[hl2 tx-tune] PTT active: packets_sent_with_ptt={packets_sent_with_ptt} \
                      elapsed_ms={elapsed_ms} amp={effective_amplitude:.3} FS fifo_count={} \
                      recovery_bits={:#02b} last_raddrs={last_raddrs:?} \
                      fwd_raw={} rev_raw={} cur_raw={} \
                      max_fwd_raw={max_forward_raw:?} max_rev_raw={max_reverse_raw:?} \
-                     max_cur_raw={max_current_raw:?} (raddr1={} raddr2={})",
+                     max_cur_raw={max_current_raw:?} (raddr1={} raddr2={}) \
+                     RDATA[0]={:#010x} RDATA[1]={:#010x} RDATA[2]={:#010x} RDATA[3]={:#010x} \
+                     (seen={:?})",
                     self.status_regs.tx_fifo_count,
                     self.status_regs.recovery_bits,
                     self.status_regs.forward_power_raw,
@@ -721,6 +802,8 @@ impl IqSource for HermesLite2Source {
                     self.status_regs.current_raw,
                     self.status_regs.raddr1_valid,
                     self.status_regs.raddr2_valid,
+                    r[0], r[1], r[2], r[3],
+                    self.status_regs.rdata_seen,
                 );
                 last_log = Instant::now();
             }
@@ -771,6 +854,19 @@ impl IqSource for HermesLite2Source {
         }
         info!("[hl2 tx-tune] PTT release frames sent: {release_frames_sent}");
 
+        // ── TX drive / PA safe-off ────────────────────────────────────────
+        // PTT is now cleared; zero the TX drive level and disable the PA
+        // (register 0x09) so the board returns to an RX-safe state.  Run on
+        // every path that reached the TX loop (normal completion or fault).
+        if let Err(e) = self.send_tx_drive_cc(0, false) {
+            warn!("[hl2 tx-tune] TX drive safe-off failed: {e}");
+            if fault_status.is_none() {
+                fault_status = Some(TxTuneStatus::Fault);
+            }
+        } else {
+            info!("[hl2 tx-tune] TX drive level zeroed + PA disabled (reg 0x09)");
+        }
+
         if let Err(e) = self.send_gain_cc() {
             warn!("[hl2 tx-tune] PTT release (send_gain_cc) failed: {e}");
             if fault_status.is_none() {
@@ -816,42 +912,45 @@ impl IqSource for HermesLite2Source {
         let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
 
         // ── Compute result telemetry ──────────────────────────────────────
-        // Power readings remain None until board-specific calibration
-        // constants are confirmed.
-        // TODO: apply forward_power_raw / reverse_power_raw calibration.
+        // Watts calibration is not available, so power stays None.  SWR,
+        // however, depends only on the *ratio* of reflected to forward, so we
+        // derive it directly from the peak raw detector counts captured during
+        // the pulse.  (Suppress unused-variable noise; SWR_ALARM_THRESHOLD and
+        // MIN_FORWARD_W are kept for the future watts-calibrated path.)
+        let _ = (SWR_ALARM_THRESHOLD, MIN_FORWARD_W);
         let forward_power_w: Option<f32> = None;
         let reverse_power_w: Option<f32> = None;
-        let swr = compute_swr(forward_power_w, reverse_power_w);
 
         // Raw detector counts to surface in the result.  Use the PEAK values
         // latched WHILE PTT was asserted, NOT the post-release `status_regs`
         // (which has already decayed by the time the post-TX drain runs).
-        // Calibrated watts are not yet available (so result watts and SWR stay
-        // None); these raw counts prove telemetry is arriving and let us judge
-        // whether drive is too low.  TEMPORARY: remove once watts calibrated.
         let fwd_raw = max_forward_raw;
         let rev_raw = max_reverse_raw;
         let cur_raw = max_current_raw;
 
-        // ── Determine result status ───────────────────────────────────────
-        let status = if let Some(fwd) = forward_power_w {
-            if fwd < MIN_FORWARD_W {
-                TxTuneStatus::NoForwardPower
-            } else if swr.map_or(false, |s| s > SWR_ALARM_THRESHOLD) {
-                TxTuneStatus::HighSwr
-            } else {
-                TxTuneStatus::Ok
-            }
-        } else {
-            // No power calibration yet — test ran to completion without fault.
-            TxTuneStatus::Ok
+        // SWR from raw fwd/rev ratio (uncalibrated).  `None` when no forward
+        // reading, rev > fwd, or gamma >= 1.0 (see compute_swr_from_raw).
+        let swr = match (fwd_raw, rev_raw) {
+            (Some(f), Some(r)) => compute_swr_from_raw(f, r),
+            _ => None,
+        };
+        // gamma is logged for diagnostics (reflection coefficient magnitude).
+        let gamma = match (fwd_raw, rev_raw) {
+            (Some(f), Some(r)) if f > 0 => Some((r as f32 / f as f32).sqrt()),
+            _ => None,
         };
 
+        // ── Determine result status ───────────────────────────────────────
+        // Watts not calibrated and no TX protection here (by design): a
+        // completed pulse is reported Ok regardless of SWR; the operator reads
+        // the SWR value itself.
+        let status = TxTuneStatus::Ok;
+
         info!(
-            "[hl2 tx-tune] done: status={:?}  fwd={:?} W  rev={:?} W  swr={:?}  \
-             amp={effective_amplitude:.3} FS  max_fwd_raw={fwd_raw:?}  \
-             max_rev_raw={rev_raw:?}  max_cur_raw={cur_raw:?}",
-            status, forward_power_w, reverse_power_w, swr
+            "[hl2 tx-tune] done: status={:?}  amp={effective_amplitude:.3} FS  \
+             drive_level={drive_level}/255  max_fwd_raw={fwd_raw:?}  \
+             max_rev_raw={rev_raw:?}  max_cur_raw={cur_raw:?}  gamma={gamma:?}  swr={swr:?}",
+            status
         );
 
         TxTuneResult {
@@ -859,6 +958,8 @@ impl IqSource for HermesLite2Source {
             forward_power_w,
             reverse_power_w,
             swr,
+            forward_raw: fwd_raw,
+            reverse_raw: rev_raw,
             frequency_hz: target_freq_hz,
             duration_ms: clamped_duration_ms,
             drive: effective_amplitude,
@@ -866,7 +967,7 @@ impl IqSource for HermesLite2Source {
             // are calibrated.
             message: Some(format!(
                 "max raw fwd={fwd_raw:?} rev={rev_raw:?} cur={cur_raw:?} \
-                 @ {effective_amplitude:.3} FS (uncalibrated)"
+                 @ {effective_amplitude:.3} FS, drive {drive_level}/255 (uncalibrated)"
             )),
         }
     }
@@ -931,6 +1032,13 @@ fn parse_ddc_packet(
         // Device-to-host status address is C0[7:3]; C0[2:0] are PTT/DASH/DOT.
         // (This differs from host-to-device writes, where C0 = addr<<1 | MOX.)
         let raddr = (c0 >> 3) & 0x1F;
+
+        // Diagnostic: capture the raw 32-bit RDATA for any address 0..=4,
+        // including ones we do not otherwise interpret (e.g. RADDR 3/4).
+        if (raddr as usize) < status.rdata.len() {
+            status.rdata[raddr as usize] = word;
+            status.rdata_seen[raddr as usize] = true;
+        }
 
         match raddr {
             0x00 => {
