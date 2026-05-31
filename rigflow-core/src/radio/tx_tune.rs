@@ -91,6 +91,11 @@ pub struct TxTuneResult {
     #[serde(default)]
     pub reverse_raw: Option<u16>,
 
+    /// Peak raw PA-current detector count captured during the pulse
+    /// (uncalibrated ADC units). `None` if not measured.
+    #[serde(default)]
+    pub current_raw: Option<u16>,
+
     /// Frequency the test was run at (Hz). Zero if no test has been run.
     #[serde(default)]
     pub frequency_hz: u64,
@@ -295,6 +300,7 @@ mod tests {
             swr: Some(1.8),
             forward_raw: Some(55),
             reverse_raw: Some(12),
+            current_raw: Some(309),
             frequency_hz: 14_200_000,
             duration_ms: 250,
             drive: 0.05,

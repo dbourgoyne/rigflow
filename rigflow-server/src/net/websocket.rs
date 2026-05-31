@@ -512,15 +512,28 @@ async fn handle_radio_message(
 	    }
 	}
 
-        ClientRadioMessage::RequestTxTuneTest { duration_ms, drive } => {
-            info!(
-                "[websocket] RequestTxTuneTest: duration_ms={} drive={:.3}",
-                duration_ms, drive
-            );
+	ClientRadioMessage::SetSourceTxDrive { tx_drive_percent } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSourceTxDrive { tx_drive_percent },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_source_tx_drive_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+        ClientRadioMessage::RequestTxTuneTest { duration_ms } => {
+            info!("[websocket] RequestTxTuneTest: duration_ms={}", duration_ms);
             if let Err(err) = send_worker_command_for_session(
                 app_state,
                 session,
-                WorkerCommand::RequestTxTuneTest { duration_ms, drive },
+                WorkerCommand::RequestTxTuneTest { duration_ms },
             )
             .await
             {

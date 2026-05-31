@@ -223,6 +223,8 @@ impl IqSource for RtlSdrSource {
             gain_db: self.gain_db,
             ppm_correction: self.ppm_correction,
             direct_sampling: self.direct_sampling,
+            // RTL-SDR has no transmit; report the default (TX unsupported).
+            ..SourceControlState::default()
         }
     }
 

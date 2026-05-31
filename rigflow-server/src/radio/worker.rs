@@ -51,9 +51,10 @@ struct SharedControlState {
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
 
-    /// Set by command thread when a TX tune test arrives; consumed (taken) by
-    /// the capture thread which owns the IQ source.
-    pending_tx_tune_test: Option<(u32, f32)>,  // (duration_ms, drive)
+    /// Set by command thread when a Spot/SWR measurement arrives; consumed
+    /// (taken) by the capture thread which owns the IQ source.  TX drive comes
+    /// from `source_control.tx_drive_percent`, not from the request.
+    pending_tx_tune_test: Option<u32>,  // duration_ms
 
     /// Written by capture thread after executing a TX tune test dry run;
     /// read by DSP thread to detect changes and publish RuntimeChanged.
@@ -585,15 +586,22 @@ fn spawn_command_thread(
                         }
                     }
 
-                    WorkerCommand::RequestTxTuneTest { duration_ms, drive } => {
+                    WorkerCommand::SetSourceTxDrive { tx_drive_percent } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.tx_drive_percent =
+                                tx_drive_percent.clamp(0.0, 100.0);
+                        }
+                    }
+
+                    WorkerCommand::RequestTxTuneTest { duration_ms } => {
                         info!(
-                            "[radio-worker] RequestTxTuneTest queued: duration_ms={} drive={:.3}",
-                            duration_ms, drive
+                            "[radio-worker] RequestTxTuneTest queued: duration_ms={}",
+                            duration_ms
                         );
                         if let Ok(mut cs) = control.lock() {
                             // Replace any previous pending request; only one
-                            // test runs at a time.
-                            cs.pending_tx_tune_test = Some((duration_ms, drive));
+                            // measurement runs at a time.
+                            cs.pending_tx_tune_test = Some(duration_ms);
                         }
                     }
                 },
@@ -929,16 +937,19 @@ fn spawn_capture_thread(
                     .ok()
                     .and_then(|mut cs| cs.pending_tx_tune_test.take());
 
-                if let Some((duration_ms, drive)) = pending {
-                    // TX tune transmits on the operator's target frequency, not
-                    // the RX DDC centre.  Pass target_freq_hz through to the source.
+                if let Some(duration_ms) = pending {
+                    // Spot/SWR transmits on the operator's target frequency (not
+                    // the RX DDC centre).  TX power is the configured source
+                    // drive percent, read from control state at measure time.
                     let target_freq_hz = control_snapshot.target_freq_hz;
+                    let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     info!(
-                        "[radio-worker {}] TX tune test: target_freq={} dur_ms={} drive={:.3}",
-                        descriptor.id.0, target_freq_hz, duration_ms, drive
+                        "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0}",
+                        descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent
                     );
 
-                    let result = source.tx_tune_test(target_freq_hz, duration_ms, drive);
+                    let result =
+                        source.tx_tune_test(target_freq_hz, duration_ms, tx_drive_percent);
 
                     info!(
                         "[radio-worker {}] TX tune test complete: result={:?}",

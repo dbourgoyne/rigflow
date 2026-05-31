@@ -102,14 +102,19 @@ pub enum ClientRadioMessage {
 	mode: DirectSamplingMode,
     },
 
-    /// Request a TX tune test (a short low-power carrier pulse for SWR
-    /// measurement). For this implementation the server executes a dry run
-    /// only — no RF is transmitted.
+    /// Set the transmit drive level in percent (0–100).  Part of source
+    /// control; the server applies/persists it like other source settings and
+    /// uses it for transmit operations (Spot/SWR).
+    SetSourceTxDrive {
+        tx_drive_percent: f32,
+    },
+
+    /// Request a Spot / SWR measurement: a short, pure, unmodulated carrier at
+    /// the current TX frequency.  TX power comes from the configured source
+    /// `tx_drive_percent`; the server clamps duration and drive to safe limits.
     RequestTxTuneTest {
         /// Pulse duration in milliseconds; server clamps to a safe maximum.
         duration_ms: u32,
-        /// Drive level in [0.0, 1.0]; server may override with a safer value.
-        drive: f32,
     },
 }
 

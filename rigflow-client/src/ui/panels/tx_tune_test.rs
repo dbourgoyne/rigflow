@@ -5,19 +5,22 @@ use rigflow_core::radio::tx_tune::TxTuneStatus;
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
 impl RigflowApp {
-    /// Draw the "TX Tune Test" panel.
+    /// Draw the "Spot / SWR" panel.
     ///
-    /// Only shown when the active source advertises `supports_tx_tune_test`.
+    /// Transmits a pure, unmodulated single-frequency carrier at the current
+    /// TX frequency (Quisk-style Spot) for SWR measurement.  Only shown when
+    /// the active source advertises `supports_tx_tune_test`.
     ///
-    /// # Safety invariants
+    /// TX power is the operator's **TX Drive (%)** set in HL2 Source Control;
+    /// this panel only displays it read-only and uses it for the measurement.
     ///
-    /// - "Measure SWR" is enabled only when the arm checkbox is checked AND
-    ///   no test is currently running.
-    /// - Clicking "Measure SWR" sends `RequestTxTuneTest { duration_ms: 250,
-    ///   drive: tx_tune_amplitude_pct / 100 }` (FS) and immediately disarms +
-    ///   sets `tx_tune_running = true`.
-    /// - `tx_tune_armed` and `tx_tune_running` are never persisted;
-    ///   `tx_tune_amplitude_pct` IS persisted per-operator.
+    /// # Behaviour
+    ///
+    /// - "Measure SWR" is enabled whenever no measurement is already running.
+    /// - Clicking it sends `RequestTxTuneTest { duration_ms: 250 }` and sets
+    ///   `tx_tune_running = true`; the result arrives via `RuntimeChanged`.
+    /// - TX power is the configured source `tx_drive_percent` (read server-side
+    ///   from Source Control); this panel does not carry a drive value.
     pub(crate) fn draw_tx_tune_test_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
         if !snapshot.radio_acquired {
             return;
@@ -27,7 +30,7 @@ impl RigflowApp {
             return;
         }
 
-        egui::CollapsingHeader::new("TX Tune Test")
+        egui::CollapsingHeader::new("Spot / SWR")
             .default_open(true)
             .show(ui, |ui| {
                 // ── Safety warning ───────────────────────────────────────────
@@ -51,58 +54,24 @@ impl RigflowApp {
                 ui.label(egui::RichText::new(state_text).color(state_color).small());
                 ui.add_space(4.0);
 
-                // ── Arm checkbox ─────────────────────────────────────────────
-                let mut armed = snapshot.tx_tune_armed;
-                if ui.checkbox(&mut armed, "Arm TX tune test").changed() {
-                    if let Ok(mut state) = self.state.lock() {
-                        state.tx_tune_armed = armed;
-                    }
-                }
-                ui.add_space(4.0);
-
-                // ── TX Tune Amplitude (%FS) ──────────────────────────────────
-                // Per-operator, persisted.  0.5–10.0% in 0.5% steps.  Editable
-                // even while connected because it governs only this test, not
-                // the locked operator settings.  Sent as `drive` (FS = pct/100).
-                let mut amp_pct = snapshot.tx_tune_amplitude_pct;
-                let amp_resp = ui.add(
-                    egui::Slider::new(&mut amp_pct, 0.5..=10.0)
-                        .step_by(0.5)
-                        .fixed_decimals(1)
-                        .suffix(" %FS")
-                        .text("TX Tune Amplitude"),
+                // ── Current TX Drive (read-only) ─────────────────────────────
+                // TX Drive is configured in HL2 Source Control; shown here for
+                // reference only.  No slider in this panel.
+                ui.label(format!(
+                    "Current TX Drive: {:.0}%",
+                    snapshot.source_control.tx_drive_percent
+                ));
+                ui.label(
+                    egui::RichText::new("Pure carrier, 250 ms · adjust power in Source Control")
+                        .small()
+                        .weak(),
                 );
-                if amp_resp.changed() {
-                    let snapped = (amp_pct.clamp(0.5, 10.0) * 2.0).round() / 2.0;
-                    if let Ok(mut state) = self.state.lock() {
-                        state.tx_tune_amplitude_pct = snapped;
-                    }
-                    self.save_tx_tune_amplitude_to_current_operator();
-                }
-                ui.add_space(4.0);
-
-                // ── Parameters ───────────────────────────────────────────────
-                egui::Grid::new("tx_tune_params_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.label("Duration");
-                        ui.label("250 ms");
-                        ui.end_row();
-
-                        ui.label("Drive");
-                        ui.label(format!(
-                            "{:.1}% ({:.3} FS)",
-                            snapshot.tx_tune_amplitude_pct,
-                            snapshot.tx_tune_amplitude_pct / 100.0
-                        ));
-                        ui.end_row();
-                    });
                 ui.add_space(4.0);
 
                 // ── Measure SWR button ───────────────────────────────────────
-                // Enabled only when armed and not already running.
-                let can_measure = snapshot.tx_tune_armed && !snapshot.tx_tune_running;
+                // Enabled when no measurement is already running.  TX power is
+                // the configured source TX Drive (the server reads it).
+                let can_measure = !snapshot.tx_tune_running;
                 let clicked = ui
                     .add_enabled(can_measure, egui::Button::new("Measure SWR"))
                     .clicked();
@@ -110,12 +79,10 @@ impl RigflowApp {
                 if clicked {
                     self.send_radio_msg(ClientRadioMessage::RequestTxTuneTest {
                         duration_ms: 250,
-                        drive: snapshot.tx_tune_amplitude_pct / 100.0,
                     });
-                    // Disarm and mark running immediately — the result will
-                    // arrive via RuntimeChanged once the test completes.
+                    // Mark running immediately — the result arrives via
+                    // RuntimeChanged once the measurement completes.
                     if let Ok(mut state) = self.state.lock() {
-                        state.tx_tune_armed = false;
                         state.tx_tune_running = true;
                     }
                 }
@@ -139,6 +106,10 @@ impl RigflowApp {
 
                         ui.label("Reverse Raw");
                         ui.label(format_raw(result.reverse_raw));
+                        ui.end_row();
+
+                        ui.label("Current Raw");
+                        ui.label(format_raw(result.current_raw));
                         ui.end_row();
 
                         ui.label("Status");

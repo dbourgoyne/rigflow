@@ -20,6 +20,17 @@ pub struct SourceControlState {
     pub gain_db: f32,
     pub ppm_correction: i32,
     pub direct_sampling: DirectSamplingMode,
+
+    /// Transmit drive level in percent (0–100).  Operator transmit-power
+    /// control; applies to all transmit operations (Spot/SWR now, voice/data
+    /// later).  Persisted and synced like the other source-control fields.
+    /// `#[serde(default)]` so older persisted state without it loads cleanly.
+    #[serde(default = "default_tx_drive_percent")]
+    pub tx_drive_percent: f32,
+}
+
+pub fn default_tx_drive_percent() -> f32 {
+    10.0
 }
 
 impl Default for SourceControlState {
@@ -30,6 +41,7 @@ impl Default for SourceControlState {
             gain_db: 0.0,
             ppm_correction: 0,
             direct_sampling: DirectSamplingMode::Off,
+            tx_drive_percent: default_tx_drive_percent(),
         }
     }
 }

@@ -454,6 +454,10 @@ impl IqSource for HermesLite2Source {
     /// first.  After pre-fill the socket receive buffer is drained and any
     /// stale `recovery_bits` from before TX started are cleared, so only
     /// genuine in-flight anomalies trigger the underflow/overflow guard.
+    /// Spot / SWR carrier (formerly the engineering "TX tune test").  `drive`
+    /// now carries the operator's **TX Drive percent (0–100)** from HL2 Source
+    /// Control — NOT an IQ amplitude.  It maps to the HL2 drive-level register
+    /// (0x09); the carrier IQ amplitude itself stays a fixed safe value.
     fn tx_tune_test(
         &mut self,
         target_freq_hz: u64,
@@ -461,15 +465,13 @@ impl IqSource for HermesLite2Source {
         drive: f32,
     ) -> TxTuneResult {
         // ── Hard safety constants ────────────────────────────────────────
+        // Fixed safe carrier IQ amplitude (constant I = amp, Q = 0).  Power is
+        // controlled by the TX drive-level register, not this amplitude.
         const TX_TUNE_DEFAULT_AMPLITUDE_FS: f32 = 0.05; // 5% FS (~-26 dBFS)
-        const TX_TUNE_MIN_AMPLITUDE_FS: f32 = 0.005; // 0.5% FS floor
-        const TX_TUNE_MAX_AMPLITUDE_FS: f32 = 0.10; // hard ceiling (~-20 dBFS)
-        // HL2 TX drive level (register 0x09 C1, 0–255).  RF output scales with
-        // this AND the digital IQ amplitude; left unprogrammed it defaults to 0
-        // (no RF).  Conservative starting value, hard-capped well below Quisk's
-        // default of 63.  Raise only after bench validation.
-        const TX_TUNE_DRIVE_LEVEL: u8 = 20;
-        const TX_TUNE_DRIVE_LEVEL_MAX: u8 = 63; // never exceed Quisk's default
+        // HL2 TX drive level (register 0x09 C1, 0–255) derived from TX Drive %.
+        // Hard-capped well below full scale (and below Quisk's default of 63)
+        // as a conservative safety ceiling regardless of the operator's %.
+        const TX_TUNE_DRIVE_LEVEL_MAX: u8 = 63;
         const MAX_DURATION_MS: u32 = 500;
         const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
         const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
@@ -484,24 +486,18 @@ impl IqSource for HermesLite2Source {
         // ── Parameter clamping ───────────────────────────────────────────
         let clamped_duration_ms = duration_ms.min(MAX_DURATION_MS);
 
-        // Effective TX amplitude: the client sends the configured TX Tune
-        // Amplitude (%FS) as `drive` in FS units (e.g. 5.0% → 0.050).  Honor a
-        // positive value, clamped to [0.005, 0.100] FS; fall back to the 0.05
-        // default when no drive is supplied (legacy clients).  The server clamp
-        // is the last line of defense — neither UI nor server may exceed 0.10 FS.
-        //
-        // HL2 TX-drive (per Quisk audit 2026-05-29): RF output scales with BOTH
-        // this digital IQ amplitude AND the HL2 TX drive-level register at
-        // address 0x09 (C0 = 0x12, C1 = 0..255 PWM).  Left unprogrammed the
-        // drive level defaults to 0 → no RF, so telemetry read ~0 regardless of
-        // IQ.  We now program 0x09 (drive level + PA enable) before PTT and
-        // safe it off on exit (see send_tx_drive_cc below).  Quisk defaults the
-        // drive level to 63/255; we start far lower and hard-cap it.
-        let effective_amplitude = if drive > 0.0 {
-            drive.clamp(TX_TUNE_MIN_AMPLITUDE_FS, TX_TUNE_MAX_AMPLITUDE_FS)
-        } else {
-            TX_TUNE_DEFAULT_AMPLITUDE_FS
-        };
+        // Carrier IQ amplitude is fixed (existing safe carrier generation).
+        let effective_amplitude = TX_TUNE_DEFAULT_AMPLITUDE_FS;
+
+        // TX Drive percent → HL2 drive-level register (0x09 C1), per Quisk:
+        //   drive_level_u8 = round(tx_drive_percent * 255 / 100)
+        // then hard-capped to TX_TUNE_DRIVE_LEVEL_MAX even at 100%.  RF output
+        // scales with BOTH this drive level AND the (fixed) IQ amplitude; left
+        // unprogrammed the drive level defaults to 0 → no RF.  We program 0x09
+        // (drive level + PA enable) before PTT and safe it off on exit.
+        let tx_drive_percent = drive.clamp(0.0, 100.0);
+        let drive_level = ((tx_drive_percent * 255.0 / 100.0).round() as i32)
+            .clamp(0, TX_TUNE_DRIVE_LEVEL_MAX as i32) as u8;
 
         // ── Frequency validation ─────────────────────────────────────────
         // HL2 HF TX band: 1.8–30 MHz.
@@ -565,11 +561,10 @@ impl IqSource for HermesLite2Source {
 
         // ── Program TX drive level + PA enable (register 0x09) ────────────
         // Without this the HL2 drive level sits at 0 and produces no RF, so
-        // forward/reverse telemetry reads ~0 regardless of IQ amplitude.  Set
-        // a conservative, hard-capped drive level and enable the PA so the
-        // post-PA forward/reverse detectors register power.  Disabled again on
-        // every exit path below.
-        let drive_level = TX_TUNE_DRIVE_LEVEL.min(TX_TUNE_DRIVE_LEVEL_MAX);
+        // forward/reverse telemetry reads ~0 regardless of IQ amplitude.  The
+        // drive level was derived from TX Drive % above and hard-capped; enable
+        // the PA so the post-PA forward/reverse detectors register power.
+        // Disabled again on every exit path below.
         if let Err(e) = self.send_tx_drive_cc(drive_level, true) {
             warn!("[hl2 tx-tune] drive-level program failed: {e}");
             // PA may be partially set — attempt a safe-off before returning.
@@ -584,8 +579,10 @@ impl IqSource for HermesLite2Source {
             };
         }
         info!(
-            "[hl2 tx-tune] TX drive programmed (before PTT): \
-             drive_level={drive_level}/255 (reg 0x09 C1)  pa_enable=true (bit 19)"
+            "[hl2 spot] TX drive programmed (before PTT): \
+             tx_drive_percent={tx_drive_percent:.0} drive_level_u8={drive_level}/255 \
+             (reg 0x09 C1, cap {TX_TUNE_DRIVE_LEVEL_MAX})  pa_enable=true (bit 19)  \
+             effective_amplitude_fs={effective_amplitude:.3}"
         );
 
         let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
@@ -947,9 +944,10 @@ impl IqSource for HermesLite2Source {
         let status = TxTuneStatus::Ok;
 
         info!(
-            "[hl2 tx-tune] done: status={:?}  amp={effective_amplitude:.3} FS  \
-             drive_level={drive_level}/255  max_fwd_raw={fwd_raw:?}  \
-             max_rev_raw={rev_raw:?}  max_cur_raw={cur_raw:?}  gamma={gamma:?}  swr={swr:?}",
+            "[hl2 spot] done: status={:?}  tx_drive_percent={tx_drive_percent:.0}  \
+             drive_level_u8={drive_level}  effective_amplitude_fs={effective_amplitude:.3}  \
+             max_fwd_raw={fwd_raw:?}  max_rev_raw={rev_raw:?}  max_cur_raw={cur_raw:?}  \
+             gamma={gamma:?}  swr={swr:?}",
             status
         );
 
@@ -960,6 +958,7 @@ impl IqSource for HermesLite2Source {
             swr,
             forward_raw: fwd_raw,
             reverse_raw: rev_raw,
+            current_raw: cur_raw,
             frequency_hz: target_freq_hz,
             duration_ms: clamped_duration_ms,
             drive: effective_amplitude,

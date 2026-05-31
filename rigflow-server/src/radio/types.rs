@@ -119,8 +119,10 @@ pub enum WorkerCommand {
     SetSourceGain { gain_db: f32 },
     SetSourcePpmCorrection { ppm: i32 },
     SetSourceDirectSampling { mode: DirectSamplingMode },
-    /// Request a TX tune test dry run (no RF produced).
-    RequestTxTuneTest { duration_ms: u32, drive: f32 },
+    SetSourceTxDrive { tx_drive_percent: f32 },
+    /// Request a Spot / SWR measurement (pure carrier pulse).  TX power comes
+    /// from the configured source `tx_drive_percent`.
+    RequestTxTuneTest { duration_ms: u32 },
 }
 
 /// Worker lifecycle/status updates.

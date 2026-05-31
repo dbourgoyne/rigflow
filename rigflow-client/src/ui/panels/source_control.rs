@@ -52,6 +52,13 @@ impl RigflowApp {
                                     },
                                 );
                             }
+                            if state.source_capabilities.supports_tx_tune_test {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourceTxDrive {
+                                        tx_drive_percent: state.source_control.tx_drive_percent,
+                                    },
+                                );
+                            }
                         }
 
                         // -----------------------------
@@ -250,6 +257,37 @@ impl RigflowApp {
                                             mode: selected,
                                         },
                                     );
+                                    save_source_control = true;
+                                }
+                            }
+                        }
+
+                        // -----------------------------
+                        // TX Drive (%) — operator transmit power.  Part of
+                        // source control: applies to all transmit operations
+                        // (Spot now; CW/SSB/digital/sweep later).  Gated on TX
+                        // support.  Flows through the source-control plane like
+                        // gain (SetSourceTxDrive); the server uses it when a
+                        // Spot/SWR measurement runs.
+                        // -----------------------------
+                        if state.source_capabilities.supports_tx_tune_test {
+                            let mut tx_drive = state.source_control.tx_drive_percent;
+                            let resp = ui.add(
+                                egui::Slider::new(&mut tx_drive, 0.0..=100.0)
+                                    .step_by(1.0)
+                                    .fixed_decimals(0)
+                                    .suffix("%")
+                                    .text("TX Drive"),
+                            );
+                            if resp.changed() {
+                                let snapped = tx_drive.clamp(0.0, 100.0).round();
+                                if (snapped - state.source_control.tx_drive_percent).abs()
+                                    > f32::EPSILON
+                                {
+                                    state.source_control.tx_drive_percent = snapped;
+                                    self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
+                                        tx_drive_percent: snapped,
+                                    });
                                     save_source_control = true;
                                 }
                             }
