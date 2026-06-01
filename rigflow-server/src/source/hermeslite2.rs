@@ -260,13 +260,23 @@ impl HermesLite2Source {
     }
 
     /// Send one 1032-byte H2D TX packet carrying a constant carrier
-    /// (I = `amplitude_fs` × 0x7FFF, Q = 0) in every TX IQ slot.
+    /// (`real = amplitude_fs` × 0x7FFF, `imag = 0`) in every TX IQ slot.
     ///
     /// Protocol 1 host-to-device sample groups are 8 bytes of **four 16-bit
-    /// signed big-endian** values — `[L_hi L_lo][R_hi R_lo][I_hi I_lo][Q_hi
-    /// Q_lo]`: left audio, right audio, TX I, TX Q.  (This differs from the
-    /// device-to-host DDC layout, which is 24-bit I + 24-bit Q + 16-bit mic.)
-    /// For the tune carrier: L = R = 0, I = amplitude, Q = 0.
+    /// signed big-endian** values: `[L][R][field0][field1]` — left audio,
+    /// right audio, then the two TX sample fields.
+    ///
+    /// IQ ORIENTATION (matches Quisk's TX fill, `microphone.c:899-900`, and is
+    /// consistent with the RX decode): the HL2 wire convention is **field0 =
+    /// imaginary, field1 = real** in BOTH directions.  So a complex baseband
+    /// sample `z` packs as `field0 = imag(z)` (offset b+4..b+6) and
+    /// `field1 = real(z)` (offset b+6..b+8).
+    ///
+    /// For a pure carrier `imag = 0`, so only `field1` (real) carries the
+    /// amplitude.  Putting the real part in `field0` instead is harmless for a
+    /// constant carrier (same RF tone, 90° rotated — Spot/SWR works either
+    /// way) but would INVERT the transmitted sideband once a complex SSB
+    /// signal is fed through, exactly mirroring the RX sideband bug.
     ///
     /// `ptt` controls the PTT bit (C0[0]) in both sub-frames:
     /// - `ptt = false` — feeds TX IQ into the FIFO **without** asserting PTT.
@@ -274,9 +284,12 @@ impl HermesLite2Source {
     /// - `ptt = true`  — feeds TX IQ **and** asserts PTT.  The caller MUST
     ///   call `send_gain_cc()` on every exit path to release PTT.
     fn send_tx_packet(&mut self, nco_freq_hz: u32, amplitude_fs: f32, ptt: bool) -> Result<(), String> {
-        // TX I as a 16-bit signed big-endian sample; Q stays 0 (carrier).
-        let i_code = (amplitude_fs.clamp(0.0, 1.0) * 0x7FFF as f32) as i32 as i16;
-        let i_b = i_code.to_be_bytes();
+        // Carrier as a complex baseband sample: real = amplitude, imag = 0.
+        // Per the HL2 field convention (field0 = imag, field1 = real), the
+        // amplitude goes in field1 (the real field); field0 stays 0.
+        let re_code = (amplitude_fs.clamp(0.0, 1.0) * 0x7FFF as f32) as i32 as i16;
+        let re_b = re_code.to_be_bytes(); // real part → field1
+        let im_b = 0i16.to_be_bytes(); // imag part → field0 (zero for carrier)
 
         let ptt_bit = ptt as u8; // 0 or 1 — OR'd into both C0 bytes
 
@@ -301,8 +314,8 @@ impl HermesLite2Source {
             for i in 0..P1_SAMPLES_PER_SUBFRAME {
                 let b = 8 + i * 8;
                 // L audio [b..b+2] and R audio [b+2..b+4] remain 0.
-                sf[b + 4..b + 6].copy_from_slice(&i_b); // TX I (16-bit BE)
-                // Q bytes [b+6..b+8] remain 0 (pkt initialised to zero).
+                sf[b + 4..b + 6].copy_from_slice(&im_b); // field0 = imag (0)
+                sf[b + 6..b + 8].copy_from_slice(&re_b); // field1 = real (amp)
             }
         }
 
@@ -318,8 +331,9 @@ impl HermesLite2Source {
             sf[7] = gain_byte;
             for i in 0..P1_SAMPLES_PER_SUBFRAME {
                 let b = 8 + i * 8;
-                // L/R audio [b..b+4] remain 0; TX I at [b+4..b+6]; Q [b+6..b+8] = 0.
-                sf[b + 4..b + 6].copy_from_slice(&i_b);
+                // L/R audio [b..b+4] remain 0; field0 = imag (0), field1 = real.
+                sf[b + 4..b + 6].copy_from_slice(&im_b);
+                sf[b + 6..b + 8].copy_from_slice(&re_b);
             }
         }
 
