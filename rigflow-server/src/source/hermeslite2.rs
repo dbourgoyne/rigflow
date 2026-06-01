@@ -1065,11 +1065,19 @@ fn parse_ddc_packet(
         }
 
         // Decode IQ samples.
+        //
+        // The HL2 sends two 24-bit big-endian fields per sample.  Matching
+        // Quisk's validated decode (`samp = xr + xi*I`, where `xi` is the FIRST
+        // field and `xr` the SECOND), the complex sample is:
+        //     real = SECOND field, imag = FIRST field
+        // Mapping them the naive way — `Complex(first, second)` — conjugate-
+        // mirrors the spectrum and swaps USB/LSB (an HL2-only sideband
+        // inversion; RTL-SDR already delivers I+jQ in the expected orientation).
         for i in 0..P1_SAMPLES_PER_SUBFRAME {
             let b = 8 + i * 8;
-            let i_f = i24_be(&sf[b..b + 3]) as f32 / (1u32 << 23) as f32;
-            let q_f = i24_be(&sf[b + 3..b + 6]) as f32 / (1u32 << 23) as f32;
-            out.push_back(Complex32::new(i_f, q_f));
+            let field0 = i24_be(&sf[b..b + 3]) as f32 / (1u32 << 23) as f32;
+            let field1 = i24_be(&sf[b + 3..b + 6]) as f32 / (1u32 << 23) as f32;
+            out.push_back(Complex32::new(field1, field0));
         }
     }
 }
