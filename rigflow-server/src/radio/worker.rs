@@ -55,6 +55,8 @@ struct SharedControlState {
     squelch_open: bool,
     /// NR2 spectral noise reduction enabled (radio control, DSP-side).
     nr2_enabled: bool,
+    /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max suppression).
+    nr2_strength: f32,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -282,6 +284,7 @@ fn build_runtime_state(
         squelch_threshold_db: control.squelch_threshold_db,
         squelch_open: control.squelch_open,
         nr2_enabled: control.nr2_enabled,
+        nr2_strength: control.nr2_strength,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -358,6 +361,7 @@ fn run_iq_worker_threads(
         squelch_threshold_db: -90.0,
         squelch_open: true,
         nr2_enabled: false,
+        nr2_strength: 0.5,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
@@ -572,6 +576,11 @@ fn spawn_command_thread(
                     WorkerCommand::SetNr2Enabled { enabled } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.nr2_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetNr2Strength { strength } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.nr2_strength = strength.clamp(0.0, 1.0);
                         }
                     }
                     WorkerCommand::SetDeemphasisMode { mode } => {
@@ -1181,8 +1190,10 @@ fn spawn_dsp_thread(
                 changed = true;
             }
 
-            // NR2 toggle: no pipeline change, just republish runtime for sync.
-            if current.nr2_enabled != applied.nr2_enabled {
+            // NR2 toggle/strength: no pipeline change, just republish for sync.
+            if current.nr2_enabled != applied.nr2_enabled
+                || (current.nr2_strength - applied.nr2_strength).abs() > f32::EPSILON
+            {
                 changed = true;
             }
 
@@ -1299,6 +1310,7 @@ fn spawn_dsp_thread(
                     // when first disabled, drop any accumulated state so a later
                     // re-enable starts fresh.
                     if current.nr2_enabled {
+                        nr2.set_strength(current.nr2_strength);
                         audio_f32 = nr2.process(&audio_f32);
                     } else if nr2.is_active() {
                         nr2.reset();

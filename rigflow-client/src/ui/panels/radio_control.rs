@@ -116,6 +116,22 @@ impl RigflowApp {
             state.nr2_enabled = enabled;
             self.send_radio_msg(ClientRadioMessage::SetNr2Enabled { enabled });
         }
+
+        ui.add_enabled_ui(state.nr2_enabled, |ui| {
+            let mut strength = state.nr2_strength;
+            let response = ui.add(
+                egui::Slider::new(&mut strength, 0.0..=1.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2)
+                    .text("NR2 Strength"),
+            );
+            if response.changed() {
+                state.nr2_strength = strength.clamp(0.0, 1.0);
+                self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
+                    strength: state.nr2_strength,
+                });
+            }
+        });
     }
 
     fn draw_filter_bandwidth_row(

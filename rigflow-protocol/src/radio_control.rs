@@ -27,6 +27,11 @@ pub fn default_squelch_open() -> bool {
     true
 }
 
+/// Default NR2 strength for `#[serde(default)]` decoding.
+pub fn default_nr2_strength() -> f32 {
+    0.5
+}
+
 /// Messages sent from client → server over WebSocket.
 ///
 /// These drive:
@@ -105,6 +110,11 @@ pub enum ClientRadioMessage {
     /// Enable/disable NR2 spectral noise reduction (radio control, DSP-side).
     SetNr2Enabled {
         enabled: bool,
+    },
+
+    /// Set NR2 strength in [0.0, 1.0] (0 = none, 1 = max) (radio control).
+    SetNr2Strength {
+        strength: f32,
     },
 
     SetSourceSampleRate {
@@ -223,6 +233,9 @@ pub enum ServerRadioMessage {
         /// NR2 spectral noise reduction enabled (radio control).
         #[serde(default)]
         nr2_enabled: bool,
+        /// NR2 strength in [0.0, 1.0].
+        #[serde(default = "default_nr2_strength")]
+        nr2_strength: f32,
 
 	source_control: SourceControlState,
 
@@ -259,6 +272,8 @@ pub enum ServerRadioMessage {
         squelch_open: Option<bool>,
         #[serde(default)]
         nr2_enabled: Option<bool>,
+        #[serde(default)]
+        nr2_strength: Option<f32>,
 
 	source_control: Option<SourceControlState>,
 
