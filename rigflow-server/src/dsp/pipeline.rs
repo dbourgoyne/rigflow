@@ -202,6 +202,10 @@ pub struct DspPipeline {
 
     // Reused scratch buffer for SSB sideband filtering.
     ssb_filtered_scratch: Vec<Complex32>,
+
+    // Mean channel power (|z|^2) of the most recent post-channel-filter,
+    // pre-demod IQ block — the S-meter measurement point.  Mode-independent.
+    last_channel_power: f32,
 }
 
 impl DspPipeline {
@@ -266,6 +270,7 @@ impl DspPipeline {
             tuned_iq_scratch: Vec::new(),
             channelized_iq_scratch: Vec::new(),
             ssb_filtered_scratch: Vec::new(),
+            last_channel_power: 0.0,
 	};
 
 	pipeline.rebuild_audio_path_for_mode();
@@ -424,6 +429,14 @@ impl DspPipeline {
 	let mut iq = std::mem::take(&mut self.channelized_iq_scratch);
 	self.process_iq_into(input, &mut iq);
 
+	// S-meter: mean channel power over the post-channel-filter, pre-demod IQ.
+	// Computed before demod/AGC/NR2/squelch so it is independent of demod
+	// mode and of any audio-domain processing.
+	if !iq.is_empty() {
+	    let sum_sq: f32 = iq.iter().map(|z| z.norm_sqr()).sum();
+	    self.last_channel_power = sum_sq / iq.len() as f32;
+	}
+
 	let mut audio = match self.mode {
             DemodMode::Usb => self.demod_ssb(&iq, Sideband::Usb),
             DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
@@ -531,6 +544,12 @@ impl DspPipeline {
     /// Current AGC envelope estimate (diagnostics).
     pub fn agc_envelope(&self) -> f32 {
         self.agc.envelope()
+    }
+
+    /// Mean channel power (|z|^2, normalized full-scale units) of the most
+    /// recent pre-demod IQ block — the S-meter measurement point.
+    pub fn last_channel_power(&self) -> f32 {
+        self.last_channel_power
     }
 
     pub fn rebuild_ssb_filters(&mut self, bandwidth_hz: f32, taps: usize) {

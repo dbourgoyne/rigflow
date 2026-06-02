@@ -64,6 +64,10 @@ pub struct UiState {
     pub agc_enabled: bool,
     pub agc_strength: f32,
 
+    /// S-meter (read-only status): uncalibrated relative dBm + S-units (0..=9).
+    pub signal_dbm: f32,
+    pub signal_s_units: i32,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -229,6 +233,8 @@ impl Default for UiState {
             nr2_strength: 0.5,
             agc_enabled: true,
             agc_strength: 0.5,
+            signal_dbm: -140.0,
+            signal_s_units: 0,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

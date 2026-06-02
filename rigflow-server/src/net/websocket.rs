@@ -746,6 +746,12 @@ fn runtime_changed_from_runtime(
     let agc_strength =
         (current.agc_strength != previous.agc_strength).then_some(current.agc_strength);
 
+    let signal_dbm =
+        (current.signal_dbm != previous.signal_dbm).then_some(current.signal_dbm);
+
+    let signal_s_units =
+        (current.signal_s_units != previous.signal_s_units).then_some(current.signal_s_units);
+
     let source_control =
     (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
@@ -779,6 +785,8 @@ fn runtime_changed_from_runtime(
         || nr2_strength.is_some()
         || agc_enabled.is_some()
         || agc_strength.is_some()
+        || signal_dbm.is_some()
+        || signal_s_units.is_some()
         || source_control.is_some()
         || source_status.is_some()
         || tx_tune_result.is_some();
@@ -800,6 +808,8 @@ fn runtime_changed_from_runtime(
         nr2_strength,
         agc_enabled,
         agc_strength,
+        signal_dbm,
+        signal_s_units,
         source_control,
         source_status,
         tx_tune_result,
@@ -834,6 +844,8 @@ fn runtime_snapshot_from_status(
             nr2_strength: runtime.nr2_strength,
             agc_enabled: runtime.agc_enabled,
             agc_strength: runtime.agc_strength,
+            signal_dbm: runtime.signal_dbm,
+            signal_s_units: runtime.signal_s_units,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
             tx_tune_result: runtime.last_tx_tune_result.clone(),

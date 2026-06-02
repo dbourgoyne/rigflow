@@ -392,6 +392,8 @@ pub fn apply_radio_server_message(
             nr2_strength,
             agc_enabled,
             agc_strength,
+            signal_dbm,
+            signal_s_units,
             source_control,
             source_status,
             tx_tune_result,
@@ -409,6 +411,8 @@ pub fn apply_radio_server_message(
             state.nr2_strength = nr2_strength;
             state.agc_enabled = agc_enabled;
             state.agc_strength = agc_strength;
+            state.signal_dbm = signal_dbm;
+            state.signal_s_units = signal_s_units;
             // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
             if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
@@ -437,6 +441,8 @@ pub fn apply_radio_server_message(
             nr2_strength,
             agc_enabled,
             agc_strength,
+            signal_dbm,
+            signal_s_units,
             source_control,
             source_status,
             tx_tune_result,
@@ -462,6 +468,12 @@ pub fn apply_radio_server_message(
             }
             if let Some(value) = agc_strength {
                 state.agc_strength = value;
+            }
+            if let Some(value) = signal_dbm {
+                state.signal_dbm = value;
+            }
+            if let Some(value) = signal_s_units {
+                state.signal_s_units = value;
             }
 
             if let Some(value) = center_freq_hz {

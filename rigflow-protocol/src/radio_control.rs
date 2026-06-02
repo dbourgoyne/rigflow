@@ -42,6 +42,11 @@ pub fn default_agc_strength() -> f32 {
     0.5
 }
 
+/// Default S-meter signal level (dBm) for `#[serde(default)]` decoding.
+pub fn default_signal_dbm() -> f32 {
+    -140.0
+}
+
 /// Messages sent from client → server over WebSocket.
 ///
 /// These drive:
@@ -263,6 +268,12 @@ pub enum ServerRadioMessage {
         #[serde(default = "default_agc_strength")]
         agc_strength: f32,
 
+        /// S-meter (read-only status): uncalibrated relative dBm + S-units 0..=9.
+        #[serde(default = "default_signal_dbm")]
+        signal_dbm: f32,
+        #[serde(default)]
+        signal_s_units: i32,
+
 	source_control: SourceControlState,
 
         /// Current source telemetry / status fields.
@@ -304,6 +315,10 @@ pub enum ServerRadioMessage {
         agc_enabled: Option<bool>,
         #[serde(default)]
         agc_strength: Option<f32>,
+        #[serde(default)]
+        signal_dbm: Option<f32>,
+        #[serde(default)]
+        signal_s_units: Option<i32>,
 
 	source_control: Option<SourceControlState>,
 

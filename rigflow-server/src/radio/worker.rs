@@ -60,6 +60,11 @@ struct SharedControlState {
     /// AGC (automatic gain control) — radio control, DSP-side.
     agc_enabled: bool,
     agc_strength: f32,
+    /// S-meter (read-only status): smoothed channel signal strength.
+    /// `signal_dbm` is an uncalibrated relative dBm; `signal_s_units` is 0..=9.
+    /// Written by the DSP thread.
+    signal_dbm: f32,
+    signal_s_units: i32,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -290,6 +295,8 @@ fn build_runtime_state(
         nr2_strength: control.nr2_strength,
         agc_enabled: control.agc_enabled,
         agc_strength: control.agc_strength,
+        signal_dbm: control.signal_dbm,
+        signal_s_units: control.signal_s_units,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -369,6 +376,8 @@ fn run_iq_worker_threads(
         nr2_strength: 0.5,
         agc_enabled: true,
         agc_strength: 0.5,
+        signal_dbm: crate::dsp::smeter::MIN_DBM,
+        signal_s_units: 0,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
@@ -1138,6 +1147,11 @@ fn spawn_dsp_thread(
         let mut last_squelch_log = Instant::now();
         let mut last_agc_log = Instant::now();
 
+        // S-meter: smoothed channel power (linear), with fast attack / slow
+        // release, published (throttled) as signal_dbm / signal_s_units.
+        let mut smoothed_channel_power: f32 = 0.0;
+        let mut last_smeter_update = Instant::now();
+
         // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
         // Only engaged while enabled; reset on demod-mode / sample-rate change.
         let mut nr2 = Nr2::new();
@@ -1180,8 +1194,9 @@ fn spawn_dsp_thread(
                 pipeline.set_deemphasis_mode(current.deemphasis_mode);
                 // Drain IQ blocks that were captured at the old sample rate.
                 while iq_audio_rx.try_recv().is_ok() {}
-                // Audio config changed — clear NR2 state.
+                // Audio config changed — clear NR2 and S-meter state.
                 nr2.reset();
+                smoothed_channel_power = 0.0;
                 changed = true;
             }
 
@@ -1225,6 +1240,14 @@ fn spawn_dsp_thread(
             {
                 pipeline.set_agc_enabled(current.agc_enabled);
                 pipeline.set_agc_strength(current.agc_strength);
+                changed = true;
+            }
+
+            // S-meter status update → republish (read-only; ~10 Hz while it
+            // moves, since the DSP thread refreshes it every 100 ms).
+            if (current.signal_dbm - applied.signal_dbm).abs() > 0.1
+                || current.signal_s_units != applied.signal_s_units
+            {
                 changed = true;
             }
 
@@ -1288,8 +1311,9 @@ fn spawn_dsp_thread(
                 // Reapply deemphasis because its effective behavior depends on demod mode.
                 pipeline.set_deemphasis_mode(current.deemphasis_mode);
 
-                // Demod mode changed — clear NR2 state.
+                // Demod mode changed — clear NR2 and S-meter state.
                 nr2.reset();
+                smoothed_channel_power = 0.0;
 
                 //		if changed {
                 //		    applied = current.clone();
@@ -1342,6 +1366,38 @@ fn spawn_dsp_thread(
                     // disabled, audio passes through untouched (NR2 not called);
                     // when first disabled, drop any accumulated state so a later
                     // re-enable starts fresh.
+                    // ── S-meter ──────────────────────────────────────────────
+                    // Channel power was measured pre-demod inside process_audio.
+                    // Smooth it (fast attack / slow release) and publish dBm +
+                    // S-units (throttled).  Independent of demod/AGC/NR2/squelch.
+                    {
+                        let raw_power = pipeline.last_channel_power();
+                        let block_secs = (audio_f32.len() as f32 / 48_000.0).max(1e-4);
+                        let attack_a = 1.0 - (-block_secs / 0.1).exp(); // ~100 ms
+                        let release_a = 1.0 - (-block_secs / 0.5).exp(); // ~500 ms
+                        let a = if raw_power > smoothed_channel_power {
+                            attack_a
+                        } else {
+                            release_a
+                        };
+                        smoothed_channel_power += a * (raw_power - smoothed_channel_power);
+
+                        if last_smeter_update.elapsed() >= Duration::from_millis(100) {
+                            let dbm =
+                                crate::dsp::smeter::channel_power_to_dbm(smoothed_channel_power);
+                            let s = crate::dsp::smeter::dbm_to_s_units(dbm);
+                            if let Ok(mut cs) = control.lock() {
+                                cs.signal_dbm = dbm;
+                                cs.signal_s_units = s;
+                            }
+                            debug!(
+                                "[smeter] signal_power={:.3e} dbm={:.1} s_units={}",
+                                smoothed_channel_power, dbm, s
+                            );
+                            last_smeter_update = Instant::now();
+                        }
+                    }
+
                     // AGC runs inside process_audio (post-demod, before NR2);
                     // log its state at ~1 Hz for diagnostics.
                     if last_agc_log.elapsed() >= Duration::from_millis(1000) {

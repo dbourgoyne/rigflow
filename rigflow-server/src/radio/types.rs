@@ -97,6 +97,8 @@ pub struct WorkerRuntimeState {
     pub nr2_strength: f32,
     pub agc_enabled: bool,
     pub agc_strength: f32,
+    pub signal_dbm: f32,
+    pub signal_s_units: i32,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
     /// Result of the most recent TX tune test executed by this worker.
