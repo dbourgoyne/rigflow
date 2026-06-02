@@ -65,6 +65,8 @@ struct SharedControlState {
     /// Written by the DSP thread.
     signal_dbm: f32,
     signal_s_units: i32,
+    /// Receive-audio volume in percent (0–100) — final audio gain stage.
+    volume_percent: u8,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -275,6 +277,36 @@ fn pipeline_cfg_for_source(
     }
 }
 
+/// Receive-volume gain from a percent (0–100).
+///
+/// `0%` → silence; `50%` → unity; `100%` → +12 dB.  In dB:
+/// `gain_db = ((vp - 50) / 50) * 12`, then `gain = 10^(gain_db/20)`.
+/// (50% = 1.0×, 75% ≈ +6 dB ≈ 2.0×, 100% = +12 dB ≈ 3.98×.)
+fn volume_gain(volume_percent: u8) -> f32 {
+    if volume_percent == 0 {
+        return 0.0;
+    }
+    let db = ((volume_percent.min(100) as f32 - 50.0) / 50.0) * 12.0;
+    10.0_f32.powf(db / 20.0)
+}
+
+/// Soft limiter applied after the volume boost so loud/boosted audio can't
+/// hard-clip harshly at the i16 conversion.
+///
+/// Transparent (identity) for `|x| <= THRESHOLD`, then a smooth tanh knee that
+/// asymptotes to ±1.0.  Continuous in value and slope at the threshold; output
+/// is always finite and bounded to [-1, 1].
+fn soft_clip(x: f32) -> f32 {
+    const THRESHOLD: f32 = 0.95;
+    let a = x.abs();
+    if a <= THRESHOLD {
+        x
+    } else {
+        let over = (a - THRESHOLD) / (1.0 - THRESHOLD);
+        x.signum() * (THRESHOLD + (1.0 - THRESHOLD) * over.tanh())
+    }
+}
+
 fn build_runtime_state(
     control: &SharedControlState,
     input_sample_rate_hz: f32,
@@ -297,6 +329,7 @@ fn build_runtime_state(
         agc_strength: control.agc_strength,
         signal_dbm: control.signal_dbm,
         signal_s_units: control.signal_s_units,
+        volume_percent: control.volume_percent,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -378,6 +411,7 @@ fn run_iq_worker_threads(
         agc_strength: 0.5,
         signal_dbm: crate::dsp::smeter::MIN_DBM,
         signal_s_units: 0,
+        volume_percent: 50,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
@@ -607,6 +641,11 @@ fn spawn_command_thread(
                     WorkerCommand::SetAgcStrength { strength } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.agc_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVolume { volume_percent } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.volume_percent = volume_percent.min(100);
                         }
                     }
                     WorkerCommand::SetDeemphasisMode { mode } => {
@@ -1152,6 +1191,12 @@ fn spawn_dsp_thread(
         let mut smoothed_channel_power: f32 = 0.0;
         let mut last_smeter_update = Instant::now();
 
+        // Volume: final audio gain.  `applied_volume_gain` ramps toward the
+        // target across each block to avoid clicks when the slider moves.
+        // Initialised to unity (the 50 % default).
+        let mut applied_volume_gain: f32 = 1.0;
+        let mut last_volume_log = Instant::now();
+
         // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
         // Only engaged while enabled; reset on demod-mode / sample-rate change.
         let mut nr2 = Nr2::new();
@@ -1248,6 +1293,11 @@ fn spawn_dsp_thread(
             if (current.signal_dbm - applied.signal_dbm).abs() > 0.1
                 || current.signal_s_units != applied.signal_s_units
             {
+                changed = true;
+            }
+
+            // Volume change → republish for client sync (gain applied below).
+            if current.volume_percent != applied.volume_percent {
                 changed = true;
             }
 
@@ -1466,6 +1516,34 @@ fn spawn_dsp_thread(
                         }
                     }
 
+                    // ── Volume (+ soft limiter) ──────────────────────────────
+                    // Final receive-audio gain (after demod/AGC/NR2/squelch,
+                    // before packetization).  Mapping: 0% → silence, 50% →
+                    // unity, 100% → +12 dB; in dB, gain = ((vp-50)/50)*12.  The
+                    // gain ramps linearly across the block from the previously-
+                    // applied value to the target so slider moves are click-free.
+                    // A soft limiter (see soft_clip) follows so the boost can't
+                    // produce harsh clipping.  Affects only listening loudness.
+                    let target_volume_gain = volume_gain(current.volume_percent);
+                    let n = audio_f32.len();
+                    if n > 0 {
+                        let step = (target_volume_gain - applied_volume_gain) / n as f32;
+                        let mut g = applied_volume_gain;
+                        for s in audio_f32.iter_mut() {
+                            g += step;
+                            *s = soft_clip(*s * g);
+                        }
+                    }
+                    applied_volume_gain = target_volume_gain;
+
+                    if last_volume_log.elapsed() >= Duration::from_millis(1000) {
+                        debug!(
+                            "[volume] volume_percent={} volume_gain={:.3}",
+                            current.volume_percent, target_volume_gain
+                        );
+                        last_volume_log = Instant::now();
+                    }
+
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
                     for sample in audio_f32 {
                         let value = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
@@ -1537,4 +1615,39 @@ fn normalize_initial_frequencies(
     );
 
     (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    #[test]
+    fn volume_gain_mapping() {
+        assert_eq!(volume_gain(0), 0.0); // silence
+        assert!((volume_gain(50) - 1.0).abs() < 1e-4); // unity
+        assert!((volume_gain(75) - 2.0).abs() < 0.05); // ~+6 dB ≈ 2.0x
+        assert!((volume_gain(100) - 3.981).abs() < 0.01); // +12 dB ≈ 3.98x
+        // Monotonic increasing above 0%.
+        assert!(volume_gain(60) > volume_gain(50));
+        assert!(volume_gain(100) > volume_gain(75));
+    }
+
+    #[test]
+    fn soft_clip_transparent_below_threshold() {
+        for &x in &[-0.9_f32, -0.5, 0.0, 0.3, 0.95] {
+            assert!((soft_clip(x) - x).abs() < 1e-6, "identity below threshold for {x}");
+        }
+    }
+
+    #[test]
+    fn soft_clip_bounded_finite_and_sign_preserving() {
+        for &x in &[1.0_f32, 2.0, 4.0, 100.0, -4.0, -100.0] {
+            let y = soft_clip(x);
+            assert!(y.is_finite(), "finite for {x}");
+            assert!(y.abs() <= 1.0, "bounded for {x}: {y}");
+            assert_eq!(y.signum(), x.signum(), "sign preserved for {x}");
+        }
+        // Continuity-ish: just above threshold stays close to threshold.
+        assert!((soft_clip(0.96) - 0.95).abs() < 0.02);
+    }
 }

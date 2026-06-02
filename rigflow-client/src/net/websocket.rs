@@ -443,11 +443,15 @@ pub fn apply_radio_server_message(
             agc_strength,
             signal_dbm,
             signal_s_units,
+            volume_percent,
             source_control,
             source_status,
             tx_tune_result,
             ..
         } => {
+            if let Some(value) = volume_percent {
+                state.volume_percent = value;
+            }
             if let Some(value) = squelch_enabled {
                 state.squelch_enabled = value;
             }

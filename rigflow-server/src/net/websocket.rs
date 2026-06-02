@@ -528,6 +528,22 @@ async fn handle_radio_message(
 	    }
 	}
 
+	ClientRadioMessage::SetVolume { volume_percent } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetVolume { volume_percent },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_volume_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
 	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
 	    if let Err(err) = send_worker_command_for_session(
 		app_state,
@@ -752,6 +768,9 @@ fn runtime_changed_from_runtime(
     let signal_s_units =
         (current.signal_s_units != previous.signal_s_units).then_some(current.signal_s_units);
 
+    let volume_percent =
+        (current.volume_percent != previous.volume_percent).then_some(current.volume_percent);
+
     let source_control =
     (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
@@ -787,6 +806,7 @@ fn runtime_changed_from_runtime(
         || agc_strength.is_some()
         || signal_dbm.is_some()
         || signal_s_units.is_some()
+        || volume_percent.is_some()
         || source_control.is_some()
         || source_status.is_some()
         || tx_tune_result.is_some();
@@ -810,6 +830,7 @@ fn runtime_changed_from_runtime(
         agc_strength,
         signal_dbm,
         signal_s_units,
+        volume_percent,
         source_control,
         source_status,
         tx_tune_result,
@@ -846,6 +867,7 @@ fn runtime_snapshot_from_status(
             agc_strength: runtime.agc_strength,
             signal_dbm: runtime.signal_dbm,
             signal_s_units: runtime.signal_s_units,
+            volume_percent: runtime.volume_percent,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
             tx_tune_result: runtime.last_tx_tune_result.clone(),

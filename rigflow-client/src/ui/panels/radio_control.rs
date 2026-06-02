@@ -26,6 +26,7 @@ impl RigflowApp {
             .default_open(true)
             .show(ui, |ui| {
                 let mut save_demod_prefs = false;
+                let mut save_volume = false;
 
                 if let Ok(mut state) = self.state.lock() {
                     // Apply persisted per-demod controls when the mode changes.
@@ -49,6 +50,11 @@ impl RigflowApp {
                                 mode: state.deemphasis_mode,
                             });
                         }
+                        // Push the persisted receive volume to the server (the
+                        // snapshot's server default is intentionally ignored).
+                        self.send_radio_msg(ClientRadioMessage::SetVolume {
+                            volume_percent: state.volume_percent,
+                        });
                     }
 
                     save_demod_prefs |=
@@ -60,12 +66,16 @@ impl RigflowApp {
                     self.draw_squelch_row(ui, &mut state);
                     self.draw_nr2_row(ui, &mut state);
                     self.draw_agc_row(ui, &mut state);
+                    save_volume = self.draw_volume_row(ui, &mut state);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
 
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
+                }
+                if save_volume {
+                    self.save_volume_to_current_operator();
                 }
             });
     }
@@ -137,6 +147,28 @@ impl RigflowApp {
                 });
             }
         });
+    }
+
+    /// Receive-audio volume slider (0–100%).  Sends `SetVolume` on change and
+    /// returns `true` when the value changed (so the caller persists it).
+    fn draw_volume_row(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
+        ui.separator();
+        let mut volume = state.volume_percent as i32;
+        let response = ui.add(
+            egui::Slider::new(&mut volume, 0..=100)
+                .integer()
+                .suffix("%")
+                .text("Volume"),
+        );
+        if response.changed() {
+            let v = volume.clamp(0, 100) as u8;
+            if v != state.volume_percent {
+                state.volume_percent = v;
+                self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
+                return true;
+            }
+        }
+        false
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

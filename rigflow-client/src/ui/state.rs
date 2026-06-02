@@ -68,6 +68,9 @@ pub struct UiState {
     pub signal_dbm: f32,
     pub signal_s_units: i32,
 
+    /// Receive-audio volume in percent (0–100).  Persisted per-operator.
+    pub volume_percent: u8,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -235,6 +238,7 @@ impl Default for UiState {
             agc_strength: 0.5,
             signal_dbm: -140.0,
             signal_s_units: 0,
+            volume_percent: 50,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

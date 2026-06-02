@@ -99,6 +99,7 @@ pub struct WorkerRuntimeState {
     pub agc_strength: f32,
     pub signal_dbm: f32,
     pub signal_s_units: i32,
+    pub volume_percent: u8,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
     /// Result of the most recent TX tune test executed by this worker.
@@ -128,6 +129,7 @@ pub enum WorkerCommand {
     SetNr2Strength { strength: f32 },
     SetAgcEnabled { enabled: bool },
     SetAgcStrength { strength: f32 },
+    SetVolume { volume_percent: u8 },
     Stop { reason: StopReason },
     SetSourceSampleRate { sample_rate_hz: u32 },
     SetSourceGainMode { mode: GainMode },

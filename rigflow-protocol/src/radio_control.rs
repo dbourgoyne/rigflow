@@ -47,6 +47,11 @@ pub fn default_signal_dbm() -> f32 {
     -140.0
 }
 
+/// Default receive-audio volume percent for `#[serde(default)]` decoding.
+pub fn default_volume_percent() -> u8 {
+    50
+}
+
 /// Messages sent from client → server over WebSocket.
 ///
 /// These drive:
@@ -140,6 +145,11 @@ pub enum ClientRadioMessage {
     /// Set AGC strength in [0.0, 1.0] (radio control, DSP-side).
     SetAgcStrength {
         strength: f32,
+    },
+
+    /// Set receive-audio volume in percent (0–100) (radio control, DSP-side).
+    SetVolume {
+        volume_percent: u8,
     },
 
     SetSourceSampleRate {
@@ -274,6 +284,10 @@ pub enum ServerRadioMessage {
         #[serde(default)]
         signal_s_units: i32,
 
+        /// Receive-audio volume in percent (0–100).
+        #[serde(default = "default_volume_percent")]
+        volume_percent: u8,
+
 	source_control: SourceControlState,
 
         /// Current source telemetry / status fields.
@@ -319,6 +333,8 @@ pub enum ServerRadioMessage {
         signal_dbm: Option<f32>,
         #[serde(default)]
         signal_s_units: Option<i32>,
+        #[serde(default)]
+        volume_percent: Option<u8>,
 
 	source_control: Option<SourceControlState>,
 

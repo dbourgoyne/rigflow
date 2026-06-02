@@ -135,6 +135,15 @@ pub struct OperatorSettingsFile {
     /// persists per-radio here alongside sample rate / gain.
     #[serde(default)]
     pub source_control_preferences: HashMap<String, SourceControlState>,
+
+    /// Receive-audio volume in percent (0–100), persisted per operator.
+    /// Serde default so older settings files load without migration.
+    #[serde(default = "default_volume_percent")]
+    pub volume_percent: u8,
+}
+
+pub fn default_volume_percent() -> u8 {
+    50
 }
 
 impl OperatorSettingsFile {
@@ -150,6 +159,7 @@ impl OperatorSettingsFile {
             bookmarks: Vec::new(),
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
+            volume_percent: default_volume_percent(),
         }
     }
 }
