@@ -55,6 +55,9 @@ pub struct UiState {
     pub squelch_threshold_db: f32,
     pub squelch_open: bool,
 
+    /// NR2 spectral noise reduction enabled (radio control).
+    pub nr2_enabled: bool,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -216,6 +219,7 @@ impl Default for UiState {
             squelch_enabled: false,
             squelch_threshold_db: -90.0,
             squelch_open: true,
+            nr2_enabled: false,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

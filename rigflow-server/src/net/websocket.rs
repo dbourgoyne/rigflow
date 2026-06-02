@@ -464,6 +464,22 @@ async fn handle_radio_message(
 	    }
 	}
 
+	ClientRadioMessage::SetNr2Enabled { enabled } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetNr2Enabled { enabled },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_nr2_enabled_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
 	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
 	    if let Err(err) = send_worker_command_for_session(
 		app_state,
@@ -670,6 +686,9 @@ fn runtime_changed_from_runtime(
     let squelch_open =
         (current.squelch_open != previous.squelch_open).then_some(current.squelch_open);
 
+    let nr2_enabled =
+        (current.nr2_enabled != previous.nr2_enabled).then_some(current.nr2_enabled);
+
     let source_control =
     (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
@@ -699,6 +718,7 @@ fn runtime_changed_from_runtime(
         || squelch_enabled.is_some()
         || squelch_threshold_db.is_some()
         || squelch_open.is_some()
+        || nr2_enabled.is_some()
         || source_control.is_some()
         || source_status.is_some()
         || tx_tune_result.is_some();
@@ -716,6 +736,7 @@ fn runtime_changed_from_runtime(
         squelch_enabled,
         squelch_threshold_db,
         squelch_open,
+        nr2_enabled,
         source_control,
         source_status,
         tx_tune_result,
@@ -746,6 +767,7 @@ fn runtime_snapshot_from_status(
             squelch_enabled: runtime.squelch_enabled,
             squelch_threshold_db: runtime.squelch_threshold_db,
             squelch_open: runtime.squelch_open,
+            nr2_enabled: runtime.nr2_enabled,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
             tx_tune_result: runtime.last_tx_tune_result.clone(),

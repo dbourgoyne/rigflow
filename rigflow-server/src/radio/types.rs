@@ -93,6 +93,7 @@ pub struct WorkerRuntimeState {
     pub squelch_enabled: bool,
     pub squelch_threshold_db: f32,
     pub squelch_open: bool,
+    pub nr2_enabled: bool,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
     /// Result of the most recent TX tune test executed by this worker.
@@ -118,6 +119,7 @@ pub enum WorkerCommand {
     SetDeemphasisMode { mode: DeemphasisMode },
     SetSquelchEnabled { enabled: bool },
     SetSquelchThreshold { threshold_db: f32 },
+    SetNr2Enabled { enabled: bool },
     Stop { reason: StopReason },
     SetSourceSampleRate { sample_rate_hz: u32 },
     SetSourceGainMode { mode: GainMode },

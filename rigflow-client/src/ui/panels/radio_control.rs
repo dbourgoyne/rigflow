@@ -54,6 +54,7 @@ impl RigflowApp {
                         self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
 
                     self.draw_squelch_row(ui, &mut state);
+                    self.draw_nr2_row(ui, &mut state);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -105,6 +106,16 @@ impl RigflowApp {
                 });
             }
         });
+    }
+
+    /// NR2 spectral noise reduction enable.  A radio (DSP) control sent to the
+    /// server; applied to demodulated receive audio.  Not persisted.
+    fn draw_nr2_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        let mut enabled = state.nr2_enabled;
+        if ui.checkbox(&mut enabled, "NR2 noise reduction").changed() {
+            state.nr2_enabled = enabled;
+            self.send_radio_msg(ClientRadioMessage::SetNr2Enabled { enabled });
+        }
     }
 
     fn draw_filter_bandwidth_row(

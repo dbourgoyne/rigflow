@@ -388,6 +388,7 @@ pub fn apply_radio_server_message(
             squelch_enabled,
             squelch_threshold_db,
             squelch_open,
+            nr2_enabled,
             source_control,
             source_status,
             tx_tune_result,
@@ -401,6 +402,7 @@ pub fn apply_radio_server_message(
             state.squelch_enabled = squelch_enabled;
             state.squelch_threshold_db = squelch_threshold_db;
             state.squelch_open = squelch_open;
+            state.nr2_enabled = nr2_enabled;
             // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
             if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
@@ -425,6 +427,7 @@ pub fn apply_radio_server_message(
             squelch_enabled,
             squelch_threshold_db,
             squelch_open,
+            nr2_enabled,
             source_control,
             source_status,
             tx_tune_result,
@@ -438,6 +441,9 @@ pub fn apply_radio_server_message(
             }
             if let Some(value) = squelch_open {
                 state.squelch_open = value;
+            }
+            if let Some(value) = nr2_enabled {
+                state.nr2_enabled = value;
             }
 
             if let Some(value) = center_freq_hz {

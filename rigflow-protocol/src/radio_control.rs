@@ -102,6 +102,11 @@ pub enum ClientRadioMessage {
         threshold_db: f32,
     },
 
+    /// Enable/disable NR2 spectral noise reduction (radio control, DSP-side).
+    SetNr2Enabled {
+        enabled: bool,
+    },
+
     SetSourceSampleRate {
 	sample_rate_hz: u32,
     },
@@ -215,6 +220,10 @@ pub enum ServerRadioMessage {
         #[serde(default = "default_squelch_open")]
         squelch_open: bool,
 
+        /// NR2 spectral noise reduction enabled (radio control).
+        #[serde(default)]
+        nr2_enabled: bool,
+
 	source_control: SourceControlState,
 
         /// Current source telemetry / status fields.
@@ -248,6 +257,8 @@ pub enum ServerRadioMessage {
         squelch_threshold_db: Option<f32>,
         #[serde(default)]
         squelch_open: Option<bool>,
+        #[serde(default)]
+        nr2_enabled: Option<bool>,
 
 	source_control: Option<SourceControlState>,
 

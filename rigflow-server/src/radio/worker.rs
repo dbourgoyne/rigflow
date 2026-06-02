@@ -18,6 +18,7 @@ use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ,
 };
+use crate::dsp::audio::nr2::Nr2;
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
@@ -52,6 +53,8 @@ struct SharedControlState {
     squelch_enabled: bool,
     squelch_threshold_db: f32,
     squelch_open: bool,
+    /// NR2 spectral noise reduction enabled (radio control, DSP-side).
+    nr2_enabled: bool,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -278,6 +281,7 @@ fn build_runtime_state(
         squelch_enabled: control.squelch_enabled,
         squelch_threshold_db: control.squelch_threshold_db,
         squelch_open: control.squelch_open,
+        nr2_enabled: control.nr2_enabled,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -353,6 +357,7 @@ fn run_iq_worker_threads(
         squelch_enabled: false,
         squelch_threshold_db: -90.0,
         squelch_open: true,
+        nr2_enabled: false,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
@@ -562,6 +567,11 @@ fn spawn_command_thread(
                         if let Ok(mut control_state) = control.lock() {
                             control_state.squelch_threshold_db =
                                 threshold_db.clamp(-120.0, 0.0);
+                        }
+                    }
+                    WorkerCommand::SetNr2Enabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.nr2_enabled = enabled;
                         }
                     }
                     WorkerCommand::SetDeemphasisMode { mode } => {
@@ -1099,6 +1109,10 @@ fn spawn_dsp_thread(
         let mut squelch_open = true;
         let mut last_squelch_log = Instant::now();
 
+        // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
+        // Only engaged while enabled; reset on demod-mode / sample-rate change.
+        let mut nr2 = Nr2::new();
+
         loop {
             if stop_requested(&stop_flag) {
                 break;
@@ -1135,6 +1149,8 @@ fn spawn_dsp_thread(
                 pipeline.set_deemphasis_mode(current.deemphasis_mode);
                 // Drain IQ blocks that were captured at the old sample rate.
                 while iq_audio_rx.try_recv().is_ok() {}
+                // Audio config changed — clear NR2 state.
+                nr2.reset();
                 changed = true;
             }
 
@@ -1162,6 +1178,11 @@ fn spawn_dsp_thread(
                     > f32::EPSILON
                 || current.squelch_open != applied.squelch_open
             {
+                changed = true;
+            }
+
+            // NR2 toggle: no pipeline change, just republish runtime for sync.
+            if current.nr2_enabled != applied.nr2_enabled {
                 changed = true;
             }
 
@@ -1223,6 +1244,9 @@ fn spawn_dsp_thread(
                 // Reapply deemphasis because its effective behavior depends on demod mode.
                 pipeline.set_deemphasis_mode(current.deemphasis_mode);
 
+                // Demod mode changed — clear NR2 state.
+                nr2.reset();
+
                 //		if changed {
                 //		    applied = current.clone();
                 //		}
@@ -1268,6 +1292,17 @@ fn spawn_dsp_thread(
             match iq_audio_rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(iq) => {
                     let mut audio_f32 = pipeline.process_audio(&iq);
+
+                    // ── NR2 spectral noise reduction ─────────────────────────
+                    // Post-demod / post-audio-filter, before squelch.  When
+                    // disabled, audio passes through untouched (NR2 not called);
+                    // when first disabled, drop any accumulated state so a later
+                    // re-enable starts fresh.
+                    if current.nr2_enabled {
+                        audio_f32 = nr2.process(&audio_f32);
+                    } else if nr2.is_active() {
+                        nr2.reset();
+                    }
 
                     // ── Receive squelch ──────────────────────────────────────
                     // Measure this block's RMS level in dBFS (ref = full-scale
