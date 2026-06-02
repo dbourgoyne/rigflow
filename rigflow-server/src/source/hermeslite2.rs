@@ -1096,14 +1096,19 @@ fn parse_ddc_packet(
     }
 }
 
+/// Convert the raw 12-bit HL2 temperature ADC code (RADDR 0x01 bits 31:16)
+/// into degrees Celsius, matching Quisk's `Code2Temp`
+/// (`hermes/quisk_widgets.py`): `(3.26 * (raw / 4096) - 0.5) / 0.01`.
+fn hl2_temperature_c(temperature_raw: u16) -> f32 {
+    (3.26 * (temperature_raw as f32 / 4096.0) - 0.5) / 0.01
+}
+
 /// Convert accumulated HL2 status register snapshot into a generic `SourceStatus`.
 ///
 /// Calibration notes:
 /// - `firmware_version`: exact binary version reported by HL2 firmware.
-/// - `temperature_c`: approximated from the raw 16-bit ADC reading using
-///   a linear formula typical for HPSDR-class hardware.  The exact slope
-///   depends on your HL2 board revision — treat this as indicative (±5 °C).
-///   TODO: verify formula against your hardware and adjust if needed.
+/// - `temperature_c`: Quisk's HL2 formula `(3.26*raw/4096 - 0.5)/0.01` over the
+///   12-bit on-board ADC code (`hl2_temperature_c`).  Matches Quisk closely.
 /// - `forward_power_w` / `reverse_power_w` / `current_a`: hardware-specific
 ///   calibration constants are not yet known.  These fields are left as `None`
 ///   and the raw ADC values are logged at TRACE level for future calibration.
@@ -1121,25 +1126,42 @@ fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
     let adc_overload = r.raddr0_valid.then_some(r.adc_overload);
     let tx_inhibited = r.raddr0_valid.then_some(r.tx_inhibited);
     let recovery_status = if r.raddr0_valid {
-        let label = match r.recovery_bits {
-            0b00 => "OK",
-            0b10 => "UNDERFLOW",
-            0b11 => "OVERFLOW",
-            _    => "UNKNOWN",
-        };
+        // Per Quisk, the TX-FIFO recovery/error is a SINGLE flag = bit 15 of the
+        // RADDR 0x00 word (the top bit of `recovery_bits`).  The low bit
+        // (word bit 14) belongs to the TX FIFO sample count, NOT recovery — so a
+        // raw value of 0b01 is benign (previously mislabeled "UNKNOWN").  During
+        // RX the TX FIFO is empty by design, so this flag being set is a normal
+        // idle condition; Quisk only treats it as a fault while transmitting, so
+        // we report it as benign here rather than as a severe RX fault.
+        // (NOTE: `recovery_bits` itself is left unchanged — the Spot/SWR TX path
+        // still uses its 2-bit value to flag in-pulse FIFO anomalies.)
+        let recovery_flag = (r.recovery_bits & 0b10) != 0;
+        log::debug!(
+            "HL2 status: recovery_bits={:#04b} recovery_flag={} adc_overload={}",
+            r.recovery_bits,
+            recovery_flag,
+            r.adc_overload
+        );
+        let label = if recovery_flag { "TX FIFO idle" } else { "OK" };
         Some(label.to_string())
     } else {
         None
     };
 
-    // Temperature: approximate formula for HPSDR-class hardware.
-    // raw is a 16-bit value; we use an affine mapping calibrated roughly
-    // around typical AD9866 / LM19 analog paths.
-    // TODO: verify with your HL2 board revision.
+    // Temperature: Quisk's HL2 conversion (hermes/quisk_widgets.py Code2Temp):
+    //   temp_C = (3.26 * (raw / 4096.0) - 0.5) / 0.01
+    // `raw` is the on-board 12-bit ADC value (0..4095) carried in RADDR 0x01
+    // bits 31:16.  3.26 V ADC reference, 4096-step ADC, LM-style 10 mV/°C with
+    // a 0.5 V offset.  (The prior formula divided by 65536 and subtracted 50,
+    // reading ~-45 °C where Quisk reads ~21 °C — a 16-bit-vs-12-bit scale bug.)
     let temperature_c = if r.raddr1_valid {
-        let raw = r.temperature_raw as f32;
-        // Approximate: maps ~20 °C at raw≈2800 and ~70 °C at raw≈3500
-        Some((raw / 65536.0) * 3.3 / 0.01 - 50.0)
+        let temp_c = hl2_temperature_c(r.temperature_raw);
+        log::debug!(
+            "HL2 temp: temp_raw={} temp_c={:.1} (Quisk (3.26*raw/4096-0.5)/0.01)",
+            r.temperature_raw,
+            temp_c
+        );
+        Some(temp_c)
     } else {
         None
     };
@@ -1196,5 +1218,84 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         tuner_freq_hz_max: 30_000_000,
         supports_tx_tune_test: true,
         ..SourceCapabilities::none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Temperature conversion ──────────────────────────────────────────────
+
+    #[test]
+    fn temperature_matches_quisk_room_temp() {
+        // Quisk: 21 °C corresponds to raw ≈ 892 ((0.21*0.01 + 0.5)/3.26*4096).
+        let t = hl2_temperature_c(892);
+        assert!((t - 21.0).abs() < 1.0, "expected ~21 °C, got {t}");
+    }
+
+    #[test]
+    fn temperature_not_the_old_minus_45_bug() {
+        // The previous formula `(raw/65536)*3.3/0.01 - 50` read ~-45.5 °C at
+        // this code; the corrected (Quisk) formula must read ~room temperature.
+        let t = hl2_temperature_c(892);
+        assert!(t > 0.0, "temperature should be well above 0 °C, got {t}");
+    }
+
+    #[test]
+    fn temperature_formula_endpoints() {
+        // raw = 0 → (3.26*0 - 0.5)/0.01 = -50 °C (formula floor).
+        assert!((hl2_temperature_c(0) - (-50.0)).abs() < 0.01);
+        // Monotonic increasing with raw.
+        assert!(hl2_temperature_c(1000) > hl2_temperature_c(500));
+    }
+
+    // ── RADDR 0x01: temperature is the high 16 bits, fwd power the low 16 ────
+
+    #[test]
+    fn raddr1_temperature_is_high_word() {
+        let mut regs = Hl2StatusRegs {
+            raddr1_valid: true,
+            temperature_raw: 892,
+            forward_power_raw: 5,
+            ..Default::default()
+        };
+        let status = hl2_status_regs_to_source_status(&regs);
+        let t = status.temperature_c.expect("temp present");
+        assert!((t - 21.0).abs() < 1.0, "got {t}");
+        regs.raddr1_valid = false;
+        assert_eq!(hl2_status_regs_to_source_status(&regs).temperature_c, None);
+    }
+
+    // ── RADDR 0x00: ADC overload (active high) ──────────────────────────────
+
+    #[test]
+    fn adc_overload_active_high() {
+        let ok = Hl2StatusRegs { raddr0_valid: true, adc_overload: false, ..Default::default() };
+        assert_eq!(hl2_status_regs_to_source_status(&ok).adc_overload, Some(false));
+        let over = Hl2StatusRegs { raddr0_valid: true, adc_overload: true, ..Default::default() };
+        assert_eq!(hl2_status_regs_to_source_status(&over).adc_overload, Some(true));
+    }
+
+    // ── RADDR 0x00: recovery flag = bit 15 only (low bit is FIFO count) ─────
+
+    #[test]
+    fn recovery_status_uses_only_bit15() {
+        let status_for = |bits: u8| {
+            let r = Hl2StatusRegs { raddr0_valid: true, recovery_bits: bits, ..Default::default() };
+            hl2_status_regs_to_source_status(&r).recovery_status.unwrap()
+        };
+        // bit15 clear → OK (incl. 0b01, which is a FIFO-count bit, not a fault).
+        assert_eq!(status_for(0b00), "OK");
+        assert_eq!(status_for(0b01), "OK");
+        // bit15 set → benign idle (NOT a severe RX fault), regardless of bit14.
+        assert_eq!(status_for(0b10), "TX FIFO idle");
+        assert_eq!(status_for(0b11), "TX FIFO idle");
+    }
+
+    #[test]
+    fn recovery_status_absent_when_raddr0_invalid() {
+        let r = Hl2StatusRegs { raddr0_valid: false, recovery_bits: 0b10, ..Default::default() };
+        assert_eq!(hl2_status_regs_to_source_status(&r).recovery_status, None);
     }
 }
