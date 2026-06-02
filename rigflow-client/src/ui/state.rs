@@ -60,6 +60,10 @@ pub struct UiState {
     /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max).
     pub nr2_strength: f32,
 
+    /// AGC (automatic gain control) — radio control.
+    pub agc_enabled: bool,
+    pub agc_strength: f32,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -223,6 +227,8 @@ impl Default for UiState {
             squelch_open: true,
             nr2_enabled: false,
             nr2_strength: 0.5,
+            agc_enabled: true,
+            agc_strength: 0.5,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

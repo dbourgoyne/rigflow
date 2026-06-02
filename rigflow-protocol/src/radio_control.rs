@@ -32,6 +32,16 @@ pub fn default_nr2_strength() -> f32 {
     0.5
 }
 
+/// Default AGC enabled state for `#[serde(default)]` decoding.
+pub fn default_agc_enabled() -> bool {
+    true
+}
+
+/// Default AGC strength for `#[serde(default)]` decoding.
+pub fn default_agc_strength() -> f32 {
+    0.5
+}
+
 /// Messages sent from client → server over WebSocket.
 ///
 /// These drive:
@@ -114,6 +124,16 @@ pub enum ClientRadioMessage {
 
     /// Set NR2 strength in [0.0, 1.0] (0 = none, 1 = max) (radio control).
     SetNr2Strength {
+        strength: f32,
+    },
+
+    /// Enable/disable AGC (radio control, DSP-side).
+    SetAgcEnabled {
+        enabled: bool,
+    },
+
+    /// Set AGC strength in [0.0, 1.0] (radio control, DSP-side).
+    SetAgcStrength {
         strength: f32,
     },
 
@@ -237,6 +257,12 @@ pub enum ServerRadioMessage {
         #[serde(default = "default_nr2_strength")]
         nr2_strength: f32,
 
+        /// AGC (automatic gain control) — radio control.
+        #[serde(default = "default_agc_enabled")]
+        agc_enabled: bool,
+        #[serde(default = "default_agc_strength")]
+        agc_strength: f32,
+
 	source_control: SourceControlState,
 
         /// Current source telemetry / status fields.
@@ -274,6 +300,10 @@ pub enum ServerRadioMessage {
         nr2_enabled: Option<bool>,
         #[serde(default)]
         nr2_strength: Option<f32>,
+        #[serde(default)]
+        agc_enabled: Option<bool>,
+        #[serde(default)]
+        agc_strength: Option<f32>,
 
 	source_control: Option<SourceControlState>,
 

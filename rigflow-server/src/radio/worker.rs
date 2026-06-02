@@ -57,6 +57,9 @@ struct SharedControlState {
     nr2_enabled: bool,
     /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max suppression).
     nr2_strength: f32,
+    /// AGC (automatic gain control) — radio control, DSP-side.
+    agc_enabled: bool,
+    agc_strength: f32,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -285,6 +288,8 @@ fn build_runtime_state(
         squelch_open: control.squelch_open,
         nr2_enabled: control.nr2_enabled,
         nr2_strength: control.nr2_strength,
+        agc_enabled: control.agc_enabled,
+        agc_strength: control.agc_strength,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -362,6 +367,8 @@ fn run_iq_worker_threads(
         squelch_open: true,
         nr2_enabled: false,
         nr2_strength: 0.5,
+        agc_enabled: true,
+        agc_strength: 0.5,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
@@ -581,6 +588,16 @@ fn spawn_command_thread(
                     WorkerCommand::SetNr2Strength { strength } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.nr2_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetAgcEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.agc_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetAgcStrength { strength } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.agc_strength = strength.clamp(0.0, 1.0);
                         }
                     }
                     WorkerCommand::SetDeemphasisMode { mode } => {
@@ -1082,6 +1099,8 @@ fn spawn_dsp_thread(
         ));
 
         pipeline.set_filter_bandwidth_hz(startup_info.runtime.filter_bandwidth_hz);
+        pipeline.set_agc_enabled(startup_info.runtime.agc_enabled);
+        pipeline.set_agc_strength(startup_info.runtime.agc_strength);
 
         if matches!(
             startup_info.runtime.demod_mode,
@@ -1117,6 +1136,7 @@ fn spawn_dsp_thread(
         const SQUELCH_HYSTERESIS_DB: f32 = 3.0;
         let mut squelch_open = true;
         let mut last_squelch_log = Instant::now();
+        let mut last_agc_log = Instant::now();
 
         // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
         // Only engaged while enabled; reset on demod-mode / sample-rate change.
@@ -1145,6 +1165,8 @@ fn spawn_dsp_thread(
                     pipeline_sample_rate_hz,
                 ));
                 pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                pipeline.set_agc_enabled(current.agc_enabled);
+                pipeline.set_agc_strength(current.agc_strength);
                 match current.demod_mode {
                     DemodMode::Usb | DemodMode::Lsb => {
                         pipeline.set_sideband(current.sideband);
@@ -1197,6 +1219,15 @@ fn spawn_dsp_thread(
                 changed = true;
             }
 
+            // AGC enable/strength → apply to the in-pipeline AGC stage.
+            if current.agc_enabled != applied.agc_enabled
+                || (current.agc_strength - applied.agc_strength).abs() > f32::EPSILON
+            {
+                pipeline.set_agc_enabled(current.agc_enabled);
+                pipeline.set_agc_strength(current.agc_strength);
+                changed = true;
+            }
+
             if current.center_freq_hz != applied.center_freq_hz {
                 pipeline.set_center_frequency(current.center_freq_hz as f32);
                 changed = true;
@@ -1240,6 +1271,8 @@ fn spawn_dsp_thread(
                 ));
 
                 pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                pipeline.set_agc_enabled(current.agc_enabled);
+                pipeline.set_agc_strength(current.agc_strength);
 
                 match current.demod_mode {
                     DemodMode::Usb | DemodMode::Lsb => {
@@ -1309,6 +1342,19 @@ fn spawn_dsp_thread(
                     // disabled, audio passes through untouched (NR2 not called);
                     // when first disabled, drop any accumulated state so a later
                     // re-enable starts fresh.
+                    // AGC runs inside process_audio (post-demod, before NR2);
+                    // log its state at ~1 Hz for diagnostics.
+                    if last_agc_log.elapsed() >= Duration::from_millis(1000) {
+                        debug!(
+                            "[agc] agc_enabled={} agc_strength={:.2} envelope={:.4} gain={:.2}",
+                            current.agc_enabled,
+                            current.agc_strength,
+                            pipeline.agc_envelope(),
+                            pipeline.agc_current_gain(),
+                        );
+                        last_agc_log = Instant::now();
+                    }
+
                     if current.nr2_enabled {
                         nr2.set_strength(current.nr2_strength);
                         audio_f32 = nr2.process(&audio_f32);

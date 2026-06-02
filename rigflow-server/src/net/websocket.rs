@@ -496,6 +496,38 @@ async fn handle_radio_message(
 	    }
 	}
 
+	ClientRadioMessage::SetAgcEnabled { enabled } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetAgcEnabled { enabled },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_agc_enabled_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetAgcStrength { strength } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetAgcStrength { strength },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_agc_strength_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
 	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
 	    if let Err(err) = send_worker_command_for_session(
 		app_state,
@@ -708,6 +740,12 @@ fn runtime_changed_from_runtime(
     let nr2_strength =
         (current.nr2_strength != previous.nr2_strength).then_some(current.nr2_strength);
 
+    let agc_enabled =
+        (current.agc_enabled != previous.agc_enabled).then_some(current.agc_enabled);
+
+    let agc_strength =
+        (current.agc_strength != previous.agc_strength).then_some(current.agc_strength);
+
     let source_control =
     (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
@@ -739,6 +777,8 @@ fn runtime_changed_from_runtime(
         || squelch_open.is_some()
         || nr2_enabled.is_some()
         || nr2_strength.is_some()
+        || agc_enabled.is_some()
+        || agc_strength.is_some()
         || source_control.is_some()
         || source_status.is_some()
         || tx_tune_result.is_some();
@@ -758,6 +798,8 @@ fn runtime_changed_from_runtime(
         squelch_open,
         nr2_enabled,
         nr2_strength,
+        agc_enabled,
+        agc_strength,
         source_control,
         source_status,
         tx_tune_result,
@@ -790,6 +832,8 @@ fn runtime_snapshot_from_status(
             squelch_open: runtime.squelch_open,
             nr2_enabled: runtime.nr2_enabled,
             nr2_strength: runtime.nr2_strength,
+            agc_enabled: runtime.agc_enabled,
+            agc_strength: runtime.agc_strength,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
             tx_tune_result: runtime.last_tx_tune_result.clone(),

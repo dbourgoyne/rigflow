@@ -513,6 +513,26 @@ impl DspPipeline {
         self.ssb_bandwidth_hz
     }
 
+    /// Enable/disable the post-demod AGC (operator radio control).
+    pub fn set_agc_enabled(&mut self, enabled: bool) {
+        self.agc.set_enabled(enabled);
+    }
+
+    /// Set AGC strength in [0, 1] (operator radio control).
+    pub fn set_agc_strength(&mut self, strength: f32) {
+        self.agc.set_strength(strength);
+    }
+
+    /// Most recently applied AGC gain (diagnostics).
+    pub fn agc_current_gain(&self) -> f32 {
+        self.agc.current_gain()
+    }
+
+    /// Current AGC envelope estimate (diagnostics).
+    pub fn agc_envelope(&self) -> f32 {
+        self.agc.envelope()
+    }
+
     pub fn rebuild_ssb_filters(&mut self, bandwidth_hz: f32, taps: usize) {
         let bandwidth_hz = bandwidth_hz.max(300.0);
         let taps = taps.max(31) | 1;

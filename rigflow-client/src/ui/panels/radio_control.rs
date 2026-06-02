@@ -55,6 +55,7 @@ impl RigflowApp {
 
                     self.draw_squelch_row(ui, &mut state);
                     self.draw_nr2_row(ui, &mut state);
+                    self.draw_agc_row(ui, &mut state);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -129,6 +130,34 @@ impl RigflowApp {
                 state.nr2_strength = strength.clamp(0.0, 1.0);
                 self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
                     strength: state.nr2_strength,
+                });
+            }
+        });
+    }
+
+    /// AGC enable + strength.  A radio (DSP) control sent to the server;
+    /// applied to demodulated receive audio (before NR2/squelch). Not persisted.
+    fn draw_agc_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        ui.separator();
+
+        let mut enabled = state.agc_enabled;
+        if ui.checkbox(&mut enabled, "AGC").changed() {
+            state.agc_enabled = enabled;
+            self.send_radio_msg(ClientRadioMessage::SetAgcEnabled { enabled });
+        }
+
+        ui.add_enabled_ui(state.agc_enabled, |ui| {
+            let mut strength = state.agc_strength;
+            let response = ui.add(
+                egui::Slider::new(&mut strength, 0.0..=1.0)
+                    .step_by(0.01)
+                    .fixed_decimals(2)
+                    .text("AGC Strength"),
+            );
+            if response.changed() {
+                state.agc_strength = strength.clamp(0.0, 1.0);
+                self.send_radio_msg(ClientRadioMessage::SetAgcStrength {
+                    strength: state.agc_strength,
                 });
             }
         });

@@ -390,6 +390,8 @@ pub fn apply_radio_server_message(
             squelch_open,
             nr2_enabled,
             nr2_strength,
+            agc_enabled,
+            agc_strength,
             source_control,
             source_status,
             tx_tune_result,
@@ -405,6 +407,8 @@ pub fn apply_radio_server_message(
             state.squelch_open = squelch_open;
             state.nr2_enabled = nr2_enabled;
             state.nr2_strength = nr2_strength;
+            state.agc_enabled = agc_enabled;
+            state.agc_strength = agc_strength;
             // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
             if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
@@ -431,6 +435,8 @@ pub fn apply_radio_server_message(
             squelch_open,
             nr2_enabled,
             nr2_strength,
+            agc_enabled,
+            agc_strength,
             source_control,
             source_status,
             tx_tune_result,
@@ -450,6 +456,12 @@ pub fn apply_radio_server_message(
             }
             if let Some(value) = nr2_strength {
                 state.nr2_strength = value;
+            }
+            if let Some(value) = agc_enabled {
+                state.agc_enabled = value;
+            }
+            if let Some(value) = agc_strength {
+                state.agc_strength = value;
             }
 
             if let Some(value) = center_freq_hz {
