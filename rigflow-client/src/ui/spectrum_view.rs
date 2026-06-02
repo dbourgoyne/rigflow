@@ -17,7 +17,15 @@ use crate::ui::{
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
     pub clicked_bookmark_id: Option<String>,
+    /// Mouse-wheel fine-tune request (Hz) while hovering the spectrum: +50 Hz
+    /// on scroll up, -50 Hz on scroll down, 0.0 when no wheel input.  The caller
+    /// applies it to the target frequency through the normal clamp/tune path.
+    pub scroll_target_delta_hz: f32,
 }
+
+/// Fixed fine-tune step applied per mouse-wheel notch over the spectrum or
+/// waterfall.
+pub const WHEEL_TUNE_STEP_HZ: f32 = 50.0;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -93,9 +101,26 @@ pub fn draw_spectrum_plot(
         }
     }
 
+    // Mouse-wheel fine tuning: only when the pointer is over the spectrum, so
+    // scrolling unrelated panels never tunes.  One notch (any nonzero scroll
+    // this frame) = one ±50 Hz step, matching the LO digit-wheel convention.
+    let scroll_target_delta_hz = if response.hovered() {
+        let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
+        if scroll_y > 0.0 {
+            WHEEL_TUNE_STEP_HZ
+        } else if scroll_y < 0.0 {
+            -WHEEL_TUNE_STEP_HZ
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
     SpectrumInteraction {
         clicked_target_freq_hz: clicked_freq_hz,
         clicked_bookmark_id,
+        scroll_target_delta_hz,
     }
 }
 
@@ -792,6 +817,7 @@ fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
         clicked_target_freq_hz: None,
         clicked_bookmark_id: None,
+        scroll_target_delta_hz: 0.0,
     }
 }
 

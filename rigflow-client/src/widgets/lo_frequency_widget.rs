@@ -278,7 +278,8 @@ pub fn draw_digit_wheel_widget(
         if scroll_y.abs() > 0.0 {
             let step = digit_step(spec.digit_count, idx);
 
-            let delta = if scroll_y > 0.0 { -step } else { step };
+            // Scroll up = increase, matching spectrum/waterfall fine tuning.
+            let delta = if scroll_y > 0.0 { step } else { -step };
 
             let next = if spec.signed {
                 value.saturating_add(delta)
