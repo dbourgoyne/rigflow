@@ -49,6 +49,12 @@ pub struct UiState {
 
     pub deemphasis_mode: DeemphasisMode,
 
+    /// Receive squelch (radio control).  `squelch_open` is server-reported
+    /// gate state (audio passing); the other two are operator controls.
+    pub squelch_enabled: bool,
+    pub squelch_threshold_db: f32,
+    pub squelch_open: bool,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -207,6 +213,9 @@ impl Default for UiState {
             pitch_hz: 0.0,
             filter_bandwidth_hz: 3000.0,
             deemphasis_mode: DeemphasisMode::Off,
+            squelch_enabled: false,
+            squelch_threshold_db: -90.0,
+            squelch_open: true,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

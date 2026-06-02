@@ -432,6 +432,38 @@ async fn handle_radio_message(
 	    }
 	}
 
+	ClientRadioMessage::SetSquelchEnabled { enabled } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSquelchEnabled { enabled },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_squelch_enabled_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
+	ClientRadioMessage::SetSquelchThreshold { threshold_db } => {
+	    if let Err(err) = send_worker_command_for_session(
+		app_state,
+		session,
+		WorkerCommand::SetSquelchThreshold { threshold_db },
+	    )
+		.await
+	    {
+		send_radio_error(
+		    local_tx,
+		    "set_squelch_threshold_failed",
+		    &radio_manager_error_string(err),
+		);
+	    }
+	}
+
 	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
 	    if let Err(err) = send_worker_command_for_session(
 		app_state,
@@ -629,6 +661,15 @@ fn runtime_changed_from_runtime(
         (current.deemphasis_mode != previous.deemphasis_mode)
         .then_some(current.deemphasis_mode);
 
+    let squelch_enabled =
+        (current.squelch_enabled != previous.squelch_enabled).then_some(current.squelch_enabled);
+
+    let squelch_threshold_db = (current.squelch_threshold_db != previous.squelch_threshold_db)
+        .then_some(current.squelch_threshold_db);
+
+    let squelch_open =
+        (current.squelch_open != previous.squelch_open).then_some(current.squelch_open);
+
     let source_control =
     (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
@@ -655,6 +696,9 @@ fn runtime_changed_from_runtime(
         || cw_pitch_hz.is_some()
         || filter_bandwidth_hz.is_some()
         || deemphasis_mode.is_some()
+        || squelch_enabled.is_some()
+        || squelch_threshold_db.is_some()
+        || squelch_open.is_some()
         || source_control.is_some()
         || source_status.is_some()
         || tx_tune_result.is_some();
@@ -669,6 +713,9 @@ fn runtime_changed_from_runtime(
         cw_pitch_hz,
         filter_bandwidth_hz,
         deemphasis_mode,
+        squelch_enabled,
+        squelch_threshold_db,
+        squelch_open,
         source_control,
         source_status,
         tx_tune_result,
@@ -696,6 +743,9 @@ fn runtime_snapshot_from_status(
             cw_pitch_hz: runtime.cw_pitch_hz,
             filter_bandwidth_hz: runtime.filter_bandwidth_hz,
             deemphasis_mode: runtime.deemphasis_mode,
+            squelch_enabled: runtime.squelch_enabled,
+            squelch_threshold_db: runtime.squelch_threshold_db,
+            squelch_open: runtime.squelch_open,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
             tx_tune_result: runtime.last_tx_tune_result.clone(),
@@ -747,6 +797,7 @@ fn log_runtime_snapshot(msg: &ServerRadioMessage) {
         source_control: _,
         source_status: _,
         tx_tune_result: _,
+        ..
     } = msg
     {
         debug!(
@@ -784,6 +835,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         source_control,
         source_status: _,
         tx_tune_result: _,
+        ..
     } = msg
     {
         info!(

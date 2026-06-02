@@ -90,6 +90,9 @@ pub struct WorkerRuntimeState {
     pub cw_pitch_hz: f32,
     pub filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
+    pub squelch_enabled: bool,
+    pub squelch_threshold_db: f32,
+    pub squelch_open: bool,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
     /// Result of the most recent TX tune test executed by this worker.
@@ -113,6 +116,8 @@ pub enum WorkerCommand {
     SetPitch { pitch_hz: f32 },
     SetFilterBandwidth { bandwidth_hz: f32 },
     SetDeemphasisMode { mode: DeemphasisMode },
+    SetSquelchEnabled { enabled: bool },
+    SetSquelchThreshold { threshold_db: f32 },
     Stop { reason: StopReason },
     SetSourceSampleRate { sample_rate_hz: u32 },
     SetSourceGainMode { mode: GainMode },

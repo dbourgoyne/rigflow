@@ -47,6 +47,11 @@ struct SharedControlState {
     cw_pitch_hz: f32,
     filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
+    /// Receive squelch (radio control).  enabled/threshold set by the command
+    /// thread; `squelch_open` is the live gate state written by the DSP thread.
+    squelch_enabled: bool,
+    squelch_threshold_db: f32,
+    squelch_open: bool,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -270,6 +275,9 @@ fn build_runtime_state(
         cw_pitch_hz: control.cw_pitch_hz,
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
+        squelch_enabled: control.squelch_enabled,
+        squelch_threshold_db: control.squelch_threshold_db,
+        squelch_open: control.squelch_open,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -342,6 +350,9 @@ fn run_iq_worker_threads(
         cw_pitch_hz: 600.0,
         filter_bandwidth_hz: 3000.0, // sensible default
         deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
+        squelch_enabled: false,
+        squelch_threshold_db: -90.0,
+        squelch_open: true,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
@@ -540,6 +551,17 @@ fn spawn_command_thread(
                     WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
+                        }
+                    }
+                    WorkerCommand::SetSquelchEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.squelch_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetSquelchThreshold { threshold_db } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.squelch_threshold_db =
+                                threshold_db.clamp(-120.0, 0.0);
                         }
                     }
                     WorkerCommand::SetDeemphasisMode { mode } => {
@@ -1071,6 +1093,12 @@ fn spawn_dsp_thread(
 
         let mut applied = current_control(&control);
 
+        // Receive-squelch gate state, owned by this (DSP) thread.  3 dB of
+        // hysteresis between the open and close thresholds prevents chatter.
+        const SQUELCH_HYSTERESIS_DB: f32 = 3.0;
+        let mut squelch_open = true;
+        let mut last_squelch_log = Instant::now();
+
         loop {
             if stop_requested(&stop_flag) {
                 break;
@@ -1122,6 +1150,18 @@ fn spawn_dsp_thread(
 
             if current.last_tx_tune_result != applied.last_tx_tune_result {
                 applied.last_tx_tune_result = current.last_tx_tune_result.clone();
+                changed = true;
+            }
+
+            // Squelch is applied in the audio block (no pipeline change), but a
+            // settings or gate-state change still republishes runtime so the
+            // client stays in sync.  The live `squelch_open` is written to
+            // control by the audio block and observed here on the next pass.
+            if current.squelch_enabled != applied.squelch_enabled
+                || (current.squelch_threshold_db - applied.squelch_threshold_db).abs()
+                    > f32::EPSILON
+                || current.squelch_open != applied.squelch_open
+            {
                 changed = true;
             }
 
@@ -1227,7 +1267,55 @@ fn spawn_dsp_thread(
 
             match iq_audio_rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(iq) => {
-                    let audio_f32 = pipeline.process_audio(&iq);
+                    let mut audio_f32 = pipeline.process_audio(&iq);
+
+                    // ── Receive squelch ──────────────────────────────────────
+                    // Measure this block's RMS level in dBFS (ref = full-scale
+                    // 1.0), apply hysteresis (open at threshold, close 3 dB
+                    // below), and mute the audio while the gate is closed.  A
+                    // packet is still emitted every time (silence when muted) so
+                    // audio timing stays stable; waterfall/spectrum are unaffected.
+                    if !audio_f32.is_empty() {
+                        let sum_sq: f32 = audio_f32.iter().map(|s| s * s).sum();
+                        let rms = (sum_sq / audio_f32.len() as f32).sqrt();
+                        let level_db = 20.0 * rms.max(1e-9).log10();
+
+                        if current.squelch_enabled {
+                            let open_thr = current.squelch_threshold_db;
+                            let close_thr = open_thr - SQUELCH_HYSTERESIS_DB;
+                            if squelch_open {
+                                if level_db < close_thr {
+                                    squelch_open = false;
+                                }
+                            } else if level_db >= open_thr {
+                                squelch_open = true;
+                            }
+                        } else {
+                            // Disabled → always pass; never mute.
+                            squelch_open = true;
+                        }
+
+                        // Mirror the gate state into control so the next loop's
+                        // change-detection republishes runtime to the client.
+                        if current.squelch_open != squelch_open {
+                            if let Ok(mut cs) = control.lock() {
+                                cs.squelch_open = squelch_open;
+                            }
+                        }
+
+                        if current.squelch_enabled && !squelch_open {
+                            audio_f32.iter_mut().for_each(|s| *s = 0.0);
+                        }
+
+                        if last_squelch_log.elapsed() >= Duration::from_millis(1000) {
+                            debug!(
+                                "[squelch] level={level_db:.1} dBFS open={squelch_open} \
+                                 enabled={} thr={:.1} dB",
+                                current.squelch_enabled, current.squelch_threshold_db
+                            );
+                            last_squelch_log = Instant::now();
+                        }
+                    }
 
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
                     for sample in audio_f32 {

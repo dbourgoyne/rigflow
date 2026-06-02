@@ -17,6 +17,16 @@ use rigflow_core::{
     dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
 
+/// Default squelch open threshold (dBFS) for `#[serde(default)]` decoding.
+pub fn default_squelch_threshold_db() -> f32 {
+    -90.0
+}
+
+/// Default squelch gate state (open = audio passing) for `#[serde(default)]`.
+pub fn default_squelch_open() -> bool {
+    true
+}
+
 /// Messages sent from client → server over WebSocket.
 ///
 /// These drive:
@@ -80,6 +90,16 @@ pub enum ClientRadioMessage {
 
     SetDeemphasisMode {
     mode: DeemphasisMode,
+    },
+
+    /// Enable/disable receive squelch (radio control, DSP-side).
+    SetSquelchEnabled {
+        enabled: bool,
+    },
+
+    /// Set the squelch open threshold in dBFS (radio control, DSP-side).
+    SetSquelchThreshold {
+        threshold_db: f32,
     },
 
     SetSourceSampleRate {
@@ -185,6 +205,16 @@ pub enum ServerRadioMessage {
 	filter_bandwidth_hz: f32,
 	deemphasis_mode: DeemphasisMode,
 
+        /// Receive squelch (radio control).  `#[serde(default)]` keeps older
+        /// peers that omit these decodable.
+        #[serde(default)]
+        squelch_enabled: bool,
+        #[serde(default = "default_squelch_threshold_db")]
+        squelch_threshold_db: f32,
+        /// Whether the squelch gate is currently open (audio passing).
+        #[serde(default = "default_squelch_open")]
+        squelch_open: bool,
+
 	source_control: SourceControlState,
 
         /// Current source telemetry / status fields.
@@ -211,6 +241,13 @@ pub enum ServerRadioMessage {
 	cw_pitch_hz: Option<f32>,
 	filter_bandwidth_hz: Option<f32>,
 	deemphasis_mode: Option<DeemphasisMode>,
+
+        #[serde(default)]
+        squelch_enabled: Option<bool>,
+        #[serde(default)]
+        squelch_threshold_db: Option<f32>,
+        #[serde(default)]
+        squelch_open: Option<bool>,
 
 	source_control: Option<SourceControlState>,
 

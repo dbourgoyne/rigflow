@@ -52,6 +52,8 @@ impl RigflowApp {
                     save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
                     save_demod_prefs |=
                         self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
+
+                    self.draw_squelch_row(ui, &mut state);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -60,6 +62,49 @@ impl RigflowApp {
                     self.save_demod_preferences_to_current_operator();
                 }
             });
+    }
+
+    /// Receive squelch: enable checkbox, threshold slider, and a live gate
+    /// indicator.  These are radio (DSP) controls sent to the server; they are
+    /// not persisted as demod preferences.
+    fn draw_squelch_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            let mut enabled = state.squelch_enabled;
+            if ui.checkbox(&mut enabled, "Squelch").changed() {
+                state.squelch_enabled = enabled;
+                self.send_radio_msg(ClientRadioMessage::SetSquelchEnabled { enabled });
+            }
+
+            // Live gate indicator from the server-reported open state.
+            let (text, color) = if !state.squelch_enabled {
+                ("—", egui::Color32::GRAY)
+            } else if state.squelch_open {
+                ("● open", egui::Color32::from_rgb(100, 220, 100))
+            } else {
+                ("muted", egui::Color32::from_rgb(210, 130, 130))
+            };
+            ui.label(RichText::new(text).color(color).small());
+        });
+
+        let enabled = state.squelch_enabled;
+        ui.add_enabled_ui(enabled, |ui| {
+            let mut threshold_db = state.squelch_threshold_db;
+            let response = ui.add(
+                egui::Slider::new(&mut threshold_db, -120.0..=0.0)
+                    .step_by(1.0)
+                    .fixed_decimals(0)
+                    .suffix(" dBFS")
+                    .text("Threshold"),
+            );
+            if response.changed() {
+                state.squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
+                self.send_radio_msg(ClientRadioMessage::SetSquelchThreshold {
+                    threshold_db: state.squelch_threshold_db,
+                });
+            }
+        });
     }
 
     fn draw_filter_bandwidth_row(

@@ -385,6 +385,9 @@ pub fn apply_radio_server_message(
             input_sample_rate_hz,
             demod_mode,
             sideband,
+            squelch_enabled,
+            squelch_threshold_db,
+            squelch_open,
             source_control,
             source_status,
             tx_tune_result,
@@ -395,6 +398,9 @@ pub fn apply_radio_server_message(
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
+            state.squelch_enabled = squelch_enabled;
+            state.squelch_threshold_db = squelch_threshold_db;
+            state.squelch_open = squelch_open;
             // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
             if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
@@ -416,11 +422,24 @@ pub fn apply_radio_server_message(
             target_freq_hz,
             demod_mode,
             sideband,
+            squelch_enabled,
+            squelch_threshold_db,
+            squelch_open,
             source_control,
             source_status,
             tx_tune_result,
             ..
         } => {
+            if let Some(value) = squelch_enabled {
+                state.squelch_enabled = value;
+            }
+            if let Some(value) = squelch_threshold_db {
+                state.squelch_threshold_db = value;
+            }
+            if let Some(value) = squelch_open {
+                state.squelch_open = value;
+            }
+
             if let Some(value) = center_freq_hz {
                 state.center_freq_hz = value as f32;
             }
