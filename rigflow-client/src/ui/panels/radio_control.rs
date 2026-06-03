@@ -459,9 +459,10 @@ impl RigflowApp {
             ui.radio_value(&mut selected, DemodMode::Wfm, "wfm");
             ui.radio_value(&mut selected, DemodMode::Nfm, "nfm");
             ui.radio_value(&mut selected, DemodMode::Am, "am");
-            ui.radio_value(&mut selected, DemodMode::Cw, "cw");
             ui.radio_value(&mut selected, DemodMode::Lsb, "lsb");
             ui.radio_value(&mut selected, DemodMode::Usb, "usb");
+            ui.radio_value(&mut selected, DemodMode::Cwu, "cwu");
+            ui.radio_value(&mut selected, DemodMode::Cwl, "cwl");
         });
 
         if selected == snapshot.demod_mode {
@@ -523,7 +524,9 @@ fn s_meter_label(dbm: f32) -> String {
             format!("S9+{rounded} dB")
         }
     } else {
-        let s = (9.0 + (dbm - S9_DBM) / DB_PER_S_UNIT).round().clamp(0.0, 9.0) as i32;
+        let s = (9.0 + (dbm - S9_DBM) / DB_PER_S_UNIT)
+            .round()
+            .clamp(0.0, 9.0) as i32;
         format!("S{s}")
     }
 }

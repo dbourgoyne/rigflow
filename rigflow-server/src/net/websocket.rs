@@ -772,6 +772,30 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::StartCwKey => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StartCwKey).await
+            {
+                send_radio_error(
+                    local_tx,
+                    "start_cw_key_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::StopCwKey => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StopCwKey).await
+            {
+                send_radio_error(
+                    local_tx,
+                    "stop_cw_key_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::RequestSwrSweep { start_hz, stop_hz } => {
             info!("[websocket] RequestSwrSweep: {start_hz}..{stop_hz} Hz");
             if let Err(err) = send_worker_command_for_session(

@@ -474,6 +474,74 @@ impl HermesLite2Source {
             .map_err(|e| format!("HL2: send TX tone packet failed: {e}"))
     }
 
+    /// Send one H2D packet of a **CW** carrier — the same complex tone as
+    /// `send_tx_tone_packet` but with a per-sample raised-cosine **envelope** so
+    /// the carrier rises/falls smoothly (no key clicks).  `level` (0..1) is the
+    /// envelope position, ramped by `step` per sample (clamped to [0,1]); the
+    /// applied amplitude is `target_amp_fs · 0.5·(1 − cos(π·level))`.  Returns
+    /// the updated `level`/`phase` via the `&mut` params for the next packet.
+    fn send_tx_cw_packet(
+        &mut self,
+        nco_freq_hz: u32,
+        target_amp_fs: f32,
+        tone_hz: f32,
+        usb: bool,
+        phase: &mut f64,
+        level: &mut f32,
+        step: f32,
+    ) -> Result<(), String> {
+        let target = target_amp_fs.clamp(0.0, 1.0) * 0x7FFF as f32;
+        let dphi = std::f64::consts::TAU * tone_hz as f64 / TX_SAMPLE_RATE_HZ as f64;
+        let q_sign: f32 = if usb { 1.0 } else { -1.0 };
+
+        let ptt_bit = 1u8; // CW carrier is always PTT-asserted
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        let freq_bytes = nco_freq_hz.to_be_bytes();
+        let gain_byte = 0x40 | (self.lna_gain_code & 0x3F);
+
+        let fill = |sf: &mut [u8], c0: u8, hdr: [u8; 4], phase: &mut f64, level: &mut f32| {
+            sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
+            sf[3] = c0;
+            sf[4..8].copy_from_slice(&hdr);
+            for i in 0..P1_SAMPLES_PER_SUBFRAME {
+                *level = (*level + step).clamp(0.0, 1.0);
+                // Raised-cosine shaping: smooth 0→1 with zero slope at the ends.
+                let shaped = 0.5 * (1.0 - (std::f32::consts::PI * *level).cos());
+                let amp = target * shaped;
+                let re = (amp * phase.cos() as f32).round().clamp(-32767.0, 32767.0) as i16;
+                let im = (amp * q_sign * phase.sin() as f32)
+                    .round()
+                    .clamp(-32767.0, 32767.0) as i16;
+                let b = 8 + i * 8;
+                sf[b + 4..b + 6].copy_from_slice(&im.to_be_bytes()); // field0 = imag
+                sf[b + 6..b + 8].copy_from_slice(&re.to_be_bytes()); // field1 = real
+                *phase += dphi;
+                if *phase >= std::f64::consts::TAU {
+                    *phase -= std::f64::consts::TAU;
+                }
+            }
+        };
+
+        fill(&mut pkt[8..520], 0x02 | ptt_bit, freq_bytes, phase, level);
+        fill(
+            &mut pkt[520..1032],
+            0x14 | ptt_bit,
+            [0, 0, 0, gain_byte],
+            phase,
+            level,
+        );
+
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send CW packet failed: {e}"))
+    }
+
     /// Shared TX-START sequencing used by every transmit path.  Drains stale
     /// DDC, pre-fills the FIFO (PTT=0, no RF), asserts PTT, then waits the lead
     /// delay sending zero-amplitude PTT=1 packets — **PTT up, NO RF** — so a
@@ -1310,6 +1378,159 @@ impl IqSource for HermesLite2Source {
         self.tx_seq_end(target_u32);
         info!(
             "[hl2 tx-tone] stopped after {} ms (fault={fault:?})",
+            tx_start.elapsed().as_millis()
+        );
+
+        match fault {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// CW keying (CW TX Phase 1).  Reuses the shared TX sequencing and the
+    /// enveloped CW packet generator: assert PTT (lead), ramp the carrier up,
+    /// sustain a complex CW tone at `pitch_hz` (USB above carrier, LSB below)
+    /// while `key_held` is set, then ramp down and release PTT (tail).  RX IQ is
+    /// forwarded to the spectrum/waterfall (FDX); audio is never touched.
+    #[allow(clippy::too_many_arguments)]
+    fn tx_cw_key(
+        &mut self,
+        target_freq_hz: u64,
+        pitch_hz: f32,
+        usb: bool,
+        tx_drive_percent: f32,
+        spot_level_percent: f32,
+        key_held: &std::sync::atomic::AtomicBool,
+        on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
+    ) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+
+        // ── Constants ────────────────────────────────────────────────────
+        const PTT_GRACE_MS: u128 = 60;
+        // Safety ceiling on a single key-down (stuck key / lost client).
+        const HARD_MAX_KEY_MS: u128 = 30_000;
+        // Raised-cosine rise/fall duration (within the 5–10 ms target).
+        const ENV_MS: f32 = 8.0;
+        const HF_MIN_HZ: u64 = 1_800_000;
+        const HF_MAX_HZ: u64 = 30_000_000;
+
+        // ── Parameter clamping ───────────────────────────────────────────
+        let tx_drive_percent = tx_drive_percent.clamp(0.0, 100.0);
+        let spot_level_percent = spot_level_percent.clamp(0.0, 100.0);
+        let target_amp = (spot_level_percent / 100.0).clamp(0.0, 1.0);
+        let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
+        let pitch_hz = pitch_hz.clamp(300.0, 1200.0);
+
+        info!(
+            "[hl2 cw] key down: mode={} pitch={pitch_hz:.0} Hz amplitude={target_amp:.2} FS \
+             drive={tx_drive_percent:.0}% drive_level={drive_level}/255 target={target_freq_hz} Hz",
+            if usb { "USB" } else { "LSB" }
+        );
+
+        // ── Pre-checks ───────────────────────────────────────────────────
+        if target_freq_hz < HF_MIN_HZ || target_freq_hz > HF_MAX_HZ {
+            return Err(format!(
+                "{target_freq_hz} Hz outside HF TX range ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
+            ));
+        }
+        if self.status_regs.raddr0_valid && self.status_regs.tx_inhibited {
+            return Err("TX inhibited by hardware".to_string());
+        }
+
+        let target_u32 = target_freq_hz as u32;
+        self.send_tx_rx_nco(target_u32)
+            .map_err(|e| format!("NCO program failed: {e}"))?;
+        if let Err(e) = self.send_tx_drive_cc(drive_level, true) {
+            let _ = self.send_tx_drive_cc(0, false);
+            return Err(format!("drive-level program failed: {e}"));
+        }
+
+        let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+        let mut phase: f64 = 0.0;
+
+        // Shared TX-start sequencing: assert PTT + lead delay, NO RF yet.
+        self.tx_seq_begin(target_u32)?;
+        info!("[hl2 tx-seq] RF start");
+
+        // Per-sample envelope ramp rate (raised-cosine applied in the packet).
+        let env_samples = (ENV_MS / 1000.0) * TX_SAMPLE_RATE_HZ;
+        let ramp_step = 1.0 / env_samples.max(1.0);
+
+        let mut level: f32 = 0.0;
+        let mut falling = false;
+        let tx_start = Instant::now();
+        let mut next_tick = Instant::now();
+        let mut fault: Option<String> = None;
+
+        loop {
+            let now = Instant::now();
+            let elapsed_ms = tx_start.elapsed().as_millis();
+
+            // Transition to the fall envelope on key-up (or the safety ceiling).
+            // Once falling we never re-key; the fall must complete before release.
+            if !falling && (!key_held.load(Ordering::Relaxed) || elapsed_ms >= HARD_MAX_KEY_MS) {
+                if elapsed_ms >= HARD_MAX_KEY_MS {
+                    warn!("[hl2 cw] hard {HARD_MAX_KEY_MS} ms key ceiling — auto key-up");
+                }
+                falling = true;
+            }
+            let step = if falling {
+                -ramp_step
+            } else if level < 1.0 {
+                ramp_step
+            } else {
+                0.0 // sustain at full amplitude
+            };
+
+            if now < next_tick {
+                thread::sleep(next_tick - now);
+                next_tick += packet_period;
+            } else {
+                next_tick = now + packet_period;
+            }
+
+            if let Err(e) = self.send_tx_cw_packet(
+                target_u32, target_amp, pitch_hz, usb, &mut phase, &mut level, step,
+            ) {
+                fault = Some(format!("CW send failed: {e}"));
+                break;
+            }
+
+            // Drain DDC status + RX IQ; forward RX IQ to FDX (spectrum/waterfall).
+            let mut rx_buf = [0u8; P1_PACKET_LEN];
+            while let Ok(len) = self.socket.recv(&mut rx_buf) {
+                if len == P1_PACKET_LEN {
+                    let mut decoded = VecDeque::new();
+                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    if self.fdx_enabled && !decoded.is_empty() {
+                        on_rx_iq(decoded.into_iter().collect());
+                    }
+                }
+            }
+
+            // FIFO anomaly guard (fatal only after the grace window).
+            if self.status_regs.raddr0_valid
+                && self.status_regs.recovery_bits != 0
+                && elapsed_ms >= PTT_GRACE_MS
+            {
+                let bits = self.status_regs.recovery_bits;
+                fault = Some(format!(
+                    "TX FIFO anomaly during CW: recovery_bits={bits:#02b}"
+                ));
+                break;
+            }
+
+            // Fall envelope complete → done.
+            if falling && level <= 0.0 {
+                break;
+            }
+        }
+
+        // Shared TX-stop sequencing: tail delay → release PTT.
+        info!("[hl2 tx-seq] RF stop");
+        self.tx_seq_end(target_u32);
+        info!(
+            "[hl2 cw] key up: done after {} ms (fault={fault:?})",
             tx_start.elapsed().as_millis()
         );
 

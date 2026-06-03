@@ -46,6 +46,37 @@ impl RigflowApp {
         let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
     }
 
+    /// Space-bar CW keying (CW TX Phase 1).  Space held = CW key down, released
+    /// = key up.  Only active when a radio is acquired, the source supports TX,
+    /// and the current mode is CW.  Edge-detected against `cw_key_down` so a
+    /// single Start/Stop is sent per press (no auto-repeat spam).  When a text
+    /// edit has keyboard focus we treat Space as "not keying" so it isn't stolen
+    /// from text widgets (and any in-progress key is released).
+    fn handle_cw_keying(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        use rigflow_core::dsp::modes::DemodMode;
+
+        let typing = ctx.wants_keyboard_input();
+        let space_held = !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+
+        let cw_ready = snapshot.radio_acquired
+            && snapshot.source_capabilities.supports_tx_tune_test
+            && matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl);
+        let want_key = space_held && cw_ready;
+
+        // Only act on a transition; this also releases the key if the operator
+        // leaves CW mode, releases the radio, or focuses a text field mid-hold.
+        if want_key != snapshot.cw_key_down {
+            if want_key {
+                self.send_radio_msg(ClientRadioMessage::StartCwKey);
+            } else {
+                self.send_radio_msg(ClientRadioMessage::StopCwKey);
+            }
+            if let Ok(mut state) = self.state.lock() {
+                state.cw_key_down = want_key;
+            }
+        }
+    }
+
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         let mut center_delta_hz: f32 = 0.0;
 
@@ -139,6 +170,7 @@ impl eframe::App for RigflowApp {
         let config_mode = !snapshot.server_connected;
 
         self.handle_keyboard_shortcuts(ctx);
+        self.handle_cw_keying(ctx, &snapshot);
         self.draw_left_panel(ctx, &snapshot, config_mode);
         self.draw_center_panel(ctx, &snapshot);
         self.draw_add_operator_dialog(ctx);

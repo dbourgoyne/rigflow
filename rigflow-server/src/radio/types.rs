@@ -184,6 +184,10 @@ pub enum WorkerCommand {
         lead_ms: u32,
         tail_ms: u32,
     },
+    /// CW key down / up (Space bar).  The server keys the CW carrier with
+    /// envelope shaping; `tx_drive_percent` / `spot_level_percent` set power.
+    StartCwKey,
+    StopCwKey,
     SetSourceN2adrEnabled {
         enabled: bool,
     },

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::ui::om_bands::LicenseClass;
-use rigflow_core::dsp::modes::{DemodMode, Sideband, DeemphasisMode};
+use rigflow_core::dsp::modes::{DeemphasisMode, DemodMode, Sideband};
 use rigflow_core::radio::source_control::SourceControlState;
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
@@ -57,7 +57,7 @@ impl DemodPreferencesFile {
         Self {
             filter_bandwidth_hz,
             pitch_hz,
-	    deemphasis_mode,
+            deemphasis_mode,
         }
     }
 }
@@ -75,12 +75,12 @@ pub struct DemodPreferenceSetFile {
 impl Default for DemodPreferenceSetFile {
     fn default() -> Self {
         Self {
-            wfm: DemodPreferencesFile::new(15_000.0,   0.0, DeemphasisMode::Tau75us),
-            nfm: DemodPreferencesFile::new( 4_000.0,   0.0, DeemphasisMode::Tau75us),
-            am:  DemodPreferencesFile::new( 5_000.0,   0.0, DeemphasisMode::Off),
-            usb: DemodPreferencesFile::new( 2_700.0,   0.0, DeemphasisMode::Off),
-            lsb: DemodPreferencesFile::new( 2_700.0,   0.0, DeemphasisMode::Off),
-            cw:  DemodPreferencesFile::new(   500.0, 600.0, DeemphasisMode::Off),
+            wfm: DemodPreferencesFile::new(15_000.0, 0.0, DeemphasisMode::Tau75us),
+            nfm: DemodPreferencesFile::new(4_000.0, 0.0, DeemphasisMode::Tau75us),
+            am: DemodPreferencesFile::new(5_000.0, 0.0, DeemphasisMode::Off),
+            usb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
+            lsb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
+            cw: DemodPreferencesFile::new(500.0, 600.0, DeemphasisMode::Off),
         }
     }
 }
@@ -93,7 +93,8 @@ impl DemodPreferenceSetFile {
             DemodMode::Am => self.am,
             DemodMode::Usb => self.usb,
             DemodMode::Lsb => self.lsb,
-            DemodMode::Cw => self.cw,
+            // CWU and CWL share one CW preference set (filter bw, pitch).
+            DemodMode::Cwu | DemodMode::Cwl => self.cw,
         }
     }
 
@@ -104,7 +105,7 @@ impl DemodPreferenceSetFile {
             DemodMode::Am => &mut self.am,
             DemodMode::Usb => &mut self.usb,
             DemodMode::Lsb => &mut self.lsb,
-            DemodMode::Cw => &mut self.cw,
+            DemodMode::Cwu | DemodMode::Cwl => &mut self.cw,
         }
     }
 }

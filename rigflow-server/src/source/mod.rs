@@ -89,6 +89,26 @@ pub trait IqSource {
     /// HL2 overrides it.
     fn set_tx_sequencing(&mut self, _lead_ms: u32, _tail_ms: u32) {}
 
+    /// Key CW (CW TX Phase 1): assert PTT, ramp the carrier up with a smooth
+    /// envelope, sustain a complex CW tone at `pitch_hz` (USB above carrier, LSB
+    /// below) while `key_held` is set, then ramp down and release PTT once it
+    /// clears.  Amplitude from `spot_level_percent`, drive from
+    /// `tx_drive_percent`.  RX IQ captured during keying is handed to `on_rx_iq`
+    /// (FDX).  Default: not supported.
+    #[allow(clippy::too_many_arguments)]
+    fn tx_cw_key(
+        &mut self,
+        _target_freq_hz: u64,
+        _pitch_hz: f32,
+        _usb: bool,
+        _tx_drive_percent: f32,
+        _spot_level_percent: f32,
+        _key_held: &std::sync::atomic::AtomicBool,
+        _on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
+    ) -> Result<(), String> {
+        Err("not_supported".to_string())
+    }
+
     /// Return the latest read-only telemetry from this source.
     ///
     /// Default returns an empty `SourceStatus` (all fields `None`).

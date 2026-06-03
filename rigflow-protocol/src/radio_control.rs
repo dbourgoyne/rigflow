@@ -221,6 +221,13 @@ pub enum ClientRadioMessage {
     /// Stop a running TX test tone (release PTT, return to receive).
     StopTxTestTone,
 
+    /// CW key DOWN (Space bar held in CW mode): assert PTT and start the keyed
+    /// CW carrier (rise envelope → sustain).  Server validates CW mode.
+    StartCwKey,
+
+    /// CW key UP (Space released): run the fall envelope, then release PTT.
+    StopCwKey,
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {

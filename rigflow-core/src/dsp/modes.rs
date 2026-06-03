@@ -25,19 +25,25 @@ pub enum DemodMode {
     /// AM
     Am,
 
-    /// CW
-    Cw,
+    /// CW, upper sideband (tone above the dial: RF = dial + pitch).
+    /// `alias = "cw"` maps legacy persisted/bookmark `"cw"` to CWU.
+    #[serde(alias = "cw")]
+    Cwu,
+
+    /// CW, lower sideband (tone below the dial: RF = dial − pitch).
+    Cwl,
 }
 
 impl fmt::Display for DemodMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-	    DemodMode::Wfm => "wfm",
-	    DemodMode::Nfm => "nfm",
-	    DemodMode::Usb => "usb",
-	    DemodMode::Lsb => "lsb",
-	    DemodMode::Am  => "am",
-	    DemodMode::Cw  => "cw",
+            DemodMode::Wfm => "wfm",
+            DemodMode::Nfm => "nfm",
+            DemodMode::Usb => "usb",
+            DemodMode::Lsb => "lsb",
+            DemodMode::Am => "am",
+            DemodMode::Cwu => "cwu",
+            DemodMode::Cwl => "cwl",
         };
         write!(f, "{}", s)
     }
@@ -54,8 +60,11 @@ impl FromStr for DemodMode {
             "nfm" => Ok(DemodMode::Nfm),
             "usb" => Ok(DemodMode::Usb),
             "lsb" => Ok(DemodMode::Lsb),
-	    "am" => Ok(DemodMode::Am),
-	    "cw" => Ok(DemodMode::Cw),
+            "am" => Ok(DemodMode::Am),
+            "cwu" => Ok(DemodMode::Cwu),
+            "cwl" => Ok(DemodMode::Cwl),
+            // Legacy single CW maps to CWU.
+            "cw" => Ok(DemodMode::Cwu),
             _ => Err(format!("invalid demod mode: {}", s)),
         }
     }
@@ -110,16 +119,16 @@ pub fn pitch_limits(mode: DemodMode) -> Option<PitchUiConfig> {
             max_hz: 1500.0,
             default_hz: 0.0,
             label: "SSB Pitch (Hz)",
-	    debounce_delta_hz: 5.0,
-	    debounce_interval_ms: 40,
+            debounce_delta_hz: 5.0,
+            debounce_interval_ms: 40,
         }),
-        DemodMode::Cw => Some(PitchUiConfig {
+        DemodMode::Cwu | DemodMode::Cwl => Some(PitchUiConfig {
             min_hz: 300.0,
             max_hz: 1200.0,
             default_hz: 600.0,
             label: "CW Pitch (Hz)",
-	    debounce_delta_hz: 10.0,
-	    debounce_interval_ms: 50,
+            debounce_delta_hz: 10.0,
+            debounce_interval_ms: 50,
         }),
         _ => None,
     }
@@ -127,9 +136,9 @@ pub fn pitch_limits(mode: DemodMode) -> Option<PitchUiConfig> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BandwidthLimits {
-     pub min_hz: f32,
-     pub max_hz: f32,
-     pub default_hz: f32,
+    pub min_hz: f32,
+    pub max_hz: f32,
+    pub default_hz: f32,
 }
 
 pub fn filter_bandwidth_limits(mode: DemodMode) -> BandwidthLimits {
@@ -139,7 +148,7 @@ pub fn filter_bandwidth_limits(mode: DemodMode) -> BandwidthLimits {
             max_hz: 4000.0,
             default_hz: 2700.0,
         },
-        DemodMode::Cw => BandwidthLimits {
+        DemodMode::Cwu | DemodMode::Cwl => BandwidthLimits {
             min_hz: 100.0,
             max_hz: 1500.0,
             default_hz: 500.0,

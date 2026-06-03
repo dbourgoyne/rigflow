@@ -236,6 +236,11 @@ pub struct UiState {
     pub tx_tone_freq_hz: f32,
     /// True while a tone is transmitting (Start pressed, not yet stopped).
     pub tx_tone_running: bool,
+
+    // ── CW keying (CW TX Phase 1; client-local, not persisted) ──────────
+    /// Tracks whether the Space bar is currently keying CW, for edge detection
+    /// (send StartCwKey on up→down, StopCwKey on down→up; no auto-repeat spam).
+    pub cw_key_down: bool,
 }
 
 impl Default for UiState {
@@ -366,6 +371,7 @@ impl Default for UiState {
             tx_tone_usb: true,
             tx_tone_freq_hz: 1000.0,
             tx_tone_running: false,
+            cw_key_down: false,
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

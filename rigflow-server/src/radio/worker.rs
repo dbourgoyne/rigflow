@@ -100,6 +100,12 @@ struct SharedControlState {
     /// stop signal the capture thread polls while the (open-ended) tone runs.
     pending_tx_tone: Option<(f32, bool)>,
     tx_tone_stop: Arc<AtomicBool>,
+
+    /// CW keying (CW TX Phase 1): `pending_cw_key` is set on key-down for the
+    /// capture thread to pick up; `cw_key_held` is the live key state the
+    /// capture thread polls — cleared on key-up to start the fall envelope.
+    pending_cw_key: bool,
+    cw_key_held: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,7 +284,7 @@ fn pipeline_cfg_for_source(
         DemodMode::Usb => (4_000.0, 3_000.0),
         DemodMode::Lsb => (4_000.0, 3_000.0),
         DemodMode::Am => (6_000.0, 5_000.0),
-        DemodMode::Cw => (1_200.0, 900.0),
+        DemodMode::Cwu | DemodMode::Cwl => (1_200.0, 900.0),
     };
 
     DspPipelineConfig {
@@ -445,6 +451,8 @@ fn run_iq_worker_threads(
         swr_sweep_progress: None,
         pending_tx_tone: None,
         tx_tone_stop: Arc::new(AtomicBool::new(false)),
+        pending_cw_key: false,
+        cw_key_held: Arc::new(AtomicBool::new(false)),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -624,7 +632,7 @@ fn spawn_command_thread(
                                 DemodMode::Usb | DemodMode::Lsb => {
                                     control_state.ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
                                 }
-                                DemodMode::Cw => {
+                                DemodMode::Cwu | DemodMode::Cwl => {
                                     control_state.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
                                 }
                                 _ => {}
@@ -634,10 +642,12 @@ fn spawn_command_thread(
                     WorkerCommand::Stop { reason } => {
                         set_stop_reason(&stop_reason, reason);
                         stop_flag.store(true, Ordering::Relaxed);
-                        // Also break any in-flight TX test tone so the capture
-                        // thread (blocked in tx_test_tone) releases PTT promptly.
+                        // Also break any in-flight TX test tone / CW key so the
+                        // capture thread (blocked in tx_test_tone / tx_cw_key)
+                        // runs its fall + releases PTT promptly.
                         if let Ok(cs) = control.lock() {
                             cs.tx_tone_stop.store(true, Ordering::Relaxed);
+                            cs.cw_key_held.store(false, Ordering::Relaxed);
                         }
                         break;
                     }
@@ -802,6 +812,22 @@ fn spawn_command_thread(
                             // not-yet-started request.
                             cs.tx_tone_stop.store(true, Ordering::Relaxed);
                             cs.pending_tx_tone = None;
+                        }
+                    }
+
+                    WorkerCommand::StartCwKey => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.cw_key_held.store(true, Ordering::Relaxed);
+                            cs.pending_cw_key = true;
+                        }
+                    }
+
+                    WorkerCommand::StopCwKey => {
+                        if let Ok(mut cs) = control.lock() {
+                            // Drop the key: a running key runs the fall envelope
+                            // and releases PTT; a not-yet-started one is cancelled.
+                            cs.cw_key_held.store(false, Ordering::Relaxed);
+                            cs.pending_cw_key = false;
                         }
                     }
                 },
@@ -1399,6 +1425,70 @@ fn spawn_capture_thread(
                 }
             }
 
+            // Execute any pending CW key (CW TX Phase 1).  Open-ended: the source
+            // keys the CW carrier (rise → sustain) until `cw_key_held` clears on
+            // key-up, then runs the fall envelope and releases PTT.  Validates CW
+            // mode here; sideband selects USB/LSB placement.  Forwards RX IQ to
+            // the waterfall/spectrum path (FDX) so the CW tone is visible.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .map(|mut cs| {
+                        let p = cs.pending_cw_key;
+                        cs.pending_cw_key = false;
+                        p
+                    })
+                    .unwrap_or(false);
+
+                if pending {
+                    let cw_usb = match control_snapshot.demod_mode {
+                        DemodMode::Cwu => Some(true),
+                        DemodMode::Cwl => Some(false),
+                        _ => None,
+                    };
+                    if cw_usb.is_none() {
+                        warn!(
+                            "[radio-worker {}] CW key ignored: mode is {:?}, not CWU/CWL",
+                            descriptor.id.0, control_snapshot.demod_mode
+                        );
+                        // Clear the held flag so a stale key doesn't linger.
+                        if let Ok(cs) = control.lock() {
+                            cs.cw_key_held.store(false, Ordering::Relaxed);
+                        }
+                    } else {
+                        let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                        let spot_level_percent = control_snapshot.source_control.spot_level_percent;
+                        // CW transmit pitch = the operator's CW pitch from Radio
+                        // Control (the same value used for RX CW demod), so TX and
+                        // RX share one pitch.
+                        let pitch_hz = control_snapshot.cw_pitch_hz;
+                        // CW TX side comes from the MODE (CWU=above, CWL=below),
+                        // never the generic SSB sideband field.
+                        let usb = cw_usb.unwrap();
+                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let held = control.lock().ok().map(|cs| cs.cw_key_held.clone());
+
+                        if let Some(held) = held {
+                            let mut forward = |iq: Vec<Complex32>| {
+                                let _ = iq_wf_tx.try_send(iq);
+                            };
+                            if let Err(e) = source.tx_cw_key(
+                                target_freq_hz,
+                                pitch_hz,
+                                usb,
+                                tx_drive_percent,
+                                spot_level_percent,
+                                &held,
+                                &mut forward,
+                            ) {
+                                warn!("[radio-worker {}] CW key error: {e}", descriptor.id.0);
+                            }
+                        }
+                    }
+                }
+            }
+
             if !realtime {
                 let now = Instant::now();
                 if now < next_source_tick {
@@ -1562,7 +1652,7 @@ fn spawn_dsp_thread(
                         pipeline.set_sideband(current.sideband);
                         pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
                     }
-                    DemodMode::Cw => {
+                    DemodMode::Cwu | DemodMode::Cwl => {
                         pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
                     }
                     _ => {}
@@ -1691,7 +1781,7 @@ fn spawn_dsp_thread(
                         pipeline.set_sideband(current.sideband);
                         pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
                     }
-                    DemodMode::Cw => {
+                    DemodMode::Cwu | DemodMode::Cwl => {
                         pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
                     }
                     _ => {}
@@ -1723,7 +1813,7 @@ fn spawn_dsp_thread(
                             changed = true;
                         }
                     }
-                    DemodMode::Cw => {
+                    DemodMode::Cwu | DemodMode::Cwl => {
                         if (current.cw_pitch_hz - applied.cw_pitch_hz).abs() > f32::EPSILON {
                             pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
                             applied.cw_pitch_hz = current.cw_pitch_hz;

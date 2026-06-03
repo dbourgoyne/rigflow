@@ -386,13 +386,26 @@ fn draw_passband_overlay(
 
     let target_freq_hz = state.target_freq_hz;
 
+    // CW passband: centered at the dial ± CW pitch (CWU above, CWL below) with
+    // a width set by Filter BW — NOT by the pitch.  `state.pitch_hz` holds the
+    // CW pitch in CW modes; `state.filter_bandwidth_hz` is the filter width.
+    //   center_offset = ±cw_pitch ; low/high = center_offset ∓ filter_bw/2
     let (pb_left_hz, pb_right_hz) = match state.demod_mode {
         DemodMode::Wfm => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
         DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
         DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
         DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
         DemodMode::Am => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
-        DemodMode::Cw => (target_freq_hz - 1_000.0, target_freq_hz + 1_000.0),
+        DemodMode::Cwu => {
+            let center = target_freq_hz + state.pitch_hz;
+            let half = state.filter_bandwidth_hz / 2.0;
+            (center - half, center + half)
+        }
+        DemodMode::Cwl => {
+            let center = target_freq_hz - state.pitch_hz;
+            let half = state.filter_bandwidth_hz / 2.0;
+            (center - half, center + half)
+        }
     };
 
     let visible_pb_left_hz = pb_left_hz.max(left_hz);
