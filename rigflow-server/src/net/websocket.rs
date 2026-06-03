@@ -673,6 +673,22 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetSourceTxSequencing { lead_ms, tail_ms } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceTxSequencing { lead_ms, tail_ms },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_tx_sequencing_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetSourceN2adrEnabled { enabled } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

@@ -180,6 +180,14 @@ pub enum ClientRadioMessage {
         spot_level_percent: f32,
     },
 
+    /// Set the TX PTT sequencing lead/tail delays in ms (0–100 each).  Part of
+    /// source control; the server applies/persists them and all HL2 transmit
+    /// paths use them to assert PTT before RF and hold PTT after RF stops.
+    SetSourceTxSequencing {
+        lead_ms: u32,
+        tail_ms: u32,
+    },
+
     /// Enable/disable the N2ADR HF filter board (HL2).  Part of source control;
     /// when enabled the server programs the band filter from the tuned freq.
     SetSourceN2adrEnabled {

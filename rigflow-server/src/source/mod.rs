@@ -83,6 +83,12 @@ pub trait IqSource {
         Vec::new()
     }
 
+    /// Set the TX PTT sequencing lead/tail delays (ms).  Transmit paths assert
+    /// PTT, wait `lead_ms`, emit RF, stop RF, wait `tail_ms`, then release PTT —
+    /// so relay-based external amplifiers are never hot-switched.  Default no-op;
+    /// HL2 overrides it.
+    fn set_tx_sequencing(&mut self, _lead_ms: u32, _tail_ms: u32) {}
+
     /// Return the latest read-only telemetry from this source.
     ///
     /// Default returns an empty `SourceStatus` (all fields `None`).

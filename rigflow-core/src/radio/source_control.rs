@@ -49,6 +49,17 @@ pub struct SourceControlState {
     /// Persisted/synced like the other source-control fields.
     #[serde(default = "default_spot_level_percent")]
     pub spot_level_percent: f32,
+
+    /// TX PTT sequencing lead delay in ms (0–100): PTT is asserted, then this
+    /// delay elapses (relays settle) BEFORE any RF is emitted.  Shared by all
+    /// HL2 transmit paths (Spot/SWR/sweep/test-tone, future CW).  Persisted.
+    #[serde(default = "default_tx_ptt_lead_ms")]
+    pub tx_ptt_lead_ms: u32,
+
+    /// TX PTT sequencing tail delay in ms (0–100): after RF stops, PTT is held
+    /// for this delay BEFORE release (prevents hot-switching relays).  Persisted.
+    #[serde(default = "default_tx_ptt_tail_ms")]
+    pub tx_ptt_tail_ms: u32,
 }
 
 pub fn default_tx_drive_percent() -> f32 {
@@ -58,6 +69,16 @@ pub fn default_tx_drive_percent() -> f32 {
 /// Quisk's default Spot level is 500 / 1000 = 50%.
 pub fn default_spot_level_percent() -> f32 {
     50.0
+}
+
+/// Default PTT lead delay (ms) — enough for typical relay actuation.
+pub fn default_tx_ptt_lead_ms() -> u32 {
+    20
+}
+
+/// Default PTT tail delay (ms).
+pub fn default_tx_ptt_tail_ms() -> u32 {
+    20
 }
 
 impl Default for SourceControlState {
@@ -72,6 +93,8 @@ impl Default for SourceControlState {
             n2adr_enabled: false,
             fdx_enabled: false,
             spot_level_percent: default_spot_level_percent(),
+            tx_ptt_lead_ms: default_tx_ptt_lead_ms(),
+            tx_ptt_tail_ms: default_tx_ptt_tail_ms(),
         }
     }
 }

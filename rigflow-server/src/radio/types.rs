@@ -180,6 +180,10 @@ pub enum WorkerCommand {
     SetSourceSpotLevel {
         spot_level_percent: f32,
     },
+    SetSourceTxSequencing {
+        lead_ms: u32,
+        tail_ms: u32,
+    },
     SetSourceN2adrEnabled {
         enabled: bool,
     },

@@ -24,6 +24,23 @@ const P1_SUBFRAME_OFFSETS: [usize; 2] = [8, 520];
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(2);
 
+// ── Shared TX sequencing constants ──────────────────────────────────────────
+// The HL2 host→device TX IQ stream is fixed at 48 kHz; one packet carries 126
+// samples (2 sub-frames × 63), so a packet represents 126/48000 ≈ 2.625 ms.
+const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
+const TX_SAMPLES_PER_PACKET: f32 = 126.0;
+// FIFO pre-fill (PTT=0) before asserting PTT, so PTT never sees an empty FIFO.
+const TX_FIFO_PREFILL_PACKETS: usize = 20;
+// Minimum PTT-asserted packets before RF, to prime the FIFO even at lead=0.
+const TX_PTT_WARMUP_PACKETS: usize = 2;
+// Redundant ptt=false frames sent at release so it survives a dropped packet.
+const TX_PTT_RELEASE_FRAMES: usize = 5;
+
+/// Number of 48 kHz TX packets that span `ms` milliseconds (rounded up).
+fn tx_packets_for_ms(ms: u32) -> usize {
+    ((ms as f32 * TX_SAMPLE_RATE_HZ / 1000.0) / TX_SAMPLES_PER_PACKET).ceil() as usize
+}
+
 // HL2 P1 D2H status register accumulator.
 //
 // The HL2 sends status data in the C0/C1-C4 bytes of every DDC sub-frame,
@@ -104,6 +121,11 @@ pub struct HermesLite2Source {
     /// RX IQ captured during the most recent transmit while `fdx_enabled`.
     /// Drained by [`HermesLite2Source::take_fdx_iq`] after `tx_tune_test`.
     fdx_iq: Vec<Complex32>,
+    /// TX PTT sequencing delays (ms): PTT is asserted, `tx_ptt_lead_ms` elapses
+    /// before RF, and `tx_ptt_tail_ms` is held after RF stops before release.
+    /// Used by every transmit path (Spot/SWR/sweep/test-tone, future CW).
+    tx_ptt_lead_ms: u32,
+    tx_ptt_tail_ms: u32,
 }
 
 impl HermesLite2Source {
@@ -134,6 +156,8 @@ impl HermesLite2Source {
             n2adr_filter_c2: 0,
             fdx_enabled: false,
             fdx_iq: Vec::new(),
+            tx_ptt_lead_ms: 20,
+            tx_ptt_tail_ms: 20,
         };
 
         src.send_run(true)?;
@@ -450,6 +474,112 @@ impl HermesLite2Source {
             .map_err(|e| format!("HL2: send TX tone packet failed: {e}"))
     }
 
+    /// Shared TX-START sequencing used by every transmit path.  Drains stale
+    /// DDC, pre-fills the FIFO (PTT=0, no RF), asserts PTT, then waits the lead
+    /// delay sending zero-amplitude PTT=1 packets — **PTT up, NO RF** — so a
+    /// relay-based external amplifier settles before any RF appears.  Leaves the
+    /// socket non-blocking and the FIFO primed; the caller emits RF immediately
+    /// after this returns.  On error it safes-off and returns `Err`.
+    ///
+    /// Safety: RF is never emitted before this returns (amplitude is 0 here).
+    fn tx_seq_begin(&mut self, nco_u32: u32) -> Result<(), String> {
+        let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+
+        // Non-blocking for the whole transmit; drain any queued DDC packets.
+        let _ = self.socket.set_nonblocking(true);
+        self.drain_ddc();
+
+        // FIFO pre-fill — PTT=0, zero amplitude (no RF, just seed the FIFO).
+        let mut tick = Instant::now();
+        for _ in 0..TX_FIFO_PREFILL_PACKETS {
+            let now = Instant::now();
+            if now < tick {
+                thread::sleep(tick - now);
+            }
+            tick += packet_period;
+            if let Err(e) = self.send_tx_packet(nco_u32, 0.0, false) {
+                self.tx_seq_safe_off(nco_u32);
+                return Err(format!("pre-fill failed: {e}"));
+            }
+        }
+        self.drain_ddc();
+        self.status_regs.recovery_bits = 0;
+
+        // Assert PTT + lead delay — PTT=1, zero amplitude (no RF).  Always send
+        // at least the warmup packets so the FIFO is primed even when lead=0.
+        info!("[hl2 tx-seq] PTT asserted");
+        let lead_ms = self.tx_ptt_lead_ms;
+        let lead_packets = tx_packets_for_ms(lead_ms).max(TX_PTT_WARMUP_PACKETS);
+        let mut tick = Instant::now();
+        for _ in 0..lead_packets {
+            let now = Instant::now();
+            if now < tick {
+                thread::sleep(tick - now);
+            }
+            tick += packet_period;
+            if let Err(e) = self.send_tx_packet(nco_u32, 0.0, true) {
+                self.tx_seq_safe_off(nco_u32);
+                return Err(format!("lead-delay send failed: {e}"));
+            }
+        }
+        debug!("[hl2 tx-seq] lead delay {lead_ms} ms ({lead_packets} pkts)");
+        // The no-RF lead may have logged a FIFO-priming transient — start RF clean.
+        self.status_regs.recovery_bits = 0;
+        Ok(())
+    }
+
+    /// Shared TX-STOP sequencing.  Holds PTT for the tail delay (PTT=1, zero
+    /// amplitude — RF has already stopped), then releases PTT and safes-off.
+    /// Best-effort on every exit path.
+    ///
+    /// Safety: PTT is not released until after the tail delay completes.
+    fn tx_seq_end(&mut self, nco_u32: u32) {
+        let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+
+        let tail_ms = self.tx_ptt_tail_ms;
+        let tail_packets = tx_packets_for_ms(tail_ms);
+        let mut tick = Instant::now();
+        for _ in 0..tail_packets {
+            let now = Instant::now();
+            if now < tick {
+                thread::sleep(tick - now);
+            }
+            tick += packet_period;
+            if self.send_tx_packet(nco_u32, 0.0, true).is_err() {
+                break; // stop tailing on send error; proceed straight to release
+            }
+        }
+        debug!("[hl2 tx-seq] tail delay {tail_ms} ms ({tail_packets} pkts)");
+
+        self.tx_seq_safe_off(nco_u32);
+        info!("[hl2 tx-seq] PTT released");
+    }
+
+    /// Release PTT, safe-off the drive register, and restore the blocking
+    /// socket.  Used by the normal stop path (`tx_seq_end`) and by `tx_seq_begin`
+    /// error paths.  Sends redundant ptt=0 frames so release survives a dropped
+    /// packet; `send_gain_cc` also restores the RX NCO to `center_freq_hz`.
+    fn tx_seq_safe_off(&mut self, nco_u32: u32) {
+        for _ in 0..TX_PTT_RELEASE_FRAMES {
+            let _ = self.send_tx_packet(nco_u32, 0.0, false);
+        }
+        let _ = self.send_tx_drive_cc(0, false);
+        let _ = self.send_gain_cc();
+        let _ = self.socket.set_nonblocking(false);
+        let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
+    }
+
+    /// Drain and parse any queued D2H DDC packets (status side-effects only).
+    fn drain_ddc(&mut self) {
+        let mut buf = [0u8; P1_PACKET_LEN];
+        let mut discard = VecDeque::new();
+        while let Ok(len) = self.socket.recv(&mut buf) {
+            if len == P1_PACKET_LEN {
+                parse_ddc_packet(&buf, &mut discard, &mut self.status_regs);
+            }
+        }
+    }
+
     fn speed_code(&self) -> u8 {
         match self.sample_rate_hz as u32 {
             96_000 => 0x01,
@@ -565,6 +695,16 @@ impl IqSource for HermesLite2Source {
         std::mem::take(&mut self.fdx_iq)
     }
 
+    fn set_tx_sequencing(&mut self, lead_ms: u32, tail_ms: u32) {
+        let lead = lead_ms.min(100);
+        let tail = tail_ms.min(100);
+        if self.tx_ptt_lead_ms != lead || self.tx_ptt_tail_ms != tail {
+            info!("[hl2 tx-seq] PTT lead={lead} ms tail={tail} ms");
+        }
+        self.tx_ptt_lead_ms = lead;
+        self.tx_ptt_tail_ms = tail;
+    }
+
     fn source_capabilities(&self) -> SourceCapabilities {
         hl2_source_capabilities()
     }
@@ -620,11 +760,6 @@ impl IqSource for HermesLite2Source {
     ) -> TxTuneResult {
         // ── Hard safety constants ────────────────────────────────────────
         const MAX_DURATION_MS: u32 = 500;
-        const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
-        const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
-                                               // Pre-fill: send IQ without PTT to fill the HL2 TX FIFO before asserting PTT.
-                                               // 20 packets × 126 samples / 48 kHz ≈ 52 ms of buffering.
-        const TX_FIFO_PREFILL_PACKETS: usize = 20;
         // SWR above this threshold is reported as HighSwr.
         const SWR_ALARM_THRESHOLD: f32 = 3.0;
         // Forward power below this threshold means NoForwardPower.
@@ -748,127 +883,39 @@ impl IqSource for HermesLite2Source {
              spot_level_percent={spot_level_percent:.0} effective_amplitude_fs={effective_amplitude:.3}"
         );
 
-        let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+        let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
 
-        // ── Capture a fresh TX FIFO reading before pre-fill ───────────────
-        // Switch to non-blocking and drain+parse any queued DDC packets so
-        // `tx_fifo_count` reflects the device's state immediately before we
-        // start feeding TX IQ.  The socket stays non-blocking through the
-        // main TX loop and is restored to blocking on exit.
-        let _ = self.socket.set_nonblocking(true);
-        {
-            let mut buf = [0u8; P1_PACKET_LEN];
-            let mut discard = VecDeque::new();
-            while let Ok(len) = self.socket.recv(&mut buf) {
-                if len == P1_PACKET_LEN {
-                    parse_ddc_packet(&buf, &mut discard, &mut self.status_regs);
-                }
-            }
+        // ── Shared TX-start sequencing ────────────────────────────────────
+        // Drains DDC, pre-fills the FIFO, asserts PTT and waits the lead delay —
+        // all with NO RF (zero amplitude).  RF begins only after this returns.
+        // On error it has already safed-off the drive register and PTT.
+        if let Err(e) = self.tx_seq_begin(target_u32) {
+            warn!("[hl2 tx-tune] tx_seq_begin failed: {e}");
+            return TxTuneResult {
+                status: TxTuneStatus::Fault,
+                frequency_hz: target_freq_hz,
+                duration_ms: clamped_duration_ms,
+                drive: effective_amplitude,
+                message: Some(e),
+                ..TxTuneResult::default()
+            };
         }
-        let fifo_before = self.status_regs.tx_fifo_count;
         info!(
-            "[hl2 tx-tune] TX FIFO count before pre-fill: {fifo_before} \
-             (raddr0_valid={})  local={:?}  peer={:?}",
-            self.status_regs.raddr0_valid,
-            self.socket.local_addr().ok(),
-            self.socket.peer_addr().ok(),
-        );
-
-        // ── TX FIFO pre-fill (PTT=0) ──────────────────────────────────────
-        // Feed TX IQ into the HL2 FIFO without asserting PTT.  This prevents
-        // an immediate underflow when PTT is asserted in the main loop.
-        info!(
-            "[hl2 tx-tune] pre-fill: {} packets (~{:.0} ms)  \
-             drive_level={drive_level}/255  effective_amplitude={effective_amplitude:.3} FS",
-            TX_FIFO_PREFILL_PACKETS,
-            TX_FIFO_PREFILL_PACKETS as f32 * (SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ) * 1000.0,
-        );
-        {
-            let mut tick = Instant::now();
-            for _ in 0..TX_FIFO_PREFILL_PACKETS {
-                let now = Instant::now();
-                if now < tick {
-                    thread::sleep(tick - now);
-                }
-                tick += packet_period;
-                if let Err(e) = self.send_tx_packet(target_u32, effective_amplitude, false) {
-                    warn!("[hl2 tx-tune] pre-fill failed: {e}");
-                    // PTT was never asserted, but drive level + PA are enabled —
-                    // turn them back off before returning.
-                    let _ = self.send_tx_drive_cc(0, false);
-                    return TxTuneResult {
-                        status: TxTuneStatus::Fault,
-                        frequency_hz: target_freq_hz,
-                        duration_ms: clamped_duration_ms,
-                        drive: effective_amplitude,
-                        message: Some(format!("pre-fill failed: {e}")),
-                        ..TxTuneResult::default()
-                    };
-                }
-            }
-        }
-
-        // ── Drain DDC packets after pre-fill and read the TX FIFO count ───
-        // After pre-fill the socket buffer holds DDC packets received during
-        // pre-fill.  Parse them so `tx_fifo_count` reflects the freshest
-        // post-pre-fill reading: if our TX IQ packets are being accepted the
-        // count should have risen above `fifo_before`.  The recovery field
-        // may carry a value set by a prior event unrelated to this TX, so we
-        // explicitly zero it afterwards — only anomalies that occur AFTER PTT
-        // is asserted should be treated as faults.  (Socket is already
-        // non-blocking from the before-pre-fill drain above.)
-        {
-            let mut stale_buf = [0u8; P1_PACKET_LEN];
-            let mut discard = VecDeque::new();
-            while let Ok(len) = self.socket.recv(&mut stale_buf) {
-                if len == P1_PACKET_LEN {
-                    parse_ddc_packet(&stale_buf, &mut discard, &mut self.status_regs);
-                }
-            }
-        }
-        let fifo_after = self.status_regs.tx_fifo_count;
-        info!(
-            "[hl2 tx-tune] TX FIFO count after pre-fill: {fifo_after} \
-             (before={fifo_before}  delta={})",
-            fifo_after as i32 - fifo_before as i32
-        );
-        self.status_regs.recovery_bits = 0;
-
-        // ── Main TX loop (PTT=1) ──────────────────────────────────────────
-        // PTT is now asserted in every packet.  The socket remains in
-        // non-blocking mode so D2H status packets can be polled between TX
-        // sends without stalling packet timing.  WouldBlock = no packet yet.
-        info!(
-            "[hl2 tx-tune] PTT asserted: freq={target_freq_hz} Hz  \
+            "[hl2 tx-seq] RF start: freq={target_freq_hz} Hz  \
              duration={clamped_duration_ms} ms  amplitude={effective_amplitude:.3} FS"
         );
-        // PTT warmup: assert PTT and seed the TX FIFO with a *minimal* number
-        // of ptt=true frames before the paced loop takes over.  Kept tiny (2)
-        // because a large burst overfills the FIFO toward overflow; the paced
-        // loop then maintains the level at the 48 kHz consumption rate.  The
-        // earlier ptt=false pre-fill does not load the TX FIFO (the HL2 appears
-        // to consume H2D TX IQ only while MOX/PTT is asserted).
-        const PTT_WARMUP_PACKETS: usize = 2;
-        // Grace window after PTT assert during which a reported FIFO anomaly is
-        // logged but NOT treated as fatal, giving the FIFO time to prime.
+
+        // ── Main TX loop (PTT=1, RF on) ───────────────────────────────────
+        // The socket is non-blocking (set by tx_seq_begin) so D2H status packets
+        // can be polled between TX sends without stalling packet timing.
+        // Grace window after RF start during which a reported FIFO anomaly is
+        // logged but NOT treated as fatal, giving the FIFO time to settle.
         const PTT_GRACE_MS: u128 = 50;
 
         let tx_start = Instant::now();
         let deadline = tx_start + Duration::from_millis(clamped_duration_ms as u64);
         let mut fault_status: Option<TxTuneStatus> = None;
         let mut packets_sent_with_ptt: u32 = 0;
-
-        for _ in 0..PTT_WARMUP_PACKETS {
-            if let Err(e) = self.send_tx_packet(target_u32, effective_amplitude, true) {
-                warn!("[hl2 tx-tune] warmup send failed: {e}");
-                fault_status = Some(TxTuneStatus::Fault);
-                break;
-            }
-            packets_sent_with_ptt += 1;
-        }
-        info!(
-            "[hl2 tx-tune] PTT warmup: {packets_sent_with_ptt} ptt=true frames sent back-to-back"
-        );
 
         // Paced main loop: SEND a ptt=true TX IQ packet first, THEN poll status
         // — so the FIFO is fed every iteration before we inspect it.
@@ -1008,45 +1055,12 @@ impl IqSource for HermesLite2Source {
             tx_start.elapsed().as_millis()
         );
 
-        // ── Restore blocking mode ─────────────────────────────────────────
-        let _ = self.socket.set_nonblocking(false);
-        let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
-
-        // ── PTT release — unconditional on all paths that asserted PTT ────
-        // Send several ptt=false TX frames (C0[0]=0 → MOX/PTT cleared) so the
-        // release survives a single dropped packet, with zero amplitude so no
-        // carrier rides the release.  Then send_gain_cc to restore the RX NCO
-        // centre and gain register (it too has C0[0]=0 → PTT cleared).
-        const PTT_RELEASE_FRAMES: usize = 5;
-        let mut release_frames_sent = 0u32;
-        for _ in 0..PTT_RELEASE_FRAMES {
-            if self.send_tx_packet(target_u32, 0.0, false).is_ok() {
-                release_frames_sent += 1;
-            }
-        }
-        info!("[hl2 tx-tune] PTT release frames sent: {release_frames_sent}");
-
-        // ── TX drive / PA safe-off ────────────────────────────────────────
-        // PTT is now cleared; zero the TX drive level and disable the PA
-        // (register 0x09) so the board returns to an RX-safe state.  Run on
-        // every path that reached the TX loop (normal completion or fault).
-        if let Err(e) = self.send_tx_drive_cc(0, false) {
-            warn!("[hl2 tx-tune] TX drive safe-off failed: {e}");
-            if fault_status.is_none() {
-                fault_status = Some(TxTuneStatus::Fault);
-            }
-        } else {
-            info!("[hl2 tx-tune] TX drive level zeroed + PA disabled (reg 0x09)");
-        }
-
-        if let Err(e) = self.send_gain_cc() {
-            warn!("[hl2 tx-tune] PTT release (send_gain_cc) failed: {e}");
-            if fault_status.is_none() {
-                fault_status = Some(TxTuneStatus::Fault);
-            }
-        } else {
-            info!("[hl2 tx-tune] PTT released");
-        }
+        // ── Shared TX-stop sequencing: RF stop → tail delay → release PTT ─
+        // Holds PTT (zero amplitude, no RF) for the tail delay so relays settle
+        // before release, then clears PTT, safes-off the drive register and
+        // restores the blocking socket.  Runs on every path that reached RF.
+        info!("[hl2 tx-seq] RF stop");
+        self.tx_seq_end(target_u32);
 
         // ── Early return on TX fault ───────────────────────────────────────
         if let Some(status) = fault_status {
@@ -1166,9 +1180,6 @@ impl IqSource for HermesLite2Source {
         use std::sync::atomic::Ordering;
 
         // ── Safety constants ─────────────────────────────────────────────
-        const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
-        const SAMPLES_PER_PACKET: f32 = 126.0;
-        const TX_FIFO_PREFILL_PACKETS: usize = 20;
         const PTT_GRACE_MS: u128 = 60;
         // Hard ceiling: even if no Stop arrives (e.g. client vanished) the tone
         // auto-keys-down so a stuck PTT cannot cook the PA.
@@ -1208,34 +1219,13 @@ impl IqSource for HermesLite2Source {
             return Err(format!("drive-level program failed: {e}"));
         }
 
-        let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+        let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
         let mut phase: f64 = 0.0;
 
-        // Drain stale DDC packets; go non-blocking for the run.
-        let _ = self.socket.set_nonblocking(true);
-        {
-            let mut buf = [0u8; P1_PACKET_LEN];
-            let mut discard = VecDeque::new();
-            while let Ok(len) = self.socket.recv(&mut buf) {
-                if len == P1_PACKET_LEN {
-                    parse_ddc_packet(&buf, &mut discard, &mut self.status_regs);
-                }
-            }
-        }
-
-        // ── FIFO pre-fill (PTT=0) ────────────────────────────────────────
-        for _ in 0..TX_FIFO_PREFILL_PACKETS {
-            if let Err(e) =
-                self.send_tx_tone_packet(target_u32, amplitude, tone_hz, usb, false, &mut phase)
-            {
-                let _ = self.send_gain_cc();
-                let _ = self.send_tx_drive_cc(0, false);
-                let _ = self.socket.set_nonblocking(false);
-                return Err(format!("pre-fill send failed: {e}"));
-            }
-            thread::sleep(packet_period);
-        }
-        self.status_regs.recovery_bits = 0;
+        // Shared TX-start sequencing: assert PTT, wait the lead delay, prime the
+        // FIFO — all with NO RF.  On error it has already safed-off.
+        self.tx_seq_begin(target_u32)?;
+        info!("[hl2 tx-seq] RF start");
 
         // ── Paced PTT loop (PTT=1) until stop / hard ceiling ─────────────
         let tx_start = Instant::now();
@@ -1315,11 +1305,9 @@ impl IqSource for HermesLite2Source {
             }
         }
 
-        // ── Safe-off (every exit path) ───────────────────────────────────
-        // send_gain_cc releases PTT and restores the RX NCO to center_freq_hz.
-        let _ = self.send_gain_cc();
-        let _ = self.send_tx_drive_cc(0, false);
-        let _ = self.socket.set_nonblocking(false);
+        // ── Shared TX-stop sequencing: RF stop → tail delay → release PTT ─
+        info!("[hl2 tx-seq] RF stop");
+        self.tx_seq_end(target_u32);
         info!(
             "[hl2 tx-tone] stopped after {} ms (fault={fault:?})",
             tx_start.elapsed().as_millis()

@@ -739,6 +739,13 @@ fn spawn_command_thread(
                         }
                     }
 
+                    WorkerCommand::SetSourceTxSequencing { lead_ms, tail_ms } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.tx_ptt_lead_ms = lead_ms.min(100);
+                            control_state.source_control.tx_ptt_tail_ms = tail_ms.min(100);
+                        }
+                    }
+
                     WorkerCommand::SetSourceN2adrEnabled { enabled } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.source_control.n2adr_enabled = enabled;
@@ -994,6 +1001,11 @@ fn spawn_capture_thread(
         // FDX / TX Monitor Spectrum (HL2): mirror the enable state into the
         // source so it retains RX IQ during transmit.  Only pushed on change.
         let mut last_fdx_enabled = false;
+        // TX PTT sequencing (HL2): mirror lead/tail delays into the source so all
+        // transmit paths use them.  Pushed on change.  `u32::MAX` forces the
+        // first push.
+        let mut last_tx_lead_ms = u32::MAX;
+        let mut last_tx_tail_ms = u32::MAX;
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
@@ -1181,6 +1193,18 @@ fn spawn_capture_thread(
             if current_source_control.fdx_enabled != last_fdx_enabled {
                 source.set_fdx_enabled(current_source_control.fdx_enabled);
                 last_fdx_enabled = current_source_control.fdx_enabled;
+            }
+
+            // TX PTT sequencing delays → source (used by all transmit paths).
+            if current_source_control.tx_ptt_lead_ms != last_tx_lead_ms
+                || current_source_control.tx_ptt_tail_ms != last_tx_tail_ms
+            {
+                source.set_tx_sequencing(
+                    current_source_control.tx_ptt_lead_ms,
+                    current_source_control.tx_ptt_tail_ms,
+                );
+                last_tx_lead_ms = current_source_control.tx_ptt_lead_ms;
+                last_tx_tail_ms = current_source_control.tx_ptt_tail_ms;
             }
 
             // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState

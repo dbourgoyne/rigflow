@@ -54,6 +54,10 @@ impl RigflowApp {
                                 self.send_radio_msg(ClientRadioMessage::SetSourceSpotLevel {
                                     spot_level_percent: state.source_control.spot_level_percent,
                                 });
+                                self.send_radio_msg(ClientRadioMessage::SetSourceTxSequencing {
+                                    lead_ms: state.source_control.tx_ptt_lead_ms,
+                                    tail_ms: state.source_control.tx_ptt_tail_ms,
+                                });
                             }
                             if state.source_capabilities.supports_band_control {
                                 self.send_radio_msg(ClientRadioMessage::SetSourceN2adrEnabled {
@@ -326,6 +330,13 @@ impl RigflowApp {
                         if state.source_capabilities.supports_tx_tune_test {
                             self.draw_tx_test_tone_section(ui, &mut state);
                         }
+
+                        // -----------------------------
+                        // TX Sequencing (HL2 PTT lead/tail delays).
+                        // -----------------------------
+                        if state.source_capabilities.supports_tx_tune_test {
+                            save_source_control |= self.draw_tx_sequencing_section(ui, &mut state);
+                        }
                     }
 
                     if save_source_control {
@@ -543,6 +554,66 @@ impl RigflowApp {
                     .weak(),
             );
         }
+    }
+
+    /// TX Sequencing: PTT lead/tail delays (ms) for relay-based external
+    /// amplifiers.  PTT is asserted, the lead delay elapses before any RF, and
+    /// the tail delay is held after RF stops before PTT releases — preventing
+    /// hot-switching.  Applies to all HL2 transmit paths.  Returns `true` when a
+    /// value changed (so the caller persists it).
+    fn draw_tx_sequencing_section(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
+        let mut save = false;
+        ui.separator();
+        ui.label("TX Sequencing");
+
+        // Edit as f32 (mirrors the other DragValues in this panel); store as u32.
+        let mut lead = state.source_control.tx_ptt_lead_ms as f32;
+        let mut tail = state.source_control.tx_ptt_tail_ms as f32;
+
+        let lead_changed = ui
+            .horizontal(|ui| {
+                ui.label("PTT Lead");
+                ui.add(
+                    egui::DragValue::new(&mut lead)
+                        .speed(1.0)
+                        .range(0.0..=100.0)
+                        .fixed_decimals(0)
+                        .suffix(" ms"),
+                )
+                .changed()
+            })
+            .inner;
+        let tail_changed = ui
+            .horizontal(|ui| {
+                ui.label("PTT Tail");
+                ui.add(
+                    egui::DragValue::new(&mut tail)
+                        .speed(1.0)
+                        .range(0.0..=100.0)
+                        .fixed_decimals(0)
+                        .suffix(" ms"),
+                )
+                .changed()
+            })
+            .inner;
+
+        if lead_changed || tail_changed {
+            state.source_control.tx_ptt_lead_ms = lead.round().clamp(0.0, 100.0) as u32;
+            state.source_control.tx_ptt_tail_ms = tail.round().clamp(0.0, 100.0) as u32;
+            self.send_radio_msg(ClientRadioMessage::SetSourceTxSequencing {
+                lead_ms: state.source_control.tx_ptt_lead_ms,
+                tail_ms: state.source_control.tx_ptt_tail_ms,
+            });
+            save = true;
+        }
+
+        ui.label(
+            egui::RichText::new("Assert PTT before RF / hold after RF — for relay-switched amps.")
+                .small()
+                .weak(),
+        );
+
+        save
     }
 
     /// SWR Sweep section: editable Start/Stop (MHz), a Run/Cancel button, and a
