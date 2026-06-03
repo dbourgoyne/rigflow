@@ -476,6 +476,38 @@ impl RigflowApp {
             );
         });
 
+        // Visibility hint: the spectrum spans ±sample_rate/2, so a low tone at a
+        // high sample rate sits right on the carrier centre-spike and is hard to
+        // see (it is still transmitted correctly — this is purely visual).  Warn
+        // adaptively when the tone is too close to centre.
+        let sr_hz = state.source_control.sample_rate_hz as f32;
+        if sr_hz > 0.0 {
+            let off_center_pct = state.tx_tone_freq_hz / (sr_hz / 2.0) * 100.0;
+            if off_center_pct < 3.0 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "⚠ At {:.0} kHz sample rate a {:.0} Hz tone is only {:.2}% off centre — \
+                         hard to see. Use a ~10 kHz tone, drop to 48 kHz, or zoom the spectrum.",
+                        sr_hz / 1000.0,
+                        state.tx_tone_freq_hz,
+                        off_center_pct,
+                    ))
+                    .small()
+                    .color(egui::Color32::from_rgb(255, 200, 50)),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Tone is {:.1}% off centre at {:.0} kHz — visible on the spectrum.",
+                        off_center_pct,
+                        sr_hz / 1000.0,
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+        }
+
         // Start / Stop.
         ui.horizontal(|ui| {
             if ui
