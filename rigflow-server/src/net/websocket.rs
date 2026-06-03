@@ -672,6 +672,39 @@ async fn handle_radio_message(
                 );
             }
         }
+
+        ClientRadioMessage::RequestSwrSweep { start_hz, stop_hz } => {
+            info!("[websocket] RequestSwrSweep: {start_hz}..{stop_hz} Hz");
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::RequestSwrSweep { start_hz, stop_hz },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "swr_sweep_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::CancelSwrSweep => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::CancelSwrSweep,
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "swr_sweep_cancel_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
     }
 }
 
@@ -804,6 +837,17 @@ fn runtime_changed_from_runtime(
         None
     };
 
+    let swr_sweep_result = if current.last_swr_sweep_result != previous.last_swr_sweep_result {
+        current.last_swr_sweep_result.clone()
+    } else {
+        None
+    };
+    let swr_sweep_progress = if current.swr_sweep_progress != previous.swr_sweep_progress {
+        current.swr_sweep_progress
+    } else {
+        None
+    };
+
     let has_change =
         center_freq_hz.is_some()
         || target_freq_hz.is_some()
@@ -825,7 +869,9 @@ fn runtime_changed_from_runtime(
         || volume_percent.is_some()
         || source_control.is_some()
         || source_status.is_some()
-        || tx_tune_result.is_some();
+        || tx_tune_result.is_some()
+        || swr_sweep_result.is_some()
+        || swr_sweep_progress.is_some();
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
@@ -850,6 +896,8 @@ fn runtime_changed_from_runtime(
         source_control,
         source_status,
         tx_tune_result,
+        swr_sweep_result,
+        swr_sweep_progress,
     })
 }
 
@@ -887,6 +935,8 @@ fn runtime_snapshot_from_status(
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
             tx_tune_result: runtime.last_tx_tune_result.clone(),
+            swr_sweep_result: runtime.last_swr_sweep_result.clone(),
+            swr_sweep_progress: runtime.swr_sweep_progress,
         }),
         _ => None,
     }

@@ -12,6 +12,7 @@ use rigflow_core::radio::{
         SourceControlState,
     },
     source_status::SourceStatus,
+    swr_sweep::{SwrSweepProgress, SwrSweepResult},
     tx_tune::TxTuneResult,
 };
 use rigflow_core::dsp::modes::DeemphasisMode;
@@ -105,6 +106,9 @@ pub struct WorkerRuntimeState {
     /// Result of the most recent TX tune test executed by this worker.
     /// `None` until a RequestTxTuneTest command has been processed.
     pub last_tx_tune_result: Option<TxTuneResult>,
+    /// Result of the most recent SWR sweep, and live progress.
+    pub last_swr_sweep_result: Option<SwrSweepResult>,
+    pub swr_sweep_progress: Option<SwrSweepProgress>,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,
@@ -138,6 +142,8 @@ pub enum WorkerCommand {
     SetSourceDirectSampling { mode: DirectSamplingMode },
     SetSourceTxDrive { tx_drive_percent: f32 },
     SetSourceN2adrEnabled { enabled: bool },
+    RequestSwrSweep { start_hz: u64, stop_hz: u64 },
+    CancelSwrSweep,
     /// Request a Spot / SWR measurement (pure carrier pulse).  TX power comes
     /// from the configured source `tx_drive_percent`.
     RequestTxTuneTest { duration_ms: u32 },

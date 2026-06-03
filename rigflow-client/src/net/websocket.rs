@@ -397,11 +397,15 @@ pub fn apply_radio_server_message(
             source_control,
             source_status,
             tx_tune_result,
+            swr_sweep_result,
+            swr_sweep_progress,
             ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
             state.input_sample_rate_hz = input_sample_rate_hz;
+            state.swr_sweep_result = swr_sweep_result;
+            state.swr_sweep_progress = swr_sweep_progress;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.squelch_enabled = squelch_enabled;
@@ -447,8 +451,19 @@ pub fn apply_radio_server_message(
             source_control,
             source_status,
             tx_tune_result,
+            swr_sweep_result,
+            swr_sweep_progress,
             ..
         } => {
+            if let Some(progress) = swr_sweep_progress {
+                state.swr_sweep_progress = Some(progress);
+            }
+            if let Some(result) = swr_sweep_result {
+                state.swr_sweep_result = Some(result);
+                // A finished sweep result arrived — open the results popup.
+                state.show_swr_sweep_window = true;
+                state.swr_sweep_csv_status = None;
+            }
             if let Some(value) = volume_percent {
                 state.volume_percent = value;
             }

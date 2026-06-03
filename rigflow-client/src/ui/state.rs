@@ -7,6 +7,7 @@ use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
 use rigflow_core::radio::tx_tune::TxTuneResult;
 use rigflow_core::radio::RadioCapabilities;
 
@@ -212,6 +213,19 @@ pub struct UiState {
     /// Cached result from the most recent TX tune test measurement.
     /// `status = NotRun` until an actual tune test is executed.
     pub last_tx_tune_result: TxTuneResult,
+
+    // ── SWR Sweep (HL2) ─────────────────────────────────────────────────
+    /// Editable Start/Stop for the sweep, in MHz.
+    pub swr_sweep_start_mhz: f64,
+    pub swr_sweep_stop_mhz: f64,
+    /// Client-side validation error to show under the Run button.
+    pub swr_sweep_error: Option<String>,
+    /// Latest sweep result and live progress (from the server).
+    pub swr_sweep_result: Option<SwrSweepResult>,
+    pub swr_sweep_progress: Option<SwrSweepProgress>,
+    /// Whether the results popup is open, and the last CSV-export status line.
+    pub show_swr_sweep_window: bool,
+    pub swr_sweep_csv_status: Option<String>,
 }
 
 impl Default for UiState {
@@ -331,6 +345,13 @@ impl Default for UiState {
 
             tx_tune_running: false,
             last_tx_tune_result: TxTuneResult::default(),
+            swr_sweep_start_mhz: 14.000_000,
+            swr_sweep_stop_mhz: 14.350_000,
+            swr_sweep_error: None,
+            swr_sweep_result: None,
+            swr_sweep_progress: None,
+            show_swr_sweep_window: false,
+            swr_sweep_csv_status: None,
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

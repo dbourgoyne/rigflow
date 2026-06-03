@@ -2,6 +2,7 @@ pub mod ham_band;
 pub mod model;
 pub mod source_control;
 pub mod source_status;
+pub mod swr_sweep;
 pub mod tx_tune;
 
 pub use model::{

@@ -34,12 +34,19 @@ use rigflow_core::radio::ham_band::{
     band_from_frequency, n2adr_filter_value_for_band, HamBand,
 };
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
+use rigflow_core::radio::swr_sweep::{
+    sweep_frequency_hz, validate_sweep_range, SwrSweepPoint, SwrSweepProgress, SwrSweepResult,
+    SWR_SWEEP_POINTS,
+};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::TxTuneResult;
 
 /// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
 /// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
 const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Spot/SWR pulse duration used for each SWR-sweep point (same as a single Spot).
+const SWR_SWEEP_SPOT_MS: u32 = 250;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -82,6 +89,13 @@ struct SharedControlState {
     /// Written by capture thread after executing a TX tune test dry run;
     /// read by DSP thread to detect changes and publish RuntimeChanged.
     last_tx_tune_result: Option<TxTuneResult>,
+
+    /// SWR sweep: pending request (start,stop) set by the command thread and
+    /// taken by the capture thread; cancel flag; result + live progress.
+    pending_swr_sweep: Option<(u64, u64)>,
+    swr_sweep_cancel: bool,
+    last_swr_sweep_result: Option<SwrSweepResult>,
+    swr_sweep_progress: Option<SwrSweepProgress>,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +350,8 @@ fn build_runtime_state(
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
+        last_swr_sweep_result: control.last_swr_sweep_result.clone(),
+        swr_sweep_progress: control.swr_sweep_progress,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -419,6 +435,10 @@ fn run_iq_worker_threads(
         source_status: SourceStatus::default(),
         pending_tx_tune_test: None,
         last_tx_tune_result: None,
+        pending_swr_sweep: None,
+        swr_sweep_cancel: false,
+        last_swr_sweep_result: None,
+        swr_sweep_progress: None,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -717,6 +737,23 @@ fn spawn_command_thread(
                             // Replace any previous pending request; only one
                             // measurement runs at a time.
                             cs.pending_tx_tune_test = Some(duration_ms);
+                        }
+                    }
+
+                    WorkerCommand::RequestSwrSweep { start_hz, stop_hz } => {
+                        info!(
+                            "[radio-worker] RequestSwrSweep queued: {start_hz}..{stop_hz} Hz"
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            cs.pending_swr_sweep = Some((start_hz, stop_hz));
+                            cs.swr_sweep_cancel = false;
+                        }
+                    }
+
+                    WorkerCommand::CancelSwrSweep => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.swr_sweep_cancel = true;
+                            cs.pending_swr_sweep = None;
                         }
                     }
                 },
@@ -1115,6 +1152,98 @@ fn spawn_capture_thread(
                 }
             }
 
+            // Execute any pending SWR sweep (server-side, reusing tx_tune_test).
+            // Runs the existing Spot/SWR at SWR_SWEEP_POINTS frequencies across a
+            // single (validated) band, at the configured TX drive.  Progress is
+            // written to control each point; a cancel flag stops it early.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .and_then(|mut cs| cs.pending_swr_sweep.take());
+
+                if let Some((start_hz, stop_hz)) = pending {
+                    let drive = control_snapshot.source_control.tx_drive_percent;
+                    let n2adr_enabled = control_snapshot.source_control.n2adr_enabled;
+                    let total = SWR_SWEEP_POINTS;
+
+                    if let Err(reason) = validate_sweep_range(start_hz, stop_hz) {
+                        warn!(
+                            "[radio-worker {}] SWR sweep rejected: {reason}",
+                            descriptor.id.0
+                        );
+                    } else {
+                        info!(
+                            "[radio-worker {}] SWR sweep: {start_hz}..{stop_hz} Hz, \
+                             {total} points, drive={drive:.0}%",
+                            descriptor.id.0
+                        );
+
+                        // Single validated band → program its N2ADR filter once.
+                        if n2adr_enabled {
+                            if let Some(band) = band_from_frequency(start_hz) {
+                                let _ =
+                                    source.set_n2adr_filter(n2adr_filter_value_for_band(band));
+                                last_n2adr_band = Some(band);
+                            }
+                        }
+
+                        if let Ok(mut cs) = control.lock() {
+                            cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                running: true,
+                                done: 0,
+                                total,
+                            });
+                        }
+
+                        let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
+                        let mut cancelled = false;
+                        for i in 0..total {
+                            if control.lock().map(|cs| cs.swr_sweep_cancel).unwrap_or(false) {
+                                cancelled = true;
+                                break;
+                            }
+                            let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
+                            let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive);
+                            points.push(SwrSweepPoint {
+                                frequency_hz: freq,
+                                swr: r.swr,
+                                forward_raw: r.forward_raw,
+                                reverse_raw: r.reverse_raw,
+                            });
+                            if let Ok(mut cs) = control.lock() {
+                                cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                    running: true,
+                                    done: i + 1,
+                                    total,
+                                });
+                            }
+                        }
+
+                        let done = points.len() as u32;
+                        let result = SwrSweepResult {
+                            start_hz,
+                            stop_hz,
+                            points,
+                        };
+                        info!(
+                            "[radio-worker {}] SWR sweep {}: {done}/{total} points",
+                            descriptor.id.0,
+                            if cancelled { "cancelled" } else { "complete" }
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            cs.last_swr_sweep_result = Some(result);
+                            cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                running: false,
+                                done,
+                                total,
+                            });
+                            cs.swr_sweep_cancel = false;
+                        }
+                    }
+                }
+            }
+
             if !realtime {
                 let now = Instant::now();
                 if now < next_source_tick {
@@ -1304,6 +1433,14 @@ fn spawn_dsp_thread(
 
             if current.last_tx_tune_result != applied.last_tx_tune_result {
                 applied.last_tx_tune_result = current.last_tx_tune_result.clone();
+                changed = true;
+            }
+
+            if current.last_swr_sweep_result != applied.last_swr_sweep_result
+                || current.swr_sweep_progress != applied.swr_sweep_progress
+            {
+                applied.last_swr_sweep_result = current.last_swr_sweep_result.clone();
+                applied.swr_sweep_progress = current.swr_sweep_progress;
                 changed = true;
             }
 

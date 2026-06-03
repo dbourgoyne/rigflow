@@ -12,6 +12,7 @@ use rigflow_core::{
             SourceControlState,
         },
         source_status::SourceStatus,
+        swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_tune::TxTuneResult,
     },
     dsp::modes::{DemodMode, Sideband, DeemphasisMode},
@@ -192,6 +193,16 @@ pub enum ClientRadioMessage {
         /// Pulse duration in milliseconds; server clamps to a safe maximum.
         duration_ms: u32,
     },
+
+    /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
+    /// The server validates the range and runs Spot/SWR at each point.
+    RequestSwrSweep {
+        start_hz: u64,
+        stop_hz: u64,
+    },
+
+    /// Cancel an in-flight SWR sweep.
+    CancelSwrSweep,
 }
 
 /// Messages sent from server → client over WebSocket.
@@ -302,6 +313,13 @@ pub enum ServerRadioMessage {
         /// Result of the most recent TX tune test, if any.
         /// `None` means no test has been run since acquisition.
         tx_tune_result: Option<TxTuneResult>,
+
+        /// Result of the most recent SWR sweep, if any.
+        #[serde(default)]
+        swr_sweep_result: Option<SwrSweepResult>,
+        /// Live SWR-sweep progress (`running=false` when idle/done).
+        #[serde(default)]
+        swr_sweep_progress: Option<SwrSweepProgress>,
     },
 
     /// Incremental runtime update.
@@ -349,6 +367,11 @@ pub enum ServerRadioMessage {
 
         /// New TX tune test result; `None` means no change since last update.
         tx_tune_result: Option<TxTuneResult>,
+
+        #[serde(default)]
+        swr_sweep_result: Option<SwrSweepResult>,
+        #[serde(default)]
+        swr_sweep_progress: Option<SwrSweepProgress>,
     },
 
     /// Error message related to radio control or streaming.

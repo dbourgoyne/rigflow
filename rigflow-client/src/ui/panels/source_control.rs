@@ -6,6 +6,7 @@ use rigflow_core::radio::ham_band::{
     band_from_frequency, default_frequency_for_band, default_mode_for_band, HamBand,
 };
 use rigflow_core::radio::source_control::{DirectSamplingMode, GainMode};
+use rigflow_core::radio::swr_sweep::{validate_sweep_range, SWR_SWEEP_POINTS};
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
 impl RigflowApp {
@@ -22,53 +23,39 @@ impl RigflowApp {
                         if state.pending_apply_source_control {
                             state.pending_apply_source_control = false;
                             if state.source_capabilities.supports_sample_rate {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourceSampleRate {
-                                        sample_rate_hz: state.source_control.sample_rate_hz,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourceSampleRate {
+                                    sample_rate_hz: state.source_control.sample_rate_hz,
+                                });
                             }
                             if state.source_capabilities.supports_gain_mode {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourceGainMode {
-                                        mode: state.source_control.gain_mode,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourceGainMode {
+                                    mode: state.source_control.gain_mode,
+                                });
                             }
                             if state.source_capabilities.supports_gain {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourceGain {
-                                        gain_db: state.source_control.gain_db,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourceGain {
+                                    gain_db: state.source_control.gain_db,
+                                });
                             }
                             if state.source_capabilities.supports_ppm_correction {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourcePpmCorrection {
-                                        ppm: state.source_control.ppm_correction,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourcePpmCorrection {
+                                    ppm: state.source_control.ppm_correction,
+                                });
                             }
                             if state.source_capabilities.supports_direct_sampling {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourceDirectSampling {
-                                        mode: state.source_control.direct_sampling,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourceDirectSampling {
+                                    mode: state.source_control.direct_sampling,
+                                });
                             }
                             if state.source_capabilities.supports_tx_tune_test {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourceTxDrive {
-                                        tx_drive_percent: state.source_control.tx_drive_percent,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
+                                    tx_drive_percent: state.source_control.tx_drive_percent,
+                                });
                             }
                             if state.source_capabilities.supports_band_control {
-                                self.send_radio_msg(
-                                    ClientRadioMessage::SetSourceN2adrEnabled {
-                                        enabled: state.source_control.n2adr_enabled,
-                                    },
-                                );
+                                self.send_radio_msg(ClientRadioMessage::SetSourceN2adrEnabled {
+                                    enabled: state.source_control.n2adr_enabled,
+                                });
                             }
                         }
 
@@ -310,6 +297,13 @@ impl RigflowApp {
                         if state.source_capabilities.supports_band_control {
                             save_source_control |= self.draw_band_control(ui, &mut state);
                         }
+
+                        // -----------------------------
+                        // SWR Sweep (HL2 TX).
+                        // -----------------------------
+                        if state.source_capabilities.supports_tx_tune_test {
+                            self.draw_swr_sweep_section(ui, &mut state);
+                        }
                     }
 
                     if save_source_control {
@@ -361,6 +355,11 @@ impl RigflowApp {
                 state.center_freq_hz = new_center;
                 state.target_freq_hz = new_target;
                 state.demod_mode = mode;
+
+                // Auto-populate the SWR-sweep range to this band's edges.
+                let (lo, hi) = band.range_hz();
+                state.swr_sweep_start_mhz = lo as f64 / 1_000_000.0;
+                state.swr_sweep_stop_mhz = hi as f64 / 1_000_000.0;
                 state.sideband = match mode {
                     DemodMode::Usb => Sideband::Usb,
                     DemodMode::Lsb => Sideband::Lsb,
@@ -392,6 +391,74 @@ impl RigflowApp {
         }
 
         save
+    }
+
+    /// SWR Sweep section: editable Start/Stop (MHz), a Run/Cancel button, and a
+    /// live progress line.  Reuses the existing Spot/SWR path on the server at a
+    /// fixed [`SWR_SWEEP_POINTS`] points; uses the current TX Drive unchanged.
+    /// Start/Stop are *not* persisted.  Results open in a separate popup window.
+    fn draw_swr_sweep_section(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        ui.separator();
+        ui.label("SWR Sweep");
+
+        let running = state.swr_sweep_progress.map(|p| p.running).unwrap_or(false);
+
+        ui.add_enabled_ui(!running, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Start");
+                ui.add(
+                    egui::DragValue::new(&mut state.swr_sweep_start_mhz)
+                        .speed(0.001)
+                        .range(0.0..=60.0)
+                        .fixed_decimals(6)
+                        .suffix(" MHz"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Stop ");
+                ui.add(
+                    egui::DragValue::new(&mut state.swr_sweep_stop_mhz)
+                        .speed(0.001)
+                        .range(0.0..=60.0)
+                        .fixed_decimals(6)
+                        .suffix(" MHz"),
+                );
+            });
+        });
+
+        if running {
+            let (done, total) = state
+                .swr_sweep_progress
+                .map(|p| (p.done, p.total))
+                .unwrap_or((0, SWR_SWEEP_POINTS));
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label(format!("Sweeping… {done}/{total}"));
+                if ui.button("Cancel").clicked() {
+                    self.send_radio_msg(ClientRadioMessage::CancelSwrSweep);
+                }
+            });
+        } else if ui.button("Run Sweep").clicked() {
+            let start_hz = (state.swr_sweep_start_mhz * 1_000_000.0).round() as u64;
+            let stop_hz = (state.swr_sweep_stop_mhz * 1_000_000.0).round() as u64;
+            match validate_sweep_range(start_hz, stop_hz) {
+                Ok(()) => {
+                    state.swr_sweep_error = None;
+                    self.send_radio_msg(ClientRadioMessage::RequestSwrSweep { start_hz, stop_hz });
+                }
+                Err(msg) => {
+                    state.swr_sweep_error = Some(msg);
+                }
+            }
+        }
+
+        if let Some(err) = &state.swr_sweep_error {
+            ui.colored_label(egui::Color32::from_rgb(220, 80, 80), err);
+        }
+
+        if state.swr_sweep_result.is_some() && ui.button("Show Last Results").clicked() {
+            state.show_swr_sweep_window = true;
+        }
     }
 }
 
