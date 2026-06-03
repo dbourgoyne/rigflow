@@ -41,10 +41,23 @@ pub struct SourceControlState {
     /// it does not change audio.  Persisted/synced like the other fields.
     #[serde(default)]
     pub fdx_enabled: bool,
+
+    /// Spot Level in percent (0–100): the digital carrier IQ amplitude used for
+    /// Spot / SWR / SWR-sweep transmits (`amplitude_fs = spot_level_percent /
+    /// 100`).  Matches Quisk's Spot-slider behaviour.  Affects ONLY Spot/SWR —
+    /// not voice/CW/digital TX.  RF power ≈ TX Drive × Spot Level.
+    /// Persisted/synced like the other source-control fields.
+    #[serde(default = "default_spot_level_percent")]
+    pub spot_level_percent: f32,
 }
 
 pub fn default_tx_drive_percent() -> f32 {
     10.0
+}
+
+/// Quisk's default Spot level is 500 / 1000 = 50%.
+pub fn default_spot_level_percent() -> f32 {
+    50.0
 }
 
 impl Default for SourceControlState {
@@ -58,6 +71,7 @@ impl Default for SourceControlState {
             tx_drive_percent: default_tx_drive_percent(),
             n2adr_enabled: false,
             fdx_enabled: false,
+            spot_level_percent: default_spot_level_percent(),
         }
     }
 }

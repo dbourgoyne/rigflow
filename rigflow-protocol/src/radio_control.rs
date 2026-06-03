@@ -180,6 +180,14 @@ pub enum ClientRadioMessage {
         tx_drive_percent: f32,
     },
 
+    /// Set the Spot Level in percent (0–100): the digital carrier IQ amplitude
+    /// used for Spot / SWR / SWR-sweep (`amplitude_fs = pct/100`).  Part of
+    /// source control; persisted/synced like the other settings.  RF power for
+    /// Spot ≈ TX Drive × Spot Level.  Does not affect voice/CW/digital TX.
+    SetSourceSpotLevel {
+        spot_level_percent: f32,
+    },
+
     /// Enable/disable the N2ADR HF filter board (HL2).  Part of source control;
     /// when enabled the server programs the band filter from the tuned freq.
     SetSourceN2adrEnabled {

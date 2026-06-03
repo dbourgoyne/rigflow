@@ -719,6 +719,13 @@ fn spawn_command_thread(
                         }
                     }
 
+                    WorkerCommand::SetSourceSpotLevel { spot_level_percent } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.spot_level_percent =
+                                spot_level_percent.clamp(0.0, 100.0);
+                        }
+                    }
+
                     WorkerCommand::SetSourceN2adrEnabled { enabled } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.source_control.n2adr_enabled = enabled;
@@ -1171,12 +1178,18 @@ fn spawn_capture_thread(
                     // drive percent, read from control state at measure time.
                     let target_freq_hz = control_snapshot.target_freq_hz;
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                    let spot_level_percent = control_snapshot.source_control.spot_level_percent;
                     info!(
-                        "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0}",
-                        descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent
+                        "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
+                        descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
                     );
 
-                    let result = source.tx_tune_test(target_freq_hz, duration_ms, tx_drive_percent);
+                    let result = source.tx_tune_test(
+                        target_freq_hz,
+                        duration_ms,
+                        tx_drive_percent,
+                        spot_level_percent,
+                    );
 
                     info!(
                         "[radio-worker {}] TX tune test complete: result={:?}",
@@ -1206,6 +1219,7 @@ fn spawn_capture_thread(
 
                 if let Some((start_hz, stop_hz)) = pending {
                     let drive = control_snapshot.source_control.tx_drive_percent;
+                    let spot_level = control_snapshot.source_control.spot_level_percent;
                     let n2adr_enabled = control_snapshot.source_control.n2adr_enabled;
                     let total = SWR_SWEEP_POINTS;
 
@@ -1249,7 +1263,7 @@ fn spawn_capture_thread(
                                 break;
                             }
                             let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
-                            let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive);
+                            let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive, spot_level);
                             // FDX: keep spectrum/waterfall alive between points.
                             forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
                             points.push(SwrSweepPoint {

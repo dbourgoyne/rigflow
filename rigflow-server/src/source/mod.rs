@@ -99,14 +99,18 @@ pub trait IqSource {
     ///
     /// - PTT MUST be released on all exit paths, including error paths.
     /// - Duration MUST be clamped to a safe maximum (≤ 500 ms).
-    /// - Drive/amplitude MUST be clamped to a safe minimum.
+    ///
+    /// `tx_drive_percent` (0–100) sets the HL2 drive register; `spot_level_percent`
+    /// (0–100) sets the digital carrier IQ amplitude (`amplitude_fs = pct/100`).
+    /// RF power ≈ drive × amplitude, matching Quisk's two-control Spot model.
     ///
     /// The default rejects the request with `"not_supported"`.
     fn tx_tune_test(
         &mut self,
         _target_freq_hz: u64,
         _duration_ms: u32,
-        _drive: f32,
+        _tx_drive_percent: f32,
+        _spot_level_percent: f32,
     ) -> TxTuneResult {
         TxTuneResult {
             status: TxTuneStatus::Fault,

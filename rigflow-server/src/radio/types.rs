@@ -1,21 +1,15 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{
-    LeaseId,
-    RadioDescriptor,
-    RadioId,
-    source_control::{
-        DirectSamplingMode,
-        GainMode,
-        SourceControlState,
-    },
+    source_control::{DirectSamplingMode, GainMode, SourceControlState},
     source_status::SourceStatus,
     swr_sweep::{SwrSweepProgress, SwrSweepResult},
     tx_tune::TxTuneResult,
+    LeaseId, RadioDescriptor, RadioId,
 };
-use rigflow_core::dsp::modes::DeemphasisMode;
 
 /// Unique identifier for a connected client/session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -120,34 +114,88 @@ pub struct WorkerRuntimeState {
 /// Commands sent from server/session → worker.
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
-    SetTargetFrequency { hz: u64 },
-    SetCenterFrequency { hz: u64 },
-    SetDemodMode { mode: DemodMode },
-    SetSideband { sideband: Sideband },
-    SetPitch { pitch_hz: f32 },
-    SetFilterBandwidth { bandwidth_hz: f32 },
-    SetDeemphasisMode { mode: DeemphasisMode },
-    SetSquelchEnabled { enabled: bool },
-    SetSquelchThreshold { threshold_db: f32 },
-    SetNr2Enabled { enabled: bool },
-    SetNr2Strength { strength: f32 },
-    SetAgcEnabled { enabled: bool },
-    SetAgcStrength { strength: f32 },
-    SetVolume { volume_percent: u8 },
-    Stop { reason: StopReason },
-    SetSourceSampleRate { sample_rate_hz: u32 },
-    SetSourceGainMode { mode: GainMode },
-    SetSourceGain { gain_db: f32 },
-    SetSourcePpmCorrection { ppm: i32 },
-    SetSourceDirectSampling { mode: DirectSamplingMode },
-    SetSourceTxDrive { tx_drive_percent: f32 },
-    SetSourceN2adrEnabled { enabled: bool },
-    SetSourceFdxEnabled { enabled: bool },
-    RequestSwrSweep { start_hz: u64, stop_hz: u64 },
+    SetTargetFrequency {
+        hz: u64,
+    },
+    SetCenterFrequency {
+        hz: u64,
+    },
+    SetDemodMode {
+        mode: DemodMode,
+    },
+    SetSideband {
+        sideband: Sideband,
+    },
+    SetPitch {
+        pitch_hz: f32,
+    },
+    SetFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+    SetDeemphasisMode {
+        mode: DeemphasisMode,
+    },
+    SetSquelchEnabled {
+        enabled: bool,
+    },
+    SetSquelchThreshold {
+        threshold_db: f32,
+    },
+    SetNr2Enabled {
+        enabled: bool,
+    },
+    SetNr2Strength {
+        strength: f32,
+    },
+    SetAgcEnabled {
+        enabled: bool,
+    },
+    SetAgcStrength {
+        strength: f32,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
+    Stop {
+        reason: StopReason,
+    },
+    SetSourceSampleRate {
+        sample_rate_hz: u32,
+    },
+    SetSourceGainMode {
+        mode: GainMode,
+    },
+    SetSourceGain {
+        gain_db: f32,
+    },
+    SetSourcePpmCorrection {
+        ppm: i32,
+    },
+    SetSourceDirectSampling {
+        mode: DirectSamplingMode,
+    },
+    SetSourceTxDrive {
+        tx_drive_percent: f32,
+    },
+    SetSourceSpotLevel {
+        spot_level_percent: f32,
+    },
+    SetSourceN2adrEnabled {
+        enabled: bool,
+    },
+    SetSourceFdxEnabled {
+        enabled: bool,
+    },
+    RequestSwrSweep {
+        start_hz: u64,
+        stop_hz: u64,
+    },
     CancelSwrSweep,
     /// Request a Spot / SWR measurement (pure carrier pulse).  TX power comes
     /// from the configured source `tx_drive_percent`.
-    RequestTxTuneTest { duration_ms: u32 },
+    RequestTxTuneTest {
+        duration_ms: u32,
+    },
 }
 
 /// Worker lifecycle/status updates.
@@ -155,21 +203,13 @@ pub enum WorkerCommand {
 pub enum WorkerStatus {
     Starting,
 
-    Running {
-        runtime: WorkerRuntimeState,
-    },
+    Running { runtime: WorkerRuntimeState },
 
-    Stopping {
-        reason: StopReason,
-    },
+    Stopping { reason: StopReason },
 
-    Stopped {
-        reason: StopReason,
-    },
+    Stopped { reason: StopReason },
 
-    Faulted {
-        reason: String,
-    },
+    Faulted { reason: String },
 }
 
 /// Initial readiness payload returned during worker startup.

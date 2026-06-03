@@ -16,17 +16,17 @@ use crate::{
     radio::{
         api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
         session::SessionState,
-        types::{ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerStatus, WorkerRuntimeState},
+        types::{
+            ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerRuntimeState,
+            WorkerStatus,
+        },
     },
 };
 
 type WsSender = futures::stream::SplitSink<WebSocket, Message>;
 
 /// Axum entry point for `/ws`.
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| client_socket(socket, state))
 }
 
@@ -83,7 +83,10 @@ async fn send_connection_message(
     msg: &ServerRadioMessage,
 ) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
-    sender.send(Message::Text(text.into())).await.map_err(|_| ())
+    sender
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|_| ())
 }
 
 /// Parse one inbound text frame.
@@ -183,9 +186,7 @@ async fn handle_radio_message(
 
             info!(
                 "radio acquired: client_id={:?} radio_id={:?} lease_id={:?}",
-                session.client_id,
-                acquire_result.radio_id,
-                acquire_result.lease_id
+                session.client_id, acquire_result.radio_id, acquire_result.lease_id
             );
 
             send_radio(
@@ -227,36 +228,36 @@ async fn handle_radio_message(
             let local_tx_clone = local_tx.clone();
             let radio_id_clone = acquire_result.radio_id.clone();
 
-	    tokio::spawn(async move {
-		let mut last_runtime: Option<WorkerRuntimeState> = None;
+            tokio::spawn(async move {
+                let mut last_runtime: Option<WorkerRuntimeState> = None;
 
-		loop {
-		    if status_rx.changed().await.is_err() {
-			break;
-		    }
+                loop {
+                    if status_rx.changed().await.is_err() {
+                        break;
+                    }
 
-		    let status = status_rx.borrow().clone();
+                    let status = status_rx.borrow().clone();
 
-		    let WorkerStatus::Running { runtime } = status else {
-			continue;
-		    };
+                    let WorkerStatus::Running { runtime } = status else {
+                        continue;
+                    };
 
-		    if let Some(previous) = &last_runtime {
-			if let Some(changed) =
-			    runtime_changed_from_runtime(radio_id_clone.clone(), previous, &runtime)
-			{
-			    log_runtime_changed(&changed);
-			    send_radio(&local_tx_clone, changed);
-			}
-		    } else {
-			// First update after snapshot: remember it, don't send duplicate full change.
-			last_runtime = Some(runtime);
-			continue;
-		    }
+                    if let Some(previous) = &last_runtime {
+                        if let Some(changed) =
+                            runtime_changed_from_runtime(radio_id_clone.clone(), previous, &runtime)
+                        {
+                            log_runtime_changed(&changed);
+                            send_radio(&local_tx_clone, changed);
+                        }
+                    } else {
+                        // First update after snapshot: remember it, don't send duplicate full change.
+                        last_runtime = Some(runtime);
+                        continue;
+                    }
 
-		    last_runtime = Some(runtime);
-		}
-	    });
+                    last_runtime = Some(runtime);
+                }
+            });
         }
 
         ClientRadioMessage::ReleaseRadio => {
@@ -312,11 +313,7 @@ async fn handle_radio_message(
 
             match app_state
                 .radio_manager
-                .renew_lease(
-                    &session.client_id,
-                    &acquired.radio_id,
-                    &acquired.lease_id,
-                )
+                .renew_lease(&session.client_id, &acquired.radio_id, &acquired.lease_id)
                 .await
             {
                 Ok(lease) => {
@@ -347,7 +344,11 @@ async fn handle_radio_message(
             )
             .await
             {
-                send_radio_error(local_tx, "set_target_frequency_failed", &radio_manager_error_string(err));
+                send_radio_error(
+                    local_tx,
+                    "set_target_frequency_failed",
+                    &radio_manager_error_string(err),
+                );
             }
         }
 
@@ -359,7 +360,11 @@ async fn handle_radio_message(
             )
             .await
             {
-                send_radio_error(local_tx, "set_center_frequency_failed", &radio_manager_error_string(err));
+                send_radio_error(
+                    local_tx,
+                    "set_center_frequency_failed",
+                    &radio_manager_error_string(err),
+                );
             }
         }
 
@@ -371,7 +376,11 @@ async fn handle_radio_message(
             )
             .await
             {
-                send_radio_error(local_tx, "set_demod_mode_failed", &radio_manager_error_string(err));
+                send_radio_error(
+                    local_tx,
+                    "set_demod_mode_failed",
+                    &radio_manager_error_string(err),
+                );
             }
         }
 
@@ -383,7 +392,11 @@ async fn handle_radio_message(
             )
             .await
             {
-                send_radio_error(local_tx, "set_sideband_failed", &radio_manager_error_string(err));
+                send_radio_error(
+                    local_tx,
+                    "set_sideband_failed",
+                    &radio_manager_error_string(err),
+                );
             }
         }
 
@@ -395,7 +408,11 @@ async fn handle_radio_message(
             )
             .await
             {
-                send_radio_error(local_tx, "set_pitch_failed", &radio_manager_error_string(err));
+                send_radio_error(
+                    local_tx,
+                    "set_pitch_failed",
+                    &radio_manager_error_string(err),
+                );
             }
         }
 
@@ -415,246 +432,262 @@ async fn handle_radio_message(
             }
         }
 
-	ClientRadioMessage::SetDeemphasisMode { mode } => {
-	    info!("WEBSOCKET: SetDeemphasis: mode = {:?}", mode);
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetDeemphasisMode { mode },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_deemphasis_mode_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetDeemphasisMode { mode } => {
+            info!("WEBSOCKET: SetDeemphasis: mode = {:?}", mode);
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetDeemphasisMode { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_deemphasis_mode_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSquelchEnabled { enabled } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSquelchEnabled { enabled },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_squelch_enabled_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSquelchEnabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSquelchEnabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_squelch_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSquelchThreshold { threshold_db } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSquelchThreshold { threshold_db },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_squelch_threshold_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSquelchThreshold { threshold_db } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSquelchThreshold { threshold_db },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_squelch_threshold_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetNr2Enabled { enabled } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetNr2Enabled { enabled },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_nr2_enabled_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetNr2Enabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetNr2Enabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_nr2_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetNr2Strength { strength } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetNr2Strength { strength },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_nr2_strength_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetNr2Strength { strength } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetNr2Strength { strength },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_nr2_strength_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetAgcEnabled { enabled } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetAgcEnabled { enabled },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_agc_enabled_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetAgcEnabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetAgcEnabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_agc_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetAgcStrength { strength } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetAgcStrength { strength },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_agc_strength_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetAgcStrength { strength } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetAgcStrength { strength },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_agc_strength_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetVolume { volume_percent } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetVolume { volume_percent },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_volume_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetVolume { volume_percent } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetVolume { volume_percent },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_volume_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourceSampleRate { sample_rate_hz },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_sample_rate_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourceSampleRate { sample_rate_hz } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceSampleRate { sample_rate_hz },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_sample_rate_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourceGainMode { mode } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourceGainMode { mode },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_gain_mode_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourceGainMode { mode } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceGainMode { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_gain_mode_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourceGain { gain_db } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourceGain { gain_db },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_gain_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourceGain { gain_db } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceGain { gain_db },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_gain_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourcePpmCorrection { ppm } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourcePpmCorrection { ppm },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_ppm_correction_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourcePpmCorrection { ppm } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourcePpmCorrection { ppm },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_ppm_correction_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourceDirectSampling { mode } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourceDirectSampling { mode },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_direct_sampling_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourceDirectSampling { mode } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceDirectSampling { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_direct_sampling_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourceTxDrive { tx_drive_percent } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourceTxDrive { tx_drive_percent },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_tx_drive_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourceTxDrive { tx_drive_percent } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceTxDrive { tx_drive_percent },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_tx_drive_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
-	ClientRadioMessage::SetSourceN2adrEnabled { enabled } => {
-	    if let Err(err) = send_worker_command_for_session(
-		app_state,
-		session,
-		WorkerCommand::SetSourceN2adrEnabled { enabled },
-	    )
-		.await
-	    {
-		send_radio_error(
-		    local_tx,
-		    "set_source_n2adr_enabled_failed",
-		    &radio_manager_error_string(err),
-		);
-	    }
-	}
+        ClientRadioMessage::SetSourceSpotLevel { spot_level_percent } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceSpotLevel { spot_level_percent },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_spot_level_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::SetSourceN2adrEnabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceN2adrEnabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_n2adr_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
 
         ClientRadioMessage::SetSourceFdxEnabled { enabled } => {
             if let Err(err) = send_worker_command_for_session(
@@ -707,12 +740,9 @@ async fn handle_radio_message(
         }
 
         ClientRadioMessage::CancelSwrSweep => {
-            if let Err(err) = send_worker_command_for_session(
-                app_state,
-                session,
-                WorkerCommand::CancelSwrSweep,
-            )
-            .await
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::CancelSwrSweep)
+                    .await
             {
                 send_radio_error(
                     local_tx,
@@ -725,10 +755,7 @@ async fn handle_radio_message(
 }
 
 /// Best-effort cleanup when the WebSocket disconnects.
-pub async fn release_session_radio_on_disconnect(
-    app_state: &AppState,
-    session: &mut SessionState,
-) {
+pub async fn release_session_radio_on_disconnect(app_state: &AppState, session: &mut SessionState) {
     let Some(acquired) = session.acquired_radio().cloned() else {
         return;
     };
@@ -786,25 +813,20 @@ fn runtime_changed_from_runtime(
     let target_freq_hz =
         (current.target_freq_hz != previous.target_freq_hz).then_some(current.target_freq_hz);
 
-    let demod_mode =
-        (current.demod_mode != previous.demod_mode).then_some(current.demod_mode);
+    let demod_mode = (current.demod_mode != previous.demod_mode).then_some(current.demod_mode);
 
-    let sideband =
-        (current.sideband != previous.sideband).then_some(current.sideband);
+    let sideband = (current.sideband != previous.sideband).then_some(current.sideband);
 
     let ssb_pitch_hz =
         (current.ssb_pitch_hz != previous.ssb_pitch_hz).then_some(current.ssb_pitch_hz);
 
-    let cw_pitch_hz =
-        (current.cw_pitch_hz != previous.cw_pitch_hz).then_some(current.cw_pitch_hz);
+    let cw_pitch_hz = (current.cw_pitch_hz != previous.cw_pitch_hz).then_some(current.cw_pitch_hz);
 
-    let filter_bandwidth_hz =
-        (current.filter_bandwidth_hz != previous.filter_bandwidth_hz)
-            .then_some(current.filter_bandwidth_hz);
+    let filter_bandwidth_hz = (current.filter_bandwidth_hz != previous.filter_bandwidth_hz)
+        .then_some(current.filter_bandwidth_hz);
 
     let deemphasis_mode =
-        (current.deemphasis_mode != previous.deemphasis_mode)
-        .then_some(current.deemphasis_mode);
+        (current.deemphasis_mode != previous.deemphasis_mode).then_some(current.deemphasis_mode);
 
     let squelch_enabled =
         (current.squelch_enabled != previous.squelch_enabled).then_some(current.squelch_enabled);
@@ -815,20 +837,17 @@ fn runtime_changed_from_runtime(
     let squelch_open =
         (current.squelch_open != previous.squelch_open).then_some(current.squelch_open);
 
-    let nr2_enabled =
-        (current.nr2_enabled != previous.nr2_enabled).then_some(current.nr2_enabled);
+    let nr2_enabled = (current.nr2_enabled != previous.nr2_enabled).then_some(current.nr2_enabled);
 
     let nr2_strength =
         (current.nr2_strength != previous.nr2_strength).then_some(current.nr2_strength);
 
-    let agc_enabled =
-        (current.agc_enabled != previous.agc_enabled).then_some(current.agc_enabled);
+    let agc_enabled = (current.agc_enabled != previous.agc_enabled).then_some(current.agc_enabled);
 
     let agc_strength =
         (current.agc_strength != previous.agc_strength).then_some(current.agc_strength);
 
-    let signal_dbm =
-        (current.signal_dbm != previous.signal_dbm).then_some(current.signal_dbm);
+    let signal_dbm = (current.signal_dbm != previous.signal_dbm).then_some(current.signal_dbm);
 
     let signal_s_units =
         (current.signal_s_units != previous.signal_s_units).then_some(current.signal_s_units);
@@ -836,13 +855,11 @@ fn runtime_changed_from_runtime(
     let volume_percent =
         (current.volume_percent != previous.volume_percent).then_some(current.volume_percent);
 
-    let source_control =
-    (current.source_control != previous.source_control)
+    let source_control = (current.source_control != previous.source_control)
         .then_some(current.source_control.clone());
 
     let source_status =
-        (current.source_status != previous.source_status)
-            .then_some(current.source_status.clone());
+        (current.source_status != previous.source_status).then_some(current.source_status.clone());
 
     // `last_tx_tune_result` is itself an `Option<TxTuneResult>`, so we cannot
     // use `.then_some(…)` here — that would produce `Option<Option<…>>`.
@@ -864,8 +881,7 @@ fn runtime_changed_from_runtime(
         None
     };
 
-    let has_change =
-        center_freq_hz.is_some()
+    let has_change = center_freq_hz.is_some()
         || target_freq_hz.is_some()
         || demod_mode.is_some()
         || sideband.is_some()
@@ -959,10 +975,7 @@ fn runtime_snapshot_from_status(
 }
 
 /// Send a radio-control protocol message over the local connection queue.
-fn send_radio(
-    local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
-    msg: ServerRadioMessage,
-) {
+fn send_radio(local_tx: &mpsc::UnboundedSender<ServerRadioMessage>, msg: ServerRadioMessage) {
     let _ = local_tx.send(msg);
 }
 

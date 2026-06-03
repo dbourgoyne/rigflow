@@ -61,10 +61,38 @@ impl RigflowApp {
                     "Current TX Drive: {:.0}%",
                     snapshot.source_control.tx_drive_percent
                 ));
+
+                // ── Spot Level (%) — digital carrier IQ amplitude ────────────
+                // Quisk's Spot-slider equivalent: amplitude_fs = spot_level/100.
+                // Spot RF power ≈ TX Drive × Spot Level.  Affects ONLY Spot/SWR
+                // (and the SWR sweep) — not voice/CW/digital TX.  Persisted via
+                // the source-control prefs.
+                let mut spot_level = snapshot.source_control.spot_level_percent;
+                let resp = ui.add(
+                    egui::Slider::new(&mut spot_level, 0.0..=100.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .suffix("%")
+                        .text("Spot Level"),
+                );
+                if resp.changed() {
+                    let snapped = spot_level.clamp(0.0, 100.0).round();
+                    self.send_radio_msg(ClientRadioMessage::SetSourceSpotLevel {
+                        spot_level_percent: snapped,
+                    });
+                    if let Ok(mut state) = self.state.lock() {
+                        state.source_control.spot_level_percent = snapped;
+                    }
+                    self.save_source_control_prefs_to_current_operator();
+                }
+
                 ui.label(
-                    egui::RichText::new("Pure carrier, 250 ms · adjust power in Source Control")
-                        .small()
-                        .weak(),
+                    egui::RichText::new(
+                        "Carrier amplitude for Spot/SWR (Quisk default 50%) · \
+                         adjust transmitter power via TX Drive in Source Control",
+                    )
+                    .small()
+                    .weak(),
                 );
                 ui.add_space(4.0);
 
@@ -77,9 +105,7 @@ impl RigflowApp {
                     .clicked();
 
                 if clicked {
-                    self.send_radio_msg(ClientRadioMessage::RequestTxTuneTest {
-                        duration_ms: 250,
-                    });
+                    self.send_radio_msg(ClientRadioMessage::RequestTxTuneTest { duration_ms: 250 });
                     // Mark running immediately — the result arrives via
                     // RuntimeChanged once the measurement completes.
                     if let Ok(mut state) = self.state.lock() {

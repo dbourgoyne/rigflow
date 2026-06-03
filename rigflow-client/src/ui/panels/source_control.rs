@@ -51,6 +51,9 @@ impl RigflowApp {
                                 self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
                                     tx_drive_percent: state.source_control.tx_drive_percent,
                                 });
+                                self.send_radio_msg(ClientRadioMessage::SetSourceSpotLevel {
+                                    spot_level_percent: state.source_control.spot_level_percent,
+                                });
                             }
                             if state.source_capabilities.supports_band_control {
                                 self.send_radio_msg(ClientRadioMessage::SetSourceN2adrEnabled {
