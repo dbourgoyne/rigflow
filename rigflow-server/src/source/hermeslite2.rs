@@ -8,9 +8,7 @@ use num_complex::Complex32;
 
 use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
-use rigflow_core::radio::tx_tune::{
-    compute_swr, compute_swr_from_raw, TxTuneResult, TxTuneStatus,
-};
+use rigflow_core::radio::tx_tune::{compute_swr, compute_swr_from_raw, TxTuneResult, TxTuneStatus};
 
 use crate::source::IqSource;
 
@@ -98,6 +96,14 @@ pub struct HermesLite2Source {
     /// filter value pre-shifted into C2[7:1] (`value << 1`), matching Quisk.
     /// Reasserted by `send_cc` so a sample-rate change doesn't drop it.
     n2adr_filter_c2: u8,
+    /// FDX / TX Monitor Spectrum.  When `true`, RX IQ decoded from DDC packets
+    /// during a Spot/SWR transmit is accumulated into `fdx_iq` instead of being
+    /// discarded, so the worker can forward it into the RX DSP pipeline and keep
+    /// the spectrum/waterfall live during transmit.
+    fdx_enabled: bool,
+    /// RX IQ captured during the most recent transmit while `fdx_enabled`.
+    /// Drained by [`HermesLite2Source::take_fdx_iq`] after `tx_tune_test`.
+    fdx_iq: Vec<Complex32>,
 }
 
 impl HermesLite2Source {
@@ -108,8 +114,8 @@ impl HermesLite2Source {
             .parse()
             .map_err(|e| format!("HL2: invalid device address '{addr_str}': {e}"))?;
 
-        let socket = UdpSocket::bind("0.0.0.0:0")
-            .map_err(|e| format!("HL2: UDP bind failed: {e}"))?;
+        let socket =
+            UdpSocket::bind("0.0.0.0:0").map_err(|e| format!("HL2: UDP bind failed: {e}"))?;
         socket
             .connect(device_addr)
             .map_err(|e| format!("HL2: UDP connect to {device_addr} failed: {e}"))?;
@@ -126,6 +132,8 @@ impl HermesLite2Source {
             pending: VecDeque::new(),
             status_regs: Hl2StatusRegs::default(),
             n2adr_filter_c2: 0,
+            fdx_enabled: false,
+            fdx_iq: Vec::new(),
         };
 
         src.send_run(true)?;
@@ -197,12 +205,20 @@ impl HermesLite2Source {
         self.tx_seq = self.tx_seq.wrapping_add(1);
 
         // Subframe 1: repeat NCO freq so hardware LO stays current
-        write_subframe(&mut pkt[8..520], 0x02, (self.center_freq_hz as u32).to_be_bytes());
+        write_subframe(
+            &mut pkt[8..520],
+            0x02,
+            (self.center_freq_hz as u32).to_be_bytes(),
+        );
         // Subframe 2: RX LNA gain — address 0x0A (C0=0x14).
         // The 32-bit data word is big-endian: C1=MSB, C4=LSB.
         // Bit 6 and bits 5:0 of the DATA word live in C4 (the LSB byte).
         // C4[6]=1 enables extended range; C4[5:0] = gain code.
-        write_subframe(&mut pkt[520..1032], 0x14, [0, 0, 0, 0x40 | (self.lna_gain_code & 0x3F)]);
+        write_subframe(
+            &mut pkt[520..1032],
+            0x14,
+            [0, 0, 0, 0x40 | (self.lna_gain_code & 0x3F)],
+        );
 
         self.socket
             .send(&pkt)
@@ -292,7 +308,12 @@ impl HermesLite2Source {
     ///   Used for pre-filling the FIFO before transmission begins.
     /// - `ptt = true`  — feeds TX IQ **and** asserts PTT.  The caller MUST
     ///   call `send_gain_cc()` on every exit path to release PTT.
-    fn send_tx_packet(&mut self, nco_freq_hz: u32, amplitude_fs: f32, ptt: bool) -> Result<(), String> {
+    fn send_tx_packet(
+        &mut self,
+        nco_freq_hz: u32,
+        amplitude_fs: f32,
+        ptt: bool,
+    ) -> Result<(), String> {
         // Carrier as a complex baseband sample: real = amplitude, imag = 0.
         // Per the HL2 field convention (field0 = imag, field1 = real), the
         // amplitude goes in field1 (the real field); field0 stays 0.
@@ -430,7 +451,10 @@ impl IqSource for HermesLite2Source {
     fn set_gain_db(&mut self, gain_db: f32) -> Result<(), String> {
         // code = gain_db + 12: code 0 = -12 dB, code 60 = +48 dB
         self.lna_gain_code = (gain_db + 12.0).round().clamp(0.0, 60.0) as u8;
-        info!("HL2: LNA gain → {:.1} dB (code {})", gain_db, self.lna_gain_code);
+        info!(
+            "HL2: LNA gain → {:.1} dB (code {})",
+            gain_db, self.lna_gain_code
+        );
         self.send_gain_cc()
     }
 
@@ -448,6 +472,20 @@ impl IqSource for HermesLite2Source {
 
     fn is_realtime(&self) -> bool {
         true
+    }
+
+    fn set_fdx_enabled(&mut self, enabled: bool) {
+        if self.fdx_enabled != enabled {
+            info!(
+                "[hl2 fdx] TX Monitor Spectrum {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+        self.fdx_enabled = enabled;
+    }
+
+    fn take_fdx_iq(&mut self) -> Vec<Complex32> {
+        std::mem::take(&mut self.fdx_iq)
     }
 
     fn source_capabilities(&self) -> SourceCapabilities {
@@ -493,25 +531,20 @@ impl IqSource for HermesLite2Source {
     /// now carries the operator's **TX Drive percent (0–100)** from HL2 Source
     /// Control — NOT an IQ amplitude.  It maps to the HL2 drive-level register
     /// (0x09); the carrier IQ amplitude itself stays a fixed safe value.
-    fn tx_tune_test(
-        &mut self,
-        target_freq_hz: u64,
-        duration_ms: u32,
-        drive: f32,
-    ) -> TxTuneResult {
+    fn tx_tune_test(&mut self, target_freq_hz: u64, duration_ms: u32, drive: f32) -> TxTuneResult {
         // ── Hard safety constants ────────────────────────────────────────
         // Fixed safe carrier IQ amplitude (constant I = amp, Q = 0).  Power is
         // controlled by the TX drive-level register, not this amplitude.
         const TX_TUNE_DEFAULT_AMPLITUDE_FS: f32 = 0.05; // 5% FS (~-26 dBFS)
-        // HL2 TX drive level (register 0x09 C1, 0–255) derived from TX Drive %.
-        // Hard-capped well below full scale (and below Quisk's default of 63)
-        // as a conservative safety ceiling regardless of the operator's %.
+                                                        // HL2 TX drive level (register 0x09 C1, 0–255) derived from TX Drive %.
+                                                        // Hard-capped well below full scale (and below Quisk's default of 63)
+                                                        // as a conservative safety ceiling regardless of the operator's %.
         const TX_TUNE_DRIVE_LEVEL_MAX: u8 = 63;
         const MAX_DURATION_MS: u32 = 500;
         const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
         const SAMPLES_PER_PACKET: f32 = 126.0; // 2 sub-frames × 63
-        // Pre-fill: send IQ without PTT to fill the HL2 TX FIFO before asserting PTT.
-        // 20 packets × 126 samples / 48 kHz ≈ 52 ms of buffering.
+                                               // Pre-fill: send IQ without PTT to fill the HL2 TX FIFO before asserting PTT.
+                                               // 20 packets × 126 samples / 48 kHz ≈ 52 ms of buffering.
         const TX_FIFO_PREFILL_PACKETS: usize = 20;
         // SWR above this threshold is reported as HighSwr.
         const SWR_ALARM_THRESHOLD: f32 = 3.0;
@@ -520,6 +553,15 @@ impl IqSource for HermesLite2Source {
 
         // ── Parameter clamping ───────────────────────────────────────────
         let clamped_duration_ms = duration_ms.min(MAX_DURATION_MS);
+
+        // FDX / TX Monitor Spectrum: start each pulse with an empty capture
+        // buffer.  When enabled, RX IQ decoded during PTT is retained (below)
+        // and drained by the worker via `take_fdx_iq` to keep the RX
+        // spectrum/waterfall alive during transmit.
+        self.fdx_iq.clear();
+        if self.fdx_enabled {
+            info!("[hl2 fdx] forwarding RX IQ during Spot");
+        }
 
         // Carrier IQ amplitude is fixed (existing safe carrier generation).
         let effective_amplitude = TX_TUNE_DEFAULT_AMPLITUDE_FS;
@@ -796,8 +838,17 @@ impl IqSource for HermesLite2Source {
                         (rx_buf[P1_SUBFRAME_OFFSETS[0] + 3] >> 3) & 0x1F,
                         (rx_buf[P1_SUBFRAME_OFFSETS[1] + 3] >> 3) & 0x1F,
                     ];
-                    let mut discard = VecDeque::new();
-                    parse_ddc_packet(&rx_buf, &mut discard, &mut self.status_regs);
+                    // RX IQ from this DDC packet.  Historically these decoded
+                    // samples were dropped (the carrier-present RX during TX was
+                    // thrown away), which is why the spectrum/waterfall froze for
+                    // the duration of every Spot.  With FDX enabled we keep them
+                    // (in `fdx_iq`) so the worker can forward them into the RX DSP
+                    // pipeline after the pulse; otherwise behaviour is unchanged.
+                    let mut decoded = VecDeque::new();
+                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    if self.fdx_enabled {
+                        self.fdx_iq.extend(decoded.drain(..));
+                    }
 
                     // Latch peak forward/reverse/current seen during PTT.
                     if self.status_regs.raddr1_valid {
@@ -834,7 +885,10 @@ impl IqSource for HermesLite2Source {
                     self.status_regs.current_raw,
                     self.status_regs.raddr1_valid,
                     self.status_regs.raddr2_valid,
-                    r[0], r[1], r[2], r[3],
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
                     self.status_regs.rdata_seen,
                 );
                 last_log = Instant::now();
@@ -929,7 +983,9 @@ impl IqSource for HermesLite2Source {
         // ── Post-TX status drain (~60 ms) ─────────────────────────────────
         // Read DDC packets briefly to refresh status registers with
         // post-TX telemetry (forward/reverse power, temperature, etc.).
-        let _ = self.socket.set_read_timeout(Some(Duration::from_millis(20)));
+        let _ = self
+            .socket
+            .set_read_timeout(Some(Duration::from_millis(20)));
         let drain_end = Instant::now() + Duration::from_millis(60);
         let mut drain_buf = [0u8; P1_PACKET_LEN];
         while Instant::now() < drain_end {
@@ -1239,6 +1295,7 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         tuner_freq_hz_max: 30_000_000,
         supports_tx_tune_test: true,
         supports_band_control: true,
+        supports_fdx: true,
         ..SourceCapabilities::none()
     }
 }
@@ -1293,10 +1350,24 @@ mod tests {
 
     #[test]
     fn adc_overload_active_high() {
-        let ok = Hl2StatusRegs { raddr0_valid: true, adc_overload: false, ..Default::default() };
-        assert_eq!(hl2_status_regs_to_source_status(&ok).adc_overload, Some(false));
-        let over = Hl2StatusRegs { raddr0_valid: true, adc_overload: true, ..Default::default() };
-        assert_eq!(hl2_status_regs_to_source_status(&over).adc_overload, Some(true));
+        let ok = Hl2StatusRegs {
+            raddr0_valid: true,
+            adc_overload: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            hl2_status_regs_to_source_status(&ok).adc_overload,
+            Some(false)
+        );
+        let over = Hl2StatusRegs {
+            raddr0_valid: true,
+            adc_overload: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            hl2_status_regs_to_source_status(&over).adc_overload,
+            Some(true)
+        );
     }
 
     // ── RADDR 0x00: recovery flag = bit 15 only (low bit is FIFO count) ─────
@@ -1304,8 +1375,14 @@ mod tests {
     #[test]
     fn recovery_status_uses_only_bit15() {
         let status_for = |bits: u8| {
-            let r = Hl2StatusRegs { raddr0_valid: true, recovery_bits: bits, ..Default::default() };
-            hl2_status_regs_to_source_status(&r).recovery_status.unwrap()
+            let r = Hl2StatusRegs {
+                raddr0_valid: true,
+                recovery_bits: bits,
+                ..Default::default()
+            };
+            hl2_status_regs_to_source_status(&r)
+                .recovery_status
+                .unwrap()
         };
         // bit15 clear → OK (incl. 0b01, which is a FIFO-count bit, not a fault).
         assert_eq!(status_for(0b00), "OK");
@@ -1317,7 +1394,11 @@ mod tests {
 
     #[test]
     fn recovery_status_absent_when_raddr0_invalid() {
-        let r = Hl2StatusRegs { raddr0_valid: false, recovery_bits: 0b10, ..Default::default() };
+        let r = Hl2StatusRegs {
+            raddr0_valid: false,
+            recovery_bits: 0b10,
+            ..Default::default()
+        };
         assert_eq!(hl2_status_regs_to_source_status(&r).recovery_status, None);
     }
 }

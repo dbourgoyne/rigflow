@@ -27,8 +27,7 @@ impl IqSource for FakeIqSource {
     }
 
     fn read_block(&mut self, max_samples: usize) -> Result<Vec<Complex32>, String> {
-        let phase_inc =
-            2.0 * std::f32::consts::PI * self.tone_hz / self.sample_rate_hz;
+        let phase_inc = 2.0 * std::f32::consts::PI * self.tone_hz / self.sample_rate_hz;
 
         let mut out = Vec::with_capacity(max_samples);
 

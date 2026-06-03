@@ -186,6 +186,13 @@ pub enum ClientRadioMessage {
         enabled: bool,
     },
 
+    /// Enable/disable FDX (TX Monitor Spectrum, HL2).  Part of source control;
+    /// when enabled the server forwards RX IQ captured during Spot/SWR into the
+    /// receive DSP pipeline so the spectrum/waterfall stay live during transmit.
+    SetSourceFdxEnabled {
+        enabled: bool,
+    },
+
     /// Request a Spot / SWR measurement: a short, pure, unmodulated carrier at
     /// the current TX frequency.  TX power comes from the configured source
     /// `tx_drive_percent`; the server clamps duration and drive to safe limits.

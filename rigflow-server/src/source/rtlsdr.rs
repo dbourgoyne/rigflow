@@ -214,6 +214,7 @@ impl IqSource for RtlSdrSource {
 
             supports_tx_tune_test: false,
             supports_band_control: false,
+            supports_fdx: false,
         }
     }
 

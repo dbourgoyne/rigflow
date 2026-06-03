@@ -30,15 +30,13 @@ use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
-use rigflow_core::radio::ham_band::{
-    band_from_frequency, n2adr_filter_value_for_band, HamBand,
-};
+use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
+use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{
     sweep_frequency_hz, validate_sweep_range, SwrSweepPoint, SwrSweepProgress, SwrSweepResult,
     SWR_SWEEP_POINTS,
 };
-use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::TxTuneResult;
 
 /// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
@@ -84,7 +82,7 @@ struct SharedControlState {
     /// Set by command thread when a Spot/SWR measurement arrives; consumed
     /// (taken) by the capture thread which owns the IQ source.  TX drive comes
     /// from `source_control.tx_drive_percent`, not from the request.
-    pending_tx_tune_test: Option<u32>,  // duration_ms
+    pending_tx_tune_test: Option<u32>, // duration_ms
 
     /// Written by capture thread after executing a TX tune test dry run;
     /// read by DSP thread to detect changes and publish RuntimeChanged.
@@ -642,8 +640,7 @@ fn spawn_command_thread(
                     }
                     WorkerCommand::SetSquelchThreshold { threshold_db } => {
                         if let Ok(mut control_state) = control.lock() {
-                            control_state.squelch_threshold_db =
-                                threshold_db.clamp(-120.0, 0.0);
+                            control_state.squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
                         }
                     }
                     WorkerCommand::SetNr2Enabled { enabled } => {
@@ -728,6 +725,12 @@ fn spawn_command_thread(
                         }
                     }
 
+                    WorkerCommand::SetSourceFdxEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.fdx_enabled = enabled;
+                        }
+                    }
+
                     WorkerCommand::RequestTxTuneTest { duration_ms } => {
                         info!(
                             "[radio-worker] RequestTxTuneTest queued: duration_ms={}",
@@ -741,9 +744,7 @@ fn spawn_command_thread(
                     }
 
                     WorkerCommand::RequestSwrSweep { start_hz, stop_hz } => {
-                        info!(
-                            "[radio-worker] RequestSwrSweep queued: {start_hz}..{stop_hz} Hz"
-                        );
+                        info!("[radio-worker] RequestSwrSweep queued: {start_hz}..{stop_hz} Hz");
                         if let Ok(mut cs) = control.lock() {
                             cs.pending_swr_sweep = Some((start_hz, stop_hz));
                             cs.swr_sweep_cancel = false;
@@ -855,6 +856,33 @@ fn spawn_waterfall_thread(
     })
 }
 
+/// FDX / TX Monitor Spectrum: forward RX IQ captured during a transmit into the
+/// **waterfall** thread, which produces BOTH the spectrum and waterfall data the
+/// client renders.  Deliberately not sent to the audio/DSP path, so transmit
+/// audio behaviour is unchanged (this feature is visual monitoring only).
+///
+/// Non-blocking (`try_send`): never stalls the capture thread, so Spot/SWR
+/// timing and the TX FIFO are unaffected.  Called after each `tx_tune_test`;
+/// `iq` is empty unless FDX is enabled, in which case this is a no-op.
+fn forward_fdx_iq(
+    iq: Vec<Complex32>,
+    iq_wf_tx: &std_mpsc::SyncSender<Vec<Complex32>>,
+    radio_id: &str,
+) {
+    if iq.is_empty() {
+        return;
+    }
+    let n = iq.len();
+    match iq_wf_tx.try_send(iq) {
+        Ok(()) => {
+            debug!("[hl2 fdx] forwarded {n} RX IQ samples to spectrum/waterfall ({radio_id})")
+        }
+        Err(_) => {
+            debug!("[hl2 fdx] waterfall queue full — dropped {n} FDX IQ samples ({radio_id})")
+        }
+    }
+}
+
 fn spawn_capture_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -923,6 +951,9 @@ fn spawn_capture_thread(
         // enable state so we only reprogram on band change or (re)enable.
         let mut last_n2adr_band: Option<HamBand> = None;
         let mut last_n2adr_enabled = false;
+        // FDX / TX Monitor Spectrum (HL2): mirror the enable state into the
+        // source so it retains RX IQ during transmit.  Only pushed on change.
+        let mut last_fdx_enabled = false;
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
@@ -1076,8 +1107,7 @@ fn spawn_capture_thread(
             // Outside the supported bands the filter is left unchanged and no
             // update is sent (per spec).  No-op on sources without N2ADR.
             {
-                let just_enabled =
-                    current_source_control.n2adr_enabled && !last_n2adr_enabled;
+                let just_enabled = current_source_control.n2adr_enabled && !last_n2adr_enabled;
                 if current_source_control.n2adr_enabled {
                     if let Some(band) = band_from_frequency(control_snapshot.target_freq_hz) {
                         if last_n2adr_band != Some(band) || just_enabled {
@@ -1103,6 +1133,14 @@ fn spawn_capture_thread(
                     last_n2adr_band = None;
                 }
                 last_n2adr_enabled = current_source_control.n2adr_enabled;
+            }
+
+            // FDX / TX Monitor Spectrum (HL2): push the enable flag into the
+            // source on change so it knows whether to retain RX IQ during the
+            // next Spot/SWR.  No-op on sources that don't support FDX.
+            if current_source_control.fdx_enabled != last_fdx_enabled {
+                source.set_fdx_enabled(current_source_control.fdx_enabled);
+                last_fdx_enabled = current_source_control.fdx_enabled;
             }
 
             // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState
@@ -1138,13 +1176,17 @@ fn spawn_capture_thread(
                         descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent
                     );
 
-                    let result =
-                        source.tx_tune_test(target_freq_hz, duration_ms, tx_drive_percent);
+                    let result = source.tx_tune_test(target_freq_hz, duration_ms, tx_drive_percent);
 
                     info!(
                         "[radio-worker {}] TX tune test complete: result={:?}",
                         descriptor.id.0, result.message
                     );
+
+                    // FDX / TX Monitor Spectrum: forward any RX IQ the source
+                    // captured during the pulse into the spectrum/waterfall path
+                    // (see `forward_fdx_iq`).  Empty unless FDX is enabled.
+                    forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
 
                     if let Ok(mut cs) = control.lock() {
                         cs.last_tx_tune_result = Some(result);
@@ -1182,8 +1224,7 @@ fn spawn_capture_thread(
                         // Single validated band → program its N2ADR filter once.
                         if n2adr_enabled {
                             if let Some(band) = band_from_frequency(start_hz) {
-                                let _ =
-                                    source.set_n2adr_filter(n2adr_filter_value_for_band(band));
+                                let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
                                 last_n2adr_band = Some(band);
                             }
                         }
@@ -1199,12 +1240,18 @@ fn spawn_capture_thread(
                         let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
                         let mut cancelled = false;
                         for i in 0..total {
-                            if control.lock().map(|cs| cs.swr_sweep_cancel).unwrap_or(false) {
+                            if control
+                                .lock()
+                                .map(|cs| cs.swr_sweep_cancel)
+                                .unwrap_or(false)
+                            {
                                 cancelled = true;
                                 break;
                             }
                             let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
                             let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive);
+                            // FDX: keep spectrum/waterfall alive between points.
+                            forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
                             points.push(SwrSweepPoint {
                                 frequency_hz: freq,
                                 swr: r.swr,
@@ -1811,7 +1858,7 @@ mod volume_tests {
         assert!((volume_gain(50) - 1.0).abs() < 1e-4); // unity
         assert!((volume_gain(75) - 2.0).abs() < 0.05); // ~+6 dB ≈ 2.0x
         assert!((volume_gain(100) - 3.981).abs() < 0.01); // +12 dB ≈ 3.98x
-        // Monotonic increasing above 0%.
+                                                          // Monotonic increasing above 0%.
         assert!(volume_gain(60) > volume_gain(50));
         assert!(volume_gain(100) > volume_gain(75));
     }
@@ -1819,7 +1866,10 @@ mod volume_tests {
     #[test]
     fn soft_clip_transparent_below_threshold() {
         for &x in &[-0.9_f32, -0.5, 0.0, 0.3, 0.95] {
-            assert!((soft_clip(x) - x).abs() < 1e-6, "identity below threshold for {x}");
+            assert!(
+                (soft_clip(x) - x).abs() < 1e-6,
+                "identity below threshold for {x}"
+            );
         }
     }
 

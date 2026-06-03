@@ -656,6 +656,22 @@ async fn handle_radio_message(
 	    }
 	}
 
+        ClientRadioMessage::SetSourceFdxEnabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetSourceFdxEnabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_source_fdx_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::RequestTxTuneTest { duration_ms } => {
             info!("[websocket] RequestTxTuneTest: duration_ms={}", duration_ms);
             if let Err(err) = send_worker_command_for_session(

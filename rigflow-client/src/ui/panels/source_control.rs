@@ -57,6 +57,11 @@ impl RigflowApp {
                                     enabled: state.source_control.n2adr_enabled,
                                 });
                             }
+                            if state.source_capabilities.supports_fdx {
+                                self.send_radio_msg(ClientRadioMessage::SetSourceFdxEnabled {
+                                    enabled: state.source_control.fdx_enabled,
+                                });
+                            }
                         }
 
                         // -----------------------------
@@ -304,6 +309,13 @@ impl RigflowApp {
                         if state.source_capabilities.supports_tx_tune_test {
                             self.draw_swr_sweep_section(ui, &mut state);
                         }
+
+                        // -----------------------------
+                        // FDX / TX Monitor Spectrum (HL2).
+                        // -----------------------------
+                        if state.source_capabilities.supports_fdx {
+                            save_source_control |= self.draw_fdx_control(ui, &mut state);
+                        }
                     }
 
                     if save_source_control {
@@ -389,6 +401,31 @@ impl RigflowApp {
             self.send_radio_msg(ClientRadioMessage::SetSourceN2adrEnabled { enabled: n2adr });
             save = true;
         }
+
+        save
+    }
+
+    /// FDX / TX Monitor Spectrum: a single enable checkbox.  When enabled the
+    /// server keeps the RX spectrum and waterfall live during Spot/SWR (the
+    /// transmit carrier becomes visible) instead of freezing.  Visual-only — it
+    /// does not change audio.  Persisted via the source-control prefs.  Returns
+    /// `true` when the enable changed (so the caller persists it).
+    fn draw_fdx_control(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
+        let mut save = false;
+        ui.separator();
+        ui.label("FDX");
+
+        let mut fdx = state.source_control.fdx_enabled;
+        if ui.checkbox(&mut fdx, "TX Monitor Spectrum").changed() {
+            state.source_control.fdx_enabled = fdx;
+            self.send_radio_msg(ClientRadioMessage::SetSourceFdxEnabled { enabled: fdx });
+            save = true;
+        }
+        ui.label(
+            egui::RichText::new("Keep RX spectrum/waterfall live during Spot/SWR (visual only).")
+                .small()
+                .weak(),
+        );
 
         save
     }

@@ -142,6 +142,7 @@ pub enum WorkerCommand {
     SetSourceDirectSampling { mode: DirectSamplingMode },
     SetSourceTxDrive { tx_drive_percent: f32 },
     SetSourceN2adrEnabled { enabled: bool },
+    SetSourceFdxEnabled { enabled: bool },
     RequestSwrSweep { start_hz: u64, stop_hz: u64 },
     CancelSwrSweep,
     /// Request a Spot / SWR measurement (pure carrier pulse).  TX power comes

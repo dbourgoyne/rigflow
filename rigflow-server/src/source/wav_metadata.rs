@@ -25,11 +25,7 @@ pub fn parse_center_freq_hz_from_str(s: &str) -> Option<u64> {
     let bytes = lower.as_bytes();
 
     // Order matters: prefer larger units first
-    const UNITS: [(&str, f64); 3] = [
-        ("mhz", 1_000_000.0),
-        ("khz", 1_000.0),
-        ("hz", 1.0),
-    ];
+    const UNITS: [(&str, f64); 3] = [("mhz", 1_000_000.0), ("khz", 1_000.0), ("hz", 1.0)];
 
     for (unit, scale) in UNITS {
         let mut search_start = 0;

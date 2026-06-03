@@ -33,6 +33,14 @@ pub struct SourceControlState {
     /// other source-control fields.
     #[serde(default)]
     pub n2adr_enabled: bool,
+
+    /// FDX / TX Monitor Spectrum (HL2).  When set, RX IQ captured during a
+    /// Spot/SWR (or SWR sweep) transmit is forwarded into the receive DSP
+    /// pipeline so the spectrum and waterfall stay live (and the transmit
+    /// carrier becomes visible) instead of freezing.  Visual monitoring only —
+    /// it does not change audio.  Persisted/synced like the other fields.
+    #[serde(default)]
+    pub fdx_enabled: bool,
 }
 
 pub fn default_tx_drive_percent() -> f32 {
@@ -49,6 +57,7 @@ impl Default for SourceControlState {
             direct_sampling: DirectSamplingMode::Off,
             tx_drive_percent: default_tx_drive_percent(),
             n2adr_enabled: false,
+            fdx_enabled: false,
         }
     }
 }
@@ -85,6 +94,12 @@ pub struct SourceCapabilities {
     /// (HL2).  Gates the Band/N2ADR section in Source Control.
     #[serde(default)]
     pub supports_band_control: bool,
+
+    /// Whether the source supports FDX / TX Monitor Spectrum (keeping RX
+    /// spectrum/waterfall alive during Spot/SWR).  Gates the FDX section in
+    /// Source Control.
+    #[serde(default)]
+    pub supports_fdx: bool,
 }
 
 impl SourceCapabilities {
@@ -107,6 +122,7 @@ impl SourceCapabilities {
 
             supports_tx_tune_test: false,
             supports_band_control: false,
+            supports_fdx: false,
         }
     }
 }

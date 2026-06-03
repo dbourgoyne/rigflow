@@ -1,16 +1,13 @@
 use num_complex::Complex32;
 
 use rigflow_core::radio::source_control::{
-    SourceCapabilities,
-    SourceControlState,
-    GainMode,
-    DirectSamplingMode,
+    DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState,
 };
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::{TxTuneResult, TxTuneStatus};
 
-pub mod fake;
 pub mod factory;
+pub mod fake;
 pub mod hermeslite2;
 pub mod rtlsdr;
 pub mod wav;
@@ -71,6 +68,20 @@ pub trait IqSource {
     /// Send a periodic keepalive to hardware that would otherwise time out.
     /// Default is a no-op; override for sources that require it (e.g. HL2).
     fn keepalive(&mut self) {}
+
+    /// Enable/disable FDX (TX Monitor Spectrum).
+    ///
+    /// When enabled, a source should retain the RX IQ it decodes during a
+    /// transmit (`tx_tune_test`) so the worker can forward it into the RX DSP
+    /// pipeline and keep the spectrum/waterfall live.  Default is a no-op
+    /// (sources that cannot receive while transmitting); HL2 overrides it.
+    fn set_fdx_enabled(&mut self, _enabled: bool) {}
+
+    /// Drain and return any RX IQ captured during the most recent transmit
+    /// while FDX was enabled.  Default returns empty (nothing captured).
+    fn take_fdx_iq(&mut self) -> Vec<Complex32> {
+        Vec::new()
+    }
 
     /// Return the latest read-only telemetry from this source.
     ///
