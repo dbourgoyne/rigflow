@@ -1242,6 +1242,17 @@ impl IqSource for HermesLite2Source {
         let mut next_tick = Instant::now();
         let mut fault: Option<String> = None;
 
+        // One-shot RX-during-TX sideband diagnostic.  Accumulate the captured
+        // samples and measure the DFT power at +f_tone (above carrier), -f_tone
+        // (below carrier) and DC (carrier/LO feedthrough).  This is the
+        // definitive test: above≫below → USB-side energy; below≫above → LSB;
+        // above≈below → symmetric (DSB / strong image).  Logged once per tone.
+        let mut diag: Vec<Complex32> = Vec::new();
+        let mut diag_logged = false;
+        // Enough samples that ±f_tone is well resolved even at 384 kHz
+        // (fs/N ≈ 23 Hz at 384k → ±1 kHz is ~40 bins off DC).
+        const DIAG_SAMPLES: usize = 16384;
+
         while !stop.load(Ordering::Relaxed) {
             let now = Instant::now();
             let elapsed_ms = tx_start.elapsed().as_millis();
@@ -1270,6 +1281,21 @@ impl IqSource for HermesLite2Source {
                 if len == P1_PACKET_LEN {
                     let mut decoded = VecDeque::new();
                     parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+
+                    // One-shot sideband diagnostic: gather DIAG_SAMPLES samples
+                    // and measure energy above/below carrier + DC, once.
+                    if !diag_logged {
+                        for s in &decoded {
+                            if diag.len() < DIAG_SAMPLES {
+                                diag.push(*s);
+                            }
+                        }
+                        if diag.len() >= DIAG_SAMPLES {
+                            log_tx_tone_rx_sideband(&diag, self.sample_rate_hz, tone_hz, usb);
+                            diag_logged = true;
+                        }
+                    }
+
                     if self.fdx_enabled && !decoded.is_empty() {
                         on_rx_iq(decoded.into_iter().collect());
                     }
@@ -1304,6 +1330,65 @@ impl IqSource for HermesLite2Source {
             None => Ok(()),
         }
     }
+}
+
+/// Measure where the captured RX-during-TX energy actually sits relative to the
+/// carrier, by evaluating the complex DFT magnitude at +f_tone (above carrier),
+/// −f_tone (below carrier) and DC (carrier/LO feedthrough).  This is the
+/// definitive sideband test:
+/// - `above ≫ below` → energy on the USB side (above carrier)
+/// - `below ≫ above` → energy on the LSB side (below carrier)
+/// - `above ≈ below`  → symmetric spectrum (real/DSB TX or a strong IQ image)
+/// `|DC|` shows how much of the display is the (always-present) centre spike.
+fn log_tx_tone_rx_sideband(samples: &[Complex32], fs: f32, tone_hz: f32, usb: bool) {
+    use std::f64::consts::TAU;
+    let n = samples.len().max(1);
+
+    // Carrier/LO feedthrough magnitude (the DC term) before removal.
+    let mean_re = samples.iter().map(|s| s.re as f64).sum::<f64>() / n as f64;
+    let mean_im = samples.iter().map(|s| s.im as f64).sum::<f64>() / n as f64;
+    let dc = (mean_re * mean_re + mean_im * mean_im).sqrt();
+
+    // Hann-windowed, DC-removed complex-DFT magnitude at frequency f (Hz).
+    // DC removal stops the (large) centre spike leaking into the ±f bins; the
+    // window suppresses sidelobe bleed between +f and -f.
+    let win_sum: f64 = (0..n)
+        .map(|k| 0.5 - 0.5 * (TAU * k as f64 / (n - 1).max(1) as f64).cos())
+        .sum();
+    let bin = |f_hz: f64| -> f64 {
+        let w = -TAU * f_hz / fs as f64;
+        let (mut ar, mut ai) = (0.0f64, 0.0f64);
+        for (k, s) in samples.iter().enumerate() {
+            let win = 0.5 - 0.5 * (TAU * k as f64 / (n - 1).max(1) as f64).cos();
+            let re = (s.re as f64 - mean_re) * win;
+            let im = (s.im as f64 - mean_im) * win;
+            let (sinp, cosp) = (w * k as f64).sin_cos();
+            ar += re * cosp - im * sinp;
+            ai += re * sinp + im * cosp;
+        }
+        (ar * ar + ai * ai).sqrt() / win_sum
+    };
+
+    let f = tone_hz as f64;
+    let above = bin(f); // +f_tone : above carrier
+    let below = bin(-f); // -f_tone : below carrier
+    let ratio_db = 20.0 * (above.max(1e-12) / below.max(1e-12)).log10();
+
+    let expected = if usb { "above (USB)" } else { "below (LSB)" };
+    let dominant = if (ratio_db).abs() < 3.0 {
+        "SYMMETRIC (both sidebands ≈ equal → DSB/image)"
+    } else if ratio_db > 0.0 {
+        "ABOVE carrier (USB side)"
+    } else {
+        "BELOW carrier (LSB side)"
+    };
+
+    let resolution_hz = fs as f64 / n as f64;
+    debug!(
+        "[hl2 tx-tone diag] sideband test ({n} samp @ {fs:.0} Hz, res={resolution_hz:.0} Hz, \
+         tone={tone_hz:.0} Hz, expected {expected}): |+f|={above:.6} |-f|={below:.6} \
+         |DC|={dc:.6}  above/below={ratio_db:+.1} dB  → {dominant}"
+    );
 }
 
 /// Write a 512-byte sub-frame into `sf`: sync, C0, C1–C4, then zeros for TX IQ.
