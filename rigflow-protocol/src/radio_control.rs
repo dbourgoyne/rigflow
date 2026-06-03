@@ -179,6 +179,12 @@ pub enum ClientRadioMessage {
         tx_drive_percent: f32,
     },
 
+    /// Enable/disable the N2ADR HF filter board (HL2).  Part of source control;
+    /// when enabled the server programs the band filter from the tuned freq.
+    SetSourceN2adrEnabled {
+        enabled: bool,
+    },
+
     /// Request a Spot / SWR measurement: a short, pure, unmodulated carrier at
     /// the current TX frequency.  TX power comes from the configured source
     /// `tx_drive_percent`; the server clamps duration and drive to safe limits.

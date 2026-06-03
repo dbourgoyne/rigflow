@@ -137,6 +137,7 @@ pub enum WorkerCommand {
     SetSourcePpmCorrection { ppm: i32 },
     SetSourceDirectSampling { mode: DirectSamplingMode },
     SetSourceTxDrive { tx_drive_percent: f32 },
+    SetSourceN2adrEnabled { enabled: bool },
     /// Request a Spot / SWR measurement (pure carrier pulse).  TX power comes
     /// from the configured source `tx_drive_percent`.
     RequestTxTuneTest { duration_ms: u32 },

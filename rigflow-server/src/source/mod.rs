@@ -60,6 +60,14 @@ pub trait IqSource {
         Ok(())
     }
 
+    /// Program the N2ADR HF filter board to the given 7-bit filter value.
+    ///
+    /// Default is a no-op (sources without an N2ADR board, e.g. RTL-SDR).
+    /// HL2 overrides this to send the address-0 C&C with `C2 = value << 1`.
+    fn set_n2adr_filter(&mut self, _value: u8) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Send a periodic keepalive to hardware that would otherwise time out.
     /// Default is a no-op; override for sources that require it (e.g. HL2).
     fn keepalive(&mut self) {}

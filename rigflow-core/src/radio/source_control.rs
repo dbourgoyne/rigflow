@@ -27,6 +27,12 @@ pub struct SourceControlState {
     /// `#[serde(default)]` so older persisted state without it loads cleanly.
     #[serde(default = "default_tx_drive_percent")]
     pub tx_drive_percent: f32,
+
+    /// N2ADR HF filter board enabled (HL2).  When set, the server programs the
+    /// correct band filter from the tuned frequency.  Persisted/synced like the
+    /// other source-control fields.
+    #[serde(default)]
+    pub n2adr_enabled: bool,
 }
 
 pub fn default_tx_drive_percent() -> f32 {
@@ -42,6 +48,7 @@ impl Default for SourceControlState {
             ppm_correction: 0,
             direct_sampling: DirectSamplingMode::Off,
             tx_drive_percent: default_tx_drive_percent(),
+            n2adr_enabled: false,
         }
     }
 }
@@ -73,6 +80,11 @@ pub struct SourceCapabilities {
     /// is not yet implemented; the UI skeleton is always disabled while
     /// this is `false`.
     pub supports_tx_tune_test: bool,
+
+    /// Whether the source supports amateur Band Control + N2ADR filter board
+    /// (HL2).  Gates the Band/N2ADR section in Source Control.
+    #[serde(default)]
+    pub supports_band_control: bool,
 }
 
 impl SourceCapabilities {
@@ -94,6 +106,7 @@ impl SourceCapabilities {
             tuner_freq_hz_max: 0,
 
             supports_tx_tune_test: false,
+            supports_band_control: false,
         }
     }
 }

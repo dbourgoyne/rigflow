@@ -30,6 +30,9 @@ use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
+use rigflow_core::radio::ham_band::{
+    band_from_frequency, n2adr_filter_value_for_band, HamBand,
+};
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::TxTuneResult;
@@ -699,6 +702,12 @@ fn spawn_command_thread(
                         }
                     }
 
+                    WorkerCommand::SetSourceN2adrEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.n2adr_enabled = enabled;
+                        }
+                    }
+
                     WorkerCommand::RequestTxTuneTest { duration_ms } => {
                         info!(
                             "[radio-worker] RequestTxTuneTest queued: duration_ms={}",
@@ -873,6 +882,10 @@ fn spawn_capture_thread(
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
         let mut last_cc_sent = Instant::now();
+        // N2ADR HF filter board (HL2): track the last band we programmed and the
+        // enable state so we only reprogram on band change or (re)enable.
+        let mut last_n2adr_band: Option<HamBand> = None;
+        let mut last_n2adr_enabled = false;
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
@@ -1019,6 +1032,40 @@ fn spawn_capture_thread(
             } else if needs_cc_keepalive && last_cc_sent.elapsed() >= HL2_CC_KEEPALIVE_INTERVAL {
                 source.keepalive();
                 last_cc_sent = Instant::now();
+            }
+
+            // N2ADR HF filter board (HL2): when enabled, follow the tuned band.
+            // Reprogram only when the band changes or N2ADR was just enabled.
+            // Outside the supported bands the filter is left unchanged and no
+            // update is sent (per spec).  No-op on sources without N2ADR.
+            {
+                let just_enabled =
+                    current_source_control.n2adr_enabled && !last_n2adr_enabled;
+                if current_source_control.n2adr_enabled {
+                    if let Some(band) = band_from_frequency(control_snapshot.target_freq_hz) {
+                        if last_n2adr_band != Some(band) || just_enabled {
+                            let value = n2adr_filter_value_for_band(band);
+                            match source.set_n2adr_filter(value) {
+                                Ok(()) => {
+                                    info!(
+                                        "[hl2] band={} freq={} mode={:?} n2adr={}",
+                                        band.label(),
+                                        control_snapshot.target_freq_hz,
+                                        control_snapshot.demod_mode,
+                                        value
+                                    );
+                                    last_n2adr_band = Some(band);
+                                }
+                                Err(e) => warn!("HL2: N2ADR filter program failed: {e}"),
+                            }
+                        }
+                    }
+                } else if last_n2adr_enabled {
+                    // Just disabled: leave the hardware filter as-is; reset
+                    // tracking so a later re-enable reprograms.
+                    last_n2adr_band = None;
+                }
+                last_n2adr_enabled = current_source_control.n2adr_enabled;
             }
 
             // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState

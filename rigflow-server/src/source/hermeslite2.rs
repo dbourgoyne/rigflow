@@ -94,6 +94,10 @@ pub struct HermesLite2Source {
     pending: VecDeque<Complex32>,
     /// Accumulated status registers decoded from incoming DDC packet headers.
     status_regs: Hl2StatusRegs,
+    /// N2ADR filter byte as it sits in the address-0 C2 register: the 7-bit
+    /// filter value pre-shifted into C2[7:1] (`value << 1`), matching Quisk.
+    /// Reasserted by `send_cc` so a sample-rate change doesn't drop it.
+    n2adr_filter_c2: u8,
 }
 
 impl HermesLite2Source {
@@ -121,6 +125,7 @@ impl HermesLite2Source {
             tx_seq: 0,
             pending: VecDeque::new(),
             status_regs: Hl2StatusRegs::default(),
+            n2adr_filter_c2: 0,
         };
 
         src.send_run(true)?;
@@ -162,8 +167,12 @@ impl HermesLite2Source {
         pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
         self.tx_seq = self.tx_seq.wrapping_add(1);
 
-        // Sub-frame 1: sample rate (address 0, C1[1:0] = speed code)
-        write_subframe(&mut pkt[8..520], 0x00, [self.speed_code(), 0, 0, 0]);
+        // Sub-frame 1: address 0 — C1[1:0]=speed code, C2[7:1]=N2ADR J16 filter.
+        write_subframe(
+            &mut pkt[8..520],
+            0x00,
+            [self.speed_code(), self.n2adr_filter_c2, 0, 0],
+        );
 
         // Sub-frame 2: NCO frequency (address 1, C1–C4 = Hz big-endian)
         write_subframe(
@@ -423,6 +432,18 @@ impl IqSource for HermesLite2Source {
         self.lna_gain_code = (gain_db + 12.0).round().clamp(0.0, 60.0) as u8;
         info!("HL2: LNA gain → {:.1} dB (code {})", gain_db, self.lna_gain_code);
         self.send_gain_cc()
+    }
+
+    fn set_n2adr_filter(&mut self, value: u8) -> Result<(), String> {
+        // The 7-bit filter value occupies C2[7:1] of the address-0 C&C frame
+        // (J16 outputs), i.e. `value << 1` — matching Quisk's
+        // `SetControlByte(0, 2, Rx << 1)`.  NOT bit-reversed.
+        self.n2adr_filter_c2 = (value & 0x7F) << 1;
+        info!(
+            "HL2: N2ADR filter → value={value} (C2={:#04x})",
+            self.n2adr_filter_c2
+        );
+        self.send_cc()
     }
 
     fn is_realtime(&self) -> bool {
@@ -1217,6 +1238,7 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
         supports_tx_tune_test: true,
+        supports_band_control: true,
         ..SourceCapabilities::none()
     }
 }

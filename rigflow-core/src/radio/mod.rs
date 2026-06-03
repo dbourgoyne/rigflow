@@ -1,3 +1,4 @@
+pub mod ham_band;
 pub mod model;
 pub mod source_control;
 pub mod source_status;

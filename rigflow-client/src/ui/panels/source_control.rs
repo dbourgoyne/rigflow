@@ -1,6 +1,10 @@
 use crate::ui::app::RigflowApp;
 use crate::UiState;
 use eframe::egui;
+use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::ham_band::{
+    band_from_frequency, default_frequency_for_band, default_mode_for_band, HamBand,
+};
 use rigflow_core::radio::source_control::{DirectSamplingMode, GainMode};
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
@@ -56,6 +60,13 @@ impl RigflowApp {
                                 self.send_radio_msg(
                                     ClientRadioMessage::SetSourceTxDrive {
                                         tx_drive_percent: state.source_control.tx_drive_percent,
+                                    },
+                                );
+                            }
+                            if state.source_capabilities.supports_band_control {
+                                self.send_radio_msg(
+                                    ClientRadioMessage::SetSourceN2adrEnabled {
+                                        enabled: state.source_control.n2adr_enabled,
                                     },
                                 );
                             }
@@ -292,6 +303,13 @@ impl RigflowApp {
                                 }
                             }
                         }
+
+                        // -----------------------------
+                        // Band Control + N2ADR (HL2).
+                        // -----------------------------
+                        if state.source_capabilities.supports_band_control {
+                            save_source_control |= self.draw_band_control(ui, &mut state);
+                        }
                     }
 
                     if save_source_control {
@@ -299,6 +317,81 @@ impl RigflowApp {
                     }
                 });
         }
+    }
+
+    /// HL2 Band Control: band radio buttons (tune to default freq + mode via the
+    /// existing control paths) and the N2ADR filter-board enable.  Returns
+    /// `true` when the N2ADR enable changed (so the caller persists it).
+    ///
+    /// The selected band is *derived* from the current target frequency, so it
+    /// always reflects actual tuning (band detection), no matter how the
+    /// frequency was changed.  Band buttons only set frequency + mode; AGC, NR2,
+    /// Volume, Squelch, filter bandwidth and pitch are untouched here.
+    fn draw_band_control(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
+        let mut save = false;
+        ui.separator();
+        ui.label("Band");
+
+        let current_band = band_from_frequency(state.target_freq_hz.max(0.0) as u64);
+        let mut selected = current_band;
+
+        ui.horizontal_wrapped(|ui| {
+            for band in HamBand::ALL {
+                ui.radio_value(&mut selected, Some(band), band.label());
+            }
+        });
+
+        if let Some(band) = selected {
+            if Some(band) != current_band {
+                // Tune to the band default through the existing tuning path
+                // (clamped, server-validated).  Move both the LO (center) and
+                // the target so the band is actually received.
+                let freq = default_frequency_for_band(band) as f32;
+                let mode = default_mode_for_band(band);
+
+                let limits = crate::ui::freq_limits::active_freq_limits(state);
+                let new_center = crate::ui::freq_limits::clamp_center(freq, &limits);
+                let new_target = crate::ui::freq_limits::clamp_target(
+                    freq,
+                    new_center,
+                    state.input_sample_rate_hz,
+                    &limits,
+                );
+
+                state.center_freq_hz = new_center;
+                state.target_freq_hz = new_target;
+                state.demod_mode = mode;
+                state.sideband = match mode {
+                    DemodMode::Usb => Sideband::Usb,
+                    DemodMode::Lsb => Sideband::Lsb,
+                    _ => state.sideband,
+                };
+
+                self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
+                    center_freq_hz: new_center as u64,
+                });
+                self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
+                    target_freq_hz: new_target as u64,
+                });
+                self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode });
+                if matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+                    self.send_radio_msg(ClientRadioMessage::SetSideband {
+                        sideband: state.sideband,
+                    });
+                }
+            }
+        }
+
+        // N2ADR filter board enable (persisted via source-control prefs; the
+        // server programs the band filter from the tuned frequency).
+        let mut n2adr = state.source_control.n2adr_enabled;
+        if ui.checkbox(&mut n2adr, "N2ADR Filter Board").changed() {
+            state.source_control.n2adr_enabled = n2adr;
+            self.send_radio_msg(ClientRadioMessage::SetSourceN2adrEnabled { enabled: n2adr });
+            save = true;
+        }
+
+        save
     }
 }
 

@@ -24,6 +24,23 @@ impl RigflowApp {
         egui::CollapsingHeader::new("Source Status")
             .default_open(true)
             .show(ui, |ui| {
+                // Detected band (HL2): derived from the tuned target frequency,
+                // so it tracks any tuning regardless of how it occurred.
+                if snapshot.source_capabilities.supports_band_control {
+                    let band = rigflow_core::radio::ham_band::band_from_frequency(
+                        snapshot.target_freq_hz.max(0.0) as u64,
+                    );
+                    egui::Grid::new("source_status_band_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 2.0])
+                        .show(ui, |ui| {
+                            ui.label("Band");
+                            ui.label(band.map(|b| b.label()).unwrap_or("—"));
+                            ui.end_row();
+                        });
+                    ui.add_space(4.0);
+                }
+
                 draw_health_group(ui, status);
                 ui.add_space(4.0);
                 draw_rf_power_group(ui, status);
