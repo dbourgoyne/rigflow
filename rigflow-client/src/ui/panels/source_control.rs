@@ -319,6 +319,13 @@ impl RigflowApp {
                         if state.source_capabilities.supports_fdx {
                             save_source_control |= self.draw_fdx_control(ui, &mut state);
                         }
+
+                        // -----------------------------
+                        // TX Test Tone (HL2, FDX Phase 2).
+                        // -----------------------------
+                        if state.source_capabilities.supports_tx_tune_test {
+                            self.draw_tx_test_tone_section(ui, &mut state);
+                        }
                     }
 
                     if save_source_control {
@@ -431,6 +438,79 @@ impl RigflowApp {
         );
 
         save
+    }
+
+    /// TX Test Tone (FDX Phase 2): transmit a pure SSB tone to visually verify
+    /// USB/LSB placement, carrier suppression and bandwidth.  Amplitude is the
+    /// Spot Level; drive is the TX Drive.  Diagnostic only — no audio is played.
+    /// Tone settings are client-local (not persisted).
+    fn draw_tx_test_tone_section(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        ui.separator();
+
+        ui.checkbox(&mut state.tx_tone_enabled, "TX Test Tone");
+        if !state.tx_tone_enabled {
+            // Hiding the section while a tone runs must also stop it.
+            if state.tx_tone_running {
+                self.send_radio_msg(ClientRadioMessage::StopTxTestTone);
+                state.tx_tone_running = false;
+            }
+            return;
+        }
+
+        // Mode: USB / LSB.
+        ui.horizontal(|ui| {
+            ui.label("Mode");
+            ui.radio_value(&mut state.tx_tone_usb, true, "USB");
+            ui.radio_value(&mut state.tx_tone_usb, false, "LSB");
+        });
+
+        // Tone frequency (Hz).
+        ui.horizontal(|ui| {
+            ui.label("Tone");
+            ui.add(
+                egui::DragValue::new(&mut state.tx_tone_freq_hz)
+                    .speed(10.0)
+                    .range(100.0..=12_000.0)
+                    .fixed_decimals(0)
+                    .suffix(" Hz"),
+            );
+        });
+
+        // Start / Stop.
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!state.tx_tone_running, egui::Button::new("Start Tone"))
+                .clicked()
+            {
+                self.send_radio_msg(ClientRadioMessage::StartTxTestTone {
+                    tone_hz: state.tx_tone_freq_hz,
+                    usb: state.tx_tone_usb,
+                });
+                state.tx_tone_running = true;
+            }
+            if ui
+                .add_enabled(state.tx_tone_running, egui::Button::new("Stop Tone"))
+                .clicked()
+            {
+                self.send_radio_msg(ClientRadioMessage::StopTxTestTone);
+                state.tx_tone_running = false;
+            }
+        });
+
+        if state.tx_tone_running {
+            ui.label(
+                egui::RichText::new("● Transmitting tone…")
+                    .small()
+                    .color(egui::Color32::from_rgb(100, 220, 100)),
+            );
+        }
+        if !state.source_control.fdx_enabled {
+            ui.label(
+                egui::RichText::new("Enable FDX to see the tone on the spectrum/waterfall.")
+                    .small()
+                    .weak(),
+            );
+        }
     }
 
     /// SWR Sweep section: editable Start/Stop (MHz), a Run/Cancel button, and a

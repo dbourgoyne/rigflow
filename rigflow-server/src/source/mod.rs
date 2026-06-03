@@ -118,4 +118,31 @@ pub trait IqSource {
             ..TxTuneResult::default()
         }
     }
+
+    /// Transmit an open-ended SSB **test tone** (FDX Phase 2): a pure sine fed
+    /// through the transmit path as a complex baseband signal, so the HL2 DUC
+    /// places it above (`usb = true`) or below (`usb = false`) the carrier.
+    ///
+    /// Runs until `stop` is set.  Amplitude is `spot_level_percent / 100` (FS);
+    /// drive comes from `tx_drive_percent`.  While running, RX IQ decoded during
+    /// transmit is handed to `on_rx_iq` (used for FDX spectrum/waterfall) — this
+    /// is the only output; audio is never touched.
+    ///
+    /// # Safety contract for overrides
+    /// - PTT MUST be released on every exit path (normal stop, fault).
+    /// - The drive register MUST be safed-off on exit.
+    ///
+    /// Default: not supported.
+    fn tx_test_tone(
+        &mut self,
+        _target_freq_hz: u64,
+        _tone_hz: f32,
+        _usb: bool,
+        _tx_drive_percent: f32,
+        _spot_level_percent: f32,
+        _stop: &std::sync::atomic::AtomicBool,
+        _on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
+    ) -> Result<(), String> {
+        Err("not_supported".to_string())
+    }
 }

@@ -94,6 +94,12 @@ struct SharedControlState {
     swr_sweep_cancel: bool,
     last_swr_sweep_result: Option<SwrSweepResult>,
     swr_sweep_progress: Option<SwrSweepProgress>,
+
+    /// TX test tone (FDX Phase 2): pending start request `(tone_hz, usb)` set by
+    /// the command thread and taken by the capture thread; `tx_tone_stop` is the
+    /// stop signal the capture thread polls while the (open-ended) tone runs.
+    pending_tx_tone: Option<(f32, bool)>,
+    tx_tone_stop: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -437,6 +443,8 @@ fn run_iq_worker_threads(
         swr_sweep_cancel: false,
         last_swr_sweep_result: None,
         swr_sweep_progress: None,
+        pending_tx_tone: None,
+        tx_tone_stop: Arc::new(AtomicBool::new(false)),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -626,6 +634,11 @@ fn spawn_command_thread(
                     WorkerCommand::Stop { reason } => {
                         set_stop_reason(&stop_reason, reason);
                         stop_flag.store(true, Ordering::Relaxed);
+                        // Also break any in-flight TX test tone so the capture
+                        // thread (blocked in tx_test_tone) releases PTT promptly.
+                        if let Ok(cs) = control.lock() {
+                            cs.tx_tone_stop.store(true, Ordering::Relaxed);
+                        }
                         break;
                     }
                     WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
@@ -762,6 +775,26 @@ fn spawn_command_thread(
                         if let Ok(mut cs) = control.lock() {
                             cs.swr_sweep_cancel = true;
                             cs.pending_swr_sweep = None;
+                        }
+                    }
+
+                    WorkerCommand::StartTxTestTone { tone_hz, usb } => {
+                        info!(
+                            "[radio-worker] StartTxTestTone queued: tone={tone_hz} Hz mode={}",
+                            if usb { "USB" } else { "LSB" }
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_tone_stop.store(false, Ordering::Relaxed);
+                            cs.pending_tx_tone = Some((tone_hz, usb));
+                        }
+                    }
+
+                    WorkerCommand::StopTxTestTone => {
+                        if let Ok(mut cs) = control.lock() {
+                            // Signal a running tone to stop, and cancel any
+                            // not-yet-started request.
+                            cs.tx_tone_stop.store(true, Ordering::Relaxed);
+                            cs.pending_tx_tone = None;
                         }
                     }
                 },
@@ -1300,6 +1333,43 @@ fn spawn_capture_thread(
                                 total,
                             });
                             cs.swr_sweep_cancel = false;
+                        }
+                    }
+                }
+            }
+
+            // Execute any pending TX test tone (FDX Phase 2).  Open-ended: the
+            // source transmits the SSB tone until `tx_tone_stop` is set by a
+            // StopTxTestTone command.  RX IQ decoded during the tone is pushed
+            // straight to the waterfall/spectrum path (FDX) each iteration via
+            // the `forward` closure, so the tone is visible while it runs.  Audio
+            // is untouched (we never feed iq_audio_tx here).
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .and_then(|mut cs| cs.pending_tx_tone.take());
+
+                if let Some((tone_hz, usb)) = pending {
+                    let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                    let spot_level_percent = control_snapshot.source_control.spot_level_percent;
+                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    let stop = control.lock().ok().map(|cs| cs.tx_tone_stop.clone());
+
+                    if let Some(stop) = stop {
+                        let mut forward = |iq: Vec<Complex32>| {
+                            let _ = iq_wf_tx.try_send(iq);
+                        };
+                        if let Err(e) = source.tx_test_tone(
+                            target_freq_hz,
+                            tone_hz,
+                            usb,
+                            tx_drive_percent,
+                            spot_level_percent,
+                            &stop,
+                            &mut forward,
+                        ) {
+                            warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
                         }
                     }
                 }

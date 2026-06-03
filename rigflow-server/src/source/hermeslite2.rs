@@ -373,6 +373,83 @@ impl HermesLite2Source {
             .map_err(|e| format!("HL2: send TX packet failed: {e}"))
     }
 
+    /// Send one H2D packet whose TX IQ slots carry an **SSB test tone** — a
+    /// complex baseband sine `A·e^{±j·θ}` sampled at the 48 kHz TX rate.  The
+    /// HL2 DUC mixes this baseband up to the TX NCO, so a positive-frequency
+    /// baseband tone lands **above** the carrier (USB) and a negative one
+    /// **below** (LSB).  This is exactly the SSB-modulator output for a single
+    /// audio tone — the same complex-baseband form future mic/CW/digital TX will
+    /// produce — so it exercises the real transmit path, not a special carrier.
+    ///
+    /// Sideband selection is the sign of the imaginary (Q) part:
+    /// - `usb = true`  → `Q = +A·sin θ`  (tone above carrier)
+    /// - `usb = false` → `Q = −A·sin θ`  (tone below carrier)
+    ///
+    /// Packing matches the established orientation (`field0 = imag`,
+    /// `field1 = real`) used by `send_tx_packet` and the RX decode — the
+    /// non-inverting convention.  `phase` is advanced across all 126 samples and
+    /// carried between packets so the tone is phase-continuous.
+    fn send_tx_tone_packet(
+        &mut self,
+        nco_freq_hz: u32,
+        amplitude_fs: f32,
+        tone_hz: f32,
+        usb: bool,
+        ptt: bool,
+        phase: &mut f64,
+    ) -> Result<(), String> {
+        const TX_SAMPLE_RATE_HZ: f64 = 48_000.0;
+        let amp = amplitude_fs.clamp(0.0, 1.0) * 0x7FFF as f32;
+        let dphi = std::f64::consts::TAU * tone_hz as f64 / TX_SAMPLE_RATE_HZ;
+        let q_sign: f32 = if usb { 1.0 } else { -1.0 };
+
+        let ptt_bit = ptt as u8;
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        let freq_bytes = nco_freq_hz.to_be_bytes();
+        let gain_byte = 0x40 | (self.lna_gain_code & 0x3F);
+
+        // Fill one 63-sample sub-frame, advancing `phase` per sample.
+        let fill = |sf: &mut [u8], c0: u8, hdr: [u8; 4], phase: &mut f64| {
+            sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
+            sf[3] = c0;
+            sf[4..8].copy_from_slice(&hdr);
+            for i in 0..P1_SAMPLES_PER_SUBFRAME {
+                let re = (amp * phase.cos() as f32).round().clamp(-32767.0, 32767.0) as i16;
+                let im = (amp * q_sign * phase.sin() as f32)
+                    .round()
+                    .clamp(-32767.0, 32767.0) as i16;
+                let b = 8 + i * 8;
+                // L/R audio [b..b+4] remain 0; field0 = imag, field1 = real.
+                sf[b + 4..b + 6].copy_from_slice(&im.to_be_bytes());
+                sf[b + 6..b + 8].copy_from_slice(&re.to_be_bytes());
+                *phase += dphi;
+                if *phase >= std::f64::consts::TAU {
+                    *phase -= std::f64::consts::TAU;
+                }
+            }
+        };
+
+        // Sub-frame 1: TX1 NCO register (C0 = 0x02 | ptt).
+        fill(&mut pkt[8..520], 0x02 | ptt_bit, freq_bytes, phase);
+        // Sub-frame 2: LNA gain register (C0 = 0x14 | ptt).
+        fill(
+            &mut pkt[520..1032],
+            0x14 | ptt_bit,
+            [0, 0, 0, gain_byte],
+            phase,
+        );
+
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send TX tone packet failed: {e}"))
+    }
+
     fn speed_code(&self) -> u8 {
         match self.sample_rate_hz as u32 {
             96_000 => 0x01,
@@ -1068,6 +1145,163 @@ impl IqSource for HermesLite2Source {
                 "max raw fwd={fwd_raw:?} rev={rev_raw:?} cur={cur_raw:?} \
                  @ {effective_amplitude:.3} FS, drive {drive_level}/255 (uncalibrated)"
             )),
+        }
+    }
+
+    /// Open-ended SSB test tone (FDX Phase 2).  Transmits a phase-continuous
+    /// complex-baseband sine through the TX path until `stop` is set; the HL2
+    /// DUC places it above the carrier for USB and below for LSB.  Reuses the
+    /// Spot machinery: NCO program, drive register + PA enable, FIFO pre-fill,
+    /// paced PTT loop, FDX RX-IQ forwarding, and PTT/drive safe-off on exit.
+    fn tx_test_tone(
+        &mut self,
+        target_freq_hz: u64,
+        tone_hz: f32,
+        usb: bool,
+        tx_drive_percent: f32,
+        spot_level_percent: f32,
+        stop: &std::sync::atomic::AtomicBool,
+        on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
+    ) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+
+        // ── Safety constants ─────────────────────────────────────────────
+        const TX_SAMPLE_RATE_HZ: f32 = 48_000.0;
+        const SAMPLES_PER_PACKET: f32 = 126.0;
+        const TX_FIFO_PREFILL_PACKETS: usize = 20;
+        const PTT_GRACE_MS: u128 = 60;
+        // Hard ceiling: even if no Stop arrives (e.g. client vanished) the tone
+        // auto-keys-down so a stuck PTT cannot cook the PA.
+        const HARD_MAX_TONE_MS: u128 = 30_000;
+        const HF_MIN_HZ: u64 = 1_800_000;
+        const HF_MAX_HZ: u64 = 30_000_000;
+
+        // ── Parameter clamping ───────────────────────────────────────────
+        let tx_drive_percent = tx_drive_percent.clamp(0.0, 100.0);
+        let spot_level_percent = spot_level_percent.clamp(0.0, 100.0);
+        let amplitude = (spot_level_percent / 100.0).clamp(0.0, 1.0);
+        let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
+        let tone_hz = tone_hz.clamp(0.0, 12_000.0);
+
+        info!(
+            "[hl2 tx-tone] mode={} tone={tone_hz:.0} Hz amplitude={amplitude:.2} FS \
+             drive={tx_drive_percent:.0}% drive_level={drive_level}/255 target={target_freq_hz} Hz",
+            if usb { "USB" } else { "LSB" }
+        );
+
+        // ── Pre-checks (mirror Spot) ─────────────────────────────────────
+        if target_freq_hz < HF_MIN_HZ || target_freq_hz > HF_MAX_HZ {
+            return Err(format!(
+                "{target_freq_hz} Hz outside HF TX range ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
+            ));
+        }
+        if self.status_regs.raddr0_valid && self.status_regs.tx_inhibited {
+            return Err("TX inhibited by hardware".to_string());
+        }
+
+        let target_u32 = target_freq_hz as u32;
+        self.send_tx_rx_nco(target_u32)
+            .map_err(|e| format!("NCO program failed: {e}"))?;
+
+        if let Err(e) = self.send_tx_drive_cc(drive_level, true) {
+            let _ = self.send_tx_drive_cc(0, false);
+            return Err(format!("drive-level program failed: {e}"));
+        }
+
+        let packet_period = Duration::from_secs_f32(SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+        let mut phase: f64 = 0.0;
+
+        // Drain stale DDC packets; go non-blocking for the run.
+        let _ = self.socket.set_nonblocking(true);
+        {
+            let mut buf = [0u8; P1_PACKET_LEN];
+            let mut discard = VecDeque::new();
+            while let Ok(len) = self.socket.recv(&mut buf) {
+                if len == P1_PACKET_LEN {
+                    parse_ddc_packet(&buf, &mut discard, &mut self.status_regs);
+                }
+            }
+        }
+
+        // ── FIFO pre-fill (PTT=0) ────────────────────────────────────────
+        for _ in 0..TX_FIFO_PREFILL_PACKETS {
+            if let Err(e) =
+                self.send_tx_tone_packet(target_u32, amplitude, tone_hz, usb, false, &mut phase)
+            {
+                let _ = self.send_gain_cc();
+                let _ = self.send_tx_drive_cc(0, false);
+                let _ = self.socket.set_nonblocking(false);
+                return Err(format!("pre-fill send failed: {e}"));
+            }
+            thread::sleep(packet_period);
+        }
+        self.status_regs.recovery_bits = 0;
+
+        // ── Paced PTT loop (PTT=1) until stop / hard ceiling ─────────────
+        let tx_start = Instant::now();
+        let mut next_tick = Instant::now();
+        let mut fault: Option<String> = None;
+
+        while !stop.load(Ordering::Relaxed) {
+            let now = Instant::now();
+            let elapsed_ms = tx_start.elapsed().as_millis();
+            if elapsed_ms >= HARD_MAX_TONE_MS {
+                warn!("[hl2 tx-tone] hard {HARD_MAX_TONE_MS} ms ceiling reached — auto key-down");
+                break;
+            }
+
+            if now < next_tick {
+                thread::sleep(next_tick - now);
+                next_tick += packet_period;
+            } else {
+                next_tick = now + packet_period;
+            }
+
+            if let Err(e) =
+                self.send_tx_tone_packet(target_u32, amplitude, tone_hz, usb, true, &mut phase)
+            {
+                fault = Some(format!("tone send failed: {e}"));
+                break;
+            }
+
+            // Drain DDC status + RX IQ; forward RX IQ to FDX (spectrum/waterfall).
+            let mut rx_buf = [0u8; P1_PACKET_LEN];
+            while let Ok(len) = self.socket.recv(&mut rx_buf) {
+                if len == P1_PACKET_LEN {
+                    let mut decoded = VecDeque::new();
+                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    if self.fdx_enabled && !decoded.is_empty() {
+                        on_rx_iq(decoded.into_iter().collect());
+                    }
+                }
+            }
+
+            // FIFO anomaly guard (fatal only after the grace window).
+            if self.status_regs.raddr0_valid
+                && self.status_regs.recovery_bits != 0
+                && elapsed_ms >= PTT_GRACE_MS
+            {
+                let bits = self.status_regs.recovery_bits;
+                fault = Some(format!(
+                    "TX FIFO anomaly during tone: recovery_bits={bits:#02b}"
+                ));
+                break;
+            }
+        }
+
+        // ── Safe-off (every exit path) ───────────────────────────────────
+        // send_gain_cc releases PTT and restores the RX NCO to center_freq_hz.
+        let _ = self.send_gain_cc();
+        let _ = self.send_tx_drive_cc(0, false);
+        let _ = self.socket.set_nonblocking(false);
+        info!(
+            "[hl2 tx-tone] stopped after {} ms (fault={fault:?})",
+            tx_start.elapsed().as_millis()
+        );
+
+        match fault {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 }

@@ -722,6 +722,40 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::StartTxTestTone { tone_hz, usb } => {
+            info!(
+                "[websocket] StartTxTestTone: tone={tone_hz} Hz mode={}",
+                if usb { "USB" } else { "LSB" }
+            );
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::StartTxTestTone { tone_hz, usb },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "start_tx_test_tone_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::StopTxTestTone => {
+            info!("[websocket] StopTxTestTone");
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StopTxTestTone)
+                    .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "stop_tx_test_tone_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::RequestSwrSweep { start_hz, stop_hz } => {
             info!("[websocket] RequestSwrSweep: {start_hz}..{stop_hz} Hz");
             if let Err(err) = send_worker_command_for_session(

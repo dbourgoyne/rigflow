@@ -1,22 +1,14 @@
-use serde::{Deserialize, Serialize};
 use rigflow_core::{
+    dsp::modes::{DeemphasisMode, DemodMode, Sideband},
     radio::{
-	HardwareKind,
-	LeaseId,
-	RadioCapabilities,
-	RadioId,
-	source_control::{
-            DirectSamplingMode,
-            GainMode,
-            SourceCapabilities,
-            SourceControlState,
-        },
+        source_control::{DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState},
         source_status::SourceStatus,
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_tune::TxTuneResult,
+        HardwareKind, LeaseId, RadioCapabilities, RadioId,
     },
-    dsp::modes::{DemodMode, Sideband, DeemphasisMode},
 };
+use serde::{Deserialize, Serialize};
 
 /// Default squelch open threshold (dBFS) for `#[serde(default)]` decoding.
 pub fn default_squelch_threshold_db() -> f32 {
@@ -115,7 +107,7 @@ pub enum ClientRadioMessage {
     },
 
     SetDeemphasisMode {
-    mode: DeemphasisMode,
+        mode: DeemphasisMode,
     },
 
     /// Enable/disable receive squelch (radio control, DSP-side).
@@ -154,23 +146,23 @@ pub enum ClientRadioMessage {
     },
 
     SetSourceSampleRate {
-	sample_rate_hz: u32,
+        sample_rate_hz: u32,
     },
 
     SetSourceGainMode {
-	mode: GainMode,
+        mode: GainMode,
     },
 
     SetSourceGain {
-	gain_db: f32,
+        gain_db: f32,
     },
 
     SetSourcePpmCorrection {
-	ppm: i32,
+        ppm: i32,
     },
 
     SetSourceDirectSampling {
-	mode: DirectSamplingMode,
+        mode: DirectSamplingMode,
     },
 
     /// Set the transmit drive level in percent (0–100).  Part of source
@@ -209,6 +201,18 @@ pub enum ClientRadioMessage {
         duration_ms: u32,
     },
 
+    /// Start an open-ended SSB **test tone** (FDX Phase 2): a pure sine fed
+    /// through the transmit path.  `usb = true` places it above the carrier
+    /// (USB), `false` below (LSB).  Amplitude = Spot Level; drive = TX Drive.
+    /// Requires FDX to see it on the spectrum/waterfall.  Diagnostic only.
+    StartTxTestTone {
+        tone_hz: f32,
+        usb: bool,
+    },
+
+    /// Stop a running TX test tone (release PTT, return to receive).
+    StopTxTestTone,
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {
@@ -231,9 +235,7 @@ pub enum ClientRadioMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerRadioMessage {
     /// Response to `ListRadios`.
-    RadiosListed {
-        radios: Vec<RadioInfo>,
-    },
+    RadiosListed { radios: Vec<RadioInfo> },
 
     /// Lease successfully acquired.
     RadioAcquired {
@@ -245,9 +247,7 @@ pub enum ServerRadioMessage {
     },
 
     /// Lease released (either by client or server).
-    RadioReleased {
-        radio_id: RadioId,
-    },
+    RadioReleased { radio_id: RadioId },
 
     /// Lease successfully renewed.
     LeaseRenewed {
@@ -281,11 +281,11 @@ pub enum ServerRadioMessage {
         /// Current demodulation state
         demod_mode: DemodMode,
         sideband: Sideband,
-	
+
         ssb_pitch_hz: f32,
-	cw_pitch_hz: f32,
-	filter_bandwidth_hz: f32,
-	deemphasis_mode: DeemphasisMode,
+        cw_pitch_hz: f32,
+        filter_bandwidth_hz: f32,
+        deemphasis_mode: DeemphasisMode,
 
         /// Receive squelch (radio control).  `#[serde(default)]` keeps older
         /// peers that omit these decodable.
@@ -320,7 +320,7 @@ pub enum ServerRadioMessage {
         #[serde(default = "default_volume_percent")]
         volume_percent: u8,
 
-	source_control: SourceControlState,
+        source_control: SourceControlState,
 
         /// Current source telemetry / status fields.
         source_status: SourceStatus,
@@ -350,9 +350,9 @@ pub enum ServerRadioMessage {
         sideband: Option<Sideband>,
 
         ssb_pitch_hz: Option<f32>,
-	cw_pitch_hz: Option<f32>,
-	filter_bandwidth_hz: Option<f32>,
-	deemphasis_mode: Option<DeemphasisMode>,
+        cw_pitch_hz: Option<f32>,
+        filter_bandwidth_hz: Option<f32>,
+        deemphasis_mode: Option<DeemphasisMode>,
 
         #[serde(default)]
         squelch_enabled: Option<bool>,
@@ -375,7 +375,7 @@ pub enum ServerRadioMessage {
         #[serde(default)]
         volume_percent: Option<u8>,
 
-	source_control: Option<SourceControlState>,
+        source_control: Option<SourceControlState>,
 
         /// Changed source telemetry; `None` means no change since last update.
         source_status: Option<SourceStatus>,

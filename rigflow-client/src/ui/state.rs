@@ -226,6 +226,16 @@ pub struct UiState {
     /// Whether the results popup is open, and the last CSV-export status line.
     pub show_swr_sweep_window: bool,
     pub swr_sweep_csv_status: Option<String>,
+
+    // ── TX Test Tone (FDX Phase 2; client-local, not persisted) ─────────
+    /// Master enable for the TX Test Tone section (shows the controls).
+    pub tx_tone_enabled: bool,
+    /// Sideband: `true` = USB (tone above carrier), `false` = LSB (below).
+    pub tx_tone_usb: bool,
+    /// Tone audio frequency in Hz.
+    pub tx_tone_freq_hz: f32,
+    /// True while a tone is transmitting (Start pressed, not yet stopped).
+    pub tx_tone_running: bool,
 }
 
 impl Default for UiState {
@@ -352,6 +362,10 @@ impl Default for UiState {
             swr_sweep_progress: None,
             show_swr_sweep_window: false,
             swr_sweep_csv_status: None,
+            tx_tone_enabled: false,
+            tx_tone_usb: true,
+            tx_tone_freq_hz: 1000.0,
+            tx_tone_running: false,
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

@@ -196,6 +196,15 @@ pub enum WorkerCommand {
     RequestTxTuneTest {
         duration_ms: u32,
     },
+    /// Start an open-ended SSB test tone (FDX Phase 2).  `usb = true` places the
+    /// tone above the carrier (USB), `false` below (LSB).  Amplitude comes from
+    /// `source_control.spot_level_percent`, drive from `tx_drive_percent`.
+    StartTxTestTone {
+        tone_hz: f32,
+        usb: bool,
+    },
+    /// Stop a running TX test tone (release PTT, return to RX).
+    StopTxTestTone,
 }
 
 /// Worker lifecycle/status updates.
