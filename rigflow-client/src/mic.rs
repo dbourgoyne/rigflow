@@ -194,6 +194,18 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
             err_fn,
             None,
         ),
+        cpal::SampleFormat::U8 => device.build_input_stream(
+            &config,
+            move |data: &[u8], _| proc.feed_u8(data),
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I8 => device.build_input_stream(
+            &config,
+            move |data: &[i8], _| proc.feed_i8(data),
+            err_fn,
+            None,
+        ),
         other => return Err(format!("unsupported input sample format {other:?}")),
     }
     .map_err(|e| format!("build input stream: {e}"))?;
@@ -283,6 +295,28 @@ impl MicProc {
                 .map(|&s| (s as f32 - 32768.0) / 32768.0)
                 .sum::<f32>()
                 / frame.len() as f32;
+            self.mono.push(m);
+        }
+        self.process();
+    }
+
+    fn feed_u8(&mut self, data: &[u8]) {
+        self.mono.clear();
+        for frame in data.chunks(self.channels) {
+            let m = frame
+                .iter()
+                .map(|&s| (s as f32 - 128.0) / 128.0)
+                .sum::<f32>()
+                / frame.len() as f32;
+            self.mono.push(m);
+        }
+        self.process();
+    }
+
+    fn feed_i8(&mut self, data: &[i8]) {
+        self.mono.clear();
+        for frame in data.chunks(self.channels) {
+            let m = frame.iter().map(|&s| s as f32 / 128.0).sum::<f32>() / frame.len() as f32;
             self.mono.push(m);
         }
         self.process();
