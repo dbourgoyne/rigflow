@@ -114,12 +114,10 @@ impl MicShared {
 }
 
 /// A running microphone capture stream.  Holding it keeps capture alive; drop
-/// to stop.  `requested` is what the operator asked for ("" = default);
-/// `device_name` is the device actually opened; `fell_back` is true when the
-/// requested device was missing and we used the default.
+/// to stop.  `device_name` is the device actually opened; `fell_back` is true
+/// when the requested device was missing and we used the default.
 pub struct MicCapture {
     _stream: cpal::Stream,
-    pub requested: String,
     pub device_name: String,
     pub fell_back: bool,
 }
@@ -211,7 +209,6 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
 
     Ok(MicCapture {
         _stream: stream,
-        requested: requested.to_string(),
         device_name,
         fell_back,
     })
