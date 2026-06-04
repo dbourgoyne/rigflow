@@ -20,6 +20,65 @@ pub struct SourceControlState {
     pub gain_db: f32,
     pub ppm_correction: i32,
     pub direct_sampling: DirectSamplingMode,
+
+    /// Transmit drive level in percent (0–100).  Operator transmit-power
+    /// control; applies to all transmit operations (Spot/SWR now, voice/data
+    /// later).  Persisted and synced like the other source-control fields.
+    /// `#[serde(default)]` so older persisted state without it loads cleanly.
+    #[serde(default = "default_tx_drive_percent")]
+    pub tx_drive_percent: f32,
+
+    /// N2ADR HF filter board enabled (HL2).  When set, the server programs the
+    /// correct band filter from the tuned frequency.  Persisted/synced like the
+    /// other source-control fields.
+    #[serde(default)]
+    pub n2adr_enabled: bool,
+
+    /// FDX / TX Monitor Spectrum (HL2).  When set, RX IQ captured during a
+    /// Spot/SWR (or SWR sweep) transmit is forwarded into the receive DSP
+    /// pipeline so the spectrum and waterfall stay live (and the transmit
+    /// carrier becomes visible) instead of freezing.  Visual monitoring only —
+    /// it does not change audio.  Persisted/synced like the other fields.
+    #[serde(default)]
+    pub fdx_enabled: bool,
+
+    /// Spot Level in percent (0–100): the digital carrier IQ amplitude used for
+    /// Spot / SWR / SWR-sweep transmits (`amplitude_fs = spot_level_percent /
+    /// 100`).  Matches Quisk's Spot-slider behaviour.  Affects ONLY Spot/SWR —
+    /// not voice/CW/digital TX.  RF power ≈ TX Drive × Spot Level.
+    /// Persisted/synced like the other source-control fields.
+    #[serde(default = "default_spot_level_percent")]
+    pub spot_level_percent: f32,
+
+    /// TX PTT sequencing lead delay in ms (0–100): PTT is asserted, then this
+    /// delay elapses (relays settle) BEFORE any RF is emitted.  Shared by all
+    /// HL2 transmit paths (Spot/SWR/sweep/test-tone, future CW).  Persisted.
+    #[serde(default = "default_tx_ptt_lead_ms")]
+    pub tx_ptt_lead_ms: u32,
+
+    /// TX PTT sequencing tail delay in ms (0–100): after RF stops, PTT is held
+    /// for this delay BEFORE release (prevents hot-switching relays).  Persisted.
+    #[serde(default = "default_tx_ptt_tail_ms")]
+    pub tx_ptt_tail_ms: u32,
+}
+
+pub fn default_tx_drive_percent() -> f32 {
+    10.0
+}
+
+/// Quisk's default Spot level is 500 / 1000 = 50%.
+pub fn default_spot_level_percent() -> f32 {
+    50.0
+}
+
+/// Default PTT lead delay (ms) — enough for typical relay actuation.
+pub fn default_tx_ptt_lead_ms() -> u32 {
+    20
+}
+
+/// Default PTT tail delay (ms).
+pub fn default_tx_ptt_tail_ms() -> u32 {
+    20
 }
 
 impl Default for SourceControlState {
@@ -30,6 +89,12 @@ impl Default for SourceControlState {
             gain_db: 0.0,
             ppm_correction: 0,
             direct_sampling: DirectSamplingMode::Off,
+            tx_drive_percent: default_tx_drive_percent(),
+            n2adr_enabled: false,
+            fdx_enabled: false,
+            spot_level_percent: default_spot_level_percent(),
+            tx_ptt_lead_ms: default_tx_ptt_lead_ms(),
+            tx_ptt_tail_ms: default_tx_ptt_tail_ms(),
         }
     }
 }
@@ -53,6 +118,25 @@ pub struct SourceCapabilities {
 
     pub tuner_freq_hz_min: u32,
     pub tuner_freq_hz_max: u32,
+
+    /// Whether the source supports a TX tune test (short low-power carrier
+    /// pulse used to measure forward/reverse power and SWR).
+    ///
+    /// This is a capability flag only. The actual TX tune test protocol
+    /// is not yet implemented; the UI skeleton is always disabled while
+    /// this is `false`.
+    pub supports_tx_tune_test: bool,
+
+    /// Whether the source supports amateur Band Control + N2ADR filter board
+    /// (HL2).  Gates the Band/N2ADR section in Source Control.
+    #[serde(default)]
+    pub supports_band_control: bool,
+
+    /// Whether the source supports FDX / TX Monitor Spectrum (keeping RX
+    /// spectrum/waterfall alive during Spot/SWR).  Gates the FDX section in
+    /// Source Control.
+    #[serde(default)]
+    pub supports_fdx: bool,
 }
 
 impl SourceCapabilities {
@@ -72,6 +156,10 @@ impl SourceCapabilities {
 
             tuner_freq_hz_min: 0,
             tuner_freq_hz_max: 0,
+
+            supports_tx_tune_test: false,
+            supports_band_control: false,
+            supports_fdx: false,
         }
     }
 }

@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
@@ -7,6 +8,7 @@ use crate::net::control::ControlCommand;
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
 use crate::persistence::PersistenceStore;
+use crate::sidetone::SidetoneShared;
 
 use crate::ui::state::UiState;
 
@@ -17,6 +19,11 @@ pub struct RigflowApp {
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
     pub persistence_store: PersistenceStore,
     pub waterfall_texture: Option<egui::TextureHandle>,
+
+    /// Text-to-CW sender control (shared with its timer thread): `cw_text_abort`
+    /// requests a prompt stop; `cw_text_sending` is true while a message plays.
+    pub cw_text_abort: Arc<AtomicBool>,
+    pub cw_text_sending: Arc<AtomicBool>,
 }
 
 impl RigflowApp {
@@ -34,6 +41,8 @@ impl RigflowApp {
             spectrum_db,
             persistence_store,
             waterfall_texture: None,
+            cw_text_abort: Arc::new(AtomicBool::new(false)),
+            cw_text_sending: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -44,6 +53,107 @@ impl RigflowApp {
 
     pub(crate) fn send_radio_msg(&self, msg: ClientRadioMessage) {
         let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
+    }
+
+    /// Space-bar CW keying (CW TX Phase 1).  Space held = CW key down, released
+    /// = key up.  Only active when a radio is acquired, the source supports TX,
+    /// and the current mode is CW.  Edge-detected against `cw_key_down` so a
+    /// single Start/Stop is sent per press (no auto-repeat spam).  When a text
+    /// edit has keyboard focus we treat Space as "not keying" so it isn't stolen
+    /// from text widgets (and any in-progress key is released).
+    fn handle_cw_keying(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        use rigflow_core::dsp::modes::DemodMode;
+
+        let typing = ctx.wants_keyboard_input();
+        let space_held = !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+
+        let cw_ready = snapshot.radio_acquired
+            && snapshot.source_capabilities.supports_tx_tune_test
+            && matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl);
+        let want_key = space_held && cw_ready;
+
+        // Keep the lock-free sidetone control current every frame so CW Pitch
+        // and Sidetone Volume changes take effect immediately.  The Arc is
+        // shared with the audio callback; writing via the snapshot clone hits
+        // the same inner state.
+        snapshot.sidetone.set_pitch_hz(snapshot.pitch_hz);
+        snapshot
+            .sidetone
+            .set_volume(snapshot.cw_sidetone_volume as f32 / 100.0);
+
+        // Only act on a transition; this also releases the key if the operator
+        // leaves CW mode, releases the radio, or focuses a text field mid-hold.
+        if want_key != snapshot.cw_key_down {
+            if want_key {
+                self.send_radio_msg(ClientRadioMessage::StartCwKey);
+            } else {
+                self.send_radio_msg(ClientRadioMessage::StopCwKey);
+            }
+            // Start/stop the local sidetone immediately (no server round-trip).
+            snapshot.sidetone.set_keyed(want_key);
+            if let Ok(mut state) = self.state.lock() {
+                state.cw_key_down = want_key;
+            }
+        }
+    }
+
+    /// Start the client-side Text-to-CW sender for `text` (used by the Send
+    /// button, the macro buttons, and the F1–F4 shortcuts).  Spawns the timer
+    /// thread; the server sees only StartCwKey/StopCwKey.
+    pub(crate) fn trigger_cw_text(&self, text: String, wpm: u32, sidetone: Arc<SidetoneShared>) {
+        crate::cw_text::spawn_send(
+            text,
+            wpm,
+            self.ws_cmd_tx.clone(),
+            sidetone,
+            Arc::clone(&self.cw_text_abort),
+            Arc::clone(&self.cw_text_sending),
+        );
+    }
+
+    /// F1–F4 fire CW memory macros via Text-to-CW.  Only when a radio is
+    /// acquired, the source supports TX, the mode is CWU/CWL, no text field has
+    /// focus, and no message is already sending.  Empty macros do nothing.
+    fn handle_cw_macros(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        use rigflow_core::dsp::modes::DemodMode;
+        use std::sync::atomic::Ordering;
+
+        if ctx.wants_keyboard_input()
+            || !snapshot.radio_acquired
+            || !snapshot.source_capabilities.supports_tx_tune_test
+            || !matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl)
+            || self.cw_text_sending.load(Ordering::Relaxed)
+        {
+            return;
+        }
+
+        let idx = ctx.input(|i| {
+            if i.key_pressed(egui::Key::F1) {
+                Some(0)
+            } else if i.key_pressed(egui::Key::F2) {
+                Some(1)
+            } else if i.key_pressed(egui::Key::F3) {
+                Some(2)
+            } else if i.key_pressed(egui::Key::F4) {
+                Some(3)
+            } else {
+                None
+            }
+        });
+
+        if let Some(i) = idx {
+            let text = snapshot.cw_macros[i].text.clone();
+            if text.trim().is_empty() {
+                return;
+            }
+            let wpm = snapshot.cw_speed_wpm;
+            // Mirror the macro into the message field, then send.
+            if let Ok(mut state) = self.state.lock() {
+                state.cw_message = text.clone();
+            }
+            self.trigger_cw_text(text, wpm, Arc::clone(&snapshot.sidetone));
+            self.save_cw_message_to_current_operator();
+        }
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
@@ -139,11 +249,14 @@ impl eframe::App for RigflowApp {
         let config_mode = !snapshot.server_connected;
 
         self.handle_keyboard_shortcuts(ctx);
+        self.handle_cw_keying(ctx, &snapshot);
+        self.handle_cw_macros(ctx, &snapshot);
         self.draw_left_panel(ctx, &snapshot, config_mode);
         self.draw_center_panel(ctx, &snapshot);
         self.draw_add_operator_dialog(ctx);
         self.draw_add_bookmark_dialog(ctx);
         self.draw_delete_operator_dialog(ctx);
+        self.draw_swr_sweep_window(ctx);
 
         ctx.request_repaint();
     }

@@ -18,6 +18,7 @@ use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ,
 };
+use crate::dsp::audio::nr2::Nr2;
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
@@ -29,12 +30,21 @@ use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
+use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::swr_sweep::{
+    sweep_frequency_hz, validate_sweep_range, SwrSweepPoint, SwrSweepProgress, SwrSweepResult,
+    SWR_SWEEP_POINTS,
+};
+use rigflow_core::radio::tx_tune::TxTuneResult;
 
 /// How often to re-send a C&C packet to the HL2 when the user isn't tuning.
 /// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
 const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Spot/SWR pulse duration used for each SWR-sweep point (same as a single Spot).
+const SWR_SWEEP_SPOT_MS: u32 = 250;
 
 #[derive(Debug, Clone)]
 struct SharedControlState {
@@ -46,9 +56,58 @@ struct SharedControlState {
     cw_pitch_hz: f32,
     filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
+    /// Receive squelch (radio control).  enabled/threshold set by the command
+    /// thread; `squelch_open` is the live gate state written by the DSP thread.
+    squelch_enabled: bool,
+    squelch_threshold_db: f32,
+    squelch_open: bool,
+    /// NR2 spectral noise reduction enabled (radio control, DSP-side).
+    nr2_enabled: bool,
+    /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max suppression).
+    nr2_strength: f32,
+    /// AGC (automatic gain control) — radio control, DSP-side.
+    agc_enabled: bool,
+    agc_strength: f32,
+    /// S-meter (read-only status): smoothed channel signal strength.
+    /// `signal_dbm` is an uncalibrated relative dBm; `signal_s_units` is 0..=9.
+    /// Written by the DSP thread.
+    signal_dbm: f32,
+    signal_s_units: i32,
+    /// Receive-audio volume in percent (0–100) — final audio gain stage.
+    volume_percent: u8,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
+
+    /// Set by command thread when a Spot/SWR measurement arrives; consumed
+    /// (taken) by the capture thread which owns the IQ source.  TX drive comes
+    /// from `source_control.tx_drive_percent`, not from the request.
+    pending_tx_tune_test: Option<u32>, // duration_ms
+
+    /// Written by capture thread after executing a TX tune test dry run;
+    /// read by DSP thread to detect changes and publish RuntimeChanged.
+    last_tx_tune_result: Option<TxTuneResult>,
+
+    /// SWR sweep: pending request (start,stop) set by the command thread and
+    /// taken by the capture thread; cancel flag; result + live progress.
+    pending_swr_sweep: Option<(u64, u64)>,
+    swr_sweep_cancel: bool,
+    last_swr_sweep_result: Option<SwrSweepResult>,
+    swr_sweep_progress: Option<SwrSweepProgress>,
+
+    /// TX test tone (FDX Phase 2): pending start request `(tone_hz, usb)` set by
+    /// the command thread and taken by the capture thread; `tx_tone_stop` is the
+    /// stop signal the capture thread polls while the (open-ended) tone runs.
+    pending_tx_tone: Option<(f32, bool)>,
+    tx_tone_stop: Arc<AtomicBool>,
+
+    /// CW keying: `pending_cw_key` starts a keying session; `cw_key_held` is the
+    /// live key state the session polls.  `cw_hang_ms` is the semi-break-in hang
+    /// time — PTT stays asserted this long after the last element before release
+    /// (0 = release immediately, like per-element keying).
+    pending_cw_key: bool,
+    cw_key_held: Arc<AtomicBool>,
+    cw_hang_ms: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -227,7 +286,7 @@ fn pipeline_cfg_for_source(
         DemodMode::Usb => (4_000.0, 3_000.0),
         DemodMode::Lsb => (4_000.0, 3_000.0),
         DemodMode::Am => (6_000.0, 5_000.0),
-        DemodMode::Cw => (1_200.0, 900.0),
+        DemodMode::Cwu | DemodMode::Cwl => (1_200.0, 900.0),
     };
 
     DspPipelineConfig {
@@ -247,6 +306,36 @@ fn pipeline_cfg_for_source(
     }
 }
 
+/// Receive-volume gain from a percent (0–100).
+///
+/// `0%` → silence; `50%` → unity; `100%` → +12 dB.  In dB:
+/// `gain_db = ((vp - 50) / 50) * 12`, then `gain = 10^(gain_db/20)`.
+/// (50% = 1.0×, 75% ≈ +6 dB ≈ 2.0×, 100% = +12 dB ≈ 3.98×.)
+fn volume_gain(volume_percent: u8) -> f32 {
+    if volume_percent == 0 {
+        return 0.0;
+    }
+    let db = ((volume_percent.min(100) as f32 - 50.0) / 50.0) * 12.0;
+    10.0_f32.powf(db / 20.0)
+}
+
+/// Soft limiter applied after the volume boost so loud/boosted audio can't
+/// hard-clip harshly at the i16 conversion.
+///
+/// Transparent (identity) for `|x| <= THRESHOLD`, then a smooth tanh knee that
+/// asymptotes to ±1.0.  Continuous in value and slope at the threshold; output
+/// is always finite and bounded to [-1, 1].
+fn soft_clip(x: f32) -> f32 {
+    const THRESHOLD: f32 = 0.95;
+    let a = x.abs();
+    if a <= THRESHOLD {
+        x
+    } else {
+        let over = (a - THRESHOLD) / (1.0 - THRESHOLD);
+        x.signum() * (THRESHOLD + (1.0 - THRESHOLD) * over.tanh())
+    }
+}
+
 fn build_runtime_state(
     control: &SharedControlState,
     input_sample_rate_hz: f32,
@@ -260,8 +349,21 @@ fn build_runtime_state(
         cw_pitch_hz: control.cw_pitch_hz,
         filter_bandwidth_hz: control.filter_bandwidth_hz,
         deemphasis_mode: control.deemphasis_mode,
+        squelch_enabled: control.squelch_enabled,
+        squelch_threshold_db: control.squelch_threshold_db,
+        squelch_open: control.squelch_open,
+        nr2_enabled: control.nr2_enabled,
+        nr2_strength: control.nr2_strength,
+        agc_enabled: control.agc_enabled,
+        agc_strength: control.agc_strength,
+        signal_dbm: control.signal_dbm,
+        signal_s_units: control.signal_s_units,
+        volume_percent: control.volume_percent,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
+        last_tx_tune_result: control.last_tx_tune_result.clone(),
+        last_swr_sweep_result: control.last_swr_sweep_result.clone(),
+        swr_sweep_progress: control.swr_sweep_progress,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -331,8 +433,29 @@ fn run_iq_worker_threads(
         cw_pitch_hz: 600.0,
         filter_bandwidth_hz: 3000.0, // sensible default
         deemphasis_mode: default_deemphasis_mode(server_cfg.demod).unwrap_or(DeemphasisMode::Off),
+        squelch_enabled: false,
+        squelch_threshold_db: -90.0,
+        squelch_open: true,
+        nr2_enabled: false,
+        nr2_strength: 0.5,
+        agc_enabled: true,
+        agc_strength: 0.5,
+        signal_dbm: crate::dsp::smeter::MIN_DBM,
+        signal_s_units: 0,
+        volume_percent: 50,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
+        pending_tx_tune_test: None,
+        last_tx_tune_result: None,
+        pending_swr_sweep: None,
+        swr_sweep_cancel: false,
+        last_swr_sweep_result: None,
+        swr_sweep_progress: None,
+        pending_tx_tone: None,
+        tx_tone_stop: Arc::new(AtomicBool::new(false)),
+        pending_cw_key: false,
+        cw_key_held: Arc::new(AtomicBool::new(false)),
+        cw_hang_ms: 300,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -512,7 +635,7 @@ fn spawn_command_thread(
                                 DemodMode::Usb | DemodMode::Lsb => {
                                     control_state.ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
                                 }
-                                DemodMode::Cw => {
+                                DemodMode::Cwu | DemodMode::Cwl => {
                                     control_state.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
                                 }
                                 _ => {}
@@ -522,11 +645,53 @@ fn spawn_command_thread(
                     WorkerCommand::Stop { reason } => {
                         set_stop_reason(&stop_reason, reason);
                         stop_flag.store(true, Ordering::Relaxed);
+                        // Also break any in-flight TX test tone / CW key so the
+                        // capture thread (blocked in tx_test_tone / tx_cw_key)
+                        // runs its fall + releases PTT promptly.
+                        if let Ok(cs) = control.lock() {
+                            cs.tx_tone_stop.store(true, Ordering::Relaxed);
+                            cs.cw_key_held.store(false, Ordering::Relaxed);
+                        }
                         break;
                     }
                     WorkerCommand::SetFilterBandwidth { bandwidth_hz } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.filter_bandwidth_hz = bandwidth_hz.clamp(100.0, 20000.0);
+                        }
+                    }
+                    WorkerCommand::SetSquelchEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.squelch_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetSquelchThreshold { threshold_db } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
+                        }
+                    }
+                    WorkerCommand::SetNr2Enabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.nr2_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetNr2Strength { strength } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.nr2_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetAgcEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.agc_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetAgcStrength { strength } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.agc_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVolume { volume_percent } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.volume_percent = volume_percent.min(100);
                         }
                     }
                     WorkerCommand::SetDeemphasisMode { mode } => {
@@ -570,6 +735,109 @@ fn spawn_command_thread(
                     WorkerCommand::SetSourceDirectSampling { mode } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.source_control.direct_sampling = mode;
+                        }
+                    }
+
+                    WorkerCommand::SetSourceTxDrive { tx_drive_percent } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.tx_drive_percent =
+                                tx_drive_percent.clamp(0.0, 100.0);
+                        }
+                    }
+
+                    WorkerCommand::SetSourceSpotLevel { spot_level_percent } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.spot_level_percent =
+                                spot_level_percent.clamp(0.0, 100.0);
+                        }
+                    }
+
+                    WorkerCommand::SetSourceTxSequencing { lead_ms, tail_ms } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.tx_ptt_lead_ms = lead_ms.min(100);
+                            control_state.source_control.tx_ptt_tail_ms = tail_ms.min(100);
+                        }
+                    }
+
+                    WorkerCommand::SetSourceN2adrEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.n2adr_enabled = enabled;
+                        }
+                    }
+
+                    WorkerCommand::SetSourceFdxEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.source_control.fdx_enabled = enabled;
+                        }
+                    }
+
+                    WorkerCommand::RequestTxTuneTest { duration_ms } => {
+                        info!(
+                            "[radio-worker] RequestTxTuneTest queued: duration_ms={}",
+                            duration_ms
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            // Replace any previous pending request; only one
+                            // measurement runs at a time.
+                            cs.pending_tx_tune_test = Some(duration_ms);
+                        }
+                    }
+
+                    WorkerCommand::RequestSwrSweep { start_hz, stop_hz } => {
+                        info!("[radio-worker] RequestSwrSweep queued: {start_hz}..{stop_hz} Hz");
+                        if let Ok(mut cs) = control.lock() {
+                            cs.pending_swr_sweep = Some((start_hz, stop_hz));
+                            cs.swr_sweep_cancel = false;
+                        }
+                    }
+
+                    WorkerCommand::CancelSwrSweep => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.swr_sweep_cancel = true;
+                            cs.pending_swr_sweep = None;
+                        }
+                    }
+
+                    WorkerCommand::StartTxTestTone { tone_hz, usb } => {
+                        info!(
+                            "[radio-worker] StartTxTestTone queued: tone={tone_hz} Hz mode={}",
+                            if usb { "USB" } else { "LSB" }
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_tone_stop.store(false, Ordering::Relaxed);
+                            cs.pending_tx_tone = Some((tone_hz, usb));
+                        }
+                    }
+
+                    WorkerCommand::StopTxTestTone => {
+                        if let Ok(mut cs) = control.lock() {
+                            // Signal a running tone to stop, and cancel any
+                            // not-yet-started request.
+                            cs.tx_tone_stop.store(true, Ordering::Relaxed);
+                            cs.pending_tx_tone = None;
+                        }
+                    }
+
+                    WorkerCommand::StartCwKey => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.cw_key_held.store(true, Ordering::Relaxed);
+                            cs.pending_cw_key = true;
+                        }
+                    }
+
+                    WorkerCommand::StopCwKey => {
+                        if let Ok(mut cs) = control.lock() {
+                            // Drop the key: a running session runs the fall
+                            // envelope and (after the hang) releases PTT; a
+                            // not-yet-started one is cancelled.
+                            cs.cw_key_held.store(false, Ordering::Relaxed);
+                            cs.pending_cw_key = false;
+                        }
+                    }
+
+                    WorkerCommand::SetCwHangTime { hang_ms } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.cw_hang_ms = hang_ms.min(2_000);
                         }
                     }
                 },
@@ -671,6 +939,33 @@ fn spawn_waterfall_thread(
     })
 }
 
+/// FDX / TX Monitor Spectrum: forward RX IQ captured during a transmit into the
+/// **waterfall** thread, which produces BOTH the spectrum and waterfall data the
+/// client renders.  Deliberately not sent to the audio/DSP path, so transmit
+/// audio behaviour is unchanged (this feature is visual monitoring only).
+///
+/// Non-blocking (`try_send`): never stalls the capture thread, so Spot/SWR
+/// timing and the TX FIFO are unaffected.  Called after each `tx_tune_test`;
+/// `iq` is empty unless FDX is enabled, in which case this is a no-op.
+fn forward_fdx_iq(
+    iq: Vec<Complex32>,
+    iq_wf_tx: &std_mpsc::SyncSender<Vec<Complex32>>,
+    radio_id: &str,
+) {
+    if iq.is_empty() {
+        return;
+    }
+    let n = iq.len();
+    match iq_wf_tx.try_send(iq) {
+        Ok(()) => {
+            debug!("[hl2 fdx] forwarded {n} RX IQ samples to spectrum/waterfall ({radio_id})")
+        }
+        Err(_) => {
+            debug!("[hl2 fdx] waterfall queue full — dropped {n} FDX IQ samples ({radio_id})")
+        }
+    }
+}
+
 fn spawn_capture_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -735,6 +1030,18 @@ fn spawn_capture_thread(
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
         let mut last_cc_sent = Instant::now();
+        // N2ADR HF filter board (HL2): track the last band we programmed and the
+        // enable state so we only reprogram on band change or (re)enable.
+        let mut last_n2adr_band: Option<HamBand> = None;
+        let mut last_n2adr_enabled = false;
+        // FDX / TX Monitor Spectrum (HL2): mirror the enable state into the
+        // source so it retains RX IQ during transmit.  Only pushed on change.
+        let mut last_fdx_enabled = false;
+        // TX PTT sequencing (HL2): mirror lead/tail delays into the source so all
+        // transmit paths use them.  Pushed on change.  `u32::MAX` forces the
+        // first push.
+        let mut last_tx_lead_ms = u32::MAX;
+        let mut last_tx_tail_ms = u32::MAX;
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
@@ -883,6 +1190,59 @@ fn spawn_capture_thread(
                 last_cc_sent = Instant::now();
             }
 
+            // N2ADR HF filter board (HL2): when enabled, follow the tuned band.
+            // Reprogram only when the band changes or N2ADR was just enabled.
+            // Outside the supported bands the filter is left unchanged and no
+            // update is sent (per spec).  No-op on sources without N2ADR.
+            {
+                let just_enabled = current_source_control.n2adr_enabled && !last_n2adr_enabled;
+                if current_source_control.n2adr_enabled {
+                    if let Some(band) = band_from_frequency(control_snapshot.target_freq_hz) {
+                        if last_n2adr_band != Some(band) || just_enabled {
+                            let value = n2adr_filter_value_for_band(band);
+                            match source.set_n2adr_filter(value) {
+                                Ok(()) => {
+                                    info!(
+                                        "[hl2] band={} freq={} mode={:?} n2adr={}",
+                                        band.label(),
+                                        control_snapshot.target_freq_hz,
+                                        control_snapshot.demod_mode,
+                                        value
+                                    );
+                                    last_n2adr_band = Some(band);
+                                }
+                                Err(e) => warn!("HL2: N2ADR filter program failed: {e}"),
+                            }
+                        }
+                    }
+                } else if last_n2adr_enabled {
+                    // Just disabled: leave the hardware filter as-is; reset
+                    // tracking so a later re-enable reprograms.
+                    last_n2adr_band = None;
+                }
+                last_n2adr_enabled = current_source_control.n2adr_enabled;
+            }
+
+            // FDX / TX Monitor Spectrum (HL2): push the enable flag into the
+            // source on change so it knows whether to retain RX IQ during the
+            // next Spot/SWR.  No-op on sources that don't support FDX.
+            if current_source_control.fdx_enabled != last_fdx_enabled {
+                source.set_fdx_enabled(current_source_control.fdx_enabled);
+                last_fdx_enabled = current_source_control.fdx_enabled;
+            }
+
+            // TX PTT sequencing delays → source (used by all transmit paths).
+            if current_source_control.tx_ptt_lead_ms != last_tx_lead_ms
+                || current_source_control.tx_ptt_tail_ms != last_tx_tail_ms
+            {
+                source.set_tx_sequencing(
+                    current_source_control.tx_ptt_lead_ms,
+                    current_source_control.tx_ptt_tail_ms,
+                );
+                last_tx_lead_ms = current_source_control.tx_ptt_lead_ms;
+                last_tx_tail_ms = current_source_control.tx_ptt_tail_ms;
+            }
+
             // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState
             // so the DSP thread can include it in WorkerStatus updates.
             if last_status_poll.elapsed() >= status_poll_interval {
@@ -891,6 +1251,264 @@ fn spawn_capture_thread(
                     cs.source_status = new_status;
                 }
                 last_status_poll = Instant::now();
+            }
+
+            // Execute any pending TX tune test.
+            //
+            // The capture thread owns the IQ source exclusively, so
+            // tx_tune_test() must run here.  The result is stored in
+            // SharedControlState; the DSP thread detects the change and
+            // publishes a RuntimeChanged message to the client.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .and_then(|mut cs| cs.pending_tx_tune_test.take());
+
+                if let Some(duration_ms) = pending {
+                    // Spot/SWR transmits on the operator's target frequency (not
+                    // the RX DDC centre).  TX power is the configured source
+                    // drive percent, read from control state at measure time.
+                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                    let spot_level_percent = control_snapshot.source_control.spot_level_percent;
+                    info!(
+                        "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
+                        descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
+                    );
+
+                    let result = source.tx_tune_test(
+                        target_freq_hz,
+                        duration_ms,
+                        tx_drive_percent,
+                        spot_level_percent,
+                    );
+
+                    info!(
+                        "[radio-worker {}] TX tune test complete: result={:?}",
+                        descriptor.id.0, result.message
+                    );
+
+                    // FDX / TX Monitor Spectrum: forward any RX IQ the source
+                    // captured during the pulse into the spectrum/waterfall path
+                    // (see `forward_fdx_iq`).  Empty unless FDX is enabled.
+                    forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+
+                    if let Ok(mut cs) = control.lock() {
+                        cs.last_tx_tune_result = Some(result);
+                    }
+                }
+            }
+
+            // Execute any pending SWR sweep (server-side, reusing tx_tune_test).
+            // Runs the existing Spot/SWR at SWR_SWEEP_POINTS frequencies across a
+            // single (validated) band, at the configured TX drive.  Progress is
+            // written to control each point; a cancel flag stops it early.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .and_then(|mut cs| cs.pending_swr_sweep.take());
+
+                if let Some((start_hz, stop_hz)) = pending {
+                    let drive = control_snapshot.source_control.tx_drive_percent;
+                    let spot_level = control_snapshot.source_control.spot_level_percent;
+                    let n2adr_enabled = control_snapshot.source_control.n2adr_enabled;
+                    let total = SWR_SWEEP_POINTS;
+
+                    if let Err(reason) = validate_sweep_range(start_hz, stop_hz) {
+                        warn!(
+                            "[radio-worker {}] SWR sweep rejected: {reason}",
+                            descriptor.id.0
+                        );
+                    } else {
+                        info!(
+                            "[radio-worker {}] SWR sweep: {start_hz}..{stop_hz} Hz, \
+                             {total} points, drive={drive:.0}%",
+                            descriptor.id.0
+                        );
+
+                        // Single validated band → program its N2ADR filter once.
+                        if n2adr_enabled {
+                            if let Some(band) = band_from_frequency(start_hz) {
+                                let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
+                                last_n2adr_band = Some(band);
+                            }
+                        }
+
+                        if let Ok(mut cs) = control.lock() {
+                            cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                running: true,
+                                done: 0,
+                                total,
+                            });
+                        }
+
+                        let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
+                        let mut cancelled = false;
+                        for i in 0..total {
+                            if control
+                                .lock()
+                                .map(|cs| cs.swr_sweep_cancel)
+                                .unwrap_or(false)
+                            {
+                                cancelled = true;
+                                break;
+                            }
+                            let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
+                            let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive, spot_level);
+                            // FDX: keep spectrum/waterfall alive between points.
+                            forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+                            points.push(SwrSweepPoint {
+                                frequency_hz: freq,
+                                swr: r.swr,
+                                forward_raw: r.forward_raw,
+                                reverse_raw: r.reverse_raw,
+                            });
+                            if let Ok(mut cs) = control.lock() {
+                                cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                    running: true,
+                                    done: i + 1,
+                                    total,
+                                });
+                            }
+                        }
+
+                        let done = points.len() as u32;
+                        let result = SwrSweepResult {
+                            start_hz,
+                            stop_hz,
+                            points,
+                        };
+                        info!(
+                            "[radio-worker {}] SWR sweep {}: {done}/{total} points",
+                            descriptor.id.0,
+                            if cancelled { "cancelled" } else { "complete" }
+                        );
+                        if let Ok(mut cs) = control.lock() {
+                            cs.last_swr_sweep_result = Some(result);
+                            cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                running: false,
+                                done,
+                                total,
+                            });
+                            cs.swr_sweep_cancel = false;
+                        }
+                    }
+                }
+            }
+
+            // Execute any pending TX test tone (FDX Phase 2).  Open-ended: the
+            // source transmits the SSB tone until `tx_tone_stop` is set by a
+            // StopTxTestTone command.  RX IQ decoded during the tone is pushed
+            // straight to the waterfall/spectrum path (FDX) each iteration via
+            // the `forward` closure, so the tone is visible while it runs.  Audio
+            // is untouched (we never feed iq_audio_tx here).
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .and_then(|mut cs| cs.pending_tx_tone.take());
+
+                if let Some((tone_hz, usb)) = pending {
+                    let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                    let spot_level_percent = control_snapshot.source_control.spot_level_percent;
+                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    let stop = control.lock().ok().map(|cs| cs.tx_tone_stop.clone());
+
+                    if let Some(stop) = stop {
+                        let mut forward = |iq: Vec<Complex32>| {
+                            let _ = iq_wf_tx.try_send(iq);
+                        };
+                        if let Err(e) = source.tx_test_tone(
+                            target_freq_hz,
+                            tone_hz,
+                            usb,
+                            tx_drive_percent,
+                            spot_level_percent,
+                            &stop,
+                            &mut forward,
+                        ) {
+                            warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
+                        }
+                    }
+                }
+            }
+
+            // Execute any pending CW key (CW TX Phase 1).  Open-ended: the source
+            // keys the CW carrier (rise → sustain) until `cw_key_held` clears on
+            // key-up, then runs the fall envelope and releases PTT.  Validates CW
+            // mode here; sideband selects USB/LSB placement.  Forwards RX IQ to
+            // the waterfall/spectrum path (FDX) so the CW tone is visible.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .map(|mut cs| {
+                        let p = cs.pending_cw_key;
+                        cs.pending_cw_key = false;
+                        p
+                    })
+                    .unwrap_or(false);
+
+                if pending {
+                    let cw_usb = match control_snapshot.demod_mode {
+                        DemodMode::Cwu => Some(true),
+                        DemodMode::Cwl => Some(false),
+                        _ => None,
+                    };
+                    if cw_usb.is_none() {
+                        warn!(
+                            "[radio-worker {}] CW key ignored: mode is {:?}, not CWU/CWL",
+                            descriptor.id.0, control_snapshot.demod_mode
+                        );
+                        // Clear the held flag so a stale key doesn't linger.
+                        if let Ok(cs) = control.lock() {
+                            cs.cw_key_held.store(false, Ordering::Relaxed);
+                        }
+                    } else {
+                        let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                        let spot_level_percent = control_snapshot.source_control.spot_level_percent;
+                        // CW transmit pitch = the operator's CW pitch from Radio
+                        // Control (the same value used for RX CW demod), so TX and
+                        // RX share one pitch.
+                        let pitch_hz = control_snapshot.cw_pitch_hz;
+                        // CW TX side comes from the MODE (CWU=above, CWL=below),
+                        // never the generic SSB sideband field.
+                        let usb = cw_usb.unwrap();
+                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        // Semi break-in hang time (PTT persists between elements).
+                        let hang_ms = control_snapshot.cw_hang_ms;
+                        let held = control.lock().ok().map(|cs| cs.cw_key_held.clone());
+
+                        if let Some(held) = held {
+                            let mut forward = |iq: Vec<Complex32>| {
+                                let _ = iq_wf_tx.try_send(iq);
+                            };
+                            // The worker stop_flag aborts a session (clean fall +
+                            // release, no hang wait) on shutdown.
+                            if let Err(e) = source.tx_cw_key(
+                                target_freq_hz,
+                                pitch_hz,
+                                usb,
+                                tx_drive_percent,
+                                spot_level_percent,
+                                hang_ms,
+                                &held,
+                                &stop_flag,
+                                &mut forward,
+                            ) {
+                                warn!("[radio-worker {}] CW key error: {e}", descriptor.id.0);
+                            }
+                            // Re-sync the start signal to the live key state: if a
+                            // key-down arrived right as the session ended, start a
+                            // fresh session next iteration; otherwise clear it.
+                            if let Ok(mut cs) = control.lock() {
+                                cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
             }
 
             if !realtime {
@@ -972,6 +1590,8 @@ fn spawn_dsp_thread(
         ));
 
         pipeline.set_filter_bandwidth_hz(startup_info.runtime.filter_bandwidth_hz);
+        pipeline.set_agc_enabled(startup_info.runtime.agc_enabled);
+        pipeline.set_agc_strength(startup_info.runtime.agc_strength);
 
         if matches!(
             startup_info.runtime.demod_mode,
@@ -1002,6 +1622,28 @@ fn spawn_dsp_thread(
 
         let mut applied = current_control(&control);
 
+        // Receive-squelch gate state, owned by this (DSP) thread.  3 dB of
+        // hysteresis between the open and close thresholds prevents chatter.
+        const SQUELCH_HYSTERESIS_DB: f32 = 3.0;
+        let mut squelch_open = true;
+        let mut last_squelch_log = Instant::now();
+        let mut last_agc_log = Instant::now();
+
+        // S-meter: smoothed channel power (linear), with fast attack / slow
+        // release, published (throttled) as signal_dbm / signal_s_units.
+        let mut smoothed_channel_power: f32 = 0.0;
+        let mut last_smeter_update = Instant::now();
+
+        // Volume: final audio gain.  `applied_volume_gain` ramps toward the
+        // target across each block to avoid clicks when the slider moves.
+        // Initialised to unity (the 50 % default).
+        let mut applied_volume_gain: f32 = 1.0;
+        let mut last_volume_log = Instant::now();
+
+        // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
+        // Only engaged while enabled; reset on demod-mode / sample-rate change.
+        let mut nr2 = Nr2::new();
+
         loop {
             if stop_requested(&stop_flag) {
                 break;
@@ -1025,12 +1667,14 @@ fn spawn_dsp_thread(
                     pipeline_sample_rate_hz,
                 ));
                 pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                pipeline.set_agc_enabled(current.agc_enabled);
+                pipeline.set_agc_strength(current.agc_strength);
                 match current.demod_mode {
                     DemodMode::Usb | DemodMode::Lsb => {
                         pipeline.set_sideband(current.sideband);
                         pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
                     }
-                    DemodMode::Cw => {
+                    DemodMode::Cwu | DemodMode::Cwl => {
                         pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
                     }
                     _ => {}
@@ -1038,6 +1682,9 @@ fn spawn_dsp_thread(
                 pipeline.set_deemphasis_mode(current.deemphasis_mode);
                 // Drain IQ blocks that were captured at the old sample rate.
                 while iq_audio_rx.try_recv().is_ok() {}
+                // Audio config changed — clear NR2 and S-meter state.
+                nr2.reset();
+                smoothed_channel_power = 0.0;
                 changed = true;
             }
 
@@ -1048,6 +1695,60 @@ fn spawn_dsp_thread(
 
             if current.source_status != applied.source_status {
                 applied.source_status = current.source_status.clone();
+                changed = true;
+            }
+
+            if current.last_tx_tune_result != applied.last_tx_tune_result {
+                applied.last_tx_tune_result = current.last_tx_tune_result.clone();
+                changed = true;
+            }
+
+            if current.last_swr_sweep_result != applied.last_swr_sweep_result
+                || current.swr_sweep_progress != applied.swr_sweep_progress
+            {
+                applied.last_swr_sweep_result = current.last_swr_sweep_result.clone();
+                applied.swr_sweep_progress = current.swr_sweep_progress;
+                changed = true;
+            }
+
+            // Squelch is applied in the audio block (no pipeline change), but a
+            // settings or gate-state change still republishes runtime so the
+            // client stays in sync.  The live `squelch_open` is written to
+            // control by the audio block and observed here on the next pass.
+            if current.squelch_enabled != applied.squelch_enabled
+                || (current.squelch_threshold_db - applied.squelch_threshold_db).abs()
+                    > f32::EPSILON
+                || current.squelch_open != applied.squelch_open
+            {
+                changed = true;
+            }
+
+            // NR2 toggle/strength: no pipeline change, just republish for sync.
+            if current.nr2_enabled != applied.nr2_enabled
+                || (current.nr2_strength - applied.nr2_strength).abs() > f32::EPSILON
+            {
+                changed = true;
+            }
+
+            // AGC enable/strength → apply to the in-pipeline AGC stage.
+            if current.agc_enabled != applied.agc_enabled
+                || (current.agc_strength - applied.agc_strength).abs() > f32::EPSILON
+            {
+                pipeline.set_agc_enabled(current.agc_enabled);
+                pipeline.set_agc_strength(current.agc_strength);
+                changed = true;
+            }
+
+            // S-meter status update → republish (read-only; ~10 Hz while it
+            // moves, since the DSP thread refreshes it every 100 ms).
+            if (current.signal_dbm - applied.signal_dbm).abs() > 0.1
+                || current.signal_s_units != applied.signal_s_units
+            {
+                changed = true;
+            }
+
+            // Volume change → republish for client sync (gain applied below).
+            if current.volume_percent != applied.volume_percent {
                 changed = true;
             }
 
@@ -1094,13 +1795,15 @@ fn spawn_dsp_thread(
                 ));
 
                 pipeline.set_filter_bandwidth_hz(current.filter_bandwidth_hz);
+                pipeline.set_agc_enabled(current.agc_enabled);
+                pipeline.set_agc_strength(current.agc_strength);
 
                 match current.demod_mode {
                     DemodMode::Usb | DemodMode::Lsb => {
                         pipeline.set_sideband(current.sideband);
                         pipeline.set_ssb_pitch_hz(current.ssb_pitch_hz);
                     }
-                    DemodMode::Cw => {
+                    DemodMode::Cwu | DemodMode::Cwl => {
                         pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
                     }
                     _ => {}
@@ -1108,6 +1811,10 @@ fn spawn_dsp_thread(
 
                 // Reapply deemphasis because its effective behavior depends on demod mode.
                 pipeline.set_deemphasis_mode(current.deemphasis_mode);
+
+                // Demod mode changed — clear NR2 and S-meter state.
+                nr2.reset();
+                smoothed_channel_power = 0.0;
 
                 //		if changed {
                 //		    applied = current.clone();
@@ -1128,7 +1835,7 @@ fn spawn_dsp_thread(
                             changed = true;
                         }
                     }
-                    DemodMode::Cw => {
+                    DemodMode::Cwu | DemodMode::Cwl => {
                         if (current.cw_pitch_hz - applied.cw_pitch_hz).abs() > f32::EPSILON {
                             pipeline.set_cw_pitch_hz(current.cw_pitch_hz);
                             applied.cw_pitch_hz = current.cw_pitch_hz;
@@ -1153,7 +1860,140 @@ fn spawn_dsp_thread(
 
             match iq_audio_rx.recv_timeout(Duration::from_millis(10)) {
                 Ok(iq) => {
-                    let audio_f32 = pipeline.process_audio(&iq);
+                    let mut audio_f32 = pipeline.process_audio(&iq);
+
+                    // ── NR2 spectral noise reduction ─────────────────────────
+                    // Post-demod / post-audio-filter, before squelch.  When
+                    // disabled, audio passes through untouched (NR2 not called);
+                    // when first disabled, drop any accumulated state so a later
+                    // re-enable starts fresh.
+                    // ── S-meter ──────────────────────────────────────────────
+                    // Channel power was measured pre-demod inside process_audio.
+                    // Smooth it (fast attack / slow release) and publish dBm +
+                    // S-units (throttled).  Independent of demod/AGC/NR2/squelch.
+                    {
+                        let raw_power = pipeline.last_channel_power();
+                        let block_secs = (audio_f32.len() as f32 / 48_000.0).max(1e-4);
+                        let attack_a = 1.0 - (-block_secs / 0.1).exp(); // ~100 ms
+                        let release_a = 1.0 - (-block_secs / 0.5).exp(); // ~500 ms
+                        let a = if raw_power > smoothed_channel_power {
+                            attack_a
+                        } else {
+                            release_a
+                        };
+                        smoothed_channel_power += a * (raw_power - smoothed_channel_power);
+
+                        if last_smeter_update.elapsed() >= Duration::from_millis(100) {
+                            let dbm =
+                                crate::dsp::smeter::channel_power_to_dbm(smoothed_channel_power);
+                            let s = crate::dsp::smeter::dbm_to_s_units(dbm);
+                            if let Ok(mut cs) = control.lock() {
+                                cs.signal_dbm = dbm;
+                                cs.signal_s_units = s;
+                            }
+                            debug!(
+                                "[smeter] signal_power={:.3e} dbm={:.1} s_units={}",
+                                smoothed_channel_power, dbm, s
+                            );
+                            last_smeter_update = Instant::now();
+                        }
+                    }
+
+                    // AGC runs inside process_audio (post-demod, before NR2);
+                    // log its state at ~1 Hz for diagnostics.
+                    if last_agc_log.elapsed() >= Duration::from_millis(1000) {
+                        debug!(
+                            "[agc] agc_enabled={} agc_strength={:.2} envelope={:.4} gain={:.2}",
+                            current.agc_enabled,
+                            current.agc_strength,
+                            pipeline.agc_envelope(),
+                            pipeline.agc_current_gain(),
+                        );
+                        last_agc_log = Instant::now();
+                    }
+
+                    if current.nr2_enabled {
+                        nr2.set_strength(current.nr2_strength);
+                        audio_f32 = nr2.process(&audio_f32);
+                    } else if nr2.is_active() {
+                        nr2.reset();
+                    }
+
+                    // ── Receive squelch ──────────────────────────────────────
+                    // Measure this block's RMS level in dBFS (ref = full-scale
+                    // 1.0), apply hysteresis (open at threshold, close 3 dB
+                    // below), and mute the audio while the gate is closed.  A
+                    // packet is still emitted every time (silence when muted) so
+                    // audio timing stays stable; waterfall/spectrum are unaffected.
+                    if !audio_f32.is_empty() {
+                        let sum_sq: f32 = audio_f32.iter().map(|s| s * s).sum();
+                        let rms = (sum_sq / audio_f32.len() as f32).sqrt();
+                        let level_db = 20.0 * rms.max(1e-9).log10();
+
+                        if current.squelch_enabled {
+                            let open_thr = current.squelch_threshold_db;
+                            let close_thr = open_thr - SQUELCH_HYSTERESIS_DB;
+                            if squelch_open {
+                                if level_db < close_thr {
+                                    squelch_open = false;
+                                }
+                            } else if level_db >= open_thr {
+                                squelch_open = true;
+                            }
+                        } else {
+                            // Disabled → always pass; never mute.
+                            squelch_open = true;
+                        }
+
+                        // Mirror the gate state into control so the next loop's
+                        // change-detection republishes runtime to the client.
+                        if current.squelch_open != squelch_open {
+                            if let Ok(mut cs) = control.lock() {
+                                cs.squelch_open = squelch_open;
+                            }
+                        }
+
+                        if current.squelch_enabled && !squelch_open {
+                            audio_f32.iter_mut().for_each(|s| *s = 0.0);
+                        }
+
+                        if last_squelch_log.elapsed() >= Duration::from_millis(1000) {
+                            debug!(
+                                "[squelch] level={level_db:.1} dBFS open={squelch_open} \
+                                 enabled={} thr={:.1} dB",
+                                current.squelch_enabled, current.squelch_threshold_db
+                            );
+                            last_squelch_log = Instant::now();
+                        }
+                    }
+
+                    // ── Volume (+ soft limiter) ──────────────────────────────
+                    // Final receive-audio gain (after demod/AGC/NR2/squelch,
+                    // before packetization).  Mapping: 0% → silence, 50% →
+                    // unity, 100% → +12 dB; in dB, gain = ((vp-50)/50)*12.  The
+                    // gain ramps linearly across the block from the previously-
+                    // applied value to the target so slider moves are click-free.
+                    // A soft limiter (see soft_clip) follows so the boost can't
+                    // produce harsh clipping.  Affects only listening loudness.
+                    let target_volume_gain = volume_gain(current.volume_percent);
+                    let n = audio_f32.len();
+                    if n > 0 {
+                        let step = (target_volume_gain - applied_volume_gain) / n as f32;
+                        let mut g = applied_volume_gain;
+                        for s in audio_f32.iter_mut() {
+                            g += step;
+                            *s = soft_clip(*s * g);
+                        }
+                    }
+                    applied_volume_gain = target_volume_gain;
+
+                    if last_volume_log.elapsed() >= Duration::from_millis(1000) {
+                        debug!(
+                            "[volume] volume_percent={} volume_gain={:.3}",
+                            current.volume_percent, target_volume_gain
+                        );
+                        last_volume_log = Instant::now();
+                    }
 
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
                     for sample in audio_f32 {
@@ -1226,4 +2066,42 @@ fn normalize_initial_frequencies(
     );
 
     (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
+}
+
+#[cfg(test)]
+mod volume_tests {
+    use super::*;
+
+    #[test]
+    fn volume_gain_mapping() {
+        assert_eq!(volume_gain(0), 0.0); // silence
+        assert!((volume_gain(50) - 1.0).abs() < 1e-4); // unity
+        assert!((volume_gain(75) - 2.0).abs() < 0.05); // ~+6 dB ≈ 2.0x
+        assert!((volume_gain(100) - 3.981).abs() < 0.01); // +12 dB ≈ 3.98x
+                                                          // Monotonic increasing above 0%.
+        assert!(volume_gain(60) > volume_gain(50));
+        assert!(volume_gain(100) > volume_gain(75));
+    }
+
+    #[test]
+    fn soft_clip_transparent_below_threshold() {
+        for &x in &[-0.9_f32, -0.5, 0.0, 0.3, 0.95] {
+            assert!(
+                (soft_clip(x) - x).abs() < 1e-6,
+                "identity below threshold for {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn soft_clip_bounded_finite_and_sign_preserving() {
+        for &x in &[1.0_f32, 2.0, 4.0, 100.0, -4.0, -100.0] {
+            let y = soft_clip(x);
+            assert!(y.is_finite(), "finite for {x}");
+            assert!(y.abs() <= 1.0, "bounded for {x}: {y}");
+            assert_eq!(y.signum(), x.signum(), "sign preserved for {x}");
+        }
+        // Continuity-ish: just above threshold stays close to threshold.
+        assert!((soft_clip(0.96) - 0.95).abs() < 0.02);
+    }
 }

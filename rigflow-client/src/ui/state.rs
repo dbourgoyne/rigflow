@@ -1,13 +1,32 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::persistence::models::DemodPreferenceSetFile;
+use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
+use rigflow_core::radio::tx_tune::TxTuneResult;
 use rigflow_core::radio::RadioCapabilities;
+
+/// A single CW memory macro: a short button label and the text to transmit.
+#[derive(Debug, Clone, Default)]
+pub struct CwMacro {
+    pub label: String,
+    pub text: String,
+}
+
+/// The 4 default CW macros, built from [`crate::cw_text::CW_MACRO_DEFAULTS`].
+pub fn default_cw_macros() -> [CwMacro; 4] {
+    crate::cw_text::CW_MACRO_DEFAULTS.map(|(label, text)| CwMacro {
+        label: label.to_string(),
+        text: text.to_string(),
+    })
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct DebounceState {
@@ -47,6 +66,28 @@ pub struct UiState {
     pub filter_bandwidth_hz: f32,
 
     pub deemphasis_mode: DeemphasisMode,
+
+    /// Receive squelch (radio control).  `squelch_open` is server-reported
+    /// gate state (audio passing); the other two are operator controls.
+    pub squelch_enabled: bool,
+    pub squelch_threshold_db: f32,
+    pub squelch_open: bool,
+
+    /// NR2 spectral noise reduction enabled (radio control).
+    pub nr2_enabled: bool,
+    /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max).
+    pub nr2_strength: f32,
+
+    /// AGC (automatic gain control) — radio control.
+    pub agc_enabled: bool,
+    pub agc_strength: f32,
+
+    /// S-meter (read-only status): uncalibrated relative dBm + S-units (0..=9).
+    pub signal_dbm: f32,
+    pub signal_s_units: i32,
+
+    /// Receive-audio volume in percent (0–100).  Persisted per-operator.
+    pub volume_percent: u8,
 
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
@@ -177,6 +218,70 @@ pub struct UiState {
     /// control values to the server (used after applying saved preferences
     /// on radio acquire).
     pub pending_apply_source_control: bool,
+
+    // =====================================================================
+    // TX TUNE TEST (client-local; never persisted; never sent to server)
+    // =====================================================================
+    /// True while a TX tune test request has been sent and no result has
+    /// arrived yet.  Used to disable the "Measure SWR" button and show a
+    /// running indicator.  Never persisted.
+    pub tx_tune_running: bool,
+
+    /// Cached result from the most recent TX tune test measurement.
+    /// `status = NotRun` until an actual tune test is executed.
+    pub last_tx_tune_result: TxTuneResult,
+
+    // ── SWR Sweep (HL2) ─────────────────────────────────────────────────
+    /// Editable Start/Stop for the sweep, in MHz.
+    pub swr_sweep_start_mhz: f64,
+    pub swr_sweep_stop_mhz: f64,
+    /// Client-side validation error to show under the Run button.
+    pub swr_sweep_error: Option<String>,
+    /// Latest sweep result and live progress (from the server).
+    pub swr_sweep_result: Option<SwrSweepResult>,
+    pub swr_sweep_progress: Option<SwrSweepProgress>,
+    /// Whether the results popup is open, and the last CSV-export status line.
+    pub show_swr_sweep_window: bool,
+    pub swr_sweep_csv_status: Option<String>,
+
+    // ── TX Test Tone (FDX Phase 2; client-local, not persisted) ─────────
+    /// Master enable for the TX Test Tone section (shows the controls).
+    pub tx_tone_enabled: bool,
+    /// Sideband: `true` = USB (tone above carrier), `false` = LSB (below).
+    pub tx_tone_usb: bool,
+    /// Tone audio frequency in Hz.
+    pub tx_tone_freq_hz: f32,
+    /// True while a tone is transmitting (Start pressed, not yet stopped).
+    pub tx_tone_running: bool,
+
+    // ── CW keying (CW TX Phase 1; client-local, not persisted) ──────────
+    /// Tracks whether the Space bar is currently keying CW, for edge detection
+    /// (send StartCwKey on up→down, StopCwKey on down→up; no auto-repeat spam).
+    pub cw_key_down: bool,
+
+    // ── CW sidetone (client-local; never sent to server) ────────────────
+    /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
+    pub cw_sidetone_volume: u8,
+
+    /// CW semi-break-in hang time in ms (0–2000): how long PTT stays asserted
+    /// after the last CW element before releasing.  Sent to the server.
+    pub cw_hang_ms: u32,
+
+    // ── Text-to-CW (client-side Morse; persisted per operator) ──────────
+    /// The CW message text to send (also the "last used message").
+    pub cw_message: String,
+    /// Sending speed in words per minute (5–50).
+    pub cw_speed_wpm: u32,
+    /// CW memory macros (F1–F4): label + text, persisted per operator.
+    pub cw_macros: [CwMacro; 4],
+
+    /// Client-side CW decoder control + decoded-text output, shared lock-free
+    /// with the media thread that runs the decoder.  Not persisted.
+    pub cw_decode: Arc<crate::cw_decode::CwDecodeShared>,
+    /// Lock-free control state shared with the CPAL audio callback, which mixes
+    /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
+    /// the media runtime at startup; written here from the Space-bar handler.
+    pub sidetone: Arc<SidetoneShared>,
 }
 
 impl Default for UiState {
@@ -194,6 +299,16 @@ impl Default for UiState {
             pitch_hz: 0.0,
             filter_bandwidth_hz: 3000.0,
             deemphasis_mode: DeemphasisMode::Off,
+            squelch_enabled: false,
+            squelch_threshold_db: -90.0,
+            squelch_open: true,
+            nr2_enabled: false,
+            nr2_strength: 0.5,
+            agc_enabled: true,
+            agc_strength: 0.5,
+            signal_dbm: -140.0,
+            signal_s_units: 0,
+            volume_percent: 50,
             input_sample_rate_hz: 0.0,
 
             // =================================================================
@@ -283,6 +398,28 @@ impl Default for UiState {
             source_status: SourceStatus::default(),
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
+
+            tx_tune_running: false,
+            last_tx_tune_result: TxTuneResult::default(),
+            swr_sweep_start_mhz: 14.000_000,
+            swr_sweep_stop_mhz: 14.350_000,
+            swr_sweep_error: None,
+            swr_sweep_result: None,
+            swr_sweep_progress: None,
+            show_swr_sweep_window: false,
+            swr_sweep_csv_status: None,
+            tx_tone_enabled: false,
+            tx_tone_usb: true,
+            tx_tone_freq_hz: 1000.0,
+            tx_tone_running: false,
+            cw_key_down: false,
+            cw_sidetone_volume: 25,
+            cw_hang_ms: 300,
+            cw_message: String::new(),
+            cw_speed_wpm: 20,
+            cw_macros: default_cw_macros(),
+            cw_decode: Arc::new(crate::cw_decode::CwDecodeShared::default()),
+            sidetone: Arc::new(SidetoneShared::default()),
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

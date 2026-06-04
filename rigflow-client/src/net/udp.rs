@@ -3,18 +3,15 @@ use std::sync::{Arc, Mutex};
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
     net::udp_framing::{
-        is_valid_header, parse_media_header, STREAM_TYPE_AUDIO,
-        STREAM_TYPE_WATERFALL,
+        is_valid_header, parse_media_header, STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL,
     },
 };
 
-use crate::{
-    ui::{
-        layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
-        spectrum_utils::{estimate_row_floor_and_top_db, update_spectrum_db},
-        state::UiState,
-        waterfall::draw_row_db,
-    },
+use crate::ui::{
+    layout::{WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH},
+    spectrum_utils::{estimate_row_floor_and_top_db, update_spectrum_db},
+    state::UiState,
+    waterfall::draw_row_db,
 };
 
 /// Smoothing factor for adaptive waterfall normalization.
@@ -63,6 +60,7 @@ pub fn handle_media_packet(
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
     ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
+    cw_decoder: &mut crate::cw_decode::CwDecoder,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -85,7 +83,7 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
-            handle_audio_packet(payload, header.sequence, jitter);
+            handle_audio_packet(payload, header.sequence, jitter, cw_decoder);
         }
 
         STREAM_TYPE_WATERFALL => {
@@ -94,23 +92,14 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Waterfall, header.sequence);
             }
 
-            handle_waterfall_packet(
-                payload,
-                waterfall_buffer,
-                spectrum_db,
-		ui_state,
-            );
+            handle_waterfall_packet(payload, waterfall_buffer, spectrum_db, ui_state);
         }
 
         _ => {}
     }
 }
 
-fn update_sequence_stats(
-    stats: &mut MediaPacketStats,
-    kind: StreamKind,
-    sequence: u32,
-) {
+fn update_sequence_stats(stats: &mut MediaPacketStats, kind: StreamKind, sequence: u32) {
     match kind {
         StreamKind::Audio => {
             if let Some(prev) = stats.last_audio_sequence {
@@ -131,8 +120,7 @@ fn update_sequence_stats(
                 let expected = prev.wrapping_add(1);
 
                 if sequence > expected {
-                    stats.dropped_waterfall_packets +=
-                        (sequence - expected) as u64;
+                    stats.dropped_waterfall_packets += (sequence - expected) as u64;
                 } else if sequence < expected {
                     stats.late_waterfall_packets += 1;
                 }
@@ -147,6 +135,7 @@ fn handle_audio_packet(
     payload: &[u8],
     sequence: u32,
     jitter: &Arc<Mutex<JitterBuffer>>,
+    cw_decoder: &mut crate::cw_decode::CwDecoder,
 ) {
     if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
@@ -159,18 +148,17 @@ fn handle_audio_packet(
         samples.push(s as f32 / i16::MAX as f32);
     }
 
+    // Feed the received audio to the CW decoder (no-op unless enabled).  This
+    // only reads the samples — the receive audio path is untouched.
+    cw_decoder.process(&samples);
+
     if let Ok(mut jb) = jitter.lock() {
         jb.push_packet(sequence, samples);
     }
 }
 
-fn update_adaptive_waterfall_display(
-    row_db: &[f32],
-    ui_state: &Arc<Mutex<UiState>>,
-) {
-    let Some((row_floor_db, row_top_db)) =
-        estimate_row_floor_and_top_db(row_db)
-    else {
+fn update_adaptive_waterfall_display(row_db: &[f32], ui_state: &Arc<Mutex<UiState>>) {
+    let Some((row_floor_db, row_top_db)) = estimate_row_floor_and_top_db(row_db) else {
         return;
     };
 
@@ -182,20 +170,16 @@ fn update_adaptive_waterfall_display(
         let alpha = ADAPTIVE_NORMALIZATION_ALPHA;
 
         state.adaptive_top_db_estimate =
-            (1.0 - alpha) * state.adaptive_top_db_estimate
-                + alpha * row_top_db;
+            (1.0 - alpha) * state.adaptive_top_db_estimate + alpha * row_top_db;
 
         state.adaptive_floor_db_estimate =
-            (1.0 - alpha) * state.adaptive_floor_db_estimate
-            + alpha * row_floor_db;
+            (1.0 - alpha) * state.adaptive_floor_db_estimate + alpha * row_floor_db;
 
-	let adaptive_display_top_db =
-	    state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
+        let adaptive_display_top_db = state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
 
-	state.adaptive_range_db_estimate = (
-	    adaptive_display_top_db - state.adaptive_floor_db_estimate
-	)
-	    .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
+        state.adaptive_range_db_estimate = (adaptive_display_top_db
+            - state.adaptive_floor_db_estimate)
+            .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
     }
 }
 
@@ -210,8 +194,7 @@ fn handle_waterfall_packet(
     }
 
     // First 2 bytes are the waterfall payload length (big-endian u16).
-    let payload_len =
-        u16::from_be_bytes([payload_with_len[0], payload_with_len[1]]) as usize;
+    let payload_len = u16::from_be_bytes([payload_with_len[0], payload_with_len[1]]) as usize;
 
     let payload = &payload_with_len[2..];
 
@@ -227,12 +210,7 @@ fn handle_waterfall_packet(
     let mut row_db = Vec::with_capacity(payload.len() / 4);
 
     for chunk in payload.chunks_exact(4) {
-        row_db.push(f32::from_le_bytes([
-            chunk[0],
-            chunk[1],
-            chunk[2],
-            chunk[3],
-        ]));
+        row_db.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
 
     if !row_db.iter().all(|v| v.is_finite()) {
@@ -250,21 +228,21 @@ fn handle_waterfall_packet(
 
     // Read current display mapping controls.
     let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
-	if state.adaptive_waterfall_normalization {
+        if state.adaptive_waterfall_normalization {
             (
-		state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB,
-		state.adaptive_range_db_estimate,
-		state.display_zoom,
+                state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB,
+                state.adaptive_range_db_estimate,
+                state.display_zoom,
             )
-	} else {
+        } else {
             (
-		state.manual_waterfall_top_db,
-		state.manual_waterfall_range_db,
-		state.display_zoom,
+                state.manual_waterfall_top_db,
+                state.manual_waterfall_range_db,
+                state.display_zoom,
             )
-	}
+        }
     } else {
-	(-35.0, 70.0, 1.0)
+        (-35.0, 70.0, 1.0)
     };
 
     // Update waterfall image buffer using client-side dB mapping.
@@ -276,7 +254,7 @@ fn handle_waterfall_packet(
             &row_db,
             top_db,
             range_db,
-	    zoom,
+            zoom,
         );
     }
 }

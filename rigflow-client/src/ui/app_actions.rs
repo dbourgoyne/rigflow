@@ -22,13 +22,19 @@ impl RigflowApp {
             )
         };
 
-        let Some(radio_id) = radio_id else { return; };
-        if operator_id.trim().is_empty() { return; }
+        let Some(radio_id) = radio_id else {
+            return;
+        };
+        if operator_id.trim().is_empty() {
+            return;
+        }
 
         // Update the in-memory mirror so subsequent acquire-apply uses the
         // latest value even before the file is re-read.
         if let Ok(mut state) = self.state.lock() {
-            state.source_control_preferences.insert(radio_id.clone(), source_control.clone());
+            state
+                .source_control_preferences
+                .insert(radio_id.clone(), source_control.clone());
         }
 
         // Load-modify-save: update only the source_control_preferences entry
@@ -40,19 +46,19 @@ impl RigflowApp {
             Ok(s) => s,
             Err(err) => {
                 if let Ok(mut state) = self.state.lock() {
-                    state.persistence_status =
-                        format!("failed to load operator settings: {err}");
+                    state.persistence_status = format!("failed to load operator settings: {err}");
                 }
                 return;
             }
         };
 
-        settings.source_control_preferences.insert(radio_id, source_control);
+        settings
+            .source_control_preferences
+            .insert(radio_id, source_control);
 
         if let Err(err) = self.persistence_store.save_operator_settings(&settings) {
             if let Ok(mut state) = self.state.lock() {
-                state.persistence_status =
-                    format!("failed to save source control prefs: {err}");
+                state.persistence_status = format!("failed to save source control prefs: {err}");
             }
         }
     }
@@ -117,6 +123,86 @@ impl RigflowApp {
             Err(err) => {
                 if let Ok(mut state) = self.state.lock() {
                     state.persistence_status = format!("failed to load operator settings: {err}");
+                }
+            }
+        }
+    }
+
+    /// Persist the receive-audio volume (%) for the current operator.
+    pub(crate) fn save_volume_to_current_operator(&mut self) {
+        let (operator_id, volume_percent) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.volume_percent)
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(mut operator_settings) => {
+                operator_settings.volume_percent = volume_percent;
+
+                if let Err(err) = self
+                    .persistence_store
+                    .save_operator_settings(&operator_settings)
+                {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.persistence_status = format!("failed to save volume: {err}");
+                    }
+                } else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+                }
+            }
+
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator settings: {err}");
+                }
+            }
+        }
+    }
+
+    /// Persist the Text-to-CW message, speed, and memory macros for the current
+    /// operator.
+    pub(crate) fn save_cw_message_to_current_operator(&mut self) {
+        let (operator_id, cw_message, cw_speed_wpm, cw_macros) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.operator_id.clone(),
+                state.cw_message.clone(),
+                state.cw_speed_wpm,
+                state
+                    .cw_macros
+                    .iter()
+                    .map(|m| crate::persistence::models::CwMacroFile {
+                        label: m.label.clone(),
+                        text: m.text.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        if let Ok(mut operator_settings) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            operator_settings.cw_message = cw_message;
+            operator_settings.cw_speed_wpm = cw_speed_wpm;
+            operator_settings.cw_macros = cw_macros;
+            if let Err(err) = self
+                .persistence_store
+                .save_operator_settings(&operator_settings)
+            {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to save CW settings: {err}");
                 }
             }
         }

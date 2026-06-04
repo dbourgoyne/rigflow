@@ -90,14 +90,15 @@ fn extract_version(value: &Value) -> u32 {
 /// v1 → v2: add `waterfall_display_preferences` with defaults if missing.
 fn migrate_v1_to_v2(mut value: Value) -> Value {
     if let Some(obj) = value.as_object_mut() {
-        obj.entry("waterfall_display_preferences").or_insert_with(|| {
-            json!({
-                "display_zoom": 1.0,
-                "adaptive_waterfall_normalization": true,
-                "manual_waterfall_top_db": -35.0,
-                "manual_waterfall_range_db": 70.0
-            })
-        });
+        obj.entry("waterfall_display_preferences")
+            .or_insert_with(|| {
+                json!({
+                    "display_zoom": 1.0,
+                    "adaptive_waterfall_normalization": true,
+                    "manual_waterfall_top_db": -35.0,
+                    "manual_waterfall_range_db": 70.0
+                })
+            });
     }
     value
 }
@@ -206,8 +207,14 @@ mod tests {
     #[test]
     fn v2_existing_waterfall_prefs_are_preserved() {
         let (migrated, _) = migrate_operator_settings_value(minimal_v2()).unwrap();
-        assert_eq!(migrated["waterfall_display_preferences"]["display_zoom"], 1.5);
-        assert_eq!(migrated["waterfall_display_preferences"]["manual_waterfall_top_db"], -40.0);
+        assert_eq!(
+            migrated["waterfall_display_preferences"]["display_zoom"],
+            1.5
+        );
+        assert_eq!(
+            migrated["waterfall_display_preferences"]["manual_waterfall_top_db"],
+            -40.0
+        );
     }
 
     #[test]
@@ -284,10 +291,7 @@ mod tests {
     #[test]
     fn demod_preferences_preserved_through_migration() {
         let (migrated, _) = migrate_operator_settings_value(minimal_v2()).unwrap();
-        assert_eq!(
-            migrated["demod_preferences"]["cw"]["pitch_hz"],
-            600.0
-        );
+        assert_eq!(migrated["demod_preferences"]["cw"]["pitch_hz"], 600.0);
         assert_eq!(
             migrated["demod_preferences"]["usb"]["filter_bandwidth_hz"],
             2700.0

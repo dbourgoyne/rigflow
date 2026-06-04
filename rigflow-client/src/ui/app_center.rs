@@ -172,6 +172,33 @@ impl RigflowApp {
 				    ),
 				);
 			    }
+
+				    // Mouse-wheel fine tuning over the spectrum: +/-50 Hz per
+				    // notch, through the same clamp/tune path as keys and click-to-
+				    // tune (server-side validation preserved).  Local target is
+				    // updated so rapid scrolls accumulate before the server echo.
+				    if interaction.scroll_target_delta_hz != 0.0
+					&& snapshot.radio_acquired
+				    {
+					let limits =
+					    crate::ui::freq_limits::active_freq_limits(snapshot);
+					let new_target = crate::ui::freq_limits::clamp_target(
+					    snapshot.target_freq_hz + interaction.scroll_target_delta_hz,
+					    snapshot.center_freq_hz,
+					    snapshot.input_sample_rate_hz,
+					    &limits,
+					);
+					if let Ok(mut state) = self.state.lock() {
+					    state.target_freq_hz = new_target;
+					}
+					let _ = self.ws_cmd_tx.send(
+					    ControlCommand::RadioMessage(
+						rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+						    target_freq_hz: new_target as u64,
+						},
+					    ),
+					);
+				    }
                         },
                     );
 
@@ -196,6 +223,7 @@ impl RigflowApp {
                                     .max(100.0);
 
                                 let mut clicked_freq_hz = None;
+                                let mut wheel_delta_hz = 0.0_f32;
 
                                 ui.horizontal(|ui| {
                                     ui.add_space(LEFT_GUTTER);
@@ -207,6 +235,21 @@ impl RigflowApp {
 					.sense(egui::Sense::click());
 
                                     let response = ui.add(image);
+
+                                    // Mouse-wheel fine tuning over the waterfall:
+                                    // ±50 Hz per notch (same step/path as the
+                                    // spectrum), only while hovering the image.
+                                    if response.hovered() {
+                                        let scroll_y =
+                                            ui.ctx().input(|i| i.raw_scroll_delta.y);
+                                        if scroll_y > 0.0 {
+                                            wheel_delta_hz =
+                                                crate::ui::spectrum_view::WHEEL_TUNE_STEP_HZ;
+                                        } else if scroll_y < 0.0 {
+                                            wheel_delta_hz =
+                                                -crate::ui::spectrum_view::WHEEL_TUNE_STEP_HZ;
+                                        }
+                                    }
 
                                     if response.clicked()
                                         && snapshot.input_sample_rate_hz > 0.0
@@ -277,6 +320,31 @@ impl RigflowApp {
                                             ),
                                         );
                                     }
+                                }
+
+                                // Apply waterfall mouse-wheel fine tuning through
+                                // the same clamp/tune path (server-side validation
+                                // preserved); local target updated so rapid
+                                // scrolls accumulate.
+                                if wheel_delta_hz != 0.0 && snapshot.radio_acquired {
+                                    let limits =
+                                        crate::ui::freq_limits::active_freq_limits(snapshot);
+                                    let new_target = crate::ui::freq_limits::clamp_target(
+                                        snapshot.target_freq_hz + wheel_delta_hz,
+                                        snapshot.center_freq_hz,
+                                        snapshot.input_sample_rate_hz,
+                                        &limits,
+                                    );
+                                    if let Ok(mut state) = self.state.lock() {
+                                        state.target_freq_hz = new_target;
+                                    }
+                                    let _ = self.ws_cmd_tx.send(
+                                        ControlCommand::RadioMessage(
+                                            rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                                                target_freq_hz: new_target as u64,
+                                            },
+                                        ),
+                                    );
                                 }
                             }
                         },

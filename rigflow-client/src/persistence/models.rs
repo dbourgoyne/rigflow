@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::ui::om_bands::LicenseClass;
-use rigflow_core::dsp::modes::{DemodMode, Sideband, DeemphasisMode};
+use rigflow_core::dsp::modes::{DeemphasisMode, DemodMode, Sideband};
 use rigflow_core::radio::source_control::SourceControlState;
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
@@ -57,7 +57,7 @@ impl DemodPreferencesFile {
         Self {
             filter_bandwidth_hz,
             pitch_hz,
-	    deemphasis_mode,
+            deemphasis_mode,
         }
     }
 }
@@ -75,12 +75,12 @@ pub struct DemodPreferenceSetFile {
 impl Default for DemodPreferenceSetFile {
     fn default() -> Self {
         Self {
-            wfm: DemodPreferencesFile::new(15_000.0,   0.0, DeemphasisMode::Tau75us),
-            nfm: DemodPreferencesFile::new( 4_000.0,   0.0, DeemphasisMode::Tau75us),
-            am:  DemodPreferencesFile::new( 5_000.0,   0.0, DeemphasisMode::Off),
-            usb: DemodPreferencesFile::new( 2_700.0,   0.0, DeemphasisMode::Off),
-            lsb: DemodPreferencesFile::new( 2_700.0,   0.0, DeemphasisMode::Off),
-            cw:  DemodPreferencesFile::new(   500.0, 600.0, DeemphasisMode::Off),
+            wfm: DemodPreferencesFile::new(15_000.0, 0.0, DeemphasisMode::Tau75us),
+            nfm: DemodPreferencesFile::new(4_000.0, 0.0, DeemphasisMode::Tau75us),
+            am: DemodPreferencesFile::new(5_000.0, 0.0, DeemphasisMode::Off),
+            usb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
+            lsb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
+            cw: DemodPreferencesFile::new(500.0, 600.0, DeemphasisMode::Off),
         }
     }
 }
@@ -93,7 +93,8 @@ impl DemodPreferenceSetFile {
             DemodMode::Am => self.am,
             DemodMode::Usb => self.usb,
             DemodMode::Lsb => self.lsb,
-            DemodMode::Cw => self.cw,
+            // CWU and CWL share one CW preference set (filter bw, pitch).
+            DemodMode::Cwu | DemodMode::Cwl => self.cw,
         }
     }
 
@@ -104,7 +105,7 @@ impl DemodPreferenceSetFile {
             DemodMode::Am => &mut self.am,
             DemodMode::Usb => &mut self.usb,
             DemodMode::Lsb => &mut self.lsb,
-            DemodMode::Cw => &mut self.cw,
+            DemodMode::Cwu | DemodMode::Cwl => &mut self.cw,
         }
     }
 }
@@ -131,8 +132,53 @@ pub struct OperatorSettingsFile {
     ///
     /// Added in schema v3.  Deserialization falls back to an empty map so
     /// that a migrated file that is somehow missing this field still loads.
+    /// TX Drive (`tx_drive_percent`) lives inside `SourceControlState`, so it
+    /// persists per-radio here alongside sample rate / gain.
     #[serde(default)]
     pub source_control_preferences: HashMap<String, SourceControlState>,
+
+    /// Receive-audio volume in percent (0–100), persisted per operator.
+    /// Serde default so older settings files load without migration.
+    #[serde(default = "default_volume_percent")]
+    pub volume_percent: u8,
+
+    /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
+    #[serde(default)]
+    pub cw_message: String,
+
+    /// Text-to-CW: sending speed in WPM (5–50).  Serde default for old files.
+    #[serde(default = "default_cw_speed_wpm")]
+    pub cw_speed_wpm: u32,
+
+    /// CW memory macros (label + text).  Serde default = the 4 stock macros so
+    /// older settings files load with sensible content.
+    #[serde(default = "default_cw_macros")]
+    pub cw_macros: Vec<CwMacroFile>,
+}
+
+/// Persisted CW memory macro (label + transmit text).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CwMacroFile {
+    pub label: String,
+    pub text: String,
+}
+
+pub fn default_volume_percent() -> u8 {
+    50
+}
+
+pub fn default_cw_speed_wpm() -> u32 {
+    20
+}
+
+pub fn default_cw_macros() -> Vec<CwMacroFile> {
+    crate::cw_text::CW_MACRO_DEFAULTS
+        .iter()
+        .map(|(label, text)| CwMacroFile {
+            label: label.to_string(),
+            text: text.to_string(),
+        })
+        .collect()
 }
 
 impl OperatorSettingsFile {
@@ -148,6 +194,10 @@ impl OperatorSettingsFile {
             bookmarks: Vec::new(),
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
+            volume_percent: default_volume_percent(),
+            cw_message: String::new(),
+            cw_speed_wpm: default_cw_speed_wpm(),
+            cw_macros: default_cw_macros(),
         }
     }
 }

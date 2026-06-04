@@ -17,7 +17,15 @@ use crate::ui::{
 pub struct SpectrumInteraction {
     pub clicked_target_freq_hz: Option<f32>,
     pub clicked_bookmark_id: Option<String>,
+    /// Mouse-wheel fine-tune request (Hz) while hovering the spectrum: +50 Hz
+    /// on scroll up, -50 Hz on scroll down, 0.0 when no wheel input.  The caller
+    /// applies it to the target frequency through the normal clamp/tune path.
+    pub scroll_target_delta_hz: f32,
 }
+
+/// Fixed fine-tune step applied per mouse-wheel notch over the spectrum or
+/// waterfall.
+pub const WHEEL_TUNE_STEP_HZ: f32 = 50.0;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -93,9 +101,26 @@ pub fn draw_spectrum_plot(
         }
     }
 
+    // Mouse-wheel fine tuning: only when the pointer is over the spectrum, so
+    // scrolling unrelated panels never tunes.  One notch (any nonzero scroll
+    // this frame) = one ±50 Hz step, matching the LO digit-wheel convention.
+    let scroll_target_delta_hz = if response.hovered() {
+        let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
+        if scroll_y > 0.0 {
+            WHEEL_TUNE_STEP_HZ
+        } else if scroll_y < 0.0 {
+            -WHEEL_TUNE_STEP_HZ
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+
     SpectrumInteraction {
         clicked_target_freq_hz: clicked_freq_hz,
         clicked_bookmark_id,
+        scroll_target_delta_hz,
     }
 }
 
@@ -361,13 +386,26 @@ fn draw_passband_overlay(
 
     let target_freq_hz = state.target_freq_hz;
 
+    // CW passband: centered at the dial ± CW pitch (CWU above, CWL below) with
+    // a width set by Filter BW — NOT by the pitch.  `state.pitch_hz` holds the
+    // CW pitch in CW modes; `state.filter_bandwidth_hz` is the filter width.
+    //   center_offset = ±cw_pitch ; low/high = center_offset ∓ filter_bw/2
     let (pb_left_hz, pb_right_hz) = match state.demod_mode {
         DemodMode::Wfm => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
         DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
         DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
         DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
         DemodMode::Am => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
-        DemodMode::Cw => (target_freq_hz - 1_000.0, target_freq_hz + 1_000.0),
+        DemodMode::Cwu => {
+            let center = target_freq_hz + state.pitch_hz;
+            let half = state.filter_bandwidth_hz / 2.0;
+            (center - half, center + half)
+        }
+        DemodMode::Cwl => {
+            let center = target_freq_hz - state.pitch_hz;
+            let half = state.filter_bandwidth_hz / 2.0;
+            (center - half, center + half)
+        }
     };
 
     let visible_pb_left_hz = pb_left_hz.max(left_hz);
@@ -792,6 +830,7 @@ fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
         clicked_target_freq_hz: None,
         clicked_bookmark_id: None,
+        scroll_target_delta_hz: 0.0,
     }
 }
 

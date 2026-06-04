@@ -359,6 +359,9 @@ pub fn apply_radio_server_message(
             // Reapply current mode controls on every acquire.
             state.pending_apply_mode_controls = true;
 
+            // No test is running on a fresh acquire.
+            state.tx_tune_running = false;
+
             // Force client audio pipeline to reset on radio switch/acquire.
             audio_session_generation.fetch_add(1, Ordering::Relaxed);
         }
@@ -382,15 +385,38 @@ pub fn apply_radio_server_message(
             input_sample_rate_hz,
             demod_mode,
             sideband,
+            squelch_enabled,
+            squelch_threshold_db,
+            squelch_open,
+            nr2_enabled,
+            nr2_strength,
+            agc_enabled,
+            agc_strength,
+            signal_dbm,
+            signal_s_units,
             source_control,
             source_status,
+            tx_tune_result,
+            swr_sweep_result,
+            swr_sweep_progress,
             ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
             state.input_sample_rate_hz = input_sample_rate_hz;
+            state.swr_sweep_result = swr_sweep_result;
+            state.swr_sweep_progress = swr_sweep_progress;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
+            state.squelch_enabled = squelch_enabled;
+            state.squelch_threshold_db = squelch_threshold_db;
+            state.squelch_open = squelch_open;
+            state.nr2_enabled = nr2_enabled;
+            state.nr2_strength = nr2_strength;
+            state.agc_enabled = agc_enabled;
+            state.agc_strength = agc_strength;
+            state.signal_dbm = signal_dbm;
+            state.signal_s_units = signal_s_units;
             // Apply server default first, then override with saved prefs if present.
             state.source_control = source_control;
             if let Some(saved) = state.source_control_preferences.get(&radio_id.0).cloned() {
@@ -398,6 +424,9 @@ pub fn apply_radio_server_message(
                 state.pending_apply_source_control = true;
             }
             state.source_status = source_status;
+            if let Some(result) = tx_tune_result {
+                state.last_tx_tune_result = result;
+            }
 
             // Do NOT overwrite persisted per-demod prefs here.
             state.pending_apply_mode_controls = true;
@@ -409,10 +438,63 @@ pub fn apply_radio_server_message(
             target_freq_hz,
             demod_mode,
             sideband,
+            squelch_enabled,
+            squelch_threshold_db,
+            squelch_open,
+            nr2_enabled,
+            nr2_strength,
+            agc_enabled,
+            agc_strength,
+            signal_dbm,
+            signal_s_units,
+            volume_percent,
             source_control,
             source_status,
+            tx_tune_result,
+            swr_sweep_result,
+            swr_sweep_progress,
             ..
         } => {
+            if let Some(progress) = swr_sweep_progress {
+                state.swr_sweep_progress = Some(progress);
+            }
+            if let Some(result) = swr_sweep_result {
+                state.swr_sweep_result = Some(result);
+                // A finished sweep result arrived — open the results popup.
+                state.show_swr_sweep_window = true;
+                state.swr_sweep_csv_status = None;
+            }
+            if let Some(value) = volume_percent {
+                state.volume_percent = value;
+            }
+            if let Some(value) = squelch_enabled {
+                state.squelch_enabled = value;
+            }
+            if let Some(value) = squelch_threshold_db {
+                state.squelch_threshold_db = value;
+            }
+            if let Some(value) = squelch_open {
+                state.squelch_open = value;
+            }
+            if let Some(value) = nr2_enabled {
+                state.nr2_enabled = value;
+            }
+            if let Some(value) = nr2_strength {
+                state.nr2_strength = value;
+            }
+            if let Some(value) = agc_enabled {
+                state.agc_enabled = value;
+            }
+            if let Some(value) = agc_strength {
+                state.agc_strength = value;
+            }
+            if let Some(value) = signal_dbm {
+                state.signal_dbm = value;
+            }
+            if let Some(value) = signal_s_units {
+                state.signal_s_units = value;
+            }
+
             if let Some(value) = center_freq_hz {
                 state.center_freq_hz = value as f32;
             }
@@ -443,6 +525,12 @@ pub fn apply_radio_server_message(
 
             if let Some(value) = source_status {
                 state.source_status = value;
+            }
+
+            if let Some(result) = tx_tune_result {
+                state.last_tx_tune_result = result;
+                // Test completed (ok or fault) — clear the running indicator.
+                state.tx_tune_running = false;
             }
         }
 

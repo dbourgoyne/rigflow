@@ -107,8 +107,11 @@
 //! - `rigflow-protocol` — shared WebSocket protocol types
 
 mod client_runtime;
-mod persistence;
+mod cw_decode;
+mod cw_text;
 mod net;
+mod persistence;
+mod sidetone;
 mod ui;
 mod widgets;
 
@@ -120,12 +123,12 @@ use eframe::NativeOptions;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::ui::state::UiState;
 use crate::client_runtime::start_media_runtime;
-use crate::ui::app::RigflowApp;
 use crate::net::control::ControlCommand;
 use crate::net::websocket::websocket_control_task;
 use crate::persistence::load_initial_ui_state;
+use crate::ui::app::RigflowApp;
+use crate::ui::state::UiState;
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging for both the UI process and background runtime tasks.
@@ -134,8 +137,7 @@ fn main() -> Result<(), eframe::Error> {
         .init();
 
     // Load persisted startup state first, then wrap it in shared UI state.
-    let (initial_ui_state, persistence_store) =
-    match load_initial_ui_state(None) {
+    let (initial_ui_state, persistence_store) = match load_initial_ui_state(None) {
         Ok(value) => value,
         Err(err) => {
             eprintln!("failed to load persistent state: {err}");
@@ -154,8 +156,8 @@ fn main() -> Result<(), eframe::Error> {
 
     // Start the media runtime first so audio/waterfall infrastructure is ready
     // before the UI and WebSocket control plane begin interacting with it.
-    let media_handles = start_media_runtime(Arc::clone(&ui_state))
-        .expect("failed to start media runtime");
+    let media_handles =
+        start_media_runtime(Arc::clone(&ui_state)).expect("failed to start media runtime");
 
     // Outbound control channel from the UI into the WebSocket control task.
     let (ws_cmd_tx, ws_cmd_rx) = mpsc::unbounded_channel::<ControlCommand>();
@@ -193,7 +195,7 @@ fn main() -> Result<(), eframe::Error> {
                 ws_cmd_tx.clone(),
                 media_handles.waterfall_buffer.clone(),
                 media_handles.spectrum_db.clone(),
-		persistence_store,
+                persistence_store,
             )))
         }),
     )

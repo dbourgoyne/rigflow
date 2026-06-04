@@ -211,6 +211,10 @@ impl IqSource for RtlSdrSource {
 
             tuner_freq_hz_min: 24_000_000,
             tuner_freq_hz_max: 1_766_000_000,
+
+            supports_tx_tune_test: false,
+            supports_band_control: false,
+            supports_fdx: false,
         }
     }
 
@@ -221,6 +225,8 @@ impl IqSource for RtlSdrSource {
             gain_db: self.gain_db,
             ppm_correction: self.ppm_correction,
             direct_sampling: self.direct_sampling,
+            // RTL-SDR has no transmit; report the default (TX unsupported).
+            ..SourceControlState::default()
         }
     }
 

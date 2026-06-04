@@ -25,8 +25,7 @@ impl IqWavReader {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let path_ref = path.as_ref();
 
-        let reader = WavReader::open(path_ref)
-            .map_err(|e| format!("failed to open wav: {e}"))?;
+        let reader = WavReader::open(path_ref).map_err(|e| format!("failed to open wav: {e}"))?;
 
         let spec = reader.spec();
 

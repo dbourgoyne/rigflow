@@ -1,6 +1,6 @@
 use std::net::UdpSocket;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 //use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
 use std::time::Duration;
@@ -17,13 +17,13 @@ use rigflow_core::{
 
 use crate::{
     net::udp::{handle_media_packet, MediaPacketStats},
+    sidetone::SidetoneShared,
     ui::{
-	layout::{
-            HEIGHT, SPECTRUM_DB_MIN, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1,
-            WATERFALL_TOP, WIDTH,
+        layout::{
+            HEIGHT, SPECTRUM_DB_MIN, SPECTRUM_PLOT_X0, SPECTRUM_PLOT_X1, WATERFALL_TOP, WIDTH,
         },
-	state::UiState,
-	stats::ClientStatsLogger,
+        state::UiState,
+        stats::ClientStatsLogger,
     },
 };
 
@@ -116,11 +116,19 @@ pub fn start_media_runtime(
 
     let config = device.default_output_config()?.config();
 
+    // Lock-free CW sidetone control, shared with the UI thread via UiState.
+    // Extract the Arc once here so the real-time audio callback never locks.
+    let sidetone = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.sidetone))
+        .unwrap_or_default();
+
     let audio_stream = build_output_stream(
         &device,
         &config,
         Arc::clone(&jitter),
         Arc::clone(&stats_logger),
+        sidetone,
     )?;
     audio_stream.play()?;
 
@@ -129,16 +137,14 @@ pub fn start_media_runtime(
     let waterfall_width = SPECTRUM_PLOT_X1 - SPECTRUM_PLOT_X0;
     let waterfall_height = HEIGHT - WATERFALL_TOP;
 
-    let waterfall_buffer =
-        Arc::new(Mutex::new(vec![0u32; waterfall_width * waterfall_height]));
+    let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; waterfall_width * waterfall_height]));
 
     let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
     let media_stats = Arc::new(Mutex::new(MediaPacketStats::new()));
 
     // --- Control channel ---------------------------------------------------
 
-    let (media_cmd_tx, mut media_cmd_rx) =
-        mpsc::unbounded_channel::<MediaCommand>();
+    let (media_cmd_tx, mut media_cmd_rx) = mpsc::unbounded_channel::<MediaCommand>();
 
     // --- Shared state clones for thread -----------------------------------
 
@@ -151,13 +157,24 @@ pub fn start_media_runtime(
     // --- Audio session generation (for radio switching) -------------------
 
     let audio_session_generation = Arc::new(AtomicU64::new(0));
-    let audio_session_generation_for_thread =
-        Arc::clone(&audio_session_generation);
+    let audio_session_generation_for_thread = Arc::clone(&audio_session_generation);
+
+    // CW decoder: shared control/output lives in UiState; the decoder DSP state
+    // is owned by the media thread and fed the received audio.
+    let cw_decode_shared = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.cw_decode))
+        .unwrap_or_default();
 
     // --- Media thread ------------------------------------------------------
 
     thread::spawn(move || {
         let mut udp_buf = [0u8; 65536];
+
+        // CW decoder DSP state, owned by this thread; fed received audio per
+        // packet (no-op unless the operator enabled decode).
+        let mut cw_decoder =
+            crate::cw_decode::CwDecoder::new(cw_decode_shared, OUTPUT_SAMPLE_RATE as f32);
 
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -167,8 +184,7 @@ pub fn start_media_runtime(
         loop {
             // --- Session change detection (radio switch) -------------------
 
-            let current =
-                audio_session_generation_for_thread.load(Ordering::Relaxed);
+            let current = audio_session_generation_for_thread.load(Ordering::Relaxed);
 
             if current != last_audio_session_generation {
                 if let Ok(mut jb) = jitter.lock() {
@@ -181,33 +197,33 @@ pub fn start_media_runtime(
 
             // --- Existing ad hoc jitter diagnostics -----------------------
 
-	    /*
-            if last_stats_log.elapsed() >= Duration::from_secs(2) {
-                if let Ok(jb) = jitter.lock() {
-                    let current_samples = jb.buffered_samples();
-                    let max_samples = jb.max_buffered_samples();
+            /*
+                if last_stats_log.elapsed() >= Duration::from_secs(2) {
+                    if let Ok(jb) = jitter.lock() {
+                        let current_samples = jb.buffered_samples();
+                        let max_samples = jb.max_buffered_samples();
 
-                    let sr = 48_000.0;
+                        let sr = 48_000.0;
 
-                    let current_ms = current_samples as f32 / sr * 1000.0;
-                    let max_ms = max_samples as f32 / sr * 1000.0;
+                        let current_ms = current_samples as f32 / sr * 1000.0;
+                        let max_ms = max_samples as f32 / sr * 1000.0;
 
-                    println!(
-                        "[client-audio] jitter: current={:.1} ms max={:.1} ms \
-                         started={} rx={} inserted={} late={} overflow={}",
-                        current_ms,
-                        max_ms,
-                        jb.started(),
-                        jb.packets_received,
-                        jb.packets_inserted,
-                        jb.packets_dropped_late,
-                        jb.packets_dropped_overflow,
-                    );
+                        println!(
+                            "[client-audio] jitter: current={:.1} ms max={:.1} ms \
+                             started={} rx={} inserted={} late={} overflow={}",
+                            current_ms,
+                            max_ms,
+                            jb.started(),
+                            jb.packets_received,
+                            jb.packets_inserted,
+                            jb.packets_dropped_late,
+                            jb.packets_dropped_overflow,
+                        );
+                    }
+
+                    last_stats_log = Instant::now();
                 }
-
-                last_stats_log = Instant::now();
-            }
-	    */
+            */
 
             // --- Additional interval-based stats logger -------------------
 
@@ -216,11 +232,7 @@ pub fn start_media_runtime(
                 stats_for_thread.lock(),
                 jitter_for_thread.lock(),
             ) {
-                logger.maybe_log(
-                    &mut media_stats,
-                    &jb,
-                    OUTPUT_SAMPLE_RATE as f32,
-                );
+                logger.maybe_log(&mut media_stats, &jb, OUTPUT_SAMPLE_RATE as f32);
             }
 
             // --- Handle control commands ----------------------------------
@@ -240,10 +252,7 @@ pub fn start_media_runtime(
 
                         match socket.send_to(&reg, &addr) {
                             Ok(_) => info!("Sent UDP registration to {}", addr),
-                            Err(e) => error!(
-                                "UDP registration failed to {}: {}",
-                                addr, e
-                            ),
+                            Err(e) => error!("UDP registration failed to {}: {}", addr, e),
                         }
                     }
                 }
@@ -255,8 +264,7 @@ pub fn start_media_runtime(
                 Ok((len, src)) => {
                     // Registration ACK (4-byte control packet)
                     if len == 4 {
-                        let magic =
-                            u16::from_be_bytes([udp_buf[0], udp_buf[1]]);
+                        let magic = u16::from_be_bytes([udp_buf[0], udp_buf[1]]);
                         let version = udp_buf[2];
                         let stream_type = udp_buf[3];
 
@@ -264,23 +272,21 @@ pub fn start_media_runtime(
                             && version == VERSION
                             && stream_type == STREAM_TYPE_REGISTER_AUDIO
                         {
-                            info!(
-                                "Received UDP registration ACK from {}",
-                                src
-                            );
+                            info!("Received UDP registration ACK from {}", src);
                         }
                     }
                     // Media packet (audio or waterfall)
                     else if len >= 16 {
-			let ui_state_for_thread = Arc::clone(&ui_state);
-			handle_media_packet(
-			    &udp_buf[..len],
-			    &jitter_for_thread,
-			    &waterfall_for_thread,
-			    &spectrum_for_thread,
-			    &ui_state_for_thread,
-			    &stats_for_thread,
-			);
+                        let ui_state_for_thread = Arc::clone(&ui_state);
+                        handle_media_packet(
+                            &udp_buf[..len],
+                            &jitter_for_thread,
+                            &waterfall_for_thread,
+                            &spectrum_for_thread,
+                            &ui_state_for_thread,
+                            &stats_for_thread,
+                            &mut cw_decoder,
+                        );
                     }
                 }
 
@@ -320,6 +326,7 @@ fn build_output_stream(
     config: &cpal::StreamConfig,
     jitter: Arc<Mutex<JitterBuffer>>,
     stats_logger: Arc<Mutex<ClientStatsLogger>>,
+    sidetone: Arc<SidetoneShared>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
     let supported_configs = device.supported_output_configs()?;
 
@@ -332,9 +339,7 @@ fn build_output_stream(
             && OUTPUT_SAMPLE_RATE >= cfg.min_sample_rate().0
             && OUTPUT_SAMPLE_RATE <= cfg.max_sample_rate().0
         {
-            selected = Some(
-                cfg.with_sample_rate(cpal::SampleRate(OUTPUT_SAMPLE_RATE)),
-            );
+            selected = Some(cfg.with_sample_rate(cpal::SampleRate(OUTPUT_SAMPLE_RATE)));
             break;
         }
     }
@@ -362,6 +367,14 @@ fn build_output_stream(
     let jitter_for_audio = Arc::clone(&jitter);
     let stats_logger_for_audio = Arc::clone(&stats_logger);
 
+    // CW sidetone oscillator state, owned by the audio callback (real-time):
+    // continuous phase + a smooth rise/fall envelope so start/stop never clicks.
+    let stream_sample_rate = selected_config.sample_rate.0 as f32;
+    // 5 ms raised-cosine rise/fall → linear `env` ramp shaped by sin².
+    let env_step = 1.0 / (0.005 * stream_sample_rate).max(1.0);
+    let mut phase: f32 = 0.0;
+    let mut env: f32 = 0.0;
+
     let stream = device.build_output_stream(
         &selected_config,
         move |data: &mut [f32], _| {
@@ -371,6 +384,30 @@ fn build_output_stream(
                 // Fallback: output silence if lock fails
                 for sample in data.iter_mut() {
                     *sample = 0.0;
+                }
+            }
+
+            // --- Mix in the local CW sidetone (never sent to the server) ---
+            // Read the lock-free control once per callback; phase/env persist
+            // across callbacks for continuity.
+            let target = if sidetone.keyed() { 1.0 } else { 0.0 };
+            let volume = sidetone.volume();
+            let phase_inc = std::f32::consts::TAU * sidetone.pitch_hz() / stream_sample_rate;
+            for sample in data.iter_mut() {
+                // Ramp the envelope toward the keyed target (5 ms), then shape
+                // it with a raised cosine for a click-free attack/decay.
+                if env < target {
+                    env = (env + env_step).min(target);
+                } else if env > target {
+                    env = (env - env_step).max(target);
+                }
+                let shaped = 0.5 * (1.0 - (std::f32::consts::PI * env).cos());
+                let tone = volume * shaped * phase.sin();
+                *sample = (*sample + tone).clamp(-1.0, 1.0);
+
+                phase += phase_inc;
+                if phase >= std::f32::consts::TAU {
+                    phase -= std::f32::consts::TAU;
                 }
             }
 

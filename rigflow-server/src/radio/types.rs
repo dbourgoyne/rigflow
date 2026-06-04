@@ -1,19 +1,15 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{
-    LeaseId,
-    RadioDescriptor,
-    RadioId,
-    source_control::{
-        DirectSamplingMode,
-        GainMode,
-        SourceControlState,
-    },
+    source_control::{DirectSamplingMode, GainMode, SourceControlState},
     source_status::SourceStatus,
+    swr_sweep::{SwrSweepProgress, SwrSweepResult},
+    tx_tune::TxTuneResult,
+    LeaseId, RadioDescriptor, RadioId,
 };
-use rigflow_core::dsp::modes::DeemphasisMode;
 
 /// Unique identifier for a connected client/session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,8 +85,24 @@ pub struct WorkerRuntimeState {
     pub cw_pitch_hz: f32,
     pub filter_bandwidth_hz: f32,
     pub deemphasis_mode: DeemphasisMode,
+    pub squelch_enabled: bool,
+    pub squelch_threshold_db: f32,
+    pub squelch_open: bool,
+    pub nr2_enabled: bool,
+    pub nr2_strength: f32,
+    pub agc_enabled: bool,
+    pub agc_strength: f32,
+    pub signal_dbm: f32,
+    pub signal_s_units: i32,
+    pub volume_percent: u8,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
+    /// Result of the most recent TX tune test executed by this worker.
+    /// `None` until a RequestTxTuneTest command has been processed.
+    pub last_tx_tune_result: Option<TxTuneResult>,
+    /// Result of the most recent SWR sweep, and live progress.
+    pub last_swr_sweep_result: Option<SwrSweepResult>,
+    pub swr_sweep_progress: Option<SwrSweepProgress>,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,
@@ -102,19 +114,110 @@ pub struct WorkerRuntimeState {
 /// Commands sent from server/session → worker.
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
-    SetTargetFrequency { hz: u64 },
-    SetCenterFrequency { hz: u64 },
-    SetDemodMode { mode: DemodMode },
-    SetSideband { sideband: Sideband },
-    SetPitch { pitch_hz: f32 },
-    SetFilterBandwidth { bandwidth_hz: f32 },
-    SetDeemphasisMode { mode: DeemphasisMode },
-    Stop { reason: StopReason },
-    SetSourceSampleRate { sample_rate_hz: u32 },
-    SetSourceGainMode { mode: GainMode },
-    SetSourceGain { gain_db: f32 },
-    SetSourcePpmCorrection { ppm: i32 },
-    SetSourceDirectSampling { mode: DirectSamplingMode },
+    SetTargetFrequency {
+        hz: u64,
+    },
+    SetCenterFrequency {
+        hz: u64,
+    },
+    SetDemodMode {
+        mode: DemodMode,
+    },
+    SetSideband {
+        sideband: Sideband,
+    },
+    SetPitch {
+        pitch_hz: f32,
+    },
+    SetFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+    SetDeemphasisMode {
+        mode: DeemphasisMode,
+    },
+    SetSquelchEnabled {
+        enabled: bool,
+    },
+    SetSquelchThreshold {
+        threshold_db: f32,
+    },
+    SetNr2Enabled {
+        enabled: bool,
+    },
+    SetNr2Strength {
+        strength: f32,
+    },
+    SetAgcEnabled {
+        enabled: bool,
+    },
+    SetAgcStrength {
+        strength: f32,
+    },
+    SetVolume {
+        volume_percent: u8,
+    },
+    Stop {
+        reason: StopReason,
+    },
+    SetSourceSampleRate {
+        sample_rate_hz: u32,
+    },
+    SetSourceGainMode {
+        mode: GainMode,
+    },
+    SetSourceGain {
+        gain_db: f32,
+    },
+    SetSourcePpmCorrection {
+        ppm: i32,
+    },
+    SetSourceDirectSampling {
+        mode: DirectSamplingMode,
+    },
+    SetSourceTxDrive {
+        tx_drive_percent: f32,
+    },
+    SetSourceSpotLevel {
+        spot_level_percent: f32,
+    },
+    SetSourceTxSequencing {
+        lead_ms: u32,
+        tail_ms: u32,
+    },
+    /// CW key down / up (Space bar).  The server keys the CW carrier with
+    /// envelope shaping; `tx_drive_percent` / `spot_level_percent` set power.
+    StartCwKey,
+    StopCwKey,
+    /// CW semi-break-in hang time in ms (0–2000): PTT persists this long after
+    /// the last element before release.
+    SetCwHangTime {
+        hang_ms: u32,
+    },
+    SetSourceN2adrEnabled {
+        enabled: bool,
+    },
+    SetSourceFdxEnabled {
+        enabled: bool,
+    },
+    RequestSwrSweep {
+        start_hz: u64,
+        stop_hz: u64,
+    },
+    CancelSwrSweep,
+    /// Request a Spot / SWR measurement (pure carrier pulse).  TX power comes
+    /// from the configured source `tx_drive_percent`.
+    RequestTxTuneTest {
+        duration_ms: u32,
+    },
+    /// Start an open-ended SSB test tone (FDX Phase 2).  `usb = true` places the
+    /// tone above the carrier (USB), `false` below (LSB).  Amplitude comes from
+    /// `source_control.spot_level_percent`, drive from `tx_drive_percent`.
+    StartTxTestTone {
+        tone_hz: f32,
+        usb: bool,
+    },
+    /// Stop a running TX test tone (release PTT, return to RX).
+    StopTxTestTone,
 }
 
 /// Worker lifecycle/status updates.
@@ -122,21 +225,13 @@ pub enum WorkerCommand {
 pub enum WorkerStatus {
     Starting,
 
-    Running {
-        runtime: WorkerRuntimeState,
-    },
+    Running { runtime: WorkerRuntimeState },
 
-    Stopping {
-        reason: StopReason,
-    },
+    Stopping { reason: StopReason },
 
-    Stopped {
-        reason: StopReason,
-    },
+    Stopped { reason: StopReason },
 
-    Faulted {
-        reason: String,
-    },
+    Faulted { reason: String },
 }
 
 /// Initial readiness payload returned during worker startup.
