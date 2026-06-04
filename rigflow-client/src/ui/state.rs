@@ -278,6 +278,22 @@ pub struct UiState {
     /// Client-side CW decoder control + decoded-text output, shared lock-free
     /// with the media thread that runs the decoder.  Not persisted.
     pub cw_decode: Arc<crate::cw_decode::CwDecodeShared>,
+
+    // ── Microphone capture (SSB Mic TX Phase 1; client-only, no RF) ─────
+    /// Selected input device name ("" = system default).  Persisted.
+    pub mic_device: String,
+    /// Mic measurement gain in percent (0–200).  Persisted.
+    pub mic_gain_percent: u16,
+    /// Cached list of input device names for the dropdown (runtime only).
+    pub mic_devices: Vec<String>,
+    /// Status / fallback warning for the mic (runtime only).
+    pub mic_status: String,
+    /// UI-side decaying peak meter value (0.0–1.0+), updated each frame.
+    pub mic_meter: f32,
+    /// When set, the clip indicator stays lit until this instant (~500 ms hold).
+    pub mic_clip_until: Option<Instant>,
+    /// Lock-free mic level/clip/gain shared with the capture callback.
+    pub mic_shared: Arc<crate::mic::MicShared>,
     /// Lock-free control state shared with the CPAL audio callback, which mixes
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
@@ -419,6 +435,13 @@ impl Default for UiState {
             cw_speed_wpm: 20,
             cw_macros: default_cw_macros(),
             cw_decode: Arc::new(crate::cw_decode::CwDecodeShared::default()),
+            mic_device: String::new(),
+            mic_gain_percent: 100,
+            mic_devices: Vec::new(),
+            mic_status: String::new(),
+            mic_meter: 0.0,
+            mic_clip_until: None,
+            mic_shared: Arc::new(crate::mic::MicShared::default()),
             sidetone: Arc::new(SidetoneShared::default()),
         };
 

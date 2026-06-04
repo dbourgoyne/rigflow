@@ -24,6 +24,13 @@ pub struct RigflowApp {
     /// requests a prompt stop; `cw_text_sending` is true while a message plays.
     pub cw_text_abort: Arc<AtomicBool>,
     pub cw_text_sending: Arc<AtomicBool>,
+
+    /// Active microphone capture stream (kept alive here; `None` if not running).
+    pub mic: Option<crate::mic::MicCapture>,
+    /// The device name we last attempted to open, so we only (re)start capture
+    /// when the selection actually changes (and don't retry a failure every
+    /// frame).  `""` = system default.
+    pub mic_requested: Option<String>,
 }
 
 impl RigflowApp {
@@ -34,7 +41,7 @@ impl RigflowApp {
         spectrum_db: Arc<Mutex<Vec<f32>>>,
         persistence_store: PersistenceStore,
     ) -> Self {
-        Self {
+        let app = Self {
             state,
             ws_cmd_tx,
             waterfall_buffer,
@@ -43,6 +50,62 @@ impl RigflowApp {
             waterfall_texture: None,
             cw_text_abort: Arc::new(AtomicBool::new(false)),
             cw_text_sending: Arc::new(AtomicBool::new(false)),
+            mic: None,
+            mic_requested: None,
+        };
+
+        // Enumerate input devices once for the dropdown (one-time; cheap enough
+        // and avoids re-enumerating every frame).
+        let devices = crate::mic::list_input_devices();
+        if let Ok(mut state) = app.state.lock() {
+            state.mic_devices = devices;
+        }
+
+        app
+    }
+
+    /// (Re)start microphone capture when the selected device changes; push the
+    /// current mic gain to the capture each frame.  Capture runs continuously
+    /// and never touches the RX/TX/network paths.
+    fn ensure_mic(&mut self) {
+        let (desired, gain, shared) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.mic_device.clone(),
+                state.mic_gain_percent,
+                Arc::clone(&state.mic_shared),
+            )
+        };
+
+        // Gain is applied via the shared atomic — no stream restart needed.
+        shared.set_gain(gain as f32 / 100.0);
+
+        // Only (re)start when the requested device differs from our last attempt
+        // (this also prevents retrying a failed open on every frame).
+        if self.mic_requested.as_deref() == Some(desired.as_str()) {
+            return;
+        }
+        self.mic_requested = Some(desired.clone());
+
+        match crate::mic::start_capture(shared, &desired) {
+            Ok(cap) => {
+                let warning = if cap.fell_back && !desired.is_empty() {
+                    format!("input '{desired}' not found; using {}", cap.device_name)
+                } else {
+                    String::new()
+                };
+                if let Ok(mut state) = self.state.lock() {
+                    state.mic_status = warning;
+                }
+                self.mic = Some(cap);
+            }
+            Err(err) => {
+                log::warn!("[mic] capture start failed: {err}");
+                if let Ok(mut state) = self.state.lock() {
+                    state.mic_status = format!("microphone unavailable: {err}");
+                }
+                self.mic = None;
+            }
         }
     }
 
@@ -248,6 +311,7 @@ impl eframe::App for RigflowApp {
         let snapshot = self.snapshot_state();
         let config_mode = !snapshot.server_connected;
 
+        self.ensure_mic();
         self.handle_keyboard_shortcuts(ctx);
         self.handle_cw_keying(ctx, &snapshot);
         self.handle_cw_macros(ctx, &snapshot);

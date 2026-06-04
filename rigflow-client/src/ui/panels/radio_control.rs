@@ -30,6 +30,7 @@ impl RigflowApp {
                 let mut save_demod_prefs = false;
                 let mut save_volume = false;
                 let mut save_cw = false;
+                let mut save_mic = false;
 
                 if let Ok(mut state) = self.state.lock() {
                     // Apply persisted per-demod controls when the mode changes.
@@ -70,6 +71,7 @@ impl RigflowApp {
                     self.draw_nr2_row(ui, &mut state);
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
+                    save_mic = self.draw_microphone_row(ui, &mut state);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
@@ -86,6 +88,9 @@ impl RigflowApp {
                 }
                 if save_cw {
                     self.save_cw_message_to_current_operator();
+                }
+                if save_mic {
+                    self.save_mic_settings_to_current_operator();
                 }
             });
     }
@@ -410,6 +415,92 @@ impl RigflowApp {
         if ui.button("Clear").clicked() {
             state.cw_decode.clear();
         }
+    }
+
+    /// Microphone section: input device selection, mic gain (0–200%), a live
+    /// peak level meter, and a clip indicator (held ~500 ms).  Capture is
+    /// client-only and never touches RX/TX/PTT/network (Phase 1 — no RF).
+    /// Returns `true` when the device/gain should be persisted.
+    fn draw_microphone_row(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
+        ui.separator();
+        ui.label("Microphone");
+
+        let mut save = false;
+
+        // Input device dropdown ("" = system default).
+        let devices = state.mic_devices.clone();
+        ui.horizontal(|ui| {
+            ui.label("Input");
+            let mut selected = state.mic_device.clone();
+            let current = if selected.is_empty() {
+                "System default".to_string()
+            } else {
+                selected.clone()
+            };
+            egui::ComboBox::from_id_salt("mic_input_device")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut selected, String::new(), "System default");
+                    for name in &devices {
+                        ui.selectable_value(&mut selected, name.clone(), name);
+                    }
+                });
+            if selected != state.mic_device {
+                state.mic_device = selected;
+                save = true; // ensure_mic() restarts capture next frame
+            }
+        });
+
+        // Mic gain (measurement only this phase).
+        let mut gain = state.mic_gain_percent as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut gain, 0..=200)
+                    .integer()
+                    .suffix("%")
+                    .text("Mic Gain"),
+            )
+            .changed()
+        {
+            state.mic_gain_percent = gain.clamp(0, 200) as u16;
+            state
+                .mic_shared
+                .set_gain(state.mic_gain_percent as f32 / 100.0);
+            save = true;
+        }
+
+        // Level meter (decaying peak) + clip indicator.
+        let peak = state.mic_shared.take_peak();
+        state.mic_meter = (state.mic_meter * 0.85).max(peak);
+        if state.mic_shared.take_clipped() {
+            state.mic_clip_until = Some(Instant::now() + Duration::from_millis(500));
+        }
+        let clipping = state
+            .mic_clip_until
+            .map(|t| Instant::now() < t)
+            .unwrap_or(false);
+
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::ProgressBar::new(state.mic_meter.min(1.0))
+                    .desired_width(180.0)
+                    .text(format!("{:.0}%", (state.mic_meter * 100.0).min(999.0))),
+            );
+            if clipping {
+                ui.colored_label(egui::Color32::from_rgb(230, 60, 60), "● CLIP");
+            } else {
+                ui.colored_label(egui::Color32::DARK_GRAY, "○ clip");
+            }
+        });
+
+        if !state.mic_status.is_empty() {
+            ui.colored_label(
+                egui::Color32::from_rgb(255, 200, 50),
+                RichText::new(&state.mic_status).small(),
+            );
+        }
+
+        save
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

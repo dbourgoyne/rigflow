@@ -130,6 +130,10 @@ pub fn apply_operator_settings_to_ui_state(
         state.cw_macros[i].label = m.label.clone();
         state.cw_macros[i].text = m.text.clone();
     }
+
+    // Microphone: restore selected device + gain.
+    state.mic_device = operator.mic_device.clone();
+    state.mic_gain_percent = operator.mic_gain_percent;
 }
 
 pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut OperatorSettingsFile) {
@@ -171,4 +175,7 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
             text: m.text.clone(),
         })
         .collect();
+
+    operator.mic_device = state.mic_device.clone();
+    operator.mic_gain_percent = state.mic_gain_percent;
 }

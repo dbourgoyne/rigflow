@@ -109,6 +109,7 @@
 mod client_runtime;
 mod cw_decode;
 mod cw_text;
+mod mic;
 mod net;
 mod persistence;
 mod sidetone;
