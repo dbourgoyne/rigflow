@@ -1,6 +1,4 @@
-use eframe::egui::{
-    self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2,
-};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
 
 /// Controls how the digit widget is anchored relative to the provided origin.
 #[derive(Debug, Clone, Copy)]
@@ -87,11 +85,7 @@ fn total_widget_width(
         + digit_gap * (spec.digit_count.saturating_sub(1)) as f32
         + sep_w * spec.groups.len().saturating_sub(1) as f32;
 
-    let sign_area = if spec.signed {
-        sign_w + digit_gap
-    } else {
-        0.0
-    };
+    let sign_area = if spec.signed { sign_w + digit_gap } else { 0.0 };
 
     label_w + label_gap + sign_area + digit_area
 }
@@ -139,15 +133,7 @@ pub fn draw_digit_wheel_widget(
         _ => 46.0,
     };
 
-    let widget_w = total_widget_width(
-        label_w,
-        label_gap,
-        digit_w,
-        digit_gap,
-        sep_w,
-        sign_w,
-        spec,
-    );
+    let widget_w = total_widget_width(label_w, label_gap, digit_w, digit_gap, sep_w, sign_w, spec);
 
     let widget_h = digit_h;
 
@@ -167,8 +153,7 @@ pub fn draw_digit_wheel_widget(
     let digits = format_abs_digits(abs_value, spec.digit_count);
 
     // Used to dim leading zeros
-    let first_nonzero = first_nonzero_digit(&digits)
-        .unwrap_or(spec.digit_count - 1);
+    let first_nonzero = first_nonzero_digit(&digits).unwrap_or(spec.digit_count - 1);
 
     // --- Draw label -------------------------------------------------------
 
@@ -205,10 +190,7 @@ pub fn draw_digit_wheel_widget(
 
     for (group_idx, group_len) in spec.groups.iter().enumerate() {
         for _ in 0..*group_len {
-            let rect = Rect::from_min_size(
-                Pos2::new(x, top_left.y),
-                Vec2::new(digit_w, digit_h),
-            );
+            let rect = Rect::from_min_size(Pos2::new(x, top_left.y), Vec2::new(digit_w, digit_h));
 
             digit_cells.push(DigitCell {
                 rect,
@@ -295,11 +277,7 @@ pub fn draw_digit_wheel_widget(
 }
 
 /// LO frequency widget (center frequency).
-pub fn draw_lo_widget(
-    ui: &mut egui::Ui,
-    top_left: Pos2,
-    center_freq_hz: u64,
-) -> Option<u64> {
+pub fn draw_lo_widget(ui: &mut egui::Ui, top_left: Pos2, center_freq_hz: u64) -> Option<u64> {
     let spec = DigitWheelSpec {
         label: "LO",
         digit_count: 10,
@@ -308,16 +286,11 @@ pub fn draw_lo_widget(
         anchor: DigitWheelAnchor::Left,
     };
 
-    draw_digit_wheel_widget(ui, top_left, &spec, center_freq_hz as i64)
-        .map(|v| v.max(0) as u64)
+    draw_digit_wheel_widget(ui, top_left, &spec, center_freq_hz as i64).map(|v| v.max(0) as u64)
 }
 
 /// LO offset widget (relative tuning offset).
-pub fn draw_lo_offset_widget(
-    ui: &mut egui::Ui,
-    top_right: Pos2,
-    offset_hz: i64,
-) -> Option<i64> {
+pub fn draw_lo_offset_widget(ui: &mut egui::Ui, top_right: Pos2, offset_hz: i64) -> Option<i64> {
     let spec = DigitWheelSpec {
         label: "LO Offset",
         digit_count: 6,

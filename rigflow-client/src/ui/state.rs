@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::persistence::models::DemodPreferenceSetFile;
+use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
@@ -241,6 +243,14 @@ pub struct UiState {
     /// Tracks whether the Space bar is currently keying CW, for edge detection
     /// (send StartCwKey on up→down, StopCwKey on down→up; no auto-repeat spam).
     pub cw_key_down: bool,
+
+    // ── CW sidetone (client-local; never sent to server) ────────────────
+    /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
+    pub cw_sidetone_volume: u8,
+    /// Lock-free control state shared with the CPAL audio callback, which mixes
+    /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
+    /// the media runtime at startup; written here from the Space-bar handler.
+    pub sidetone: Arc<SidetoneShared>,
 }
 
 impl Default for UiState {
@@ -372,6 +382,8 @@ impl Default for UiState {
             tx_tone_freq_hz: 1000.0,
             tx_tone_running: false,
             cw_key_down: false,
+            cw_sidetone_volume: 25,
+            sidetone: Arc::new(SidetoneShared::default()),
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

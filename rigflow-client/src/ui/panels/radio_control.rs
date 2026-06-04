@@ -67,6 +67,7 @@ impl RigflowApp {
                     self.draw_nr2_row(ui, &mut state);
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
+                    self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -169,6 +170,30 @@ impl RigflowApp {
             }
         }
         false
+    }
+
+    /// CW Sidetone Volume slider (0–100%), shown only in CWU/CWL.  This is a
+    /// client-local control (independent of RX Volume) that drives the locally
+    /// generated sidetone; it is never sent to the server.  The audio callback
+    /// reads `state.sidetone`, which the Space-bar handler keeps in sync.
+    fn draw_cw_sidetone_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Cwu | DemodMode::Cwl) {
+            return;
+        }
+        ui.separator();
+        let mut vol = state.cw_sidetone_volume as i32;
+        let response = ui.add(
+            egui::Slider::new(&mut vol, 0..=100)
+                .integer()
+                .suffix("%")
+                .text("CW Sidetone"),
+        );
+        if response.changed() {
+            let v = vol.clamp(0, 100) as u8;
+            state.cw_sidetone_volume = v;
+            // Reflect immediately into the lock-free audio control.
+            state.sidetone.set_volume(v as f32 / 100.0);
+        }
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

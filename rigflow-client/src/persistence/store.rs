@@ -45,10 +45,7 @@ impl PersistenceStore {
         read_json_file(&path)
     }
 
-    pub fn save_app_state(
-        &self,
-        state: &AppStateFile,
-    ) -> Result<(), PersistenceError> {
+    pub fn save_app_state(&self, state: &AppStateFile) -> Result<(), PersistenceError> {
         self.ensure_layout()?;
         let path = app_state_path(&self.config_dir);
         write_json_file_atomic(&path, state)
@@ -122,7 +119,11 @@ impl PersistenceStore {
         let operator_id = normalize_operator_id(operator_id)?;
         let mut app_state = self.load_app_state()?;
 
-        if !app_state.known_operator_ids.iter().any(|id| id == &operator_id) {
+        if !app_state
+            .known_operator_ids
+            .iter()
+            .any(|id| id == &operator_id)
+        {
             app_state.known_operator_ids.push(operator_id.clone());
             app_state.known_operator_ids.sort();
         }
@@ -142,10 +143,7 @@ where
     Ok(value)
 }
 
-fn write_json_file_atomic<T>(
-    path: &Path,
-    value: &T,
-) -> Result<(), PersistenceError>
+fn write_json_file_atomic<T>(path: &Path, value: &T) -> Result<(), PersistenceError>
 where
     T: serde::Serialize,
 {

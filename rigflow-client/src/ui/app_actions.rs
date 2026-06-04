@@ -22,13 +22,19 @@ impl RigflowApp {
             )
         };
 
-        let Some(radio_id) = radio_id else { return; };
-        if operator_id.trim().is_empty() { return; }
+        let Some(radio_id) = radio_id else {
+            return;
+        };
+        if operator_id.trim().is_empty() {
+            return;
+        }
 
         // Update the in-memory mirror so subsequent acquire-apply uses the
         // latest value even before the file is re-read.
         if let Ok(mut state) = self.state.lock() {
-            state.source_control_preferences.insert(radio_id.clone(), source_control.clone());
+            state
+                .source_control_preferences
+                .insert(radio_id.clone(), source_control.clone());
         }
 
         // Load-modify-save: update only the source_control_preferences entry
@@ -40,19 +46,19 @@ impl RigflowApp {
             Ok(s) => s,
             Err(err) => {
                 if let Ok(mut state) = self.state.lock() {
-                    state.persistence_status =
-                        format!("failed to load operator settings: {err}");
+                    state.persistence_status = format!("failed to load operator settings: {err}");
                 }
                 return;
             }
         };
 
-        settings.source_control_preferences.insert(radio_id, source_control);
+        settings
+            .source_control_preferences
+            .insert(radio_id, source_control);
 
         if let Err(err) = self.persistence_store.save_operator_settings(&settings) {
             if let Ok(mut state) = self.state.lock() {
-                state.persistence_status =
-                    format!("failed to save source control prefs: {err}");
+                state.persistence_status = format!("failed to save source control prefs: {err}");
             }
         }
     }

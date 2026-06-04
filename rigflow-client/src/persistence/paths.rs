@@ -12,9 +12,7 @@ use crate::persistence::error::PersistenceError;
 /// 2. RIGFLOW_CONFIG_DIR
 /// 3. XDG_CONFIG_HOME/rigflow
 /// 4. ~/.config/rigflow
-pub fn resolve_config_dir(
-    cli_override: Option<&Path>,
-) -> Result<PathBuf, PersistenceError> {
+pub fn resolve_config_dir(cli_override: Option<&Path>) -> Result<PathBuf, PersistenceError> {
     if let Some(path) = cli_override {
         return Ok(path.to_path_buf());
     }

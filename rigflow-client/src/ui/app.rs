@@ -63,6 +63,15 @@ impl RigflowApp {
             && matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl);
         let want_key = space_held && cw_ready;
 
+        // Keep the lock-free sidetone control current every frame so CW Pitch
+        // and Sidetone Volume changes take effect immediately.  The Arc is
+        // shared with the audio callback; writing via the snapshot clone hits
+        // the same inner state.
+        snapshot.sidetone.set_pitch_hz(snapshot.pitch_hz);
+        snapshot
+            .sidetone
+            .set_volume(snapshot.cw_sidetone_volume as f32 / 100.0);
+
         // Only act on a transition; this also releases the key if the operator
         // leaves CW mode, releases the radio, or focuses a text field mid-hold.
         if want_key != snapshot.cw_key_down {
@@ -71,6 +80,8 @@ impl RigflowApp {
             } else {
                 self.send_radio_msg(ClientRadioMessage::StopCwKey);
             }
+            // Start/stop the local sidetone immediately (no server round-trip).
+            snapshot.sidetone.set_keyed(want_key);
             if let Ok(mut state) = self.state.lock() {
                 state.cw_key_down = want_key;
             }
