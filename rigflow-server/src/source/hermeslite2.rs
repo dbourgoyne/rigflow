@@ -1706,6 +1706,12 @@ impl IqSource for HermesLite2Source {
         const AUDIO_PITCH_HZ: f32 = 300.0;
         const FIR_TAPS: usize = 127;
         const TX_AUDIO_SCALE: f32 = 0.9;
+        // TX audio diagnostics (diagnostics only — does NOT alter audio).
+        // Measured on the post-DC audio that feeds the modulator, ~20 Hz.
+        const DIAG_WINDOW_SAMPLES: usize = 2400; // ~50 ms @ 48 kHz
+        const DIAG_CLIP_THRESH: f32 = 0.99;
+        const DIAG_PEAK_HOLD: Duration = Duration::from_millis(500);
+        const DIAG_CLIP_HOLD: Duration = Duration::from_millis(1000);
 
         let tx_drive_percent = tx_drive_percent.clamp(0.0, 100.0);
         let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
@@ -1751,11 +1757,26 @@ impl IqSource for HermesLite2Source {
         debug!("[hl2 mic] ptt asserted");
         info!("[hl2 tx-seq] RF start");
 
+        // Live meters start at silence for this over (counters persist).
+        crate::tx_diag::clear_levels();
+
         let session_start = Instant::now();
         let mut next_tick = Instant::now();
         let mut fault: Option<String> = None;
         let mut audio: Vec<f32> = Vec::with_capacity(n);
         let mut iq: Vec<Complex32> = Vec::with_capacity(n);
+
+        // TX-audio diagnostics accumulators (see consts above).
+        let mut win_sumsq = 0.0f64;
+        let mut win_count = 0usize;
+        let mut win_peak = 0.0f32;
+        let mut win_clip = false;
+        let mut held_peak = 0.0f32;
+        let mut peak_at = Instant::now();
+        let mut clip_until: Option<Instant> = None;
+        // Underrun is counted once per transition into starvation (edge), not
+        // per starved packet, so the counter reflects events not frames.
+        let mut starved = false;
 
         loop {
             let now = Instant::now();
@@ -1778,10 +1799,55 @@ impl IqSource for HermesLite2Source {
             audio.clear();
             let got = pull_audio(n, &mut audio);
             if got < n {
-                debug!("[hl2 mic] tx audio underrun ({got}/{n})");
+                if !starved {
+                    starved = true;
+                    crate::tx_diag::incr_underruns();
+                    debug!("[hl2 mic] tx audio underrun ({got}/{n})");
+                }
                 audio.resize(n, 0.0);
+            } else {
+                starved = false;
             }
             dc.process_in_place(&mut audio);
+
+            // TX audio diagnostics: measure the post-DC audio that feeds the
+            // modulator (diagnostics only — `audio` is not modified here).
+            for &s in &audio {
+                let a = s.abs();
+                win_sumsq += (s as f64) * (s as f64);
+                win_count += 1;
+                if a > win_peak {
+                    win_peak = a;
+                }
+                if a >= DIAG_CLIP_THRESH {
+                    win_clip = true;
+                }
+            }
+            if win_count >= DIAG_WINDOW_SAMPLES {
+                let now2 = Instant::now();
+                let rms = (win_sumsq / win_count as f64).sqrt() as f32;
+                // Peak hold: latch new peaks, decay to the live peak after hold.
+                if win_peak >= held_peak || now2.duration_since(peak_at) >= DIAG_PEAK_HOLD {
+                    held_peak = win_peak;
+                    peak_at = now2;
+                }
+                // Clip hold: latch ~1 s, log on the rising edge only.
+                if win_clip {
+                    if clip_until.is_none() {
+                        debug!("[hl2 mic] tx clip detected");
+                    }
+                    clip_until = Some(now2 + DIAG_CLIP_HOLD);
+                }
+                let clipping = clip_until.map(|t| now2 < t).unwrap_or(false);
+                if !clipping {
+                    clip_until = None;
+                }
+                crate::tx_diag::set_levels(rms, held_peak, clipping);
+                win_sumsq = 0.0;
+                win_count = 0;
+                win_peak = 0.0;
+                win_clip = false;
+            }
 
             // Real audio → complex (imag 0) → sideband FIR → baseband IQ.
             let cin: Vec<Complex32> = audio
@@ -1812,13 +1878,17 @@ impl IqSource for HermesLite2Source {
                 && session_start.elapsed().as_millis() >= PTT_GRACE_MS
             {
                 let bits = self.status_regs.recovery_bits;
-                fault = Some(format!("TX FIFO anomaly during mic TX: recovery_bits={bits:#02b}"));
+                fault = Some(format!(
+                    "TX FIFO anomaly during mic TX: recovery_bits={bits:#02b}"
+                ));
                 break;
             }
         }
 
         info!("[hl2 tx-seq] RF stop");
         self.tx_seq_end(target_u32);
+        // Live meters fall to silence between overs (counters persist).
+        crate::tx_diag::clear_levels();
         debug!("[hl2 mic] ptt released");
         info!(
             "[hl2 mic] SSB TX end after {} ms (fault={fault:?})",

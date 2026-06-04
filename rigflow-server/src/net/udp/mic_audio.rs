@@ -21,6 +21,7 @@ pub fn push_mic_samples(samples: &[f32]) {
         if q.len() > MAX_SAMPLES {
             let drop = q.len() - MAX_SAMPLES;
             q.drain(..drop);
+            crate::tx_diag::incr_overruns();
             log::debug!("[mic-rx] tx audio overrun — dropped {drop} samples");
         }
     }

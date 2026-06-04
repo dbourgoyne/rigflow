@@ -820,6 +820,19 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::ResetTxAudioDiag => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::ResetTxAudioDiag)
+                    .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "reset_tx_audio_diag_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetCwHangTime { hang_ms } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,
@@ -975,6 +988,9 @@ fn runtime_changed_from_runtime(
     let source_status =
         (current.source_status != previous.source_status).then_some(current.source_status.clone());
 
+    let tx_audio_diag =
+        (current.tx_audio_diag != previous.tx_audio_diag).then_some(current.tx_audio_diag);
+
     // `last_tx_tune_result` is itself an `Option<TxTuneResult>`, so we cannot
     // use `.then_some(…)` here — that would produce `Option<Option<…>>`.
     // A plain if/else gives the `Option<TxTuneResult>` the protocol expects.
@@ -1015,6 +1031,7 @@ fn runtime_changed_from_runtime(
         || volume_percent.is_some()
         || source_control.is_some()
         || source_status.is_some()
+        || tx_audio_diag.is_some()
         || tx_tune_result.is_some()
         || swr_sweep_result.is_some()
         || swr_sweep_progress.is_some();
@@ -1041,6 +1058,7 @@ fn runtime_changed_from_runtime(
         volume_percent,
         source_control,
         source_status,
+        tx_audio_diag,
         tx_tune_result,
         swr_sweep_result,
         swr_sweep_progress,
@@ -1080,6 +1098,7 @@ fn runtime_snapshot_from_status(
             volume_percent: runtime.volume_percent,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
+            tx_audio_diag: runtime.tx_audio_diag,
             tx_tune_result: runtime.last_tx_tune_result.clone(),
             swr_sweep_result: runtime.last_swr_sweep_result.clone(),
             swr_sweep_progress: runtime.swr_sweep_progress,

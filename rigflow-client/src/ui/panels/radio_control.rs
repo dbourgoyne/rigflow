@@ -72,6 +72,7 @@ impl RigflowApp {
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
                     save_mic = self.draw_microphone_row(ui, &mut state);
+                    self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
@@ -501,6 +502,55 @@ impl RigflowApp {
         }
 
         save
+    }
+
+    /// TX Audio Diagnostics (USB/LSB only).  Shows the server-measured audio
+    /// feeding the SSB modulator: live RMS level, held peak, a clip indicator,
+    /// and underrun/overrun transport counters with a reset button.
+    /// Diagnostics only — nothing here changes transmitted audio.
+    fn draw_tx_audio_diag_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+            return;
+        }
+
+        ui.separator();
+        ui.label("TX Audio Diagnostics");
+
+        let diag = state.tx_audio_diag;
+
+        // TX RMS level meter.
+        ui.horizontal(|ui| {
+            ui.label("Level");
+            ui.add(
+                egui::ProgressBar::new(diag.rms.min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("{:.0}%", (diag.rms * 100.0).min(999.0))),
+            );
+        });
+
+        // TX peak meter + clip indicator.
+        ui.horizontal(|ui| {
+            ui.label("Peak");
+            ui.add(
+                egui::ProgressBar::new(diag.peak.min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("{:.0}%", (diag.peak * 100.0).min(999.0))),
+            );
+            if diag.clipping {
+                ui.colored_label(egui::Color32::from_rgb(230, 60, 60), "● CLIP");
+            } else {
+                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "○ ok");
+            }
+        });
+
+        // Transport-health counters + reset (server-side counters).
+        ui.horizontal(|ui| {
+            ui.label(format!("Underruns: {}", diag.underruns));
+            ui.label(format!("Overruns: {}", diag.overruns));
+            if ui.button("Reset Counters").clicked() {
+                self.send_radio_msg(ClientRadioMessage::ResetTxAudioDiag);
+            }
+        });
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

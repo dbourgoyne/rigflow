@@ -4,6 +4,7 @@ use rigflow_core::{
         source_control::{DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState},
         source_status::SourceStatus,
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
+        tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
         HardwareKind, LeaseId, RadioCapabilities, RadioId,
     },
@@ -245,6 +246,9 @@ pub enum ClientRadioMessage {
     /// Stop SSB microphone transmit (Space released): stop RF, release PTT.
     StopMicTx,
 
+    /// Reset the TX-audio underrun/overrun diagnostic counters.
+    ResetTxAudioDiag,
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {
@@ -357,6 +361,10 @@ pub enum ServerRadioMessage {
         /// Current source telemetry / status fields.
         source_status: SourceStatus,
 
+        /// Live TX-audio diagnostics for SSB mic transmit (zero when idle).
+        #[serde(default)]
+        tx_audio_diag: TxAudioDiag,
+
         /// Result of the most recent TX tune test, if any.
         /// `None` means no test has been run since acquisition.
         tx_tune_result: Option<TxTuneResult>,
@@ -411,6 +419,10 @@ pub enum ServerRadioMessage {
 
         /// Changed source telemetry; `None` means no change since last update.
         source_status: Option<SourceStatus>,
+
+        /// Changed TX-audio diagnostics; `None` means no change since last update.
+        #[serde(default)]
+        tx_audio_diag: Option<TxAudioDiag>,
 
         /// New TX tune test result; `None` means no change since last update.
         tx_tune_result: Option<TxTuneResult>,

@@ -366,6 +366,7 @@ fn build_runtime_state(
         volume_percent: control.volume_percent,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
+        tx_audio_diag: crate::tx_diag::snapshot(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
         last_swr_sweep_result: control.last_swr_sweep_result.clone(),
         swr_sweep_progress: control.swr_sweep_progress,
@@ -863,6 +864,10 @@ fn spawn_command_thread(
                             cs.mic_tx_active.store(false, Ordering::Relaxed);
                             cs.pending_mic_tx = false;
                         }
+                    }
+
+                    WorkerCommand::ResetTxAudioDiag => {
+                        crate::tx_diag::reset_counters();
                     }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
@@ -1706,6 +1711,10 @@ fn spawn_dsp_thread(
         };
 
         let mut applied = current_control(&control);
+        // TX-audio diagnostics live in the process-global (written by the
+        // mic-TX loop), not in SharedControlState; track the last-published
+        // snapshot here so the client meters update during an over.
+        let mut applied_tx_diag = crate::tx_diag::snapshot();
 
         // Receive-squelch gate state, owned by this (DSP) thread.  3 dB of
         // hysteresis between the open and close thresholds prevents chatter.
@@ -1780,6 +1789,14 @@ fn spawn_dsp_thread(
 
             if current.source_status != applied.source_status {
                 applied.source_status = current.source_status.clone();
+                changed = true;
+            }
+
+            // TX audio diagnostics: republish whenever the live meters or
+            // counters move (only changes while keyed / on overrun).
+            let cur_tx_diag = crate::tx_diag::snapshot();
+            if cur_tx_diag != applied_tx_diag {
+                applied_tx_diag = cur_tx_diag;
                 changed = true;
             }
 

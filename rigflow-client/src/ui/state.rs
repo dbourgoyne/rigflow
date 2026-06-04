@@ -10,6 +10,7 @@ use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
+use rigflow_core::radio::tx_audio_diag::TxAudioDiag;
 use rigflow_core::radio::tx_tune::TxTuneResult;
 use rigflow_core::radio::RadioCapabilities;
 
@@ -209,6 +210,9 @@ pub struct UiState {
     /// Latest read-only telemetry from the active source.
     /// Empty (`SourceStatus::default()`) when the source does not report status.
     pub source_status: SourceStatus,
+
+    /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
+    pub tx_audio_diag: TxAudioDiag,
 
     /// Persisted source-control settings keyed by radio ID string.
     /// Mirrors `OperatorSettingsFile::source_control_preferences`.
@@ -416,6 +420,7 @@ impl Default for UiState {
             source_capabilities: SourceCapabilities::none(),
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
+            tx_audio_diag: TxAudioDiag::default(),
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
 
