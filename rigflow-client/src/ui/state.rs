@@ -259,6 +259,10 @@ pub struct UiState {
     /// (send StartCwKey on up→down, StopCwKey on down→up; no auto-repeat spam).
     pub cw_key_down: bool,
 
+    /// Tracks whether the Space bar is currently keying SSB mic TX (USB/LSB),
+    /// for edge detection (StartMicTx/StopMicTx).
+    pub ssb_ptt_down: bool,
+
     // ── CW sidetone (client-local; never sent to server) ────────────────
     /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
     pub cw_sidetone_volume: u8,
@@ -429,6 +433,7 @@ impl Default for UiState {
             tx_tone_freq_hz: 1000.0,
             tx_tone_running: false,
             cw_key_down: false,
+            ssb_ptt_down: false,
             cw_sidetone_volume: 25,
             cw_hang_ms: 300,
             cw_message: String::new(),

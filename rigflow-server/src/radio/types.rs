@@ -193,6 +193,10 @@ pub enum WorkerCommand {
     SetCwHangTime {
         hang_ms: u32,
     },
+    /// SSB microphone transmit start/stop (Space bar in USB/LSB).  The server
+    /// modulates the mic-audio UDP stream; sideband comes from the current mode.
+    StartMicTx,
+    StopMicTx,
     SetSourceN2adrEnabled {
         enabled: bool,
     },

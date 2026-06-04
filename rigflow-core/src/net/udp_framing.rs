@@ -14,6 +14,9 @@ pub const VERSION: u8 = 1;
 pub const STREAM_TYPE_AUDIO: u8 = 1;
 pub const STREAM_TYPE_WATERFALL: u8 = 2;
 pub const STREAM_TYPE_REGISTER_AUDIO: u8 = 10;
+/// Client → server microphone audio (mono f32 LE samples after a 4-byte
+/// `MAGIC/VERSION/stream_type/_` header).  Loss-tolerant; no sequence/codec.
+pub const STREAM_TYPE_MIC_AUDIO: u8 = 11;
 
 /// Fixed-size header present at the start of every UDP media packet.
 ///

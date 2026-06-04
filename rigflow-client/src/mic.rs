@@ -7,13 +7,20 @@
 //! network — no RF, no server interaction.  Designed to be reused by later
 //! phases (monitor, SSB TX): `process_mono` is the single capture→measure point.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 /// Clip threshold on the post-gain sample magnitude.
 const CLIP_LEVEL: f32 = 0.99;
+
+/// Mic audio transport rate (mono f32 to the server for SSB TX).
+const TX_RATE_HZ: u32 = 48_000;
+
+/// Cap on the outbound mic-TX ring (~0.5 s at 48 kHz); drop oldest on overflow.
+const TX_RING_MAX: usize = 24_000;
 
 /// Lock-free mic state shared between the audio input callback (writer of
 /// peak/clip) and the UI thread (reader; writer of gain).
@@ -26,6 +33,11 @@ pub struct MicShared {
     peak_bits: AtomicU32,
     /// Set by the callback when a post-gain sample clipped; UI reads + clears.
     clipped: AtomicBool,
+    /// True while SSB mic TX is keyed: the callback buffers gained 48 kHz mono
+    /// audio into `tx_ring` for the media thread to send to the server.
+    tx_streaming: AtomicBool,
+    /// Outbound mic-TX audio ring (48 kHz mono f32).
+    tx_ring: Mutex<VecDeque<f32>>,
 }
 
 impl Default for MicShared {
@@ -34,6 +46,8 @@ impl Default for MicShared {
             gain_bits: AtomicU32::new(1.0f32.to_bits()),
             peak_bits: AtomicU32::new(0),
             clipped: AtomicBool::new(false),
+            tx_streaming: AtomicBool::new(false),
+            tx_ring: Mutex::new(VecDeque::new()),
         }
     }
 }
@@ -60,6 +74,41 @@ impl MicShared {
         }
         if clipped {
             self.clipped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Enable/disable buffering of mic audio for SSB TX.  Clears the ring on a
+    /// transition so stale audio doesn't leak into the next over.
+    pub fn set_tx_streaming(&self, on: bool) {
+        let was = self.tx_streaming.swap(on, Ordering::Relaxed);
+        if was != on {
+            if let Ok(mut r) = self.tx_ring.lock() {
+                r.clear();
+            }
+        }
+    }
+    pub fn tx_streaming(&self) -> bool {
+        self.tx_streaming.load(Ordering::Relaxed)
+    }
+    /// Append captured 48 kHz mono samples (callback side); drop oldest on
+    /// overflow.  No-op unless streaming.
+    fn push_tx(&self, samples: &[f32]) {
+        if !self.tx_streaming.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Ok(mut r) = self.tx_ring.lock() {
+            r.extend(samples.iter().copied());
+            if r.len() > TX_RING_MAX {
+                let drop = r.len() - TX_RING_MAX;
+                r.drain(..drop);
+            }
+        }
+    }
+    /// Drain all buffered mic-TX samples (media-thread side).
+    pub fn drain_tx(&self) -> Vec<f32> {
+        match self.tx_ring.lock() {
+            Ok(mut r) => r.drain(..).collect(),
+            Err(_) => Vec::new(),
         }
     }
 }
@@ -117,32 +166,33 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
     };
 
     let device_name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
-    let supported = device
-        .default_input_config()
-        .map_err(|e| format!("default input config: {e}"))?;
+    // Prefer a 48 kHz config (avoids resampling); fall back to the device
+    // default (resampled to 48 kHz for TX).
+    let supported = pick_input_config(&device)?;
     let sample_format = supported.sample_format();
     let channels = supported.channels().max(1) as usize;
     let config: cpal::StreamConfig = supported.into();
+    let in_rate = config.sample_rate.0 as f32;
 
     let err_fn = |e| log::error!("[mic] input stream error: {e}");
-    let cb = Arc::clone(&shared);
+    let mut proc = MicProc::new(Arc::clone(&shared), channels, in_rate);
 
     let stream = match sample_format {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config,
-            move |data: &[f32], _| process_f32(data, channels, &cb),
+            move |data: &[f32], _| proc.feed_f32(data),
             err_fn,
             None,
         ),
         cpal::SampleFormat::I16 => device.build_input_stream(
             &config,
-            move |data: &[i16], _| process_i16(data, channels, &cb),
+            move |data: &[i16], _| proc.feed_i16(data),
             err_fn,
             None,
         ),
         cpal::SampleFormat::U16 => device.build_input_stream(
             &config,
-            move |data: &[u16], _| process_u16(data, channels, &cb),
+            move |data: &[u16], _| proc.feed_u16(data),
             err_fn,
             None,
         ),
@@ -154,7 +204,9 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
         .play()
         .map_err(|e| format!("play input stream: {e}"))?;
 
-    log::info!("[mic] microphone device selected: {device_name} (requested {requested:?})");
+    log::info!(
+        "[mic] microphone device selected: {device_name} @ {in_rate:.0} Hz (requested {requested:?})"
+    );
     log::debug!("[mic] microphone stream started");
 
     Ok(MicCapture {
@@ -165,56 +217,139 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
     })
 }
 
-// ── Per-format capture: downmix to mono, apply gain, measure peak + clip ─────
-
-fn process_f32(data: &[f32], channels: usize, shared: &MicShared) {
-    process_mono(
-        data.chunks(channels)
-            .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32),
-        shared,
-    );
+/// Choose an input config, preferring one at 48 kHz so no resampling is needed.
+fn pick_input_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig, String> {
+    if let Ok(ranges) = device.supported_input_configs() {
+        for r in ranges {
+            if r.min_sample_rate().0 <= TX_RATE_HZ && TX_RATE_HZ <= r.max_sample_rate().0 {
+                return Ok(r.with_sample_rate(cpal::SampleRate(TX_RATE_HZ)));
+            }
+        }
+    }
+    device
+        .default_input_config()
+        .map_err(|e| format!("default input config: {e}"))
 }
 
-fn process_i16(data: &[i16], channels: usize, shared: &MicShared) {
-    process_mono(
-        data.chunks(channels).map(|frame| {
-            frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / frame.len() as f32
-        }),
-        shared,
-    );
+// ── Capture processing: downmix → gain → measure → (resample → buffer) ───────
+
+/// Per-stream capture state (lives in the input callback).  Downmixes to mono,
+/// applies the measurement gain, reports peak/clip, and — while streaming —
+/// resamples to 48 kHz and buffers the gained audio for SSB TX.
+struct MicProc {
+    shared: Arc<MicShared>,
+    channels: usize,
+    in_rate: f32,
+    mono: Vec<f32>,
+    resampled: Vec<f32>,
+    // Linear-resampler state (only used when in_rate != 48 kHz).
+    pos: f32,
+    prev: f32,
 }
 
-fn process_u16(data: &[u16], channels: usize, shared: &MicShared) {
-    process_mono(
-        data.chunks(channels).map(|frame| {
-            frame
+impl MicProc {
+    fn new(shared: Arc<MicShared>, channels: usize, in_rate: f32) -> Self {
+        Self {
+            shared,
+            channels,
+            in_rate,
+            mono: Vec::new(),
+            resampled: Vec::new(),
+            pos: 0.0,
+            prev: 0.0,
+        }
+    }
+
+    fn feed_f32(&mut self, data: &[f32]) {
+        self.mono.clear();
+        for frame in data.chunks(self.channels) {
+            self.mono
+                .push(frame.iter().sum::<f32>() / frame.len() as f32);
+        }
+        self.process();
+    }
+
+    fn feed_i16(&mut self, data: &[i16]) {
+        self.mono.clear();
+        for frame in data.chunks(self.channels) {
+            let m = frame.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / frame.len() as f32;
+            self.mono.push(m);
+        }
+        self.process();
+    }
+
+    fn feed_u16(&mut self, data: &[u16]) {
+        self.mono.clear();
+        for frame in data.chunks(self.channels) {
+            let m = frame
                 .iter()
                 .map(|&s| (s as f32 - 32768.0) / 32768.0)
                 .sum::<f32>()
-                / frame.len() as f32
-        }),
-        shared,
-    );
-}
+                / frame.len() as f32;
+            self.mono.push(m);
+        }
+        self.process();
+    }
 
-/// Apply the measurement gain to a mono f32 stream and report peak + clip.
-/// This is the reusable capture→measure point for future monitor / SSB-TX work.
-fn process_mono(samples: impl Iterator<Item = f32>, shared: &MicShared) {
-    let gain = shared.gain();
-    let mut peak = 0.0f32;
-    let mut clipped = false;
-    for s in samples {
-        let v = s * gain;
-        let mag = v.abs();
-        if mag > peak {
-            peak = mag;
+    /// Gain, measure peak/clip, and buffer 48 kHz mono audio while streaming.
+    /// (`self.mono` is the device-rate mono block.)
+    fn process(&mut self) {
+        let gain = self.shared.gain();
+        let mut peak = 0.0f32;
+        let mut clipped = false;
+        for s in &mut self.mono {
+            *s *= gain;
+            let mag = s.abs();
+            if mag > peak {
+                peak = mag;
+            }
+            if mag >= CLIP_LEVEL {
+                clipped = true;
+            }
         }
-        if mag >= CLIP_LEVEL {
-            clipped = true;
+        if clipped {
+            log::debug!("[mic] clipping detected (peak {peak:.3})");
+        }
+        self.shared.report(peak, clipped);
+
+        if self.shared.tx_streaming() {
+            if (self.in_rate - TX_RATE_HZ as f32).abs() < 1.0 {
+                self.shared.push_tx(&self.mono);
+            } else {
+                self.resample_into_48k();
+                let out = std::mem::take(&mut self.resampled);
+                self.shared.push_tx(&out);
+                self.resampled = out;
+            }
         }
     }
-    if clipped {
-        log::debug!("[mic] clipping detected (peak {peak:.3})");
+
+    /// Linear-resample `self.mono` (at `in_rate`) to 48 kHz into `self.resampled`,
+    /// carrying fractional phase + the last sample across blocks.  Adequate for
+    /// voice SSB (the 48 kHz path above avoids this entirely on most devices).
+    fn resample_into_48k(&mut self) {
+        let step = self.in_rate / TX_RATE_HZ as f32; // input advance per output sample
+        let maxk = self.mono.len();
+        let prev = self.prev;
+        let mut pos = self.pos;
+        let mut out = std::mem::take(&mut self.resampled);
+        out.clear();
+        // Virtual input V: V[0] = prev, V[k] = mono[k-1].  Interpolate while a
+        // full segment [k, k+1] is available (k+1 <= maxk).
+        while (pos.floor() as usize) + 1 <= maxk {
+            let f = pos.floor();
+            let k = f as usize;
+            let frac = pos - f;
+            let vk = if k == 0 { prev } else { self.mono[k - 1] };
+            let vk1 = self.mono[k];
+            out.push(vk + (vk1 - vk) * frac);
+            pos += step;
+        }
+        pos -= maxk as f32;
+        self.pos = pos.max(0.0);
+        if maxk > 0 {
+            self.prev = self.mono[maxk - 1];
+        }
+        self.resampled = out;
     }
-    shared.report(peak, clipped);
 }

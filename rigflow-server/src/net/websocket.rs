@@ -796,6 +796,30 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::StartMicTx => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StartMicTx).await
+            {
+                send_radio_error(
+                    local_tx,
+                    "start_mic_tx_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::StopMicTx => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StopMicTx).await
+            {
+                send_radio_error(
+                    local_tx,
+                    "stop_mic_tx_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetCwHangTime { hang_ms } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

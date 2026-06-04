@@ -236,6 +236,15 @@ pub enum ClientRadioMessage {
         hang_ms: u32,
     },
 
+    /// Begin SSB microphone transmit (Space held in USB/LSB).  The server keys
+    /// PTT and modulates the mic-audio UDP stream; sideband comes from the
+    /// current mode (USB above carrier, LSB below).  Mic audio itself is a
+    /// separate UDP stream, not a control message.
+    StartMicTx,
+
+    /// Stop SSB microphone transmit (Space released): stop RF, release PTT.
+    StopMicTx,
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {

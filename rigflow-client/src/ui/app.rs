@@ -219,6 +219,35 @@ impl RigflowApp {
         }
     }
 
+    /// Space-bar SSB mic PTT (USB/LSB).  Space held = transmit mic audio; the
+    /// server keys PTT + modulates the mic UDP stream.  Gated like CW keying
+    /// (acquired, TX-capable, not typing), edge-detected against `ssb_ptt_down`.
+    /// Toggles `mic_shared.tx_streaming` so the capture buffers audio to send.
+    fn handle_ssb_ptt(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        use rigflow_core::dsp::modes::DemodMode;
+
+        let typing = ctx.wants_keyboard_input();
+        let space_held = !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+
+        let ssb_ready = snapshot.radio_acquired
+            && snapshot.source_capabilities.supports_tx_tune_test
+            && matches!(snapshot.demod_mode, DemodMode::Usb | DemodMode::Lsb);
+        let want_tx = space_held && ssb_ready;
+
+        if want_tx != snapshot.ssb_ptt_down {
+            if want_tx {
+                snapshot.mic_shared.set_tx_streaming(true);
+                self.send_radio_msg(ClientRadioMessage::StartMicTx);
+            } else {
+                self.send_radio_msg(ClientRadioMessage::StopMicTx);
+                snapshot.mic_shared.set_tx_streaming(false);
+            }
+            if let Ok(mut state) = self.state.lock() {
+                state.ssb_ptt_down = want_tx;
+            }
+        }
+    }
+
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         let mut center_delta_hz: f32 = 0.0;
 
@@ -315,6 +344,7 @@ impl eframe::App for RigflowApp {
         self.handle_keyboard_shortcuts(ctx);
         self.handle_cw_keying(ctx, &snapshot);
         self.handle_cw_macros(ctx, &snapshot);
+        self.handle_ssb_ptt(ctx, &snapshot);
         self.draw_left_panel(ctx, &snapshot, config_mode);
         self.draw_center_panel(ctx, &snapshot);
         self.draw_add_operator_dialog(ctx);

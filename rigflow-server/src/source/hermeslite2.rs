@@ -10,6 +10,9 @@ use rigflow_core::radio::source_control::{GainMode, SourceCapabilities, SourceCo
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::{compute_swr, compute_swr_from_raw, TxTuneResult, TxTuneStatus};
 
+use crate::dsp::audio::dc_blocker::DcBlocker;
+use crate::dsp::demod::Sideband;
+use crate::dsp::pipeline::ComplexSidebandFir;
 use crate::source::IqSource;
 
 // Protocol 1 packet layout constants.
@@ -540,6 +543,56 @@ impl HermesLite2Source {
             .send(&pkt)
             .map(|_| ())
             .map_err(|e| format!("HL2: send CW packet failed: {e}"))
+    }
+
+    /// Send one H2D packet carrying a provided complex-baseband IQ buffer (used
+    /// by SSB mic TX — the modulator output).  Packs the first 126 samples
+    /// (`field0 = imag`, `field1 = real`, the non-inverting convention),
+    /// clamping to i16; missing samples pad with zero.
+    fn send_tx_iq_packet(
+        &mut self,
+        nco_freq_hz: u32,
+        iq: &[Complex32],
+        ptt: bool,
+    ) -> Result<(), String> {
+        let ptt_bit = ptt as u8;
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+
+        let freq_bytes = nco_freq_hz.to_be_bytes();
+        let gain_byte = 0x40 | (self.lna_gain_code & 0x3F);
+
+        let fill = |sf: &mut [u8], c0: u8, hdr: [u8; 4], idx: &mut usize| {
+            sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
+            sf[3] = c0;
+            sf[4..8].copy_from_slice(&hdr);
+            for i in 0..P1_SAMPLES_PER_SUBFRAME {
+                let s = iq.get(*idx).copied().unwrap_or(Complex32::new(0.0, 0.0));
+                *idx += 1;
+                let re = (s.re * 0x7FFF as f32).round().clamp(-32767.0, 32767.0) as i16;
+                let im = (s.im * 0x7FFF as f32).round().clamp(-32767.0, 32767.0) as i16;
+                let b = 8 + i * 8;
+                sf[b + 4..b + 6].copy_from_slice(&im.to_be_bytes()); // field0 = imag
+                sf[b + 6..b + 8].copy_from_slice(&re.to_be_bytes()); // field1 = real
+            }
+        };
+
+        let mut idx = 0usize;
+        fill(&mut pkt[8..520], 0x02 | ptt_bit, freq_bytes, &mut idx);
+        fill(
+            &mut pkt[520..1032],
+            0x14 | ptt_bit,
+            [0, 0, 0, gain_byte],
+            &mut idx,
+        );
+
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send IQ packet failed: {e}"))
     }
 
     /// Shared TX-START sequencing used by every transmit path.  Drains stale
@@ -1613,6 +1666,162 @@ impl IqSource for HermesLite2Source {
         debug!("[cw] ptt_release");
         info!(
             "[hl2 cw] session end after {} ms (fault={fault:?})",
+            session_start.elapsed().as_millis()
+        );
+
+        match fault {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// SSB microphone transmit (Phase 3).  Open-ended session: asserts PTT
+    /// (lead), then per packet pulls 126 mic samples (pads silence on underrun),
+    /// DC-blocks them, and runs them through the sideband complex FIR
+    /// (band-limited ~300–2700 Hz, USB above carrier / LSB below) to produce the
+    /// complex baseband IQ the HL2 DUC upconverts.  Runs until `active` clears,
+    /// then tail + release.  RX IQ is forwarded to FDX.
+    #[allow(clippy::too_many_arguments)]
+    fn tx_ssb_mic(
+        &mut self,
+        target_freq_hz: u64,
+        usb: bool,
+        tx_drive_percent: f32,
+        active: &std::sync::atomic::AtomicBool,
+        abort: &std::sync::atomic::AtomicBool,
+        pull_audio: &mut dyn FnMut(usize, &mut Vec<f32>) -> usize,
+        on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
+    ) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        use Sideband::{Lsb, Usb};
+
+        const PTT_GRACE_MS: u128 = 60;
+        // Safety ceiling on one continuous over (lost client / stuck key).
+        const HARD_MAX_MS: u128 = 600_000;
+        const HF_MIN_HZ: u64 = 1_800_000;
+        const HF_MAX_HZ: u64 = 30_000_000;
+        // Voice passband and headroom into the modulator (mic gain is applied
+        // client-side; this is just headroom so nominal speech sits below FS).
+        const AUDIO_BW_HZ: f32 = 2400.0;
+        const AUDIO_PITCH_HZ: f32 = 300.0;
+        const FIR_TAPS: usize = 127;
+        const TX_AUDIO_SCALE: f32 = 0.9;
+
+        let tx_drive_percent = tx_drive_percent.clamp(0.0, 100.0);
+        let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
+
+        info!(
+            "[hl2 mic] SSB TX start: mode={} drive={tx_drive_percent:.0}% target={target_freq_hz} Hz",
+            if usb { "USB" } else { "LSB" }
+        );
+
+        if target_freq_hz < HF_MIN_HZ || target_freq_hz > HF_MAX_HZ {
+            return Err(format!(
+                "{target_freq_hz} Hz outside HF TX range ({HF_MIN_HZ}-{HF_MAX_HZ} Hz)"
+            ));
+        }
+        if self.status_regs.raddr0_valid && self.status_regs.tx_inhibited {
+            return Err("TX inhibited by hardware".to_string());
+        }
+
+        let target_u32 = target_freq_hz as u32;
+        self.send_tx_rx_nco(target_u32)
+            .map_err(|e| format!("NCO program failed: {e}"))?;
+        if let Err(e) = self.send_tx_drive_cc(drive_level, true) {
+            let _ = self.send_tx_drive_cc(0, false);
+            return Err(format!("drive-level program failed: {e}"));
+        }
+
+        let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
+        let n = TX_SAMPLES_PER_PACKET as usize;
+
+        // SSB modulator: DC removal + sideband-selective complex FIR (Hilbert +
+        // band-limit).  Reuses the RX SSB filter design applied to real audio.
+        let mut dc = DcBlocker::new(0.995);
+        let mut fir = ComplexSidebandFir::new(
+            TX_SAMPLE_RATE_HZ,
+            AUDIO_BW_HZ,
+            AUDIO_PITCH_HZ,
+            FIR_TAPS,
+            if usb { Usb } else { Lsb },
+        );
+
+        // Shared TX-start sequencing: assert PTT + lead delay (no RF yet).
+        self.tx_seq_begin(target_u32)?;
+        debug!("[hl2 mic] ptt asserted");
+        info!("[hl2 tx-seq] RF start");
+
+        let session_start = Instant::now();
+        let mut next_tick = Instant::now();
+        let mut fault: Option<String> = None;
+        let mut audio: Vec<f32> = Vec::with_capacity(n);
+        let mut iq: Vec<Complex32> = Vec::with_capacity(n);
+
+        loop {
+            let now = Instant::now();
+            if abort.load(Ordering::Relaxed) || !active.load(Ordering::Relaxed) {
+                break;
+            }
+            if session_start.elapsed().as_millis() >= HARD_MAX_MS {
+                warn!("[hl2 mic] hard {HARD_MAX_MS} ms ceiling — auto key-up");
+                break;
+            }
+
+            if now < next_tick {
+                thread::sleep(next_tick - now);
+                next_tick += packet_period;
+            } else {
+                next_tick = now + packet_period;
+            }
+
+            // Pull one packet of mic audio (pad silence on underrun).
+            audio.clear();
+            let got = pull_audio(n, &mut audio);
+            if got < n {
+                debug!("[hl2 mic] tx audio underrun ({got}/{n})");
+                audio.resize(n, 0.0);
+            }
+            dc.process_in_place(&mut audio);
+
+            // Real audio → complex (imag 0) → sideband FIR → baseband IQ.
+            let cin: Vec<Complex32> = audio
+                .iter()
+                .map(|&s| Complex32::new(s * TX_AUDIO_SCALE, 0.0))
+                .collect();
+            fir.process_into(&cin, &mut iq);
+
+            if let Err(e) = self.send_tx_iq_packet(target_u32, &iq, true) {
+                fault = Some(format!("mic IQ send failed: {e}"));
+                break;
+            }
+
+            // Drain DDC status + RX IQ; forward to FDX (spectrum/waterfall).
+            let mut rx_buf = [0u8; P1_PACKET_LEN];
+            while let Ok(len) = self.socket.recv(&mut rx_buf) {
+                if len == P1_PACKET_LEN {
+                    let mut decoded = VecDeque::new();
+                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    if self.fdx_enabled && !decoded.is_empty() {
+                        on_rx_iq(decoded.into_iter().collect());
+                    }
+                }
+            }
+
+            if self.status_regs.raddr0_valid
+                && self.status_regs.recovery_bits != 0
+                && session_start.elapsed().as_millis() >= PTT_GRACE_MS
+            {
+                let bits = self.status_regs.recovery_bits;
+                fault = Some(format!("TX FIFO anomaly during mic TX: recovery_bits={bits:#02b}"));
+                break;
+            }
+        }
+
+        info!("[hl2 tx-seq] RF stop");
+        self.tx_seq_end(target_u32);
+        debug!("[hl2 mic] ptt released");
+        info!(
+            "[hl2 mic] SSB TX end after {} ms (fault={fault:?})",
             session_start.elapsed().as_millis()
         );
 

@@ -108,6 +108,11 @@ struct SharedControlState {
     pending_cw_key: bool,
     cw_key_held: Arc<AtomicBool>,
     cw_hang_ms: u32,
+
+    /// SSB mic TX (Phase 3): `pending_mic_tx` starts a session; `mic_tx_active`
+    /// is the live PTT state the session polls (cleared on key-up / stop).
+    pending_mic_tx: bool,
+    mic_tx_active: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -456,6 +461,8 @@ fn run_iq_worker_threads(
         pending_cw_key: false,
         cw_key_held: Arc::new(AtomicBool::new(false)),
         cw_hang_ms: 300,
+        pending_mic_tx: false,
+        mic_tx_active: Arc::new(AtomicBool::new(false)),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -651,6 +658,7 @@ fn spawn_command_thread(
                         if let Ok(cs) = control.lock() {
                             cs.tx_tone_stop.store(true, Ordering::Relaxed);
                             cs.cw_key_held.store(false, Ordering::Relaxed);
+                            cs.mic_tx_active.store(false, Ordering::Relaxed);
                         }
                         break;
                     }
@@ -838,6 +846,22 @@ fn spawn_command_thread(
                     WorkerCommand::SetCwHangTime { hang_ms } => {
                         if let Ok(mut cs) = control.lock() {
                             cs.cw_hang_ms = hang_ms.min(2_000);
+                        }
+                    }
+
+                    WorkerCommand::StartMicTx => {
+                        // Drop any stale buffered mic audio from a prior over.
+                        crate::net::udp::mic_audio::clear_mic_samples();
+                        if let Ok(mut cs) = control.lock() {
+                            cs.mic_tx_active.store(true, Ordering::Relaxed);
+                            cs.pending_mic_tx = true;
+                        }
+                    }
+
+                    WorkerCommand::StopMicTx => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.mic_tx_active.store(false, Ordering::Relaxed);
+                            cs.pending_mic_tx = false;
                         }
                     }
                 },
@@ -1505,6 +1529,67 @@ fn spawn_capture_thread(
                             // fresh session next iteration; otherwise clear it.
                             if let Ok(mut cs) = control.lock() {
                                 cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Execute any pending SSB mic transmit (Phase 3).  Open-ended: the
+            // source modulates pulled mic audio (USB above carrier / LSB below)
+            // until `mic_tx_active` clears on key-up.  Sideband comes from the
+            // current mode.  RX IQ is forwarded to FDX; audio is pulled from the
+            // global mic queue fed by the UDP listener.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .map(|mut cs| {
+                        let p = cs.pending_mic_tx;
+                        cs.pending_mic_tx = false;
+                        p
+                    })
+                    .unwrap_or(false);
+
+                if pending {
+                    let mic_usb = match control_snapshot.demod_mode {
+                        DemodMode::Usb => Some(true),
+                        DemodMode::Lsb => Some(false),
+                        _ => None,
+                    };
+                    if mic_usb.is_none() {
+                        warn!(
+                            "[radio-worker {}] mic TX ignored: mode is {:?}, not USB/LSB",
+                            descriptor.id.0, control_snapshot.demod_mode
+                        );
+                        if let Ok(cs) = control.lock() {
+                            cs.mic_tx_active.store(false, Ordering::Relaxed);
+                        }
+                    } else {
+                        let usb = mic_usb.unwrap();
+                        let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let active = control.lock().ok().map(|cs| cs.mic_tx_active.clone());
+
+                        if let Some(active) = active {
+                            let mut forward = |iq: Vec<Complex32>| {
+                                let _ = iq_wf_tx.try_send(iq);
+                            };
+                            // Pull up to `n` mic samples from the global queue
+                            // (padded with silence on underrun by the source).
+                            let mut pull = |n: usize, out: &mut Vec<f32>| {
+                                crate::net::udp::mic_audio::drain_mic_samples(out, n)
+                            };
+                            if let Err(e) = source.tx_ssb_mic(
+                                target_freq_hz,
+                                usb,
+                                tx_drive_percent,
+                                &active,
+                                &stop_flag,
+                                &mut pull,
+                                &mut forward,
+                            ) {
+                                warn!("[radio-worker {}] mic TX error: {e}", descriptor.id.0);
                             }
                         }
                     }
