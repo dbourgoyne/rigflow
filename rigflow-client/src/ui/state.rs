@@ -251,6 +251,12 @@ pub struct UiState {
     /// CW semi-break-in hang time in ms (0–2000): how long PTT stays asserted
     /// after the last CW element before releasing.  Sent to the server.
     pub cw_hang_ms: u32,
+
+    // ── Text-to-CW (client-side Morse; persisted per operator) ──────────
+    /// The CW message text to send (also the "last used message").
+    pub cw_message: String,
+    /// Sending speed in words per minute (5–50).
+    pub cw_speed_wpm: u32,
     /// Lock-free control state shared with the CPAL audio callback, which mixes
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
@@ -388,6 +394,8 @@ impl Default for UiState {
             cw_key_down: false,
             cw_sidetone_volume: 25,
             cw_hang_ms: 300,
+            cw_message: String::new(),
+            cw_speed_wpm: 20,
             sidetone: Arc::new(SidetoneShared::default()),
         };
 

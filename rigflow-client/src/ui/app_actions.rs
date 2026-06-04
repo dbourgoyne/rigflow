@@ -166,6 +166,38 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the Text-to-CW message and speed for the current operator.
+    pub(crate) fn save_cw_message_to_current_operator(&mut self) {
+        let (operator_id, cw_message, cw_speed_wpm) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.operator_id.clone(),
+                state.cw_message.clone(),
+                state.cw_speed_wpm,
+            )
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        if let Ok(mut operator_settings) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            operator_settings.cw_message = cw_message;
+            operator_settings.cw_speed_wpm = cw_speed_wpm;
+            if let Err(err) = self
+                .persistence_store
+                .save_operator_settings(&operator_settings)
+            {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to save CW message: {err}");
+                }
+            }
+        }
+    }
+
     pub(crate) fn save_demod_preferences_to_current_operator(&mut self) {
         let snapshot = {
             let state = self.state.lock().unwrap();

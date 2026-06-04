@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::ui::app::RigflowApp;
@@ -27,6 +29,7 @@ impl RigflowApp {
             .show(ui, |ui| {
                 let mut save_demod_prefs = false;
                 let mut save_volume = false;
+                let mut save_cw = false;
 
                 if let Ok(mut state) = self.state.lock() {
                     // Apply persisted per-demod controls when the mode changes.
@@ -68,6 +71,7 @@ impl RigflowApp {
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
+                    save_cw = self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -77,6 +81,9 @@ impl RigflowApp {
                 }
                 if save_volume {
                     self.save_volume_to_current_operator();
+                }
+                if save_cw {
+                    self.save_cw_message_to_current_operator();
                 }
             });
     }
@@ -212,6 +219,77 @@ impl RigflowApp {
                 self.send_radio_msg(ClientRadioMessage::SetCwHangTime { hang_ms: h });
             }
         }
+    }
+
+    /// Text-to-CW: message text, speed, and Send/Stop, shown only in CWU/CWL.
+    /// All Morse encoding/timing happens client-side (see `crate::cw_text`); the
+    /// server only receives the same StartCwKey/StopCwKey events as Space-bar
+    /// keying.  Returns `true` when the message/speed should be persisted.
+    fn draw_cw_message_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) -> bool {
+        if !matches!(mode, DemodMode::Cwu | DemodMode::Cwl) {
+            return false;
+        }
+        ui.separator();
+        ui.label("CW Message");
+
+        let mut save = false;
+        let sending = self.cw_text_sending.load(Ordering::Relaxed);
+
+        // Message text (locked out while a message is playing).
+        ui.add_enabled_ui(!sending, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.cw_message)
+                    .hint_text("text to send")
+                    .desired_width(220.0),
+            );
+        });
+
+        // Sending speed: 5–50 WPM, step 1.
+        let mut wpm = state.cw_speed_wpm as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut wpm, 5..=50)
+                    .integer()
+                    .suffix(" WPM")
+                    .text("CW Speed"),
+            )
+            .changed()
+        {
+            let w = wpm.clamp(5, 50) as u32;
+            if w != state.cw_speed_wpm {
+                state.cw_speed_wpm = w;
+                save = true;
+            }
+        }
+
+        ui.horizontal(|ui| {
+            let can_send = !sending && !state.cw_message.trim().is_empty();
+            if ui
+                .add_enabled(can_send, egui::Button::new("Send"))
+                .clicked()
+            {
+                // Spawn the client-side Morse sender; it sends the same CW key
+                // events as the Space bar and drives the local sidetone.
+                crate::cw_text::spawn_send(
+                    state.cw_message.clone(),
+                    state.cw_speed_wpm,
+                    self.ws_cmd_tx.clone(),
+                    Arc::clone(&state.sidetone),
+                    Arc::clone(&self.cw_text_abort),
+                    Arc::clone(&self.cw_text_sending),
+                );
+                save = true; // persist the just-sent message + speed
+            }
+            if ui.add_enabled(sending, egui::Button::new("Stop")).clicked() {
+                // Abort promptly; the server's semi break-in releases PTT.
+                self.cw_text_abort.store(true, Ordering::Relaxed);
+            }
+            if sending {
+                ui.label(RichText::new("● sending…").small());
+            }
+        });
+
+        save
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

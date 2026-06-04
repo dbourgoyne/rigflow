@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use eframe::egui;
@@ -17,6 +18,11 @@ pub struct RigflowApp {
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
     pub persistence_store: PersistenceStore,
     pub waterfall_texture: Option<egui::TextureHandle>,
+
+    /// Text-to-CW sender control (shared with its timer thread): `cw_text_abort`
+    /// requests a prompt stop; `cw_text_sending` is true while a message plays.
+    pub cw_text_abort: Arc<AtomicBool>,
+    pub cw_text_sending: Arc<AtomicBool>,
 }
 
 impl RigflowApp {
@@ -34,6 +40,8 @@ impl RigflowApp {
             spectrum_db,
             persistence_store,
             waterfall_texture: None,
+            cw_text_abort: Arc::new(AtomicBool::new(false)),
+            cw_text_sending: Arc::new(AtomicBool::new(false)),
         }
     }
 

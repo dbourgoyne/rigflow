@@ -107,6 +107,7 @@
 //! - `rigflow-protocol` — shared WebSocket protocol types
 
 mod client_runtime;
+mod cw_text;
 mod net;
 mod persistence;
 mod sidetone;

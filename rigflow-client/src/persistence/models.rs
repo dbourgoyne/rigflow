@@ -141,10 +141,22 @@ pub struct OperatorSettingsFile {
     /// Serde default so older settings files load without migration.
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
+
+    /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
+    #[serde(default)]
+    pub cw_message: String,
+
+    /// Text-to-CW: sending speed in WPM (5–50).  Serde default for old files.
+    #[serde(default = "default_cw_speed_wpm")]
+    pub cw_speed_wpm: u32,
 }
 
 pub fn default_volume_percent() -> u8 {
     50
+}
+
+pub fn default_cw_speed_wpm() -> u32 {
+    20
 }
 
 impl OperatorSettingsFile {
@@ -161,6 +173,8 @@ impl OperatorSettingsFile {
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
             volume_percent: default_volume_percent(),
+            cw_message: String::new(),
+            cw_speed_wpm: default_cw_speed_wpm(),
         }
     }
 }
