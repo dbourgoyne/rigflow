@@ -159,10 +159,22 @@ pub fn start_media_runtime(
     let audio_session_generation = Arc::new(AtomicU64::new(0));
     let audio_session_generation_for_thread = Arc::clone(&audio_session_generation);
 
+    // CW decoder: shared control/output lives in UiState; the decoder DSP state
+    // is owned by the media thread and fed the received audio.
+    let cw_decode_shared = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.cw_decode))
+        .unwrap_or_default();
+
     // --- Media thread ------------------------------------------------------
 
     thread::spawn(move || {
         let mut udp_buf = [0u8; 65536];
+
+        // CW decoder DSP state, owned by this thread; fed received audio per
+        // packet (no-op unless the operator enabled decode).
+        let mut cw_decoder =
+            crate::cw_decode::CwDecoder::new(cw_decode_shared, OUTPUT_SAMPLE_RATE as f32);
 
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -273,6 +285,7 @@ pub fn start_media_runtime(
                             &spectrum_for_thread,
                             &ui_state_for_thread,
                             &stats_for_thread,
+                            &mut cw_decoder,
                         );
                     }
                 }

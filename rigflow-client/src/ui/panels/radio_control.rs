@@ -73,6 +73,7 @@ impl RigflowApp {
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -361,6 +362,54 @@ impl RigflowApp {
         }
 
         save
+    }
+
+    /// CW decode (assistive CW-to-text), shown only in CWU/CWL.  Pushes the
+    /// current CW Pitch + speed to the decoder's shared control, exposes the
+    /// Enable toggle, the auto-WPM estimate, the scrolling decoded text, and a
+    /// Clear button.  The decoder itself runs in the media thread on received
+    /// audio; nothing here alters the receive path or transmits.
+    fn draw_cw_decode_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Cwu | DemodMode::Cwl) {
+            return;
+        }
+        ui.separator();
+        ui.label("CW Decode");
+
+        // Keep the decoder's target tone (CW Pitch) and WPM seed current.
+        state.cw_decode.set_pitch_hz(state.pitch_hz);
+        state.cw_decode.set_wpm(state.cw_speed_wpm);
+
+        ui.horizontal(|ui| {
+            let mut enabled = state.cw_decode.enabled();
+            if ui.checkbox(&mut enabled, "Enable Decode").changed() {
+                state.cw_decode.set_enabled(enabled);
+            }
+            ui.label(
+                RichText::new(format!("Auto WPM (~{})", state.cw_decode.est_wpm()))
+                    .small()
+                    .weak(),
+            );
+        });
+
+        // Scrolling, read-only decoded text (auto-scrolls to the newest).
+        let mut text = state.cw_decode.text();
+        egui::ScrollArea::vertical()
+            .id_salt("cw_decode_text")
+            .max_height(100.0)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut text)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .interactive(false),
+                );
+            });
+
+        if ui.button("Clear").clicked() {
+            state.cw_decode.clear();
+        }
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

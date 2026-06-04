@@ -60,6 +60,7 @@ pub fn handle_media_packet(
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
     ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
+    cw_decoder: &mut crate::cw_decode::CwDecoder,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -82,7 +83,7 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
-            handle_audio_packet(payload, header.sequence, jitter);
+            handle_audio_packet(payload, header.sequence, jitter, cw_decoder);
         }
 
         STREAM_TYPE_WATERFALL => {
@@ -130,7 +131,12 @@ fn update_sequence_stats(stats: &mut MediaPacketStats, kind: StreamKind, sequenc
     }
 }
 
-fn handle_audio_packet(payload: &[u8], sequence: u32, jitter: &Arc<Mutex<JitterBuffer>>) {
+fn handle_audio_packet(
+    payload: &[u8],
+    sequence: u32,
+    jitter: &Arc<Mutex<JitterBuffer>>,
+    cw_decoder: &mut crate::cw_decode::CwDecoder,
+) {
     if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
     }
@@ -141,6 +147,10 @@ fn handle_audio_packet(payload: &[u8], sequence: u32, jitter: &Arc<Mutex<JitterB
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
         samples.push(s as f32 / i16::MAX as f32);
     }
+
+    // Feed the received audio to the CW decoder (no-op unless enabled).  This
+    // only reads the samples — the receive audio path is untouched.
+    cw_decoder.process(&samples);
 
     if let Ok(mut jb) = jitter.lock() {
         jb.push_packet(sequence, samples);

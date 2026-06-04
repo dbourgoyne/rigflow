@@ -274,6 +274,10 @@ pub struct UiState {
     pub cw_speed_wpm: u32,
     /// CW memory macros (F1–F4): label + text, persisted per operator.
     pub cw_macros: [CwMacro; 4],
+
+    /// Client-side CW decoder control + decoded-text output, shared lock-free
+    /// with the media thread that runs the decoder.  Not persisted.
+    pub cw_decode: Arc<crate::cw_decode::CwDecodeShared>,
     /// Lock-free control state shared with the CPAL audio callback, which mixes
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
@@ -414,6 +418,7 @@ impl Default for UiState {
             cw_message: String::new(),
             cw_speed_wpm: 20,
             cw_macros: default_cw_macros(),
+            cw_decode: Arc::new(crate::cw_decode::CwDecodeShared::default()),
             sidetone: Arc::new(SidetoneShared::default()),
         };
 
