@@ -225,8 +225,16 @@ pub enum ClientRadioMessage {
     /// CW carrier (rise envelope → sustain).  Server validates CW mode.
     StartCwKey,
 
-    /// CW key UP (Space released): run the fall envelope, then release PTT.
+    /// CW key UP (Space released): run the fall envelope; PTT releases after the
+    /// semi-break-in hang time (or immediately if hang = 0).
     StopCwKey,
+
+    /// Set the CW semi-break-in hang time in ms (0–2000).  PTT stays asserted
+    /// this long after the last CW element before releasing; 0 = release
+    /// immediately (per-element keying).
+    SetCwHangTime {
+        hang_ms: u32,
+    },
 
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.

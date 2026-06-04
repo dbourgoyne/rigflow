@@ -101,11 +101,13 @@ struct SharedControlState {
     pending_tx_tone: Option<(f32, bool)>,
     tx_tone_stop: Arc<AtomicBool>,
 
-    /// CW keying (CW TX Phase 1): `pending_cw_key` is set on key-down for the
-    /// capture thread to pick up; `cw_key_held` is the live key state the
-    /// capture thread polls — cleared on key-up to start the fall envelope.
+    /// CW keying: `pending_cw_key` starts a keying session; `cw_key_held` is the
+    /// live key state the session polls.  `cw_hang_ms` is the semi-break-in hang
+    /// time — PTT stays asserted this long after the last element before release
+    /// (0 = release immediately, like per-element keying).
     pending_cw_key: bool,
     cw_key_held: Arc<AtomicBool>,
+    cw_hang_ms: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -453,6 +455,7 @@ fn run_iq_worker_threads(
         tx_tone_stop: Arc::new(AtomicBool::new(false)),
         pending_cw_key: false,
         cw_key_held: Arc::new(AtomicBool::new(false)),
+        cw_hang_ms: 300,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -824,10 +827,17 @@ fn spawn_command_thread(
 
                     WorkerCommand::StopCwKey => {
                         if let Ok(mut cs) = control.lock() {
-                            // Drop the key: a running key runs the fall envelope
-                            // and releases PTT; a not-yet-started one is cancelled.
+                            // Drop the key: a running session runs the fall
+                            // envelope and (after the hang) releases PTT; a
+                            // not-yet-started one is cancelled.
                             cs.cw_key_held.store(false, Ordering::Relaxed);
                             cs.pending_cw_key = false;
+                        }
+                    }
+
+                    WorkerCommand::SetCwHangTime { hang_ms } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.cw_hang_ms = hang_ms.min(2_000);
                         }
                     }
                 },
@@ -1467,22 +1477,34 @@ fn spawn_capture_thread(
                         // never the generic SSB sideband field.
                         let usb = cw_usb.unwrap();
                         let target_freq_hz = control_snapshot.target_freq_hz;
+                        // Semi break-in hang time (PTT persists between elements).
+                        let hang_ms = control_snapshot.cw_hang_ms;
                         let held = control.lock().ok().map(|cs| cs.cw_key_held.clone());
 
                         if let Some(held) = held {
                             let mut forward = |iq: Vec<Complex32>| {
                                 let _ = iq_wf_tx.try_send(iq);
                             };
+                            // The worker stop_flag aborts a session (clean fall +
+                            // release, no hang wait) on shutdown.
                             if let Err(e) = source.tx_cw_key(
                                 target_freq_hz,
                                 pitch_hz,
                                 usb,
                                 tx_drive_percent,
                                 spot_level_percent,
+                                hang_ms,
                                 &held,
+                                &stop_flag,
                                 &mut forward,
                             ) {
                                 warn!("[radio-worker {}] CW key error: {e}", descriptor.id.0);
+                            }
+                            // Re-sync the start signal to the live key state: if a
+                            // key-down arrived right as the session ended, start a
+                            // fresh session next iteration; otherwise clear it.
+                            if let Ok(mut cs) = control.lock() {
+                                cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
                             }
                         }
                     }

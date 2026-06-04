@@ -103,7 +103,9 @@ pub trait IqSource {
         _usb: bool,
         _tx_drive_percent: f32,
         _spot_level_percent: f32,
+        _hang_ms: u32,
         _key_held: &std::sync::atomic::AtomicBool,
+        _abort: &std::sync::atomic::AtomicBool,
         _on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
     ) -> Result<(), String> {
         Err("not_supported".to_string())

@@ -1387,11 +1387,19 @@ impl IqSource for HermesLite2Source {
         }
     }
 
-    /// CW keying (CW TX Phase 1).  Reuses the shared TX sequencing and the
-    /// enveloped CW packet generator: assert PTT (lead), ramp the carrier up,
-    /// sustain a complex CW tone at `pitch_hz` (USB above carrier, LSB below)
-    /// while `key_held` is set, then ramp down and release PTT (tail).  RX IQ is
-    /// forwarded to the spectrum/waterfall (FDX); audio is never touched.
+    /// CW keying with **semi break-in** (CW TX Phase 2).
+    ///
+    /// One call is a whole keying *session*: PTT is asserted once (with the lead
+    /// delay), then held across many key-down/up elements; RF still follows every
+    /// element (raised-cosine rise/sustain/fall).  On key-up RF stops immediately
+    /// and a `hang_ms` timer starts with PTT still asserted — a re-key before it
+    /// expires resumes RF with **no new lead delay**; expiry runs the tail delay
+    /// and releases PTT.  `hang_ms = 0` releases right after the fall (the old
+    /// per-element behaviour).  Forwards RX IQ to FDX while transmitting; during
+    /// the hang PTT is up but no RF is sent, so no CW shows on the spectrum.
+    ///
+    /// `key_held` is the live key state; `abort` (worker stop) forces a clean
+    /// fall + release without waiting out the hang.
     #[allow(clippy::too_many_arguments)]
     fn tx_cw_key(
         &mut self,
@@ -1400,15 +1408,17 @@ impl IqSource for HermesLite2Source {
         usb: bool,
         tx_drive_percent: f32,
         spot_level_percent: f32,
+        hang_ms: u32,
         key_held: &std::sync::atomic::AtomicBool,
+        abort: &std::sync::atomic::AtomicBool,
         on_rx_iq: &mut dyn FnMut(Vec<Complex32>),
     ) -> Result<(), String> {
         use std::sync::atomic::Ordering;
 
         // ── Constants ────────────────────────────────────────────────────
         const PTT_GRACE_MS: u128 = 60;
-        // Safety ceiling on a single key-down (stuck key / lost client).
-        const HARD_MAX_KEY_MS: u128 = 30_000;
+        // Stuck-key guard: max length of ONE continuous key-down.
+        const HARD_MAX_ELEMENT_MS: u128 = 30_000;
         // Raised-cosine rise/fall duration (within the 5–10 ms target).
         const ENV_MS: f32 = 8.0;
         const HF_MIN_HZ: u64 = 1_800_000;
@@ -1420,10 +1430,11 @@ impl IqSource for HermesLite2Source {
         let target_amp = (spot_level_percent / 100.0).clamp(0.0, 1.0);
         let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
         let pitch_hz = pitch_hz.clamp(300.0, 1200.0);
+        let hang = Duration::from_millis(hang_ms as u64);
 
         info!(
-            "[hl2 cw] key down: mode={} pitch={pitch_hz:.0} Hz amplitude={target_amp:.2} FS \
-             drive={tx_drive_percent:.0}% drive_level={drive_level}/255 target={target_freq_hz} Hz",
+            "[hl2 cw] session start: mode={} pitch={pitch_hz:.0} Hz amplitude={target_amp:.2} FS \
+             drive={tx_drive_percent:.0}% hang={hang_ms} ms target={target_freq_hz} Hz",
             if usb { "USB" } else { "LSB" }
         );
 
@@ -1446,42 +1457,111 @@ impl IqSource for HermesLite2Source {
         }
 
         let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
-        let mut phase: f64 = 0.0;
-
-        // Shared TX-start sequencing: assert PTT + lead delay, NO RF yet.
-        self.tx_seq_begin(target_u32)?;
-        info!("[hl2 tx-seq] RF start");
-
-        // Per-sample envelope ramp rate (raised-cosine applied in the packet).
         let env_samples = (ENV_MS / 1000.0) * TX_SAMPLE_RATE_HZ;
         let ramp_step = 1.0 / env_samples.max(1.0);
 
+        // Shared TX-start sequencing: assert PTT + lead delay, NO RF.  PTT now
+        // stays asserted for the whole session (across elements and hang).
+        self.tx_seq_begin(target_u32)?;
+        debug!("[cw] key_down");
+        info!("[hl2 tx-seq] RF start");
+
+        // CW element / PTT state machine.
+        #[derive(Clone, Copy, PartialEq)]
+        enum St {
+            Rise,
+            Sustain,
+            Fall,
+            Hang,
+        }
+        let mut state = St::Rise;
+        let mut phase: f64 = 0.0;
         let mut level: f32 = 0.0;
-        let mut falling = false;
-        let tx_start = Instant::now();
         let mut next_tick = Instant::now();
+        let mut element_start = Instant::now(); // start of the current key-down
+        let mut hang_start = Instant::now();
+        let session_start = Instant::now();
         let mut fault: Option<String> = None;
+        let mut done = false;
 
         loop {
             let now = Instant::now();
-            let elapsed_ms = tx_start.elapsed().as_millis();
+            let keyed = key_held.load(Ordering::Relaxed);
+            let aborting = abort.load(Ordering::Relaxed);
 
-            // Transition to the fall envelope on key-up (or the safety ceiling).
-            // Once falling we never re-key; the fall must complete before release.
-            if !falling && (!key_held.load(Ordering::Relaxed) || elapsed_ms >= HARD_MAX_KEY_MS) {
-                if elapsed_ms >= HARD_MAX_KEY_MS {
-                    warn!("[hl2 cw] hard {HARD_MAX_KEY_MS} ms key ceiling — auto key-up");
+            // RF states (Rise/Sustain/Fall) send the enveloped CW packet;
+            // `zero_rf` states (Hang / fall-complete) send a zero-amplitude
+            // PTT=1 packet — PTT + FIFO alive, NO RF.
+            let mut zero_rf = false;
+            let step = match state {
+                St::Rise => {
+                    if !keyed || aborting {
+                        state = St::Fall;
+                        debug!("[cw] key_up");
+                        -ramp_step
+                    } else if level >= 1.0 {
+                        state = St::Sustain;
+                        0.0
+                    } else {
+                        ramp_step
+                    }
                 }
-                falling = true;
-            }
-            let step = if falling {
-                -ramp_step
-            } else if level < 1.0 {
-                ramp_step
-            } else {
-                0.0 // sustain at full amplitude
+                St::Sustain => {
+                    let stuck = element_start.elapsed().as_millis() >= HARD_MAX_ELEMENT_MS;
+                    if !keyed || aborting || stuck {
+                        if stuck {
+                            warn!(
+                                "[hl2 cw] hard {HARD_MAX_ELEMENT_MS} ms element ceiling — key-up"
+                            );
+                        }
+                        state = St::Fall;
+                        debug!("[cw] key_up");
+                        -ramp_step
+                    } else {
+                        0.0
+                    }
+                }
+                St::Fall => {
+                    if keyed && !aborting {
+                        // Re-key during the fall: resume rising immediately.
+                        state = St::Rise;
+                        element_start = now;
+                        debug!("[cw] key_down");
+                        ramp_step
+                    } else if level <= 0.0 {
+                        // RF stopped: start the hang timer, PTT stays asserted.
+                        state = St::Hang;
+                        hang_start = now;
+                        zero_rf = true;
+                        debug!("[cw] hang_timer_start {hang_ms}ms");
+                        0.0
+                    } else {
+                        -ramp_step
+                    }
+                }
+                St::Hang => {
+                    zero_rf = true;
+                    if keyed && !aborting {
+                        // Re-key before timeout: resume, NO new lead delay.
+                        debug!("[cw] hang_timer_cancel");
+                        debug!("[cw] key_down");
+                        element_start = now;
+                        state = St::Rise;
+                    } else if aborting || hang_start.elapsed() >= hang {
+                        if !aborting {
+                            debug!("[cw] hang_timer_expired");
+                        }
+                        done = true;
+                    }
+                    0.0
+                }
             };
 
+            if done {
+                break;
+            }
+
+            // Pace one packet period.
             if now < next_tick {
                 thread::sleep(next_tick - now);
                 next_tick += packet_period;
@@ -1489,14 +1569,20 @@ impl IqSource for HermesLite2Source {
                 next_tick = now + packet_period;
             }
 
-            if let Err(e) = self.send_tx_cw_packet(
-                target_u32, target_amp, pitch_hz, usb, &mut phase, &mut level, step,
-            ) {
+            let send_result = if zero_rf {
+                self.send_tx_packet(target_u32, 0.0, true)
+            } else {
+                self.send_tx_cw_packet(
+                    target_u32, target_amp, pitch_hz, usb, &mut phase, &mut level, step,
+                )
+            };
+            if let Err(e) = send_result {
                 fault = Some(format!("CW send failed: {e}"));
                 break;
             }
 
-            // Drain DDC status + RX IQ; forward RX IQ to FDX (spectrum/waterfall).
+            // FDX: forward RX IQ (CW only appears while RF is on; the hang shows
+            // no signal — PTT up, nothing transmitted).
             let mut rx_buf = [0u8; P1_PACKET_LEN];
             while let Ok(len) = self.socket.recv(&mut rx_buf) {
                 if len == P1_PACKET_LEN {
@@ -1508,10 +1594,10 @@ impl IqSource for HermesLite2Source {
                 }
             }
 
-            // FIFO anomaly guard (fatal only after the grace window).
+            // FIFO anomaly guard (after the initial grace window).
             if self.status_regs.raddr0_valid
                 && self.status_regs.recovery_bits != 0
-                && elapsed_ms >= PTT_GRACE_MS
+                && session_start.elapsed().as_millis() >= PTT_GRACE_MS
             {
                 let bits = self.status_regs.recovery_bits;
                 fault = Some(format!(
@@ -1519,19 +1605,15 @@ impl IqSource for HermesLite2Source {
                 ));
                 break;
             }
-
-            // Fall envelope complete → done.
-            if falling && level <= 0.0 {
-                break;
-            }
         }
 
         // Shared TX-stop sequencing: tail delay → release PTT.
         info!("[hl2 tx-seq] RF stop");
         self.tx_seq_end(target_u32);
+        debug!("[cw] ptt_release");
         info!(
-            "[hl2 cw] key up: done after {} ms (fault={fault:?})",
-            tx_start.elapsed().as_millis()
+            "[hl2 cw] session end after {} ms (fault={fault:?})",
+            session_start.elapsed().as_millis()
         );
 
         match fault {

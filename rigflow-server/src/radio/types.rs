@@ -188,6 +188,11 @@ pub enum WorkerCommand {
     /// envelope shaping; `tx_drive_percent` / `spot_level_percent` set power.
     StartCwKey,
     StopCwKey,
+    /// CW semi-break-in hang time in ms (0–2000): PTT persists this long after
+    /// the last element before release.
+    SetCwHangTime {
+        hang_ms: u32,
+    },
     SetSourceN2adrEnabled {
         enabled: bool,
     },

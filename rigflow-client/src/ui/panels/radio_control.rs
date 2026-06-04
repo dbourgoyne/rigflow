@@ -172,15 +172,16 @@ impl RigflowApp {
         false
     }
 
-    /// CW Sidetone Volume slider (0–100%), shown only in CWU/CWL.  This is a
-    /// client-local control (independent of RX Volume) that drives the locally
-    /// generated sidetone; it is never sent to the server.  The audio callback
-    /// reads `state.sidetone`, which the Space-bar handler keeps in sync.
+    /// CW controls shown only in CWU/CWL: Sidetone Volume (client-local, drives
+    /// the locally generated sidetone; never sent to the server) and Hang Time
+    /// (semi break-in — sent to the server, controls how long PTT persists after
+    /// the last element).  CW Pitch is the existing pitch row above.
     fn draw_cw_sidetone_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
         if !matches!(mode, DemodMode::Cwu | DemodMode::Cwl) {
             return;
         }
         ui.separator();
+
         let mut vol = state.cw_sidetone_volume as i32;
         let response = ui.add(
             egui::Slider::new(&mut vol, 0..=100)
@@ -193,6 +194,23 @@ impl RigflowApp {
             state.cw_sidetone_volume = v;
             // Reflect immediately into the lock-free audio control.
             state.sidetone.set_volume(v as f32 / 100.0);
+        }
+
+        // Semi break-in hang time: 0–2000 ms, step 50.
+        let mut hang = state.cw_hang_ms as i32;
+        let response = ui.add(
+            egui::Slider::new(&mut hang, 0..=2000)
+                .step_by(50.0)
+                .integer()
+                .suffix(" ms")
+                .text("Hang Time"),
+        );
+        if response.changed() {
+            let h = hang.clamp(0, 2000) as u32;
+            if h != state.cw_hang_ms {
+                state.cw_hang_ms = h;
+                self.send_radio_msg(ClientRadioMessage::SetCwHangTime { hang_ms: h });
+            }
         }
     }
 

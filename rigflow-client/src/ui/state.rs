@@ -247,6 +247,10 @@ pub struct UiState {
     // ── CW sidetone (client-local; never sent to server) ────────────────
     /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
     pub cw_sidetone_volume: u8,
+
+    /// CW semi-break-in hang time in ms (0–2000): how long PTT stays asserted
+    /// after the last CW element before releasing.  Sent to the server.
+    pub cw_hang_ms: u32,
     /// Lock-free control state shared with the CPAL audio callback, which mixes
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
@@ -383,6 +387,7 @@ impl Default for UiState {
             tx_tone_running: false,
             cw_key_down: false,
             cw_sidetone_volume: 25,
+            cw_hang_ms: 300,
             sidetone: Arc::new(SidetoneShared::default()),
         };
 

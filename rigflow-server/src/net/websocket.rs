@@ -796,6 +796,22 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetCwHangTime { hang_ms } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetCwHangTime { hang_ms },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_cw_hang_time_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::RequestSwrSweep { start_hz, stop_hz } => {
             info!("[websocket] RequestSwrSweep: {start_hz}..{stop_hz} Hz");
             if let Err(err) = send_worker_command_for_session(
