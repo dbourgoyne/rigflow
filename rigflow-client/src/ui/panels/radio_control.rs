@@ -71,7 +71,8 @@ impl RigflowApp {
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
-                    save_cw = self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
+                    save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
+                    save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
                 }
 
                 save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
@@ -288,6 +289,76 @@ impl RigflowApp {
                 ui.label(RichText::new("● sending…").small());
             }
         });
+
+        save
+    }
+
+    /// CW memory macros (F1–F4), shown only in CWU/CWL: 4 buttons that load and
+    /// send their text via the existing Text-to-CW path, plus editable
+    /// label/text fields.  Empty macros are disabled.  Returns `true` when a
+    /// label/text edit should be persisted.
+    fn draw_cw_macros_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) -> bool {
+        if !matches!(mode, DemodMode::Cwu | DemodMode::Cwl) {
+            return false;
+        }
+        ui.separator();
+        ui.label("CW Macros");
+
+        let mut save = false;
+        let sending = self.cw_text_sending.load(Ordering::Relaxed);
+
+        // Macro buttons (F1–F4).  Clicking loads the text into the message field
+        // and starts sending it.
+        ui.horizontal_wrapped(|ui| {
+            for i in 0..4 {
+                // Build the button label and enabled flag without holding a
+                // borrow of `state` across the click handler (which mutates it).
+                let label = {
+                    let l = state.cw_macros[i].label.trim();
+                    if l.is_empty() {
+                        format!("F{}", i + 1)
+                    } else {
+                        format!("F{} {}", i + 1, l)
+                    }
+                };
+                let enabled = !sending && !state.cw_macros[i].text.trim().is_empty();
+                if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                    let text = state.cw_macros[i].text.clone();
+                    let wpm = state.cw_speed_wpm;
+                    let sidetone = Arc::clone(&state.sidetone);
+                    state.cw_message = text.clone();
+                    self.trigger_cw_text(text, wpm, sidetone);
+                    save = true;
+                }
+            }
+        });
+
+        // Editable label + text for each slot.
+        for i in 0..4 {
+            ui.horizontal(|ui| {
+                ui.label(format!("M{}", i + 1));
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut state.cw_macros[i].label)
+                            .hint_text("label")
+                            .desired_width(60.0),
+                    )
+                    .changed()
+                {
+                    save = true;
+                }
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut state.cw_macros[i].text)
+                            .hint_text("macro text")
+                            .desired_width(240.0),
+                    )
+                    .changed()
+                {
+                    save = true;
+                }
+            });
+        }
 
         save
     }

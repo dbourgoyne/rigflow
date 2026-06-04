@@ -166,14 +166,23 @@ impl RigflowApp {
         }
     }
 
-    /// Persist the Text-to-CW message and speed for the current operator.
+    /// Persist the Text-to-CW message, speed, and memory macros for the current
+    /// operator.
     pub(crate) fn save_cw_message_to_current_operator(&mut self) {
-        let (operator_id, cw_message, cw_speed_wpm) = {
+        let (operator_id, cw_message, cw_speed_wpm, cw_macros) = {
             let state = self.state.lock().unwrap();
             (
                 state.operator_id.clone(),
                 state.cw_message.clone(),
                 state.cw_speed_wpm,
+                state
+                    .cw_macros
+                    .iter()
+                    .map(|m| crate::persistence::models::CwMacroFile {
+                        label: m.label.clone(),
+                        text: m.text.clone(),
+                    })
+                    .collect::<Vec<_>>(),
             )
         };
 
@@ -187,12 +196,13 @@ impl RigflowApp {
         {
             operator_settings.cw_message = cw_message;
             operator_settings.cw_speed_wpm = cw_speed_wpm;
+            operator_settings.cw_macros = cw_macros;
             if let Err(err) = self
                 .persistence_store
                 .save_operator_settings(&operator_settings)
             {
                 if let Ok(mut state) = self.state.lock() {
-                    state.persistence_status = format!("failed to save CW message: {err}");
+                    state.persistence_status = format!("failed to save CW settings: {err}");
                 }
             }
         }

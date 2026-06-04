@@ -8,6 +8,7 @@ use crate::net::control::ControlCommand;
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
 use crate::persistence::PersistenceStore;
+use crate::sidetone::SidetoneShared;
 
 use crate::ui::state::UiState;
 
@@ -93,6 +94,65 @@ impl RigflowApp {
             if let Ok(mut state) = self.state.lock() {
                 state.cw_key_down = want_key;
             }
+        }
+    }
+
+    /// Start the client-side Text-to-CW sender for `text` (used by the Send
+    /// button, the macro buttons, and the F1–F4 shortcuts).  Spawns the timer
+    /// thread; the server sees only StartCwKey/StopCwKey.
+    pub(crate) fn trigger_cw_text(&self, text: String, wpm: u32, sidetone: Arc<SidetoneShared>) {
+        crate::cw_text::spawn_send(
+            text,
+            wpm,
+            self.ws_cmd_tx.clone(),
+            sidetone,
+            Arc::clone(&self.cw_text_abort),
+            Arc::clone(&self.cw_text_sending),
+        );
+    }
+
+    /// F1–F4 fire CW memory macros via Text-to-CW.  Only when a radio is
+    /// acquired, the source supports TX, the mode is CWU/CWL, no text field has
+    /// focus, and no message is already sending.  Empty macros do nothing.
+    fn handle_cw_macros(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        use rigflow_core::dsp::modes::DemodMode;
+        use std::sync::atomic::Ordering;
+
+        if ctx.wants_keyboard_input()
+            || !snapshot.radio_acquired
+            || !snapshot.source_capabilities.supports_tx_tune_test
+            || !matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl)
+            || self.cw_text_sending.load(Ordering::Relaxed)
+        {
+            return;
+        }
+
+        let idx = ctx.input(|i| {
+            if i.key_pressed(egui::Key::F1) {
+                Some(0)
+            } else if i.key_pressed(egui::Key::F2) {
+                Some(1)
+            } else if i.key_pressed(egui::Key::F3) {
+                Some(2)
+            } else if i.key_pressed(egui::Key::F4) {
+                Some(3)
+            } else {
+                None
+            }
+        });
+
+        if let Some(i) = idx {
+            let text = snapshot.cw_macros[i].text.clone();
+            if text.trim().is_empty() {
+                return;
+            }
+            let wpm = snapshot.cw_speed_wpm;
+            // Mirror the macro into the message field, then send.
+            if let Ok(mut state) = self.state.lock() {
+                state.cw_message = text.clone();
+            }
+            self.trigger_cw_text(text, wpm, Arc::clone(&snapshot.sidetone));
+            self.save_cw_message_to_current_operator();
         }
     }
 
@@ -190,6 +250,7 @@ impl eframe::App for RigflowApp {
 
         self.handle_keyboard_shortcuts(ctx);
         self.handle_cw_keying(ctx, &snapshot);
+        self.handle_cw_macros(ctx, &snapshot);
         self.draw_left_panel(ctx, &snapshot, config_mode);
         self.draw_center_panel(ctx, &snapshot);
         self.draw_add_operator_dialog(ctx);

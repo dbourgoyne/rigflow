@@ -123,6 +123,13 @@ pub fn apply_operator_settings_to_ui_state(
     // Text-to-CW: restore the last-used message and speed.
     state.cw_message = operator.cw_message.clone();
     state.cw_speed_wpm = operator.cw_speed_wpm;
+
+    // CW macros: copy up to 4 persisted slots over the defaults (a short or
+    // missing list keeps the stock defaults for the remaining slots).
+    for (i, m) in operator.cw_macros.iter().take(4).enumerate() {
+        state.cw_macros[i].label = m.label.clone();
+        state.cw_macros[i].text = m.text.clone();
+    }
 }
 
 pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut OperatorSettingsFile) {
@@ -156,4 +163,12 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
 
     operator.cw_message = state.cw_message.clone();
     operator.cw_speed_wpm = state.cw_speed_wpm;
+    operator.cw_macros = state
+        .cw_macros
+        .iter()
+        .map(|m| crate::persistence::models::CwMacroFile {
+            label: m.label.clone(),
+            text: m.text.clone(),
+        })
+        .collect();
 }

@@ -13,6 +13,21 @@ use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
 use rigflow_core::radio::tx_tune::TxTuneResult;
 use rigflow_core::radio::RadioCapabilities;
 
+/// A single CW memory macro: a short button label and the text to transmit.
+#[derive(Debug, Clone, Default)]
+pub struct CwMacro {
+    pub label: String,
+    pub text: String,
+}
+
+/// The 4 default CW macros, built from [`crate::cw_text::CW_MACRO_DEFAULTS`].
+pub fn default_cw_macros() -> [CwMacro; 4] {
+    crate::cw_text::CW_MACRO_DEFAULTS.map(|(label, text)| CwMacro {
+        label: label.to_string(),
+        text: text.to_string(),
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DebounceState {
     pub last_sent_value: f32,
@@ -257,6 +272,8 @@ pub struct UiState {
     pub cw_message: String,
     /// Sending speed in words per minute (5–50).
     pub cw_speed_wpm: u32,
+    /// CW memory macros (F1–F4): label + text, persisted per operator.
+    pub cw_macros: [CwMacro; 4],
     /// Lock-free control state shared with the CPAL audio callback, which mixes
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
@@ -396,6 +413,7 @@ impl Default for UiState {
             cw_hang_ms: 300,
             cw_message: String::new(),
             cw_speed_wpm: 20,
+            cw_macros: default_cw_macros(),
             sidetone: Arc::new(SidetoneShared::default()),
         };
 

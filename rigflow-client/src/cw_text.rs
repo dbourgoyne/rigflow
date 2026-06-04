@@ -14,6 +14,16 @@ use crate::net::control::ControlCommand;
 use crate::sidetone::SidetoneShared;
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
+/// Default CW memory macros `(label, text)` for the 4 slots (F1–F4).  Safe
+/// generic content — the operator edits in their own callsign; we never infer
+/// it.  Shared by UI state defaults and persistence defaults.
+pub const CW_MACRO_DEFAULTS: [(&str, &str); 4] = [
+    ("CQ", "CQ CQ CQ DE YOURCALL YOURCALL K"),
+    ("Call", "THEIRCALL DE YOURCALL K"),
+    ("RST", "599 599"),
+    ("TU", "TU 73 DE YOURCALL SK"),
+];
+
 /// Morse code for the supported characters (A–Z, 0–9, common punctuation).
 /// Case-insensitive (caller uppercases); unknown characters return `None` and
 /// are skipped.  `.` = dit, `-` = dah.

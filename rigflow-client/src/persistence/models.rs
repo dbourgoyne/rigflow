@@ -149,6 +149,18 @@ pub struct OperatorSettingsFile {
     /// Text-to-CW: sending speed in WPM (5–50).  Serde default for old files.
     #[serde(default = "default_cw_speed_wpm")]
     pub cw_speed_wpm: u32,
+
+    /// CW memory macros (label + text).  Serde default = the 4 stock macros so
+    /// older settings files load with sensible content.
+    #[serde(default = "default_cw_macros")]
+    pub cw_macros: Vec<CwMacroFile>,
+}
+
+/// Persisted CW memory macro (label + transmit text).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CwMacroFile {
+    pub label: String,
+    pub text: String,
 }
 
 pub fn default_volume_percent() -> u8 {
@@ -157,6 +169,16 @@ pub fn default_volume_percent() -> u8 {
 
 pub fn default_cw_speed_wpm() -> u32 {
     20
+}
+
+pub fn default_cw_macros() -> Vec<CwMacroFile> {
+    crate::cw_text::CW_MACRO_DEFAULTS
+        .iter()
+        .map(|(label, text)| CwMacroFile {
+            label: label.to_string(),
+            text: text.to_string(),
+        })
+        .collect()
 }
 
 impl OperatorSettingsFile {
@@ -175,6 +197,7 @@ impl OperatorSettingsFile {
             volume_percent: default_volume_percent(),
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
+            cw_macros: default_cw_macros(),
         }
     }
 }
