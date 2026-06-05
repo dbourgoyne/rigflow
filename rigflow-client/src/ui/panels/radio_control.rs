@@ -31,8 +31,9 @@ impl RigflowApp {
                 let mut save_cw = false;
                 let mut save_mic = false;
 
+                // Preamble (runs every frame, independent of section state):
+                // apply persisted per-demod controls when the mode changes.
                 if let Ok(mut state) = self.state.lock() {
-                    // Apply persisted per-demod controls when the mode changes.
                     let should_apply = state.pending_apply_mode_controls
                         || state.last_demod_mode_for_controls != Some(snapshot.demod_mode);
 
@@ -59,28 +60,70 @@ impl RigflowApp {
                             volume_percent: state.volume_percent,
                         });
                     }
-
-                    save_demod_prefs |=
-                        self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |=
-                        self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
-
-                    self.draw_squelch_row(ui, &mut state);
-                    self.draw_nr2_row(ui, &mut state);
-                    self.draw_agc_row(ui, &mut state);
-                    save_volume = self.draw_volume_row(ui, &mut state);
-                    save_mic = self.draw_microphone_row(ui, &mut state);
-                    self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
-                    save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
-                    save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
                 }
 
-                save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
+                // ── Receive (default expanded): frequently-used RX controls ──
+                egui::CollapsingHeader::new("Receive")
+                    .id_salt("rc_receive")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            save_demod_prefs |=
+                                self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
+                            save_demod_prefs |=
+                                self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
+                            save_demod_prefs |=
+                                self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
+                            self.draw_squelch_row(ui, &mut state);
+                            self.draw_nr2_row(ui, &mut state);
+                            self.draw_agc_row(ui, &mut state);
+                            self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                        // Demod mode buttons (locks state internally → outside).
+                        save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
+                    });
+
+                // ── Audio (default expanded) ─────────────────────────────────
+                egui::CollapsingHeader::new("Audio")
+                    .id_salt("rc_audio")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            save_volume = self.draw_volume_row(ui, &mut state);
+                            save_mic = self.draw_microphone_row(ui, &mut state);
+                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
+                // ── Transmit (default collapsed): TX setup ───────────────────
+                egui::CollapsingHeader::new("Transmit")
+                    .id_salt("rc_transmit")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
+                            save_cw |=
+                                self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
+                            save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
+                // ── Diagnostics (default collapsed) ──────────────────────────
+                egui::CollapsingHeader::new("Diagnostics")
+                    .id_salt("rc_diagnostics")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                            self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
+                // ── Advanced (default collapsed): empty for now ──────────────
+                egui::CollapsingHeader::new("Advanced")
+                    .id_salt("rc_advanced")
+                    .default_open(false)
+                    .show(ui, |_ui| {});
 
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
