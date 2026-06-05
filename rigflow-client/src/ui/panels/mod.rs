@@ -6,6 +6,9 @@ mod bookmarks;
 mod operator;
 mod radio_control;
 mod radios;
+
+/// Shared S-meter label formatter (also used by the top status bar).
+pub(crate) use radio_control::s_meter_label;
 mod server;
 mod source_control;
 mod source_status;

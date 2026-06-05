@@ -20,9 +20,8 @@ impl RigflowApp {
             return;
         }
 
-        // Read-only status (S-meter, extensible for future fields), shown above
-        // the controls.
-        self.draw_radio_status_section(ui, snapshot);
+        // Live telemetry (S-meter, etc.) now lives in the top status bar; the
+        // left panel holds configuration and controls only.
 
         egui::CollapsingHeader::new("Radio Control")
             .default_open(true)
@@ -730,26 +729,6 @@ impl RigflowApp {
         });
     }
 
-    /// Read-only "Radio Status" section (S-meter for now; extensible).
-    fn draw_radio_status_section(&self, ui: &mut egui::Ui, snapshot: &UiState) {
-        egui::CollapsingHeader::new("Radio Status")
-            .default_open(true)
-            .show(ui, |ui| {
-                egui::Grid::new("radio_status_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.label("Signal");
-                        ui.label(format!(
-                            "{} ({:.0} dBm)",
-                            s_meter_label(snapshot.signal_dbm),
-                            snapshot.signal_dbm
-                        ));
-                        ui.end_row();
-                    });
-            });
-    }
-
     /// AGC enable + strength.  A radio (DSP) control sent to the server;
     /// applied to demodulated receive audio (before NR2/squelch). Not persisted.
     fn draw_agc_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
@@ -1070,7 +1049,7 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
 ///
 /// HF convention: S9 = -73 dBm, 6 dB per S-unit.  Below S1 clamps to "S0";
 /// above S9 shows "S9+N dB" (N rounded to the nearest 10 dB, as is customary).
-fn s_meter_label(dbm: f32) -> String {
+pub(crate) fn s_meter_label(dbm: f32) -> String {
     const S9_DBM: f32 = -73.0;
     const DB_PER_S_UNIT: f32 = 6.0;
 

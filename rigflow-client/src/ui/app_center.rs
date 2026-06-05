@@ -20,6 +20,18 @@ impl RigflowApp {
                     bottom: 4,
                 })
                 .show(ui, |ui| {
+                    // Top status bar: live operating telemetry (frequency, mode,
+                    // S-meter, dBm, TX/RX, SWR, REC).  Allocated first so it
+                    // consumes height before the spectrum/waterfall are sized.
+                    let status_bar_height = 30.0;
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), status_bar_height),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            self.draw_status_bar(ui, snapshot);
+                        },
+                    );
+
                     let lo_strip_height = 34.0;
                     let spectrum_height = 220.0;
                     let gap = 6.0;
@@ -353,6 +365,72 @@ impl RigflowApp {
         });
     }
 
+    /// Top status bar: compact, single-row live operating telemetry.  Reads
+    /// only from the UI snapshot (no protocol changes); optional fields (SWR,
+    /// REC) are omitted when unavailable.  Structured as a left-to-right row so
+    /// future items (TX power, ALC, network status, …) just append more cells.
+    fn draw_status_bar(&self, ui: &mut egui::Ui, snapshot: &UiState) {
+        use crate::ui::panels::s_meter_label;
+
+        if !snapshot.radio_acquired {
+            ui.label(egui::RichText::new("No radio acquired").weak());
+            return;
+        }
+
+        // Frequency (operating / target) — prominent.
+        ui.label(
+            egui::RichText::new(format_freq_dotted(snapshot.target_freq_hz.max(0.0) as u64))
+                .size(18.0)
+                .strong(),
+        );
+        // Mode.
+        ui.label(egui::RichText::new(mode_label(snapshot.demod_mode)).strong());
+
+        ui.separator();
+
+        // S-meter — the most prominent item (largest text, coloured).
+        ui.label(
+            egui::RichText::new(s_meter_label(snapshot.signal_dbm))
+                .size(20.0)
+                .strong()
+                .color(egui::Color32::from_rgb(120, 230, 120)),
+        );
+        ui.label(egui::RichText::new(format!("{:.0} dBm", snapshot.signal_dbm)).size(15.0));
+
+        ui.separator();
+
+        // TX / RX state.
+        let transmitting = snapshot.ssb_ptt_down
+            || snapshot.cw_key_down
+            || snapshot.tx_tone_running
+            || snapshot.tx_tune_running;
+        if transmitting {
+            ui.label(
+                egui::RichText::new("TX")
+                    .strong()
+                    .color(egui::Color32::from_rgb(235, 80, 80)),
+            );
+        } else {
+            ui.label(egui::RichText::new("RX").weak());
+        }
+
+        // SWR — shown only when the source reports it.
+        if let Some(swr) = snapshot.source_status.swr {
+            ui.separator();
+            ui.label(format!("SWR {swr:.1}"));
+        }
+
+        // Recording — shown only while a recording is active.
+        if snapshot.iq_recording_status.recording {
+            ui.separator();
+            ui.label(
+                egui::RichText::new("REC")
+                    .strong()
+                    .color(egui::Color32::from_rgb(235, 90, 90)),
+            );
+        }
+    }
+
     fn update_waterfall_texture(&mut self, ctx: &egui::Context, wf_width: usize, wf_height: usize) {
         let pixels = {
             let guard = self.waterfall_buffer.lock().unwrap();
@@ -388,5 +466,34 @@ impl RigflowApp {
                 self.waterfall_texture = Some(texture);
             }
         }
+    }
+}
+
+/// Format a frequency in Hz with `.` thousands separators, e.g.
+/// `14074000 → "14.074.000"`.
+fn format_freq_dotted(hz: u64) -> String {
+    let digits = hz.to_string();
+    let n = digits.len();
+    let mut out = String::with_capacity(n + n / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i != 0 && (n - i) % 3 == 0 {
+            out.push('.');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Uppercase mode label for the status bar.
+fn mode_label(mode: rigflow_core::dsp::modes::DemodMode) -> &'static str {
+    use rigflow_core::dsp::modes::DemodMode;
+    match mode {
+        DemodMode::Wfm => "WFM",
+        DemodMode::Nfm => "NFM",
+        DemodMode::Usb => "USB",
+        DemodMode::Lsb => "LSB",
+        DemodMode::Am => "AM",
+        DemodMode::Cwu => "CWU",
+        DemodMode::Cwl => "CWL",
     }
 }
