@@ -38,6 +38,7 @@ pub fn radio_summary_to_protocol(summary: RadioSummary) -> RadioInfo {
         id: descriptor.id,
         display_name: descriptor.display_name,
         hardware_kind: descriptor.hardware_kind,
+        source_kind: descriptor.hardware_kind.source_kind(),
         index: descriptor.index,
         serial: descriptor.serial,
         radio_capabilities: descriptor.radio_capabilities,

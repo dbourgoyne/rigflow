@@ -7,7 +7,7 @@ use rigflow_core::{
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
-        HardwareKind, LeaseId, RadioCapabilities, RadioId,
+        HardwareKind, LeaseId, RadioCapabilities, RadioId, RadioSourceKind,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -503,6 +503,12 @@ pub struct RadioInfo {
 
     /// Hardware/source type
     pub hardware_kind: HardwareKind,
+
+    /// Presentation category (Hardware / Recording / Virtual).  Server-provided;
+    /// the client groups and orders radios by this.  `#[serde(default)]` keeps
+    /// older servers (which omit it) parseable — they decode as `Unknown`.
+    #[serde(default)]
+    pub source_kind: RadioSourceKind,
 
     /// Device index (e.g., RTL device index)
     pub index: u32,
