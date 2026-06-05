@@ -214,6 +214,11 @@ pub enum WorkerCommand {
         enabled: bool,
         threshold_percent: f32,
     },
+    /// Configure the SSB speech compressor (before the limiter).
+    SetCompression {
+        enabled: bool,
+        level: u8,
+    },
     SetSourceN2adrEnabled {
         enabled: bool,
     },

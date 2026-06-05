@@ -268,6 +268,14 @@ pub enum ClientRadioMessage {
         threshold_percent: f32,
     },
 
+    /// Configure the SSB speech compressor (inserted before the limiter).
+    /// `enabled` defaults false; `level` is 0–10 (default 3).  Raises average
+    /// talk power; compressor gain reduction is reported in `TxAudioDiag`.
+    SetCompression {
+        enabled: bool,
+        level: u8,
+    },
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {

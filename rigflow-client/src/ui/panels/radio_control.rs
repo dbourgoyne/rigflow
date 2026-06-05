@@ -618,11 +618,11 @@ impl RigflowApp {
             changed = true;
         }
 
-        // Gain-reduction meter (from server telemetry).  Shown as -N dB; the bar
-        // fills toward a nominal 20 dB of reduction.
+        // Limiter gain-reduction meter (from server telemetry).  Shown as -N dB;
+        // the bar fills toward a nominal 20 dB of reduction.
         let gr = state.tx_audio_diag.gain_reduction_db.max(0.0);
         ui.horizontal(|ui| {
-            ui.label("Gain Reduction");
+            ui.label("Limiter GR");
             ui.add(
                 egui::ProgressBar::new((gr / 20.0).min(1.0))
                     .desired_width(160.0)
@@ -634,6 +634,49 @@ impl RigflowApp {
             self.send_radio_msg(ClientRadioMessage::SetTxLimiter {
                 enabled: state.tx_limiter_enabled,
                 threshold_percent: state.tx_limiter_threshold_percent as f32,
+            });
+        }
+
+        // --- Speech compression (before the limiter) ---------------------
+        let mut comp_changed = false;
+
+        let mut comp_enabled = state.compressor_enabled;
+        if ui
+            .checkbox(&mut comp_enabled, "Enable Compression")
+            .changed()
+        {
+            state.compressor_enabled = comp_enabled;
+            comp_changed = true;
+        }
+
+        let mut level = state.compressor_level as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut level, 0..=10)
+                    .integer()
+                    .text("Compression Level"),
+            )
+            .changed()
+        {
+            state.compressor_level = level.clamp(0, 10) as u8;
+            comp_changed = true;
+        }
+
+        // Compressor gain-reduction meter (from server telemetry).
+        let cgr = state.tx_audio_diag.compressor_reduction_db.max(0.0);
+        ui.horizontal(|ui| {
+            ui.label("Compression GR");
+            ui.add(
+                egui::ProgressBar::new((cgr / 20.0).min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("-{cgr:.1} dB")),
+            );
+        });
+
+        if comp_changed {
+            self.send_radio_msg(ClientRadioMessage::SetCompression {
+                enabled: state.compressor_enabled,
+                level: state.compressor_level,
             });
         }
     }

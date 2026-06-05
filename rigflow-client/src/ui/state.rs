@@ -227,6 +227,11 @@ pub struct UiState {
     pub tx_limiter_enabled: bool,
     pub tx_limiter_threshold_percent: u16,
 
+    /// SSB speech compressor (before the limiter).  Disabled by default; level
+    /// 0–10 (default 3). Not persisted.
+    pub compressor_enabled: bool,
+    pub compressor_level: u8,
+
     /// Persisted source-control settings keyed by radio ID string.
     /// Mirrors `OperatorSettingsFile::source_control_preferences`.
     pub source_control_preferences: HashMap<String, SourceControlState>,
@@ -440,6 +445,8 @@ impl Default for UiState {
             two_tone_level_percent: 50,
             tx_limiter_enabled: true,
             tx_limiter_threshold_percent: 90,
+            compressor_enabled: false,
+            compressor_level: 3,
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
 

@@ -127,6 +127,8 @@ pub trait IqSource {
         _tx_drive_percent: f32,
         _limiter_enabled: bool,
         _limiter_threshold: f32,
+        _compressor_enabled: bool,
+        _compressor_level: u8,
         _active: &std::sync::atomic::AtomicBool,
         _abort: &std::sync::atomic::AtomicBool,
         _pull_audio: &mut dyn FnMut(usize, &mut Vec<f32>) -> usize,

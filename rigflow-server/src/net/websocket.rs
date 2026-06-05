@@ -881,6 +881,22 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetCompression { enabled, level } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetCompression { enabled, level },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_compression_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetCwHangTime { hang_ms } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

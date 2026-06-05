@@ -127,6 +127,11 @@ struct SharedControlState {
     /// of full scale (UI percent / 100).  Read at mic-TX session start.
     tx_limiter_enabled: bool,
     tx_limiter_threshold: f32,
+
+    /// Speech compressor (before the limiter).  `compressor_level` is the UI
+    /// 0–10 level (mapped to a ratio).  Read at mic-TX session start.
+    compressor_enabled: bool,
+    compressor_level: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -484,6 +489,8 @@ fn run_iq_worker_threads(
         two_tone_level: 0.5,
         tx_limiter_enabled: true,
         tx_limiter_threshold: 0.9,
+        compressor_enabled: false,
+        compressor_level: 3,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -912,6 +919,15 @@ fn spawn_command_thread(
                             cs.tx_limiter_enabled = enabled;
                             cs.tx_limiter_threshold = threshold_percent.clamp(50.0, 99.0) / 100.0;
                         }
+                    }
+
+                    WorkerCommand::SetCompression { enabled, level } => {
+                        let level = level.min(10);
+                        if let Ok(mut cs) = control.lock() {
+                            cs.compressor_enabled = enabled;
+                            cs.compressor_level = level;
+                        }
+                        debug!("[radio-worker] compressor enabled={enabled} level={level}");
                     }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
@@ -1664,6 +1680,8 @@ fn spawn_capture_thread(
                                 tx_drive_percent,
                                 control_snapshot.tx_limiter_enabled,
                                 control_snapshot.tx_limiter_threshold,
+                                control_snapshot.compressor_enabled,
+                                control_snapshot.compressor_level,
                                 &active,
                                 &stop_flag,
                                 &mut pull,

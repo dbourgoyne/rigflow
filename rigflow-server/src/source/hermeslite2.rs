@@ -11,6 +11,7 @@ use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::{compute_swr, compute_swr_from_raw, TxTuneResult, TxTuneStatus};
 
 use crate::dsp::audio::dc_blocker::DcBlocker;
+use crate::dsp::audio::speech_compressor::{ratio_for_level, SpeechCompressor};
 use crate::dsp::audio::tx_limiter::TxLimiter;
 use crate::dsp::demod::Sideband;
 use crate::dsp::pipeline::ComplexSidebandFir;
@@ -1690,6 +1691,8 @@ impl IqSource for HermesLite2Source {
         tx_drive_percent: f32,
         limiter_enabled: bool,
         limiter_threshold: f32,
+        compressor_enabled: bool,
+        compressor_level: u8,
         active: &std::sync::atomic::AtomicBool,
         abort: &std::sync::atomic::AtomicBool,
         pull_audio: &mut dyn FnMut(usize, &mut Vec<f32>) -> usize,
@@ -1720,6 +1723,10 @@ impl IqSource for HermesLite2Source {
         const LIM_ATTACK_MS: f32 = 2.0;
         const LIM_RELEASE_MS: f32 = 120.0;
         const LIM_ENGAGE_DB: f32 = 0.5; // GR above this = "engaged" (for logs)
+                                        // Speech compressor (before the limiter): slower than the limiter for
+                                        // natural voice dynamics.
+        const COMP_ATTACK_MS: f32 = 10.0;
+        const COMP_RELEASE_MS: f32 = 150.0;
 
         let tx_drive_percent = tx_drive_percent.clamp(0.0, 100.0);
         let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
@@ -1760,9 +1767,20 @@ impl IqSource for HermesLite2Source {
             if usb { Usb } else { Lsb },
         );
 
-        // TX soft peak limiter, inserted after DC/band-limit and before the
-        // modulator.  `limiter_enabled` gates it; the threshold is a fraction
-        // of full scale (UI percent / 100).
+        // Speech compressor (before the limiter): raises average talk power by
+        // reducing dynamic range.  `compressor_enabled` gates it; ratio comes
+        // from the UI level (0–10).
+        let mut compressor = SpeechCompressor::new(
+            TX_SAMPLE_RATE_HZ,
+            ratio_for_level(compressor_level),
+            COMP_ATTACK_MS,
+            COMP_RELEASE_MS,
+        );
+        let mut comp_engaged = false;
+
+        // TX soft peak limiter, inserted after the compressor and before the
+        // modulator (final peak protection).  `limiter_enabled` gates it; the
+        // threshold is a fraction of full scale (UI percent / 100).
         let mut limiter = TxLimiter::new(
             TX_SAMPLE_RATE_HZ,
             limiter_threshold,
@@ -1792,6 +1810,7 @@ impl IqSource for HermesLite2Source {
         let mut win_peak = 0.0f32;
         let mut win_clip = false;
         let mut win_gr_db = 0.0f32;
+        let mut win_comp_gr_db = 0.0f32;
         let mut held_peak = 0.0f32;
         let mut peak_at = Instant::now();
         let mut clip_until: Option<Instant> = None;
@@ -1831,9 +1850,26 @@ impl IqSource for HermesLite2Source {
             }
             dc.process_in_place(&mut audio);
 
-            // TX soft peak limiter (before the modulator).  Reduces clipping
-            // and splatter; reports gain reduction for the meter.  When
-            // disabled, audio passes through untouched.
+            // Speech compressor (before the limiter).  Raises average level;
+            // reports its own gain reduction for the meter.  Pass-through when
+            // disabled.
+            let block_comp_gr_db = if compressor_enabled {
+                compressor.process_in_place(&mut audio)
+            } else {
+                0.0
+            };
+            if block_comp_gr_db > win_comp_gr_db {
+                win_comp_gr_db = block_comp_gr_db;
+            }
+            let comp_now = block_comp_gr_db >= LIM_ENGAGE_DB;
+            if comp_now && !comp_engaged {
+                debug!("[hl2 mic] compressor gain reduction {block_comp_gr_db:.1} dB");
+            }
+            comp_engaged = comp_now;
+
+            // TX soft peak limiter (after the compressor, before the modulator).
+            // Reduces clipping and splatter; reports gain reduction for the
+            // meter.  When disabled, audio passes through untouched.
             let block_gr_db = if limiter_enabled {
                 limiter.process_in_place(&mut audio)
             } else {
@@ -1884,12 +1920,13 @@ impl IqSource for HermesLite2Source {
                 if !clipping {
                     clip_until = None;
                 }
-                crate::tx_diag::set_levels(rms, held_peak, clipping, win_gr_db);
+                crate::tx_diag::set_levels(rms, held_peak, clipping, win_gr_db, win_comp_gr_db);
                 win_sumsq = 0.0;
                 win_count = 0;
                 win_peak = 0.0;
                 win_clip = false;
                 win_gr_db = 0.0;
+                win_comp_gr_db = 0.0;
             }
 
             // Real audio → complex (imag 0) → sideband FIR → baseband IQ.
