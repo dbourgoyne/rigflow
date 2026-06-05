@@ -70,279 +70,337 @@ impl RigflowApp {
                                 });
                             }
                         }
+                    }
 
-                        // -----------------------------
-                        // Sample rate
-                        // -----------------------------
-                        if state.source_capabilities.supports_sample_rate {
-                            let sample_rates = state.source_capabilities.sample_rates_hz.clone();
+                    // ── Configuration (default expanded): source operating
+                    // parameters operators adjust during normal use. ──────────
+                    egui::CollapsingHeader::new("Configuration")
+                        .id_salt("sc_configuration")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            if let Ok(mut state) = self.state.lock() {
+                                // -----------------------------
+                                // Sample rate
+                                // -----------------------------
+                                if state.source_capabilities.supports_sample_rate {
+                                    let sample_rates =
+                                        state.source_capabilities.sample_rates_hz.clone();
 
-                            if !sample_rates.is_empty() {
-                                let mut selected_sample_rate = state.source_control.sample_rate_hz;
+                                    if !sample_rates.is_empty() {
+                                        let mut selected_sample_rate =
+                                            state.source_control.sample_rate_hz;
 
-                                egui::ComboBox::from_id_salt("source_sample_rate_combo")
-                                    .selected_text(format_sample_rate(selected_sample_rate))
-                                    .show_ui(ui, |ui| {
-                                        for sample_rate_hz in sample_rates {
-                                            ui.selectable_value(
-                                                &mut selected_sample_rate,
-                                                sample_rate_hz,
-                                                format_sample_rate(sample_rate_hz),
+                                        egui::ComboBox::from_id_salt("source_sample_rate_combo")
+                                            .selected_text(format_sample_rate(selected_sample_rate))
+                                            .show_ui(ui, |ui| {
+                                                for sample_rate_hz in sample_rates {
+                                                    ui.selectable_value(
+                                                        &mut selected_sample_rate,
+                                                        sample_rate_hz,
+                                                        format_sample_rate(sample_rate_hz),
+                                                    );
+                                                }
+                                            });
+
+                                        if selected_sample_rate
+                                            != state.source_control.sample_rate_hz
+                                        {
+                                            state.source_control.sample_rate_hz =
+                                                selected_sample_rate;
+                                            self.send_radio_msg(
+                                                ClientRadioMessage::SetSourceSampleRate {
+                                                    sample_rate_hz: selected_sample_rate,
+                                                },
                                             );
+                                            save_source_control = true;
+                                        }
+                                    } else {
+                                        ui.label("Sample rates unavailable");
+                                    }
+                                }
+
+                                // -----------------------------
+                                // Gain mode: Auto / Manual
+                                // -----------------------------
+                                let ds_active =
+                                    state.source_control.direct_sampling != DirectSamplingMode::Off;
+
+                                if state.source_capabilities.supports_gain_mode {
+                                    ui.add_enabled_ui(!ds_active, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label("Gain Mode");
+
+                                            let mut gain_mode = state.source_control.gain_mode;
+
+                                            let auto_changed = ui
+                                                .radio_value(&mut gain_mode, GainMode::Auto, "Auto")
+                                                .changed();
+
+                                            let manual_changed = ui
+                                                .radio_value(
+                                                    &mut gain_mode,
+                                                    GainMode::Manual,
+                                                    "Manual",
+                                                )
+                                                .changed();
+
+                                            if auto_changed || manual_changed {
+                                                state.source_control.gain_mode = gain_mode;
+                                                self.send_radio_msg(
+                                                    ClientRadioMessage::SetSourceGainMode {
+                                                        mode: gain_mode,
+                                                    },
+                                                );
+                                                save_source_control = true;
+                                            }
+                                        });
+                                    });
+                                }
+
+                                // -----------------------------
+                                // Gain value
+                                // -----------------------------
+                                if state.source_capabilities.supports_gain {
+                                    let manual_gain = !ds_active
+                                        && state.source_control.gain_mode == GainMode::Manual;
+
+                                    ui.add_enabled_ui(manual_gain, |ui| {
+                                        let gains = &state.source_capabilities.gain_values_db;
+
+                                        if !gains.is_empty() {
+                                            let min_gain = gains.first().copied().unwrap_or(0.0);
+                                            let max_gain = gains.last().copied().unwrap_or(50.0);
+
+                                            let mut gain_db = state.source_control.gain_db;
+
+                                            let response = ui.add(
+                                                egui::Slider::new(
+                                                    &mut gain_db,
+                                                    min_gain..=max_gain,
+                                                )
+                                                .text(format!(
+                                                    "Gain ({:.1} dB)",
+                                                    state.source_control.gain_db
+                                                )),
+                                            );
+                                            if response.changed() {
+                                                let snapped_gain = gains
+                                                    .iter()
+                                                    .copied()
+                                                    .min_by(|a, b| {
+                                                        (gain_db - *a)
+                                                            .abs()
+                                                            .partial_cmp(&(gain_db - *b).abs())
+                                                            .unwrap_or(std::cmp::Ordering::Equal)
+                                                    })
+                                                    .unwrap_or(gain_db);
+
+                                                if (snapped_gain - state.source_control.gain_db)
+                                                    .abs()
+                                                    > f32::EPSILON
+                                                {
+                                                    state.source_control.gain_db = snapped_gain;
+                                                    self.send_radio_msg(
+                                                        ClientRadioMessage::SetSourceGain {
+                                                            gain_db: snapped_gain,
+                                                        },
+                                                    );
+                                                    save_source_control = true;
+                                                }
+                                            }
+                                        } else {
+                                            ui.label("Gain values unavailable");
                                         }
                                     });
-
-                                if selected_sample_rate != state.source_control.sample_rate_hz {
-                                    state.source_control.sample_rate_hz = selected_sample_rate;
-                                    self.send_radio_msg(ClientRadioMessage::SetSourceSampleRate {
-                                        sample_rate_hz: selected_sample_rate,
-                                    });
-                                    save_source_control = true;
                                 }
-                            } else {
-                                ui.label("Sample rates unavailable");
-                            }
-                        }
 
-                        // -----------------------------
-                        // Gain mode: Auto / Manual
-                        // -----------------------------
-                        let ds_active =
-                            state.source_control.direct_sampling != DirectSamplingMode::Off;
+                                if ds_active
+                                    && (state.source_capabilities.supports_gain_mode
+                                        || state.source_capabilities.supports_gain)
+                                {
+                                    ui.label("Gain is not applicable in direct sampling mode.");
+                                }
 
-                        if state.source_capabilities.supports_gain_mode {
-                            ui.add_enabled_ui(!ds_active, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label("Gain Mode");
+                                // -----------------------------
+                                // PPM correction
+                                // -----------------------------
+                                if state.source_capabilities.supports_ppm_correction {
+                                    let ppm_min = state.source_capabilities.ppm_min;
+                                    let ppm_max = state.source_capabilities.ppm_max;
+                                    let mut ppm = state.source_control.ppm_correction;
 
-                                    let mut gain_mode = state.source_control.gain_mode;
-
-                                    let auto_changed = ui
-                                        .radio_value(&mut gain_mode, GainMode::Auto, "Auto")
-                                        .changed();
-
-                                    let manual_changed = ui
-                                        .radio_value(&mut gain_mode, GainMode::Manual, "Manual")
-                                        .changed();
-
-                                    if auto_changed || manual_changed {
-                                        state.source_control.gain_mode = gain_mode;
-                                        self.send_radio_msg(
-                                            ClientRadioMessage::SetSourceGainMode {
-                                                mode: gain_mode,
-                                            },
+                                    ui.label("PPM Correction");
+                                    ui.horizontal(|ui| {
+                                        let slider = ui.add(
+                                            egui::Slider::new(&mut ppm, ppm_min..=ppm_max)
+                                                .integer()
+                                                .show_value(false),
                                         );
-                                        save_source_control = true;
-                                    }
-                                });
-                            });
-                        }
 
-                        // -----------------------------
-                        // Gain value
-                        // -----------------------------
-                        if state.source_capabilities.supports_gain {
-                            let manual_gain =
-                                !ds_active && state.source_control.gain_mode == GainMode::Manual;
+                                        let sign = if ppm > 0 { "+" } else { "" };
+                                        ui.label(format!("{sign}{ppm} ppm"));
 
-                            ui.add_enabled_ui(manual_gain, |ui| {
-                                let gains = &state.source_capabilities.gain_values_db;
+                                        let reset = ui
+                                            .add_enabled(ppm != 0, egui::Button::new("Reset"))
+                                            .clicked();
 
-                                if !gains.is_empty() {
-                                    let min_gain = gains.first().copied().unwrap_or(0.0);
-                                    let max_gain = gains.last().copied().unwrap_or(50.0);
-
-                                    let mut gain_db = state.source_control.gain_db;
-
-                                    let response = ui.add(
-                                        egui::Slider::new(&mut gain_db, min_gain..=max_gain).text(
-                                            format!(
-                                                "Gain ({:.1} dB)",
-                                                state.source_control.gain_db
-                                            ),
-                                        ),
-                                    );
-                                    if response.changed() {
-                                        let snapped_gain = gains
-                                            .iter()
-                                            .copied()
-                                            .min_by(|a, b| {
-                                                (gain_db - *a)
-                                                    .abs()
-                                                    .partial_cmp(&(gain_db - *b).abs())
-                                                    .unwrap_or(std::cmp::Ordering::Equal)
-                                            })
-                                            .unwrap_or(gain_db);
-
-                                        if (snapped_gain - state.source_control.gain_db).abs()
-                                            > f32::EPSILON
-                                        {
-                                            state.source_control.gain_db = snapped_gain;
+                                        if slider.changed() || reset {
+                                            if reset {
+                                                ppm = 0;
+                                            }
+                                            state.source_control.ppm_correction = ppm;
                                             self.send_radio_msg(
-                                                ClientRadioMessage::SetSourceGain {
-                                                    gain_db: snapped_gain,
+                                                ClientRadioMessage::SetSourcePpmCorrection { ppm },
+                                            );
+                                            save_source_control = true;
+                                        }
+                                    });
+                                }
+
+                                // -----------------------------
+                                // Direct sampling mode
+                                // -----------------------------
+                                if state.source_capabilities.supports_direct_sampling {
+                                    let modes =
+                                        state.source_capabilities.direct_sampling_modes.clone();
+
+                                    if !modes.is_empty() {
+                                        let mut selected = state.source_control.direct_sampling;
+
+                                        ui.horizontal(|ui| {
+                                            ui.label("Direct Sampling");
+
+                                            egui::ComboBox::from_id_salt(
+                                                "source_direct_sampling_combo",
+                                            )
+                                            .selected_text(format_direct_sampling_mode(selected))
+                                            .show_ui(
+                                                ui,
+                                                |ui| {
+                                                    for mode in modes {
+                                                        ui.selectable_value(
+                                                            &mut selected,
+                                                            mode,
+                                                            format_direct_sampling_mode(mode),
+                                                        );
+                                                    }
+                                                },
+                                            );
+                                        });
+
+                                        if selected != state.source_control.direct_sampling {
+                                            state.source_control.direct_sampling = selected;
+                                            self.send_radio_msg(
+                                                ClientRadioMessage::SetSourceDirectSampling {
+                                                    mode: selected,
                                                 },
                                             );
                                             save_source_control = true;
                                         }
                                     }
-                                } else {
-                                    ui.label("Gain values unavailable");
                                 }
-                            });
-                        }
 
-                        if ds_active
-                            && (state.source_capabilities.supports_gain_mode
-                                || state.source_capabilities.supports_gain)
-                        {
-                            ui.label("Gain is not applicable in direct sampling mode.");
-                        }
-
-                        // -----------------------------
-                        // PPM correction
-                        // -----------------------------
-                        if state.source_capabilities.supports_ppm_correction {
-                            let ppm_min = state.source_capabilities.ppm_min;
-                            let ppm_max = state.source_capabilities.ppm_max;
-                            let mut ppm = state.source_control.ppm_correction;
-
-                            ui.label("PPM Correction");
-                            ui.horizontal(|ui| {
-                                let slider = ui.add(
-                                    egui::Slider::new(&mut ppm, ppm_min..=ppm_max)
-                                        .integer()
-                                        .show_value(false),
-                                );
-
-                                let sign = if ppm > 0 { "+" } else { "" };
-                                ui.label(format!("{sign}{ppm} ppm"));
-
-                                let reset = ui
-                                    .add_enabled(ppm != 0, egui::Button::new("Reset"))
-                                    .clicked();
-
-                                if slider.changed() || reset {
-                                    if reset {
-                                        ppm = 0;
+                                // -----------------------------
+                                // TX Drive (%) — operator transmit power.  Part of
+                                // source control: applies to all transmit operations
+                                // (Spot now; CW/SSB/digital/sweep later).  Gated on TX
+                                // support.  Flows through the source-control plane like
+                                // gain (SetSourceTxDrive); the server uses it when a
+                                // Spot/SWR measurement runs.
+                                // -----------------------------
+                                if state.source_capabilities.supports_tx_tune_test {
+                                    let mut tx_drive = state.source_control.tx_drive_percent;
+                                    let resp = ui.add(
+                                        egui::Slider::new(&mut tx_drive, 0.0..=100.0)
+                                            .step_by(1.0)
+                                            .fixed_decimals(0)
+                                            .suffix("%")
+                                            .text("TX Drive"),
+                                    );
+                                    if resp.changed() {
+                                        let snapped = tx_drive.clamp(0.0, 100.0).round();
+                                        if (snapped - state.source_control.tx_drive_percent).abs()
+                                            > f32::EPSILON
+                                        {
+                                            state.source_control.tx_drive_percent = snapped;
+                                            self.send_radio_msg(
+                                                ClientRadioMessage::SetSourceTxDrive {
+                                                    tx_drive_percent: snapped,
+                                                },
+                                            );
+                                            save_source_control = true;
+                                        }
                                     }
-                                    state.source_control.ppm_correction = ppm;
-                                    self.send_radio_msg(
-                                        ClientRadioMessage::SetSourcePpmCorrection { ppm },
-                                    );
-                                    save_source_control = true;
                                 }
-                            });
-                        }
 
-                        // -----------------------------
-                        // Direct sampling mode
-                        // -----------------------------
-                        if state.source_capabilities.supports_direct_sampling {
-                            let modes = state.source_capabilities.direct_sampling_modes.clone();
+                                // -----------------------------
+                                // Band Control + N2ADR (HL2).
+                                // -----------------------------
+                                if state.source_capabilities.supports_band_control {
+                                    save_source_control |= self.draw_band_control(ui, &mut state);
+                                }
 
-                            if !modes.is_empty() {
-                                let mut selected = state.source_control.direct_sampling;
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Direct Sampling");
-
-                                    egui::ComboBox::from_id_salt("source_direct_sampling_combo")
-                                        .selected_text(format_direct_sampling_mode(selected))
-                                        .show_ui(ui, |ui| {
-                                            for mode in modes {
-                                                ui.selectable_value(
-                                                    &mut selected,
-                                                    mode,
-                                                    format_direct_sampling_mode(mode),
-                                                );
-                                            }
-                                        });
-                                });
-
-                                if selected != state.source_control.direct_sampling {
-                                    state.source_control.direct_sampling = selected;
-                                    self.send_radio_msg(
-                                        ClientRadioMessage::SetSourceDirectSampling {
-                                            mode: selected,
-                                        },
-                                    );
-                                    save_source_control = true;
+                                // -----------------------------
+                                // TX Sequencing (HL2 PTT lead/tail delays).
+                                // -----------------------------
+                                if state.source_capabilities.supports_tx_tune_test {
+                                    save_source_control |=
+                                        self.draw_tx_sequencing_section(ui, &mut state);
                                 }
                             }
-                        }
+                        });
 
-                        // -----------------------------
-                        // TX Drive (%) — operator transmit power.  Part of
-                        // source control: applies to all transmit operations
-                        // (Spot now; CW/SSB/digital/sweep later).  Gated on TX
-                        // support.  Flows through the source-control plane like
-                        // gain (SetSourceTxDrive); the server uses it when a
-                        // Spot/SWR measurement runs.
-                        // -----------------------------
-                        if state.source_capabilities.supports_tx_tune_test {
-                            let mut tx_drive = state.source_control.tx_drive_percent;
-                            let resp = ui.add(
-                                egui::Slider::new(&mut tx_drive, 0.0..=100.0)
-                                    .step_by(1.0)
-                                    .fixed_decimals(0)
-                                    .suffix("%")
-                                    .text("TX Drive"),
-                            );
-                            if resp.changed() {
-                                let snapped = tx_drive.clamp(0.0, 100.0).round();
-                                if (snapped - state.source_control.tx_drive_percent).abs()
-                                    > f32::EPSILON
-                                {
-                                    state.source_control.tx_drive_percent = snapped;
-                                    self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
-                                        tx_drive_percent: snapped,
-                                    });
-                                    save_source_control = true;
+                    // ── Diagnostics (default collapsed): testing / validation /
+                    // calibration features, hidden during normal operation. ───
+                    egui::CollapsingHeader::new("Diagnostics")
+                        .id_salt("sc_diagnostics")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if let Ok(mut state) = self.state.lock() {
+                                // -----------------------------
+                                // SWR Sweep (HL2 TX).
+                                // -----------------------------
+                                if state.source_capabilities.supports_tx_tune_test {
+                                    self.draw_swr_sweep_section(ui, &mut state);
+                                }
+
+                                // -----------------------------
+                                // FDX / TX Monitor Spectrum (HL2).
+                                // -----------------------------
+                                if state.source_capabilities.supports_fdx {
+                                    save_source_control |= self.draw_fdx_control(ui, &mut state);
+                                }
+
+                                // -----------------------------
+                                // TX Test Tone (HL2, FDX Phase 2).
+                                // -----------------------------
+                                if state.source_capabilities.supports_tx_tune_test {
+                                    self.draw_tx_test_tone_section(ui, &mut state);
                                 }
                             }
-                        }
+                            // Spot / SWR — locks state internally, so call it
+                            // after the guard above is dropped.
+                            self.draw_tx_tune_test_panel(ui, snapshot);
+                        });
 
-                        // -----------------------------
-                        // Band Control + N2ADR (HL2).
-                        // -----------------------------
-                        if state.source_capabilities.supports_band_control {
-                            save_source_control |= self.draw_band_control(ui, &mut state);
-                        }
+                    // ── Recording (default collapsed): IQ recording (future
+                    // home for playback / library / scheduled recording). ─────
+                    egui::CollapsingHeader::new("Recording")
+                        .id_salt("sc_recording")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if let Ok(state) = self.state.lock() {
+                                self.draw_iq_recording_section(ui, &state);
+                            }
+                        });
 
-                        // -----------------------------
-                        // SWR Sweep (HL2 TX).
-                        // -----------------------------
-                        if state.source_capabilities.supports_tx_tune_test {
-                            self.draw_swr_sweep_section(ui, &mut state);
-                        }
-
-                        // -----------------------------
-                        // FDX / TX Monitor Spectrum (HL2).
-                        // -----------------------------
-                        if state.source_capabilities.supports_fdx {
-                            save_source_control |= self.draw_fdx_control(ui, &mut state);
-                        }
-
-                        // -----------------------------
-                        // TX Test Tone (HL2, FDX Phase 2).
-                        // -----------------------------
-                        if state.source_capabilities.supports_tx_tune_test {
-                            self.draw_tx_test_tone_section(ui, &mut state);
-                        }
-
-                        // -----------------------------
-                        // TX Sequencing (HL2 PTT lead/tail delays).
-                        // -----------------------------
-                        if state.source_capabilities.supports_tx_tune_test {
-                            save_source_control |= self.draw_tx_sequencing_section(ui, &mut state);
-                        }
-
-                        // -----------------------------
-                        // IQ Recording (Phase 1, receive — server-side).
-                        // -----------------------------
-                        self.draw_iq_recording_section(ui, &state);
-                    }
+                    // ── Status (default expanded): source health / telemetry. ─
+                    egui::CollapsingHeader::new("Status")
+                        .id_salt("sc_status")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            self.draw_source_status_panel(ui, snapshot);
+                        });
 
                     if save_source_control {
                         self.save_source_control_prefs_to_current_operator();

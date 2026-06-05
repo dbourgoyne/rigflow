@@ -40,8 +40,6 @@ impl RigflowApp {
                         self.draw_radio_control_panel(ui, snapshot);
                         ui.separator();
                         self.draw_source_control_panel(ui, snapshot);
-                        self.draw_source_status_panel(ui, snapshot);
-                        self.draw_tx_tune_test_panel(ui, snapshot);
                         ui.separator();
                         self.draw_waterfall_control_panel(ui);
                         ui.separator();
