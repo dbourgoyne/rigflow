@@ -7,6 +7,7 @@ use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
@@ -210,6 +211,9 @@ pub struct UiState {
     /// Latest read-only telemetry from the active source.
     /// Empty (`SourceStatus::default()`) when the source does not report status.
     pub source_status: SourceStatus,
+
+    /// Receive IQ recording status (Phase 1), from the server.
+    pub iq_recording_status: IqRecordingStatus,
 
     /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
     pub tx_audio_diag: TxAudioDiag,
@@ -438,6 +442,7 @@ impl Default for UiState {
             source_capabilities: SourceCapabilities::none(),
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
+            iq_recording_status: IqRecordingStatus::default(),
             tx_audio_diag: TxAudioDiag::default(),
             two_tone_enabled: false,
             two_tone_a_hz: 700.0,

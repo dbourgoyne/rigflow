@@ -337,12 +337,65 @@ impl RigflowApp {
                         if state.source_capabilities.supports_tx_tune_test {
                             save_source_control |= self.draw_tx_sequencing_section(ui, &mut state);
                         }
+
+                        // -----------------------------
+                        // IQ Recording (Phase 1, receive — server-side).
+                        // -----------------------------
+                        self.draw_iq_recording_section(ui, &state);
                     }
 
                     if save_source_control {
                         self.save_source_control_prefs_to_current_operator();
                     }
                 });
+        }
+    }
+
+    /// Receive IQ Recording (Phase 1): Start/Stop buttons plus live status
+    /// (filename, elapsed, file size, dropped buffers).  Recording happens on
+    /// the server; this only sends start/stop and shows the reported status.
+    fn draw_iq_recording_section(&self, ui: &mut egui::Ui, state: &UiState) {
+        ui.separator();
+        ui.label("IQ Recording");
+
+        let rec = &state.iq_recording_status;
+
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!rec.recording, egui::Button::new("Start Recording"))
+                .clicked()
+            {
+                self.send_radio_msg(ClientRadioMessage::StartIqRecording);
+            }
+            if ui
+                .add_enabled(rec.recording, egui::Button::new("Stop Recording"))
+                .clicked()
+            {
+                self.send_radio_msg(ClientRadioMessage::StopIqRecording);
+            }
+        });
+
+        if rec.recording {
+            ui.colored_label(egui::Color32::from_rgb(230, 90, 90), "● Recording");
+        } else {
+            ui.colored_label(egui::Color32::GRAY, "○ Idle");
+        }
+
+        if let Some(name) = &rec.filename {
+            ui.label(egui::RichText::new(name).small().monospace());
+            ui.label(format!(
+                "{}   {}",
+                format_elapsed(rec.elapsed_secs),
+                format_size(rec.file_size_bytes),
+            ));
+        }
+        if rec.dropped_buffers > 0 {
+            ui.colored_label(
+                egui::Color32::from_rgb(230, 140, 60),
+                format!("Dropped IQ Buffers: {}", rec.dropped_buffers),
+            );
+        } else {
+            ui.label("Dropped IQ Buffers: 0");
         }
     }
 
@@ -700,5 +753,30 @@ fn format_sample_rate(sample_rate_hz: u32) -> String {
         format!("{:.1} kSPS", sample_rate_hz as f32 / 1_000.0)
     } else {
         format!("{sample_rate_hz} SPS")
+    }
+}
+
+/// `HH:MM:SS` for the IQ recording elapsed time.
+fn format_elapsed(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+/// Human-readable byte size for the IQ recording file.
+fn format_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.2} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{bytes} B")
     }
 }

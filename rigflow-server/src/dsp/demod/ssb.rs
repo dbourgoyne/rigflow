@@ -51,6 +51,9 @@ impl SsbDemodulator {
     /// Current first-pass behavior uses only the real component after the
     /// pipeline has already isolated the desired sideband.
     pub fn process(&mut self, input: &[Complex32]) -> Vec<f32> {
-        input.iter().map(|sample| sample.re * self.audio_gain).collect()
+        input
+            .iter()
+            .map(|sample| sample.re * self.audio_gain)
+            .collect()
     }
 }

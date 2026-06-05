@@ -22,8 +22,7 @@ impl Hl2Device {
     pub fn mac_hex(&self) -> String {
         format!(
             "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            self.mac[0], self.mac[1], self.mac[2],
-            self.mac[3], self.mac[4], self.mac[5],
+            self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5],
         )
     }
 }
@@ -92,7 +91,10 @@ pub fn discover_hl2_devices() -> Vec<Hl2Device> {
                 );
 
                 if in_use {
-                    warn!("HL2 at {} reports it is already in use by another host", src.ip());
+                    warn!(
+                        "HL2 at {} reports it is already in use by another host",
+                        src.ip()
+                    );
                 }
 
                 // Normalise to port 1024 regardless of the source port in the
@@ -151,7 +153,10 @@ fn send_on_all_interfaces(socket: &UdpSocket, request: &[u8]) {
             let target = SocketAddr::new(IpAddr::V4(bcast), HPSDR_PORT);
             match socket.send_to(request, target) {
                 Ok(_) => {
-                    info!("HL2 discovery: broadcast sent on {} ({} → {})", iface.name, v4.ip, bcast);
+                    info!(
+                        "HL2 discovery: broadcast sent on {} ({} → {})",
+                        iface.name, v4.ip, bcast
+                    );
                     sent = true;
                 }
                 Err(e) => {

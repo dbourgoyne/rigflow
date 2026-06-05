@@ -1,7 +1,7 @@
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use log::{debug,error,info};
 
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
@@ -157,12 +157,7 @@ impl RadioManager {
 
             for (radio_id, client_id, lease_id) in expired {
                 let _ = manager
-                    .release_radio(
-                        &client_id,
-                        &radio_id,
-                        &lease_id,
-                        StopReason::LeaseExpired,
-                    )
+                    .release_radio(&client_id, &radio_id, &lease_id, StopReason::LeaseExpired)
                     .await;
             }
         }
@@ -375,7 +370,8 @@ impl RadioManager {
                 _ => return Err(RadioManagerError::RadioNotRunning),
             }
 
-            radio.runtime
+            radio
+                .runtime
                 .as_ref()
                 .ok_or(RadioManagerError::RadioNotRunning)?
                 .worker_tx
@@ -417,7 +413,8 @@ impl RadioManager {
 
             radio.state = RadioState::Stopping;
 
-            radio.runtime
+            radio
+                .runtime
                 .take()
                 .ok_or(RadioManagerError::RadioNotRunning)?
         };

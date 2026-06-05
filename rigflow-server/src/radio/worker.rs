@@ -31,6 +31,7 @@ use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
+use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{
@@ -132,6 +133,13 @@ struct SharedControlState {
     /// 0–10 level (mapped to a ratio).  Read at mic-TX session start.
     compressor_enabled: bool,
     compressor_level: u8,
+
+    /// Receive IQ recording (Phase 1).  Start/stop are one-shot requests set by
+    /// the command thread and consumed by the capture thread (which owns the
+    /// recorder + IQ stream).  `iq_recording_status` is published telemetry.
+    pending_iq_record_start: bool,
+    pending_iq_record_stop: bool,
+    iq_recording_status: IqRecordingStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -385,6 +393,7 @@ fn build_runtime_state(
         volume_percent: control.volume_percent,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
+        iq_recording_status: control.iq_recording_status.clone(),
         tx_audio_diag: crate::tx_diag::snapshot(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
         last_swr_sweep_result: control.last_swr_sweep_result.clone(),
@@ -491,6 +500,9 @@ fn run_iq_worker_threads(
         tx_limiter_threshold: 0.9,
         compressor_enabled: false,
         compressor_level: 3,
+        pending_iq_record_start: false,
+        pending_iq_record_stop: false,
+        iq_recording_status: IqRecordingStatus::default(),
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -929,6 +941,20 @@ fn spawn_command_thread(
                         }
                         debug!("[radio-worker] compressor enabled={enabled} level={level}");
                     }
+
+                    WorkerCommand::StartIqRecording => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.pending_iq_record_start = true;
+                            cs.pending_iq_record_stop = false;
+                        }
+                    }
+
+                    WorkerCommand::StopIqRecording => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.pending_iq_record_stop = true;
+                            cs.pending_iq_record_start = false;
+                        }
+                    }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => {
@@ -1131,6 +1157,10 @@ fn spawn_capture_thread(
         // first push.
         let mut last_tx_lead_ms = u32::MAX;
         let mut last_tx_tail_ms = u32::MAX;
+        // Receive IQ recording (Phase 1): the recorder is owned here (the
+        // capture thread owns the IQ stream).  Start/stop are driven by control
+        // flags; status is published periodically with the telemetry poll.
+        let mut iq_rec: Option<crate::recording::iq_recorder::IqRecorder> = None;
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
@@ -1332,12 +1362,68 @@ fn spawn_capture_thread(
                 last_tx_tail_ms = current_source_control.tx_ptt_tail_ms;
             }
 
+            // Receive IQ recording: honour pending start/stop requests.  The
+            // capture thread owns the recorder (and the IQ stream), so all
+            // file lifecycle happens here; the background writer does the I/O.
+            {
+                let (want_start, want_stop) = control
+                    .lock()
+                    .map(|mut cs| {
+                        let s = cs.pending_iq_record_start;
+                        let e = cs.pending_iq_record_stop;
+                        cs.pending_iq_record_start = false;
+                        cs.pending_iq_record_stop = false;
+                        (s, e)
+                    })
+                    .unwrap_or((false, false));
+
+                if want_stop {
+                    if let Some(rec) = iq_rec.take() {
+                        rec.stop();
+                    }
+                }
+                if want_start && iq_rec.is_none() {
+                    let params = crate::recording::iq_recorder::RecordParams {
+                        sample_rate_hz: source.sample_rate() as u32,
+                        center_freq_hz: control_snapshot.center_freq_hz as u32,
+                        gain_db: control_snapshot.source_control.gain_db,
+                        ppm: control_snapshot.source_control.ppm_correction as f32,
+                        source: format!("{:?}", descriptor.hardware_kind),
+                    };
+                    match crate::recording::iq_recorder::IqRecorder::start(params) {
+                        Ok(rec) => iq_rec = Some(rec),
+                        Err(e) => warn!(
+                            "[radio-worker {}] IQ record start failed: {e}",
+                            descriptor.id.0
+                        ),
+                    }
+                }
+            }
+
             // Poll hardware telemetry at ~4 Hz and propagate to SharedControlState
-            // so the DSP thread can include it in WorkerStatus updates.
+            // so the DSP thread can include it in WorkerStatus updates.  The IQ
+            // recording status is refreshed on the same cadence.
             if last_status_poll.elapsed() >= status_poll_interval {
                 let new_status = source.source_status();
+                let rec_status = match &iq_rec {
+                    Some(rec) => IqRecordingStatus {
+                        recording: true,
+                        filename: Some(rec.filename().to_string()),
+                        elapsed_secs: rec.elapsed_secs(),
+                        file_size_bytes: rec.file_size_bytes(),
+                        dropped_buffers: rec.dropped_buffers(),
+                    },
+                    None => IqRecordingStatus::default(),
+                };
                 if let Ok(mut cs) = control.lock() {
                     cs.source_status = new_status;
+                    // Preserve the last filename/size when idle so the UI can
+                    // show the most recent recording; only `recording` flips.
+                    if rec_status.recording {
+                        cs.iq_recording_status = rec_status;
+                    } else if cs.iq_recording_status.recording {
+                        cs.iq_recording_status.recording = false;
+                    }
                 }
                 last_status_poll = Instant::now();
             }
@@ -1723,6 +1809,12 @@ fn spawn_capture_thread(
 
             blocks_read += 1;
 
+            // IQ recording tap: capture the raw source IQ before any DSP.
+            // Non-blocking — a full writer queue drops (and counts) the block.
+            if let Some(rec) = &iq_rec {
+                rec.record_block(&iq);
+            }
+
             if blocks_read % 20 == 0 {
                 trace!(
                     "[radio-worker {}] capture alive: blocks={} iq_samples={} center={} target={}",
@@ -1747,6 +1839,12 @@ fn spawn_capture_thread(
                     break;
                 }
             }
+        }
+
+        // Finalize any in-progress recording on capture-thread exit so the WAV
+        // header is always valid even if the worker stops mid-recording.
+        if let Some(rec) = iq_rec.take() {
+            rec.stop();
         }
     })
 }
@@ -1882,6 +1980,11 @@ fn spawn_dsp_thread(
 
             if current.source_status != applied.source_status {
                 applied.source_status = current.source_status.clone();
+                changed = true;
+            }
+
+            if current.iq_recording_status != applied.iq_recording_status {
+                applied.iq_recording_status = current.iq_recording_status.clone();
                 changed = true;
             }
 

@@ -20,13 +20,11 @@ pub struct PolyphaseDecimator {
 }
 
 impl PolyphaseDecimator {
-    pub fn new(
-        input_sample_rate_hz: f32,
-        cutoff_hz: f32,
-        num_taps: usize,
-        factor: usize,
-    ) -> Self {
-        assert!(input_sample_rate_hz > 0.0, "input_sample_rate_hz must be > 0");
+    pub fn new(input_sample_rate_hz: f32, cutoff_hz: f32, num_taps: usize, factor: usize) -> Self {
+        assert!(
+            input_sample_rate_hz > 0.0,
+            "input_sample_rate_hz must be > 0"
+        );
         assert!(cutoff_hz > 0.0, "cutoff_hz must be > 0");
         assert!(num_taps >= 3, "num_taps must be at least 3");
         assert!(factor >= 1, "decimation factor must be >= 1");
@@ -69,7 +67,12 @@ impl PolyphaseDecimator {
     /// can reuse storage across blocks and avoid repeated allocations.
     pub fn process_into(&mut self, input: &[Complex32], output: &mut Vec<Complex32>) {
         output.clear();
-        output.reserve(input.len().div_ceil(self.factor).saturating_sub(output.capacity()));
+        output.reserve(
+            input
+                .len()
+                .div_ceil(self.factor)
+                .saturating_sub(output.capacity()),
+        );
 
         let delay_len = self.delay.len();
 

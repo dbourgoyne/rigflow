@@ -7,10 +7,7 @@ use tokio::sync::RwLock;
 use log::info;
 
 use rigflow_core::net::udp_framing::{
-    MAGIC,
-    STREAM_TYPE_MIC_AUDIO,
-    STREAM_TYPE_REGISTER_AUDIO,
-    VERSION,
+    MAGIC, STREAM_TYPE_MIC_AUDIO, STREAM_TYPE_REGISTER_AUDIO, VERSION,
 };
 
 use crate::net::udp::mic_audio::push_mic_samples;
@@ -67,9 +64,7 @@ pub async fn run_udp_registration_listener(
                 let payload = &buf[4..len];
                 let mut samples = Vec::with_capacity(payload.len() / 4);
                 for chunk in payload.chunks_exact(4) {
-                    samples.push(f32::from_le_bytes([
-                        chunk[0], chunk[1], chunk[2], chunk[3],
-                    ]));
+                    samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
                 }
                 if !samples.is_empty() {
                     push_mic_samples(&samples);

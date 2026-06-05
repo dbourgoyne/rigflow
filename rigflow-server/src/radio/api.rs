@@ -1,13 +1,9 @@
 use std::net::SocketAddr;
 use std::str::FromStr;
 
-use rigflow_protocol::radio_control::{
-    RadioAvailability, RadioInfo, ServerRadioMessage,
-};
+use rigflow_protocol::radio_control::{RadioAvailability, RadioInfo, ServerRadioMessage};
 
-use crate::radio::types::{
-    AcquireRequest, RadioManagerError, RadioState, RadioSummary,
-};
+use crate::radio::types::{AcquireRequest, RadioManagerError, RadioState, RadioSummary};
 
 /// Parse an acquire request from protocol fields.
 ///
@@ -45,7 +41,7 @@ pub fn radio_summary_to_protocol(summary: RadioSummary) -> RadioInfo {
         index: descriptor.index,
         serial: descriptor.serial,
         radio_capabilities: descriptor.radio_capabilities,
-	source_capabilities: descriptor.source_capabilities,
+        source_capabilities: descriptor.source_capabilities,
         state: radio_state_to_protocol(&state),
         is_leased,
     }
