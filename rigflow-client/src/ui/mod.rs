@@ -9,6 +9,7 @@ pub mod spectrum_view;
 pub mod state;
 pub mod stats;
 pub mod utils;
+pub mod view_interaction;
 pub mod waterfall;
 
 mod app_actions;

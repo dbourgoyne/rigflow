@@ -12,20 +12,16 @@ use crate::ui::{
     },
     spectrum_utils::zoom_window,
     state::UiState,
+    view_interaction::ViewMouseResult,
 };
 
 pub struct SpectrumInteraction {
-    pub clicked_target_freq_hz: Option<f32>,
+    /// A bookmark overlay was clicked (takes precedence over tune/recenter).
     pub clicked_bookmark_id: Option<String>,
-    /// Mouse-wheel fine-tune request (Hz) while hovering the spectrum: +50 Hz
-    /// on scroll up, -50 Hz on scroll down, 0.0 when no wheel input.  The caller
-    /// applies it to the target frequency through the normal clamp/tune path.
-    pub scroll_target_delta_hz: f32,
+    /// Shared mouse interaction (tune / recenter / wheel-tune / zoom).  The
+    /// caller applies it identically for the spectrum and the waterfall.
+    pub mouse: ViewMouseResult,
 }
-
-/// Fixed fine-tune step applied per mouse-wheel notch over the spectrum or
-/// waterfall.
-pub const WHEEL_TUNE_STEP_HZ: f32 = 50.0;
 
 pub fn draw_spectrum_plot(
     ui: &mut egui::Ui,
@@ -86,41 +82,30 @@ pub fn draw_spectrum_plot(
         egui::StrokeKind::Inside,
     );
 
-    let mut clicked_freq_hz = None;
-
-    if clicked_bookmark_id.is_none() && response.clicked() && visible_span_hz(state) > 0.0 {
-        if let Some(pointer_pos) = response.interact_pointer_pos() {
-            if plot_rect.contains(pointer_pos) {
-                let frac = ((pointer_pos.x - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0);
-
-                if let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state)
-                {
-                    clicked_freq_hz = Some(left_hz + frac * (right_hz - left_hz));
-                }
-            }
-        }
-    }
-
-    // Mouse-wheel fine tuning: only when the pointer is over the spectrum, so
-    // scrolling unrelated panels never tunes.  One notch (any nonzero scroll
-    // this frame) = one ±50 Hz step, matching the LO digit-wheel convention.
-    let scroll_target_delta_hz = if response.hovered() {
-        let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
-        if scroll_y > 0.0 {
-            WHEEL_TUNE_STEP_HZ
-        } else if scroll_y < 0.0 {
-            -WHEEL_TUNE_STEP_HZ
-        } else {
-            0.0
-        }
+    // Shared mouse interaction (identical to the waterfall): wheel fine-tune /
+    // zoom and click/double-click tuning.  The spectrum maps screen-x →
+    // frequency via the currently-visible (zoomed) range across `plot_rect`.
+    let visible_range = zoomed_visible_freq_range_hz(spectrum_len, state);
+    let mut mouse = if let Some((left_hz, right_hz)) = visible_range {
+        crate::ui::view_interaction::handle_view_mouse(ui, &response, plot_rect, |x| {
+            let frac = ((x - plot_rect.left()) / plot_rect.width()).clamp(0.0, 1.0);
+            left_hz + frac * (right_hz - left_hz)
+        })
     } else {
-        0.0
+        // No visible span: still allow wheel zoom, but no click→frequency.
+        crate::ui::view_interaction::handle_view_mouse(ui, &response, plot_rect, |_| 0.0)
     };
 
+    // Suppress click→frequency when there is no valid mapping (no visible
+    // span) or when a bookmark overlay was clicked; wheel / zoom / center still
+    // apply (they don't depend on the click position).
+    if visible_range.is_none() || clicked_bookmark_id.is_some() {
+        mouse.tune_to_hz = None;
+    }
+
     SpectrumInteraction {
-        clicked_target_freq_hz: clicked_freq_hz,
         clicked_bookmark_id,
-        scroll_target_delta_hz,
+        mouse,
     }
 }
 
@@ -828,9 +813,8 @@ fn draw_bookmark_tooltip(
 
 fn empty_interaction() -> SpectrumInteraction {
     SpectrumInteraction {
-        clicked_target_freq_hz: None,
         clicked_bookmark_id: None,
-        scroll_target_delta_hz: 0.0,
+        mouse: ViewMouseResult::default(),
     }
 }
 
