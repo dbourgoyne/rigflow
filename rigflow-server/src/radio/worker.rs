@@ -113,6 +113,15 @@ struct SharedControlState {
     /// is the live PTT state the session polls (cleared on key-up / stop).
     pending_mic_tx: bool,
     mic_tx_active: Arc<AtomicBool>,
+
+    /// SSB two-tone test generator.  When `two_tone_enabled`, the mic-TX path
+    /// generates `Tone A + Tone B` instead of draining the mic queue, so it
+    /// flows through the identical DcBlocker → SSB FIR → diagnostics → HL2
+    /// path as microphone audio.  `two_tone_level` is a 0..1 amplitude scale.
+    two_tone_enabled: bool,
+    two_tone_a_hz: f32,
+    two_tone_b_hz: f32,
+    two_tone_level: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -464,6 +473,10 @@ fn run_iq_worker_threads(
         cw_hang_ms: 300,
         pending_mic_tx: false,
         mic_tx_active: Arc::new(AtomicBool::new(false)),
+        two_tone_enabled: false,
+        two_tone_a_hz: 700.0,
+        two_tone_b_hz: 1900.0,
+        two_tone_level: 0.5,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -868,6 +881,20 @@ fn spawn_command_thread(
 
                     WorkerCommand::ResetTxAudioDiag => {
                         crate::tx_diag::reset_counters();
+                    }
+
+                    WorkerCommand::SetTwoToneTest {
+                        enabled,
+                        tone_a_hz,
+                        tone_b_hz,
+                        level_percent,
+                    } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.two_tone_enabled = enabled;
+                            cs.two_tone_a_hz = tone_a_hz.clamp(100.0, 4000.0);
+                            cs.two_tone_b_hz = tone_b_hz.clamp(100.0, 4000.0);
+                            cs.two_tone_level = (level_percent.clamp(0.0, 100.0)) / 100.0;
+                        }
                     }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
@@ -1580,10 +1607,39 @@ fn spawn_capture_thread(
                             let mut forward = |iq: Vec<Complex32>| {
                                 let _ = iq_wf_tx.try_send(iq);
                             };
-                            // Pull up to `n` mic samples from the global queue
-                            // (padded with silence on underrun by the source).
+                            // Two-tone test: when enabled, the same TX path is
+                            // fed generated tones instead of mic audio, so it
+                            // runs through the identical DcBlocker → SSB FIR →
+                            // diagnostics chain.  Phase accumulators persist
+                            // across pulls for a glitch-free continuous tone.
+                            let two_tone = control_snapshot.two_tone_enabled;
+                            let tt_amp = control_snapshot.two_tone_level * 0.5;
+                            let tt_inc_a =
+                                std::f32::consts::TAU * control_snapshot.two_tone_a_hz / 48_000.0;
+                            let tt_inc_b =
+                                std::f32::consts::TAU * control_snapshot.two_tone_b_hz / 48_000.0;
+                            let mut tt_phase_a = 0.0f32;
+                            let mut tt_phase_b = 0.0f32;
+                            // Pull up to `n` samples: two-tone generator if
+                            // enabled, else the mic queue (padded with silence
+                            // on underrun by the source).
                             let mut pull = |n: usize, out: &mut Vec<f32>| {
-                                crate::net::udp::mic_audio::drain_mic_samples(out, n)
+                                if two_tone {
+                                    for _ in 0..n {
+                                        out.push(tt_amp * (tt_phase_a.sin() + tt_phase_b.sin()));
+                                        tt_phase_a += tt_inc_a;
+                                        if tt_phase_a >= std::f32::consts::TAU {
+                                            tt_phase_a -= std::f32::consts::TAU;
+                                        }
+                                        tt_phase_b += tt_inc_b;
+                                        if tt_phase_b >= std::f32::consts::TAU {
+                                            tt_phase_b -= std::f32::consts::TAU;
+                                        }
+                                    }
+                                    n
+                                } else {
+                                    crate::net::udp::mic_audio::drain_mic_samples(out, n)
+                                }
                             };
                             if let Err(e) = source.tx_ssb_mic(
                                 target_freq_hz,

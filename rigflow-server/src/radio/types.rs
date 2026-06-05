@@ -202,6 +202,13 @@ pub enum WorkerCommand {
     StopMicTx,
     /// Reset the TX-audio underrun/overrun diagnostic counters.
     ResetTxAudioDiag,
+    /// Configure the SSB two-tone test generator (mic-TX path tone source).
+    SetTwoToneTest {
+        enabled: bool,
+        tone_a_hz: f32,
+        tone_b_hz: f32,
+        level_percent: f32,
+    },
     SetSourceN2adrEnabled {
         enabled: bool,
     },

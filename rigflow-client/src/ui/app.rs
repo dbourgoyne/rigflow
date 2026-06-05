@@ -219,10 +219,12 @@ impl RigflowApp {
         }
     }
 
-    /// Space-bar SSB mic PTT (USB/LSB).  Space held = transmit mic audio; the
-    /// server keys PTT + modulates the mic UDP stream.  Gated like CW keying
+    /// Space-bar SSB mic PTT (USB/LSB).  Space held = transmit; the server keys
+    /// PTT and either modulates the mic UDP stream or, when the two-tone test is
+    /// enabled, generates the tones server-side.  Gated like CW keying
     /// (acquired, TX-capable, not typing), edge-detected against `ssb_ptt_down`.
-    /// Toggles `mic_shared.tx_streaming` so the capture buffers audio to send.
+    /// Mic capture streams only when NOT running the two-tone test, so the mic
+    /// queue can't overrun (and bump the diag counter) while tones are sourced.
     fn handle_ssb_ptt(&mut self, ctx: &egui::Context, snapshot: &UiState) {
         use rigflow_core::dsp::modes::DemodMode;
 
@@ -236,7 +238,9 @@ impl RigflowApp {
 
         if want_tx != snapshot.ssb_ptt_down {
             if want_tx {
-                snapshot.mic_shared.set_tx_streaming(true);
+                if !snapshot.two_tone_enabled {
+                    snapshot.mic_shared.set_tx_streaming(true);
+                }
                 self.send_radio_msg(ClientRadioMessage::StartMicTx);
             } else {
                 self.send_radio_msg(ClientRadioMessage::StopMicTx);

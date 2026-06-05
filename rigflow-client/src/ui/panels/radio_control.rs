@@ -72,6 +72,7 @@ impl RigflowApp {
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
                     save_mic = self.draw_microphone_row(ui, &mut state);
+                    self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
@@ -502,6 +503,85 @@ impl RigflowApp {
         }
 
         save
+    }
+
+    /// SSB Two-Tone Test generator (USB/LSB only).  Enable bypasses the mic and
+    /// makes the server generate `Tone A + Tone B` through the normal mic-TX
+    /// path; transmit with the usual Space-bar PTT.  A standard tool for SSB
+    /// quality / IMD / clipping checks via FDX.  Sends `SetTwoToneTest` on any
+    /// change.  Tone/level generation and clip behaviour live server-side.
+    fn draw_two_tone_test_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+            return;
+        }
+
+        ui.separator();
+        ui.label("Two-Tone Test");
+
+        let mut changed = false;
+
+        let mut enabled = state.two_tone_enabled;
+        if ui.checkbox(&mut enabled, "Enable Two-Tone Test").changed() {
+            state.two_tone_enabled = enabled;
+            changed = true;
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("Tone A");
+            let mut a = state.two_tone_a_hz;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut a)
+                        .range(100.0..=4000.0)
+                        .speed(10.0)
+                        .suffix(" Hz"),
+                )
+                .changed()
+            {
+                state.two_tone_a_hz = a;
+                changed = true;
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Tone B");
+            let mut b = state.two_tone_b_hz;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut b)
+                        .range(100.0..=4000.0)
+                        .speed(10.0)
+                        .suffix(" Hz"),
+                )
+                .changed()
+            {
+                state.two_tone_b_hz = b;
+                changed = true;
+            }
+        });
+
+        let mut level = state.two_tone_level_percent as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut level, 0..=100)
+                    .integer()
+                    .suffix("%")
+                    .text("Level"),
+            )
+            .changed()
+        {
+            state.two_tone_level_percent = level.clamp(0, 100) as u16;
+            changed = true;
+        }
+
+        if changed {
+            self.send_radio_msg(ClientRadioMessage::SetTwoToneTest {
+                enabled: state.two_tone_enabled,
+                tone_a_hz: state.two_tone_a_hz,
+                tone_b_hz: state.two_tone_b_hz,
+                level_percent: state.two_tone_level_percent as f32,
+            });
+        }
     }
 
     /// TX Audio Diagnostics (USB/LSB only).  Shows the server-measured audio

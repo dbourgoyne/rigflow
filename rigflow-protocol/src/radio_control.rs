@@ -249,6 +249,17 @@ pub enum ClientRadioMessage {
     /// Reset the TX-audio underrun/overrun diagnostic counters.
     ResetTxAudioDiag,
 
+    /// Configure the SSB two-tone test generator.  When `enabled`, the mic-TX
+    /// path generates `Tone A + Tone B` instead of microphone audio (USB/LSB
+    /// only; reuses the normal Space-bar PTT).  `level_percent` scales the
+    /// combined signal (0–100; default 50 avoids clipping).
+    SetTwoToneTest {
+        enabled: bool,
+        tone_a_hz: f32,
+        tone_b_hz: f32,
+        level_percent: f32,
+    },
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {

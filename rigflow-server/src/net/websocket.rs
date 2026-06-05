@@ -833,6 +833,32 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetTwoToneTest {
+            enabled,
+            tone_a_hz,
+            tone_b_hz,
+            level_percent,
+        } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetTwoToneTest {
+                    enabled,
+                    tone_a_hz,
+                    tone_b_hz,
+                    level_percent,
+                },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_two_tone_test_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetCwHangTime { hang_ms } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

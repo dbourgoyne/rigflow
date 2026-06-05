@@ -214,6 +214,14 @@ pub struct UiState {
     /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
     pub tx_audio_diag: TxAudioDiag,
 
+    /// SSB two-tone test generator (diagnostic).  When enabled, the mic-TX
+    /// path transmits `Tone A + Tone B` instead of mic audio (USB/LSB only).
+    /// Not persisted — a transient calibration tool.
+    pub two_tone_enabled: bool,
+    pub two_tone_a_hz: f32,
+    pub two_tone_b_hz: f32,
+    pub two_tone_level_percent: u16,
+
     /// Persisted source-control settings keyed by radio ID string.
     /// Mirrors `OperatorSettingsFile::source_control_preferences`.
     pub source_control_preferences: HashMap<String, SourceControlState>,
@@ -421,6 +429,10 @@ impl Default for UiState {
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
             tx_audio_diag: TxAudioDiag::default(),
+            two_tone_enabled: false,
+            two_tone_a_hz: 700.0,
+            two_tone_b_hz: 1900.0,
+            two_tone_level_percent: 50,
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
 
