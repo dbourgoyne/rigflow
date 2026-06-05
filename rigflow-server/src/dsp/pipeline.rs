@@ -40,14 +40,14 @@ const NFM_AUDIO_GAIN: f32 = 12.0;
 /// Complex FIR used to isolate one sideband by modulating a low-pass prototype.
 ///
 /// USB keeps roughly 0..B and LSB keeps roughly -B..0 in complex baseband.
-struct ComplexSidebandFir {
+pub(crate) struct ComplexSidebandFir {
     taps: Vec<Complex32>,
     delay: Vec<Complex32>,
     pos: usize,
 }
 
 impl ComplexSidebandFir {
-    fn new(
+    pub(crate) fn new(
         sample_rate_hz: f32,
         audio_bandwidth_hz: f32,
         pitch_hz: f32,
@@ -77,7 +77,7 @@ impl ComplexSidebandFir {
         self.pos = 0;
     }
 
-    fn process_into(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
+    pub(crate) fn process_into(&mut self, input: &[Complex32], out: &mut Vec<Complex32>) {
         out.clear();
         out.reserve(input.len().saturating_sub(out.capacity()));
 
@@ -117,7 +117,7 @@ fn sinc(x: f32) -> f32 {
     }
 }
 
-fn design_sideband_taps(
+pub(crate) fn design_sideband_taps(
     sample_rate_hz: f32,
     audio_bandwidth_hz: f32,
     pitch_hz: f32,

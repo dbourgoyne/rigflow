@@ -4,6 +4,7 @@ use rigflow_core::{
         source_control::{DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState},
         source_status::SourceStatus,
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
+        tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
         HardwareKind, LeaseId, RadioCapabilities, RadioId,
     },
@@ -236,6 +237,45 @@ pub enum ClientRadioMessage {
         hang_ms: u32,
     },
 
+    /// Begin SSB microphone transmit (Space held in USB/LSB).  The server keys
+    /// PTT and modulates the mic-audio UDP stream; sideband comes from the
+    /// current mode (USB above carrier, LSB below).  Mic audio itself is a
+    /// separate UDP stream, not a control message.
+    StartMicTx,
+
+    /// Stop SSB microphone transmit (Space released): stop RF, release PTT.
+    StopMicTx,
+
+    /// Reset the TX-audio underrun/overrun diagnostic counters.
+    ResetTxAudioDiag,
+
+    /// Configure the SSB two-tone test generator.  When `enabled`, the mic-TX
+    /// path generates `Tone A + Tone B` instead of microphone audio (USB/LSB
+    /// only; reuses the normal Space-bar PTT).  `level_percent` scales the
+    /// combined signal (0–100; default 50 avoids clipping).
+    SetTwoToneTest {
+        enabled: bool,
+        tone_a_hz: f32,
+        tone_b_hz: f32,
+        level_percent: f32,
+    },
+
+    /// Configure the TX soft peak limiter (ALC Phase 1).  `enabled` defaults
+    /// true; `threshold_percent` is 50–99 (default 90).  Limits SSB mic/two-tone
+    /// audio before modulation; gain reduction is reported in `TxAudioDiag`.
+    SetTxLimiter {
+        enabled: bool,
+        threshold_percent: f32,
+    },
+
+    /// Configure the SSB speech compressor (inserted before the limiter).
+    /// `enabled` defaults false; `level` is 0–10 (default 3).  Raises average
+    /// talk power; compressor gain reduction is reported in `TxAudioDiag`.
+    SetCompression {
+        enabled: bool,
+        level: u8,
+    },
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {
@@ -348,6 +388,10 @@ pub enum ServerRadioMessage {
         /// Current source telemetry / status fields.
         source_status: SourceStatus,
 
+        /// Live TX-audio diagnostics for SSB mic transmit (zero when idle).
+        #[serde(default)]
+        tx_audio_diag: TxAudioDiag,
+
         /// Result of the most recent TX tune test, if any.
         /// `None` means no test has been run since acquisition.
         tx_tune_result: Option<TxTuneResult>,
@@ -402,6 +446,10 @@ pub enum ServerRadioMessage {
 
         /// Changed source telemetry; `None` means no change since last update.
         source_status: Option<SourceStatus>,
+
+        /// Changed TX-audio diagnostics; `None` means no change since last update.
+        #[serde(default)]
+        tx_audio_diag: Option<TxAudioDiag>,
 
         /// New TX tune test result; `None` means no change since last update.
         tx_tune_result: Option<TxTuneResult>,

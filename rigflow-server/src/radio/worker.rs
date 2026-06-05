@@ -108,6 +108,30 @@ struct SharedControlState {
     pending_cw_key: bool,
     cw_key_held: Arc<AtomicBool>,
     cw_hang_ms: u32,
+
+    /// SSB mic TX (Phase 3): `pending_mic_tx` starts a session; `mic_tx_active`
+    /// is the live PTT state the session polls (cleared on key-up / stop).
+    pending_mic_tx: bool,
+    mic_tx_active: Arc<AtomicBool>,
+
+    /// SSB two-tone test generator.  When `two_tone_enabled`, the mic-TX path
+    /// generates `Tone A + Tone B` instead of draining the mic queue, so it
+    /// flows through the identical DcBlocker → SSB FIR → diagnostics → HL2
+    /// path as microphone audio.  `two_tone_level` is a 0..1 amplitude scale.
+    two_tone_enabled: bool,
+    two_tone_a_hz: f32,
+    two_tone_b_hz: f32,
+    two_tone_level: f32,
+
+    /// TX soft peak limiter (ALC Phase 1).  `tx_limiter_threshold` is a fraction
+    /// of full scale (UI percent / 100).  Read at mic-TX session start.
+    tx_limiter_enabled: bool,
+    tx_limiter_threshold: f32,
+
+    /// Speech compressor (before the limiter).  `compressor_level` is the UI
+    /// 0–10 level (mapped to a ratio).  Read at mic-TX session start.
+    compressor_enabled: bool,
+    compressor_level: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +385,7 @@ fn build_runtime_state(
         volume_percent: control.volume_percent,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
+        tx_audio_diag: crate::tx_diag::snapshot(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
         last_swr_sweep_result: control.last_swr_sweep_result.clone(),
         swr_sweep_progress: control.swr_sweep_progress,
@@ -456,6 +481,16 @@ fn run_iq_worker_threads(
         pending_cw_key: false,
         cw_key_held: Arc::new(AtomicBool::new(false)),
         cw_hang_ms: 300,
+        pending_mic_tx: false,
+        mic_tx_active: Arc::new(AtomicBool::new(false)),
+        two_tone_enabled: false,
+        two_tone_a_hz: 700.0,
+        two_tone_b_hz: 1900.0,
+        two_tone_level: 0.5,
+        tx_limiter_enabled: true,
+        tx_limiter_threshold: 0.9,
+        compressor_enabled: false,
+        compressor_level: 3,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -651,6 +686,7 @@ fn spawn_command_thread(
                         if let Ok(cs) = control.lock() {
                             cs.tx_tone_stop.store(true, Ordering::Relaxed);
                             cs.cw_key_held.store(false, Ordering::Relaxed);
+                            cs.mic_tx_active.store(false, Ordering::Relaxed);
                         }
                         break;
                     }
@@ -839,6 +875,59 @@ fn spawn_command_thread(
                         if let Ok(mut cs) = control.lock() {
                             cs.cw_hang_ms = hang_ms.min(2_000);
                         }
+                    }
+
+                    WorkerCommand::StartMicTx => {
+                        // Drop any stale buffered mic audio from a prior over.
+                        crate::net::udp::mic_audio::clear_mic_samples();
+                        if let Ok(mut cs) = control.lock() {
+                            cs.mic_tx_active.store(true, Ordering::Relaxed);
+                            cs.pending_mic_tx = true;
+                        }
+                    }
+
+                    WorkerCommand::StopMicTx => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.mic_tx_active.store(false, Ordering::Relaxed);
+                            cs.pending_mic_tx = false;
+                        }
+                    }
+
+                    WorkerCommand::ResetTxAudioDiag => {
+                        crate::tx_diag::reset_counters();
+                    }
+
+                    WorkerCommand::SetTwoToneTest {
+                        enabled,
+                        tone_a_hz,
+                        tone_b_hz,
+                        level_percent,
+                    } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.two_tone_enabled = enabled;
+                            cs.two_tone_a_hz = tone_a_hz.clamp(100.0, 4000.0);
+                            cs.two_tone_b_hz = tone_b_hz.clamp(100.0, 4000.0);
+                            cs.two_tone_level = (level_percent.clamp(0.0, 100.0)) / 100.0;
+                        }
+                    }
+
+                    WorkerCommand::SetTxLimiter {
+                        enabled,
+                        threshold_percent,
+                    } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_limiter_enabled = enabled;
+                            cs.tx_limiter_threshold = threshold_percent.clamp(50.0, 99.0) / 100.0;
+                        }
+                    }
+
+                    WorkerCommand::SetCompression { enabled, level } => {
+                        let level = level.min(10);
+                        if let Ok(mut cs) = control.lock() {
+                            cs.compressor_enabled = enabled;
+                            cs.compressor_level = level;
+                        }
+                        debug!("[radio-worker] compressor enabled={enabled} level={level}");
                     }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
@@ -1511,6 +1600,100 @@ fn spawn_capture_thread(
                 }
             }
 
+            // Execute any pending SSB mic transmit (Phase 3).  Open-ended: the
+            // source modulates pulled mic audio (USB above carrier / LSB below)
+            // until `mic_tx_active` clears on key-up.  Sideband comes from the
+            // current mode.  RX IQ is forwarded to FDX; audio is pulled from the
+            // global mic queue fed by the UDP listener.
+            {
+                let pending = control
+                    .lock()
+                    .ok()
+                    .map(|mut cs| {
+                        let p = cs.pending_mic_tx;
+                        cs.pending_mic_tx = false;
+                        p
+                    })
+                    .unwrap_or(false);
+
+                if pending {
+                    let mic_usb = match control_snapshot.demod_mode {
+                        DemodMode::Usb => Some(true),
+                        DemodMode::Lsb => Some(false),
+                        _ => None,
+                    };
+                    if mic_usb.is_none() {
+                        warn!(
+                            "[radio-worker {}] mic TX ignored: mode is {:?}, not USB/LSB",
+                            descriptor.id.0, control_snapshot.demod_mode
+                        );
+                        if let Ok(cs) = control.lock() {
+                            cs.mic_tx_active.store(false, Ordering::Relaxed);
+                        }
+                    } else {
+                        let usb = mic_usb.unwrap();
+                        let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
+                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let active = control.lock().ok().map(|cs| cs.mic_tx_active.clone());
+
+                        if let Some(active) = active {
+                            let mut forward = |iq: Vec<Complex32>| {
+                                let _ = iq_wf_tx.try_send(iq);
+                            };
+                            // Two-tone test: when enabled, the same TX path is
+                            // fed generated tones instead of mic audio, so it
+                            // runs through the identical DcBlocker → SSB FIR →
+                            // diagnostics chain.  Phase accumulators persist
+                            // across pulls for a glitch-free continuous tone.
+                            let two_tone = control_snapshot.two_tone_enabled;
+                            let tt_amp = control_snapshot.two_tone_level * 0.5;
+                            let tt_inc_a =
+                                std::f32::consts::TAU * control_snapshot.two_tone_a_hz / 48_000.0;
+                            let tt_inc_b =
+                                std::f32::consts::TAU * control_snapshot.two_tone_b_hz / 48_000.0;
+                            let mut tt_phase_a = 0.0f32;
+                            let mut tt_phase_b = 0.0f32;
+                            // Pull up to `n` samples: two-tone generator if
+                            // enabled, else the mic queue (padded with silence
+                            // on underrun by the source).
+                            let mut pull = |n: usize, out: &mut Vec<f32>| {
+                                if two_tone {
+                                    for _ in 0..n {
+                                        out.push(tt_amp * (tt_phase_a.sin() + tt_phase_b.sin()));
+                                        tt_phase_a += tt_inc_a;
+                                        if tt_phase_a >= std::f32::consts::TAU {
+                                            tt_phase_a -= std::f32::consts::TAU;
+                                        }
+                                        tt_phase_b += tt_inc_b;
+                                        if tt_phase_b >= std::f32::consts::TAU {
+                                            tt_phase_b -= std::f32::consts::TAU;
+                                        }
+                                    }
+                                    n
+                                } else {
+                                    crate::net::udp::mic_audio::drain_mic_samples(out, n)
+                                }
+                            };
+                            if let Err(e) = source.tx_ssb_mic(
+                                target_freq_hz,
+                                usb,
+                                tx_drive_percent,
+                                control_snapshot.tx_limiter_enabled,
+                                control_snapshot.tx_limiter_threshold,
+                                control_snapshot.compressor_enabled,
+                                control_snapshot.compressor_level,
+                                &active,
+                                &stop_flag,
+                                &mut pull,
+                                &mut forward,
+                            ) {
+                                warn!("[radio-worker {}] mic TX error: {e}", descriptor.id.0);
+                            }
+                        }
+                    }
+                }
+            }
+
             if !realtime {
                 let now = Instant::now();
                 if now < next_source_tick {
@@ -1621,6 +1804,10 @@ fn spawn_dsp_thread(
         };
 
         let mut applied = current_control(&control);
+        // TX-audio diagnostics live in the process-global (written by the
+        // mic-TX loop), not in SharedControlState; track the last-published
+        // snapshot here so the client meters update during an over.
+        let mut applied_tx_diag = crate::tx_diag::snapshot();
 
         // Receive-squelch gate state, owned by this (DSP) thread.  3 dB of
         // hysteresis between the open and close thresholds prevents chatter.
@@ -1695,6 +1882,14 @@ fn spawn_dsp_thread(
 
             if current.source_status != applied.source_status {
                 applied.source_status = current.source_status.clone();
+                changed = true;
+            }
+
+            // TX audio diagnostics: republish whenever the live meters or
+            // counters move (only changes while keyed / on overrun).
+            let cur_tx_diag = crate::tx_diag::snapshot();
+            if cur_tx_diag != applied_tx_diag {
+                applied_tx_diag = cur_tx_diag;
                 changed = true;
             }
 

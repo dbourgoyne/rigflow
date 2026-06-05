@@ -104,7 +104,10 @@ mod tests {
         assert!((mid as i64 - 14_175_000).abs() < 1_000, "mid={mid}");
         // Monotonic non-decreasing.
         for i in 1..25 {
-            assert!(sweep_frequency_hz(start, stop, i, 25) >= sweep_frequency_hz(start, stop, i - 1, 25));
+            assert!(
+                sweep_frequency_hz(start, stop, i, 25)
+                    >= sweep_frequency_hz(start, stop, i - 1, 25)
+            );
         }
     }
 
@@ -129,9 +132,24 @@ mod tests {
             start_hz: 14_000_000,
             stop_hz: 14_350_000,
             points: vec![
-                SwrSweepPoint { frequency_hz: 14_000_000, swr: Some(3.1), forward_raw: None, reverse_raw: None },
-                SwrSweepPoint { frequency_hz: 14_200_000, swr: Some(1.4), forward_raw: None, reverse_raw: None },
-                SwrSweepPoint { frequency_hz: 14_300_000, swr: None, forward_raw: None, reverse_raw: None },
+                SwrSweepPoint {
+                    frequency_hz: 14_000_000,
+                    swr: Some(3.1),
+                    forward_raw: None,
+                    reverse_raw: None,
+                },
+                SwrSweepPoint {
+                    frequency_hz: 14_200_000,
+                    swr: Some(1.4),
+                    forward_raw: None,
+                    reverse_raw: None,
+                },
+                SwrSweepPoint {
+                    frequency_hz: 14_300_000,
+                    swr: None,
+                    forward_raw: None,
+                    reverse_raw: None,
+                },
             ],
         };
         let p = r.min_swr_point().unwrap();

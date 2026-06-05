@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
-    net::udp_framing::{MAGIC, STREAM_TYPE_REGISTER_AUDIO, VERSION},
+    net::udp_framing::{MAGIC, STREAM_TYPE_MIC_AUDIO, STREAM_TYPE_REGISTER_AUDIO, VERSION},
 };
 
 use crate::{
@@ -166,6 +166,13 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.cw_decode))
         .unwrap_or_default();
 
+    // Mic capture shares an outbound TX-audio ring; the media thread drains it
+    // and sends mic packets to the server while SSB mic TX is keyed.
+    let mic_shared = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.mic_shared))
+        .unwrap_or_default();
+
     // --- Media thread ------------------------------------------------------
 
     thread::spawn(move || {
@@ -175,6 +182,9 @@ pub fn start_media_runtime(
         // packet (no-op unless the operator enabled decode).
         let mut cw_decoder =
             crate::cw_decode::CwDecoder::new(cw_decode_shared, OUTPUT_SAMPLE_RATE as f32);
+
+        // Server address for outbound mic-audio packets (learned at RegisterUdp).
+        let mut mic_server_addr: Option<String> = None;
 
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -253,6 +263,29 @@ pub fn start_media_runtime(
                         match socket.send_to(&reg, &addr) {
                             Ok(_) => info!("Sent UDP registration to {}", addr),
                             Err(e) => error!("UDP registration failed to {}: {}", addr, e),
+                        }
+                        // Same endpoint receives mic-audio packets.
+                        mic_server_addr = Some(addr);
+                    }
+                }
+            }
+
+            // --- Send buffered mic audio (SSB mic TX) ---------------------
+            // Drain the capture ring and send mono-f32 packets to the server.
+            // Loss-tolerant; only active while keyed (ring is empty otherwise).
+            {
+                let mic = mic_shared.drain_tx();
+                if !mic.is_empty() {
+                    if let Some(addr) = &mic_server_addr {
+                        for chunk in mic.chunks(256) {
+                            let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
+                            pkt.extend_from_slice(&MAGIC.to_be_bytes());
+                            pkt.push(VERSION);
+                            pkt.push(STREAM_TYPE_MIC_AUDIO);
+                            for &s in chunk {
+                                pkt.extend_from_slice(&s.to_le_bytes());
+                            }
+                            let _ = socket.send_to(&pkt, addr);
                         }
                     }
                 }

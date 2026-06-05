@@ -37,7 +37,10 @@ impl DeemphasisFilter {
     /// - `sample_rate_hz`: audio sample rate
     /// - `tau_seconds`: time constant (e.g. 75e-6 for 75 µs)
     pub fn new(sample_rate_hz: f32, tau_seconds: f32) -> Self {
-	info!("DeemphasisFilter: new: sample_rate_hz = {}, tau_seconds = {}", sample_rate_hz, tau_seconds);
+        info!(
+            "DeemphasisFilter: new: sample_rate_hz = {}, tau_seconds = {}",
+            sample_rate_hz, tau_seconds
+        );
         assert!(sample_rate_hz > 0.0, "sample_rate_hz must be > 0");
         assert!(tau_seconds > 0.0, "tau_seconds must be > 0");
 
@@ -46,10 +49,7 @@ impl DeemphasisFilter {
         // Standard RC filter discretization
         let alpha = dt / (tau_seconds + dt);
 
-        Self {
-            alpha,
-            y_prev: 0.0,
-        }
+        Self { alpha, y_prev: 0.0 }
     }
 
     /// Reset internal filter state.

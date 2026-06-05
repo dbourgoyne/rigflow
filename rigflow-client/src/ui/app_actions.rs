@@ -208,6 +208,38 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the microphone device + gain for the current operator.
+    pub(crate) fn save_mic_settings_to_current_operator(&mut self) {
+        let (operator_id, mic_device, mic_gain_percent) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.operator_id.clone(),
+                state.mic_device.clone(),
+                state.mic_gain_percent,
+            )
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        if let Ok(mut operator_settings) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            operator_settings.mic_device = mic_device;
+            operator_settings.mic_gain_percent = mic_gain_percent;
+            if let Err(err) = self
+                .persistence_store
+                .save_operator_settings(&operator_settings)
+            {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to save mic settings: {err}");
+                }
+            }
+        }
+    }
+
     pub(crate) fn save_demod_preferences_to_current_operator(&mut self) {
         let snapshot = {
             let state = self.state.lock().unwrap();

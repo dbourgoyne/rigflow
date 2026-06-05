@@ -10,6 +10,7 @@ use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
+use rigflow_core::radio::tx_audio_diag::TxAudioDiag;
 use rigflow_core::radio::tx_tune::TxTuneResult;
 use rigflow_core::radio::RadioCapabilities;
 
@@ -210,6 +211,27 @@ pub struct UiState {
     /// Empty (`SourceStatus::default()`) when the source does not report status.
     pub source_status: SourceStatus,
 
+    /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
+    pub tx_audio_diag: TxAudioDiag,
+
+    /// SSB two-tone test generator (diagnostic).  When enabled, the mic-TX
+    /// path transmits `Tone A + Tone B` instead of mic audio (USB/LSB only).
+    /// Not persisted — a transient calibration tool.
+    pub two_tone_enabled: bool,
+    pub two_tone_a_hz: f32,
+    pub two_tone_b_hz: f32,
+    pub two_tone_level_percent: u16,
+
+    /// TX soft peak limiter (ALC Phase 1).  Enabled by default; threshold is a
+    /// percent of full scale (50–99). Not persisted.
+    pub tx_limiter_enabled: bool,
+    pub tx_limiter_threshold_percent: u16,
+
+    /// SSB speech compressor (before the limiter).  Disabled by default; level
+    /// 0–10 (default 3). Not persisted.
+    pub compressor_enabled: bool,
+    pub compressor_level: u8,
+
     /// Persisted source-control settings keyed by radio ID string.
     /// Mirrors `OperatorSettingsFile::source_control_preferences`.
     pub source_control_preferences: HashMap<String, SourceControlState>,
@@ -259,6 +281,10 @@ pub struct UiState {
     /// (send StartCwKey on up→down, StopCwKey on down→up; no auto-repeat spam).
     pub cw_key_down: bool,
 
+    /// Tracks whether the Space bar is currently keying SSB mic TX (USB/LSB),
+    /// for edge detection (StartMicTx/StopMicTx).
+    pub ssb_ptt_down: bool,
+
     // ── CW sidetone (client-local; never sent to server) ────────────────
     /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
     pub cw_sidetone_volume: u8,
@@ -278,6 +304,22 @@ pub struct UiState {
     /// Client-side CW decoder control + decoded-text output, shared lock-free
     /// with the media thread that runs the decoder.  Not persisted.
     pub cw_decode: Arc<crate::cw_decode::CwDecodeShared>,
+
+    // ── Microphone capture (SSB Mic TX Phase 1; client-only, no RF) ─────
+    /// Selected input device name ("" = system default).  Persisted.
+    pub mic_device: String,
+    /// Mic measurement gain in percent (0–200).  Persisted.
+    pub mic_gain_percent: u16,
+    /// Cached list of input device names for the dropdown (runtime only).
+    pub mic_devices: Vec<String>,
+    /// Status / fallback warning for the mic (runtime only).
+    pub mic_status: String,
+    /// UI-side decaying peak meter value (0.0–1.0+), updated each frame.
+    pub mic_meter: f32,
+    /// When set, the clip indicator stays lit until this instant (~500 ms hold).
+    pub mic_clip_until: Option<Instant>,
+    /// Lock-free mic level/clip/gain shared with the capture callback.
+    pub mic_shared: Arc<crate::mic::MicShared>,
     /// Lock-free control state shared with the CPAL audio callback, which mixes
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
@@ -396,6 +438,15 @@ impl Default for UiState {
             source_capabilities: SourceCapabilities::none(),
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
+            tx_audio_diag: TxAudioDiag::default(),
+            two_tone_enabled: false,
+            two_tone_a_hz: 700.0,
+            two_tone_b_hz: 1900.0,
+            two_tone_level_percent: 50,
+            tx_limiter_enabled: true,
+            tx_limiter_threshold_percent: 90,
+            compressor_enabled: false,
+            compressor_level: 3,
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
 
@@ -413,12 +464,20 @@ impl Default for UiState {
             tx_tone_freq_hz: 1000.0,
             tx_tone_running: false,
             cw_key_down: false,
+            ssb_ptt_down: false,
             cw_sidetone_volume: 25,
             cw_hang_ms: 300,
             cw_message: String::new(),
             cw_speed_wpm: 20,
             cw_macros: default_cw_macros(),
             cw_decode: Arc::new(crate::cw_decode::CwDecodeShared::default()),
+            mic_device: String::new(),
+            mic_gain_percent: 100,
+            mic_devices: Vec::new(),
+            mic_status: String::new(),
+            mic_meter: 0.0,
+            mic_clip_until: None,
+            mic_shared: Arc::new(crate::mic::MicShared::default()),
             sidetone: Arc::new(SidetoneShared::default()),
         };
 

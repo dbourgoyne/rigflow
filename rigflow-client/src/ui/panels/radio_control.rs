@@ -30,6 +30,7 @@ impl RigflowApp {
                 let mut save_demod_prefs = false;
                 let mut save_volume = false;
                 let mut save_cw = false;
+                let mut save_mic = false;
 
                 if let Ok(mut state) = self.state.lock() {
                     // Apply persisted per-demod controls when the mode changes.
@@ -70,6 +71,10 @@ impl RigflowApp {
                     self.draw_nr2_row(ui, &mut state);
                     self.draw_agc_row(ui, &mut state);
                     save_volume = self.draw_volume_row(ui, &mut state);
+                    save_mic = self.draw_microphone_row(ui, &mut state);
+                    self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
@@ -86,6 +91,9 @@ impl RigflowApp {
                 }
                 if save_cw {
                     self.save_cw_message_to_current_operator();
+                }
+                if save_mic {
+                    self.save_mic_settings_to_current_operator();
                 }
             });
     }
@@ -410,6 +418,316 @@ impl RigflowApp {
         if ui.button("Clear").clicked() {
             state.cw_decode.clear();
         }
+    }
+
+    /// Microphone section: input device selection, mic gain (0–200%), a live
+    /// peak level meter, and a clip indicator (held ~500 ms).  Capture is
+    /// client-only and never touches RX/TX/PTT/network (Phase 1 — no RF).
+    /// Returns `true` when the device/gain should be persisted.
+    fn draw_microphone_row(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
+        ui.separator();
+        ui.label("Microphone");
+
+        let mut save = false;
+
+        // Input device dropdown ("" = system default).
+        let devices = state.mic_devices.clone();
+        ui.horizontal(|ui| {
+            ui.label("Input");
+            let mut selected = state.mic_device.clone();
+            let current = if selected.is_empty() {
+                "System default".to_string()
+            } else {
+                selected.clone()
+            };
+            egui::ComboBox::from_id_salt("mic_input_device")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut selected, String::new(), "System default");
+                    for name in &devices {
+                        ui.selectable_value(&mut selected, name.clone(), name);
+                    }
+                });
+            if selected != state.mic_device {
+                state.mic_device = selected;
+                save = true; // ensure_mic() restarts capture next frame
+            }
+        });
+
+        // Mic gain (measurement only this phase).
+        let mut gain = state.mic_gain_percent as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut gain, 0..=200)
+                    .integer()
+                    .suffix("%")
+                    .text("Mic Gain"),
+            )
+            .changed()
+        {
+            state.mic_gain_percent = gain.clamp(0, 200) as u16;
+            state
+                .mic_shared
+                .set_gain(state.mic_gain_percent as f32 / 100.0);
+            save = true;
+        }
+
+        // Level meter (decaying peak) + clip indicator.
+        let peak = state.mic_shared.take_peak();
+        state.mic_meter = (state.mic_meter * 0.85).max(peak);
+        if state.mic_shared.take_clipped() {
+            state.mic_clip_until = Some(Instant::now() + Duration::from_millis(500));
+        }
+        let clipping = state
+            .mic_clip_until
+            .map(|t| Instant::now() < t)
+            .unwrap_or(false);
+
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::ProgressBar::new(state.mic_meter.min(1.0))
+                    .desired_width(180.0)
+                    .text(format!("{:.0}%", (state.mic_meter * 100.0).min(999.0))),
+            );
+            if clipping {
+                ui.colored_label(egui::Color32::from_rgb(230, 60, 60), "● CLIP");
+            } else {
+                ui.colored_label(egui::Color32::DARK_GRAY, "○ clip");
+            }
+        });
+
+        if !state.mic_status.is_empty() {
+            ui.colored_label(
+                egui::Color32::from_rgb(255, 200, 50),
+                RichText::new(&state.mic_status).small(),
+            );
+        }
+
+        save
+    }
+
+    /// SSB Two-Tone Test generator (USB/LSB only).  Enable bypasses the mic and
+    /// makes the server generate `Tone A + Tone B` through the normal mic-TX
+    /// path; transmit with the usual Space-bar PTT.  A standard tool for SSB
+    /// quality / IMD / clipping checks via FDX.  Sends `SetTwoToneTest` on any
+    /// change.  Tone/level generation and clip behaviour live server-side.
+    fn draw_two_tone_test_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+            return;
+        }
+
+        ui.separator();
+        ui.label("Two-Tone Test");
+
+        let mut changed = false;
+
+        let mut enabled = state.two_tone_enabled;
+        if ui.checkbox(&mut enabled, "Enable Two-Tone Test").changed() {
+            state.two_tone_enabled = enabled;
+            changed = true;
+        }
+
+        ui.horizontal(|ui| {
+            ui.label("Tone A");
+            let mut a = state.two_tone_a_hz;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut a)
+                        .range(100.0..=4000.0)
+                        .speed(10.0)
+                        .suffix(" Hz"),
+                )
+                .changed()
+            {
+                state.two_tone_a_hz = a;
+                changed = true;
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Tone B");
+            let mut b = state.two_tone_b_hz;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut b)
+                        .range(100.0..=4000.0)
+                        .speed(10.0)
+                        .suffix(" Hz"),
+                )
+                .changed()
+            {
+                state.two_tone_b_hz = b;
+                changed = true;
+            }
+        });
+
+        let mut level = state.two_tone_level_percent as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut level, 0..=100)
+                    .integer()
+                    .suffix("%")
+                    .text("Level"),
+            )
+            .changed()
+        {
+            state.two_tone_level_percent = level.clamp(0, 100) as u16;
+            changed = true;
+        }
+
+        if changed {
+            self.send_radio_msg(ClientRadioMessage::SetTwoToneTest {
+                enabled: state.two_tone_enabled,
+                tone_a_hz: state.two_tone_a_hz,
+                tone_b_hz: state.two_tone_b_hz,
+                level_percent: state.two_tone_level_percent as f32,
+            });
+        }
+    }
+
+    /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
+    /// Enable + threshold are operator controls (sent via `SetTxLimiter`); the
+    /// gain-reduction meter is read from server telemetry (`tx_audio_diag`).
+    fn draw_tx_processing_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+            return;
+        }
+
+        ui.separator();
+        ui.label("TX Processing");
+
+        let mut changed = false;
+
+        let mut enabled = state.tx_limiter_enabled;
+        if ui.checkbox(&mut enabled, "Enable Limiter").changed() {
+            state.tx_limiter_enabled = enabled;
+            changed = true;
+        }
+
+        let mut threshold = state.tx_limiter_threshold_percent as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut threshold, 50..=99)
+                    .integer()
+                    .suffix("%")
+                    .text("Limiter Threshold"),
+            )
+            .changed()
+        {
+            state.tx_limiter_threshold_percent = threshold.clamp(50, 99) as u16;
+            changed = true;
+        }
+
+        // Limiter gain-reduction meter (from server telemetry).  Shown as -N dB;
+        // the bar fills toward a nominal 20 dB of reduction.
+        let gr = state.tx_audio_diag.gain_reduction_db.max(0.0);
+        ui.horizontal(|ui| {
+            ui.label("Limiter GR");
+            ui.add(
+                egui::ProgressBar::new((gr / 20.0).min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("-{gr:.1} dB")),
+            );
+        });
+
+        if changed {
+            self.send_radio_msg(ClientRadioMessage::SetTxLimiter {
+                enabled: state.tx_limiter_enabled,
+                threshold_percent: state.tx_limiter_threshold_percent as f32,
+            });
+        }
+
+        // --- Speech compression (before the limiter) ---------------------
+        let mut comp_changed = false;
+
+        let mut comp_enabled = state.compressor_enabled;
+        if ui
+            .checkbox(&mut comp_enabled, "Enable Compression")
+            .changed()
+        {
+            state.compressor_enabled = comp_enabled;
+            comp_changed = true;
+        }
+
+        let mut level = state.compressor_level as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut level, 0..=10)
+                    .integer()
+                    .text("Compression Level"),
+            )
+            .changed()
+        {
+            state.compressor_level = level.clamp(0, 10) as u8;
+            comp_changed = true;
+        }
+
+        // Compressor gain-reduction meter (from server telemetry).
+        let cgr = state.tx_audio_diag.compressor_reduction_db.max(0.0);
+        ui.horizontal(|ui| {
+            ui.label("Compression GR");
+            ui.add(
+                egui::ProgressBar::new((cgr / 20.0).min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("-{cgr:.1} dB")),
+            );
+        });
+
+        if comp_changed {
+            self.send_radio_msg(ClientRadioMessage::SetCompression {
+                enabled: state.compressor_enabled,
+                level: state.compressor_level,
+            });
+        }
+    }
+
+    /// TX Audio Diagnostics (USB/LSB only).  Shows the server-measured audio
+    /// feeding the SSB modulator: live RMS level, held peak, a clip indicator,
+    /// and underrun/overrun transport counters with a reset button.
+    /// Diagnostics only — nothing here changes transmitted audio.
+    fn draw_tx_audio_diag_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+            return;
+        }
+
+        ui.separator();
+        ui.label("TX Audio Diagnostics");
+
+        let diag = state.tx_audio_diag;
+
+        // TX RMS level meter.
+        ui.horizontal(|ui| {
+            ui.label("Level");
+            ui.add(
+                egui::ProgressBar::new(diag.rms.min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("{:.0}%", (diag.rms * 100.0).min(999.0))),
+            );
+        });
+
+        // TX peak meter + clip indicator.
+        ui.horizontal(|ui| {
+            ui.label("Peak");
+            ui.add(
+                egui::ProgressBar::new(diag.peak.min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("{:.0}%", (diag.peak * 100.0).min(999.0))),
+            );
+            if diag.clipping {
+                ui.colored_label(egui::Color32::from_rgb(230, 60, 60), "● CLIP");
+            } else {
+                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "○ ok");
+            }
+        });
+
+        // Transport-health counters + reset (server-side counters).
+        ui.horizontal(|ui| {
+            ui.label(format!("Underruns: {}", diag.underruns));
+            ui.label(format!("Overruns: {}", diag.overruns));
+            if ui.button("Reset Counters").clicked() {
+                self.send_radio_msg(ClientRadioMessage::ResetTxAudioDiag);
+            }
+        });
     }
 
     /// Read-only "Radio Status" section (S-meter for now; extensible).

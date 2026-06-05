@@ -315,7 +315,8 @@ mod tests {
     fn result_serde_missing_new_fields() {
         // Old JSON without status/frequency_hz/duration_ms/drive should
         // deserialise to defaults for those fields.
-        let old_json = r#"{"forward_power_w":null,"reverse_power_w":null,"swr":null,"message":null}"#;
+        let old_json =
+            r#"{"forward_power_w":null,"reverse_power_w":null,"swr":null,"message":null}"#;
         let decoded: TxTuneResult = serde_json::from_str(old_json).unwrap();
         assert_eq!(decoded.status, TxTuneStatus::NotRun);
         assert_eq!(decoded.frequency_hz, 0);

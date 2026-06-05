@@ -113,16 +113,16 @@ impl HamBand {
     /// `Hermes_BandDict`.  Transmit as `C2 = value << 1` on the address-0 frame.
     pub fn n2adr_filter_value(self) -> u8 {
         match self {
-            HamBand::B160 => 1,   // 0b0000001
-            HamBand::B80 => 66,   // 0b1000010
-            HamBand::B60 => 68,   // 0b1000100 (shares the 40m filter, per Quisk)
-            HamBand::B40 => 68,   // 0b1000100
-            HamBand::B30 => 72,   // 0b1001000
-            HamBand::B20 => 72,   // 0b1001000
-            HamBand::B17 => 80,   // 0b1010000
-            HamBand::B15 => 80,   // 0b1010000
-            HamBand::B12 => 96,   // 0b1100000
-            HamBand::B10 => 96,   // 0b1100000
+            HamBand::B160 => 1, // 0b0000001
+            HamBand::B80 => 66, // 0b1000010
+            HamBand::B60 => 68, // 0b1000100 (shares the 40m filter, per Quisk)
+            HamBand::B40 => 68, // 0b1000100
+            HamBand::B30 => 72, // 0b1001000
+            HamBand::B20 => 72, // 0b1001000
+            HamBand::B17 => 80, // 0b1010000
+            HamBand::B15 => 80, // 0b1010000
+            HamBand::B12 => 96, // 0b1100000
+            HamBand::B10 => 96, // 0b1100000
         }
     }
 }

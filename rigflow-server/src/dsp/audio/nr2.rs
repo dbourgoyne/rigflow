@@ -215,14 +215,16 @@ mod tests {
             .map(|n| {
                 acc = acc.wrapping_mul(1664525).wrapping_add(1013904223);
                 let noise = (acc >> 9) as f32 / (1u32 << 23) as f32 - 1.0;
-                0.3 * (2.0 * std::f32::consts::PI * 1000.0 * n as f32 / 48000.0).sin()
-                    + 0.1 * noise
+                0.3 * (2.0 * std::f32::consts::PI * 1000.0 * n as f32 / 48000.0).sin() + 0.1 * noise
             })
             .collect();
 
         let out = nr.process(&input);
         assert!(!out.is_empty(), "should emit samples after warm-up");
-        assert!(out.iter().all(|s| s.is_finite()), "all samples must be finite");
+        assert!(
+            out.iter().all(|s| s.is_finite()),
+            "all samples must be finite"
+        );
     }
 
     #[test]
@@ -237,7 +239,7 @@ mod tests {
     fn strength_maps_to_gain_floor() {
         assert!((gain_floor_for_strength(0.0) - 1.0).abs() < 1e-6); // none → unity
         assert!((gain_floor_for_strength(1.0) - NR2_MIN_GAIN_FLOOR).abs() < 1e-6); // max
-        // Monotonic: more strength → lower floor (deeper suppression).
+                                                                                   // Monotonic: more strength → lower floor (deeper suppression).
         assert!(gain_floor_for_strength(0.25) > gain_floor_for_strength(0.75));
         // Out-of-range clamps.
         assert!((gain_floor_for_strength(-1.0) - 1.0).abs() < 1e-6);
@@ -261,7 +263,10 @@ mod tests {
         for i in (FRAME * 2)..out.len() {
             max_err = max_err.max((out[i] - input[i]).abs());
         }
-        assert!(max_err < 1e-3, "strength 0 should pass through; max_err={max_err}");
+        assert!(
+            max_err < 1e-3,
+            "strength 0 should pass through; max_err={max_err}"
+        );
     }
 
     #[test]

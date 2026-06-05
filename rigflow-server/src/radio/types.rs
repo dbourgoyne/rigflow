@@ -7,6 +7,7 @@ use rigflow_core::radio::{
     source_control::{DirectSamplingMode, GainMode, SourceControlState},
     source_status::SourceStatus,
     swr_sweep::{SwrSweepProgress, SwrSweepResult},
+    tx_audio_diag::TxAudioDiag,
     tx_tune::TxTuneResult,
     LeaseId, RadioDescriptor, RadioId,
 };
@@ -97,6 +98,8 @@ pub struct WorkerRuntimeState {
     pub volume_percent: u8,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
+    /// Live TX-audio diagnostics for SSB mic transmit (zero when idle).
+    pub tx_audio_diag: TxAudioDiag,
     /// Result of the most recent TX tune test executed by this worker.
     /// `None` until a RequestTxTuneTest command has been processed.
     pub last_tx_tune_result: Option<TxTuneResult>,
@@ -192,6 +195,29 @@ pub enum WorkerCommand {
     /// the last element before release.
     SetCwHangTime {
         hang_ms: u32,
+    },
+    /// SSB microphone transmit start/stop (Space bar in USB/LSB).  The server
+    /// modulates the mic-audio UDP stream; sideband comes from the current mode.
+    StartMicTx,
+    StopMicTx,
+    /// Reset the TX-audio underrun/overrun diagnostic counters.
+    ResetTxAudioDiag,
+    /// Configure the SSB two-tone test generator (mic-TX path tone source).
+    SetTwoToneTest {
+        enabled: bool,
+        tone_a_hz: f32,
+        tone_b_hz: f32,
+        level_percent: f32,
+    },
+    /// Configure the TX soft peak limiter (ALC Phase 1).
+    SetTxLimiter {
+        enabled: bool,
+        threshold_percent: f32,
+    },
+    /// Configure the SSB speech compressor (before the limiter).
+    SetCompression {
+        enabled: bool,
+        level: u8,
     },
     SetSourceN2adrEnabled {
         enabled: bool,

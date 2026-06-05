@@ -154,6 +154,14 @@ pub struct OperatorSettingsFile {
     /// older settings files load with sensible content.
     #[serde(default = "default_cw_macros")]
     pub cw_macros: Vec<CwMacroFile>,
+
+    /// Selected microphone input device name ("" = system default).
+    #[serde(default)]
+    pub mic_device: String,
+
+    /// Microphone measurement gain in percent (0–200).
+    #[serde(default = "default_mic_gain_percent")]
+    pub mic_gain_percent: u16,
 }
 
 /// Persisted CW memory macro (label + transmit text).
@@ -169,6 +177,10 @@ pub fn default_volume_percent() -> u8 {
 
 pub fn default_cw_speed_wpm() -> u32 {
     20
+}
+
+pub fn default_mic_gain_percent() -> u16 {
+    100
 }
 
 pub fn default_cw_macros() -> Vec<CwMacroFile> {
@@ -198,6 +210,8 @@ impl OperatorSettingsFile {
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
             cw_macros: default_cw_macros(),
+            mic_device: String::new(),
+            mic_gain_percent: default_mic_gain_percent(),
         }
     }
 }
