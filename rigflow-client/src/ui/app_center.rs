@@ -251,6 +251,22 @@ impl RigflowApp {
     fn draw_status_bar(&self, ui: &mut egui::Ui, snapshot: &UiState) {
         use crate::ui::panels::s_meter_label;
 
+        // Operator + license first (shown whenever an operator is selected,
+        // even before a radio is acquired).  Operator is coloured to stand out;
+        // the license is normal text.
+        if !snapshot.operator_id.is_empty() {
+            ui.label(
+                egui::RichText::new(&snapshot.operator_id)
+                    .size(20.0)
+                    .strong()
+                    .color(egui::Color32::from_rgb(90, 200, 255)),
+            );
+            if let Some(license) = snapshot.selected_license {
+                ui.label(license_label(license));
+            }
+            ui.separator();
+        }
+
         if !snapshot.radio_acquired {
             ui.label(egui::RichText::new("No radio acquired").weak());
             return;
@@ -449,6 +465,18 @@ fn format_freq_dotted(hz: u64) -> String {
         out.push(c);
     }
     out
+}
+
+/// Compact license-class label for the status bar.
+fn license_label(license: crate::ui::om_bands::LicenseClass) -> &'static str {
+    use crate::ui::om_bands::LicenseClass;
+    match license {
+        LicenseClass::AmateurExtra => "Extra",
+        LicenseClass::Advanced => "Advanced",
+        LicenseClass::General => "General",
+        LicenseClass::Technician => "Technician",
+        LicenseClass::Novice => "Novice",
+    }
 }
 
 /// Uppercase mode label for the status bar.
