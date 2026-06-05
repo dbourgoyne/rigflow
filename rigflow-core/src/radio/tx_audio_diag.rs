@@ -21,6 +21,8 @@ pub struct TxAudioDiag {
     pub peak: f32,
     /// True while clipping is being held (a sample reached full scale).
     pub clipping: bool,
+    /// Current TX-limiter gain reduction in dB (≥0; 0 = limiter inactive).
+    pub gain_reduction_db: f32,
     /// Count of TX-audio underruns (modulator wanted audio, buffer empty).
     pub underruns: u64,
     /// Count of TX-audio overruns (producer outran the consumer; samples dropped).

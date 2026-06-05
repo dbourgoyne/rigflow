@@ -260,6 +260,14 @@ pub enum ClientRadioMessage {
         level_percent: f32,
     },
 
+    /// Configure the TX soft peak limiter (ALC Phase 1).  `enabled` defaults
+    /// true; `threshold_percent` is 50–99 (default 90).  Limits SSB mic/two-tone
+    /// audio before modulation; gain reduction is reported in `TxAudioDiag`.
+    SetTxLimiter {
+        enabled: bool,
+        threshold_percent: f32,
+    },
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {

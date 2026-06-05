@@ -222,6 +222,11 @@ pub struct UiState {
     pub two_tone_b_hz: f32,
     pub two_tone_level_percent: u16,
 
+    /// TX soft peak limiter (ALC Phase 1).  Enabled by default; threshold is a
+    /// percent of full scale (50–99). Not persisted.
+    pub tx_limiter_enabled: bool,
+    pub tx_limiter_threshold_percent: u16,
+
     /// Persisted source-control settings keyed by radio ID string.
     /// Mirrors `OperatorSettingsFile::source_control_preferences`.
     pub source_control_preferences: HashMap<String, SourceControlState>,
@@ -433,6 +438,8 @@ impl Default for UiState {
             two_tone_a_hz: 700.0,
             two_tone_b_hz: 1900.0,
             two_tone_level_percent: 50,
+            tx_limiter_enabled: true,
+            tx_limiter_threshold_percent: 90,
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
 

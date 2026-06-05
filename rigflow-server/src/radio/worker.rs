@@ -122,6 +122,11 @@ struct SharedControlState {
     two_tone_a_hz: f32,
     two_tone_b_hz: f32,
     two_tone_level: f32,
+
+    /// TX soft peak limiter (ALC Phase 1).  `tx_limiter_threshold` is a fraction
+    /// of full scale (UI percent / 100).  Read at mic-TX session start.
+    tx_limiter_enabled: bool,
+    tx_limiter_threshold: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -477,6 +482,8 @@ fn run_iq_worker_threads(
         two_tone_a_hz: 700.0,
         two_tone_b_hz: 1900.0,
         two_tone_level: 0.5,
+        tx_limiter_enabled: true,
+        tx_limiter_threshold: 0.9,
     }));
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
@@ -894,6 +901,16 @@ fn spawn_command_thread(
                             cs.two_tone_a_hz = tone_a_hz.clamp(100.0, 4000.0);
                             cs.two_tone_b_hz = tone_b_hz.clamp(100.0, 4000.0);
                             cs.two_tone_level = (level_percent.clamp(0.0, 100.0)) / 100.0;
+                        }
+                    }
+
+                    WorkerCommand::SetTxLimiter {
+                        enabled,
+                        threshold_percent,
+                    } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_limiter_enabled = enabled;
+                            cs.tx_limiter_threshold = threshold_percent.clamp(50.0, 99.0) / 100.0;
                         }
                     }
                 },
@@ -1645,6 +1662,8 @@ fn spawn_capture_thread(
                                 target_freq_hz,
                                 usb,
                                 tx_drive_percent,
+                                control_snapshot.tx_limiter_enabled,
+                                control_snapshot.tx_limiter_threshold,
                                 &active,
                                 &stop_flag,
                                 &mut pull,

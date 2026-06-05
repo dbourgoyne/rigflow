@@ -73,6 +73,7 @@ impl RigflowApp {
                     save_volume = self.draw_volume_row(ui, &mut state);
                     save_mic = self.draw_microphone_row(ui, &mut state);
                     self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
@@ -580,6 +581,59 @@ impl RigflowApp {
                 tone_a_hz: state.two_tone_a_hz,
                 tone_b_hz: state.two_tone_b_hz,
                 level_percent: state.two_tone_level_percent as f32,
+            });
+        }
+    }
+
+    /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
+    /// Enable + threshold are operator controls (sent via `SetTxLimiter`); the
+    /// gain-reduction meter is read from server telemetry (`tx_audio_diag`).
+    fn draw_tx_processing_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        if !matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+            return;
+        }
+
+        ui.separator();
+        ui.label("TX Processing");
+
+        let mut changed = false;
+
+        let mut enabled = state.tx_limiter_enabled;
+        if ui.checkbox(&mut enabled, "Enable Limiter").changed() {
+            state.tx_limiter_enabled = enabled;
+            changed = true;
+        }
+
+        let mut threshold = state.tx_limiter_threshold_percent as i32;
+        if ui
+            .add(
+                egui::Slider::new(&mut threshold, 50..=99)
+                    .integer()
+                    .suffix("%")
+                    .text("Limiter Threshold"),
+            )
+            .changed()
+        {
+            state.tx_limiter_threshold_percent = threshold.clamp(50, 99) as u16;
+            changed = true;
+        }
+
+        // Gain-reduction meter (from server telemetry).  Shown as -N dB; the bar
+        // fills toward a nominal 20 dB of reduction.
+        let gr = state.tx_audio_diag.gain_reduction_db.max(0.0);
+        ui.horizontal(|ui| {
+            ui.label("Gain Reduction");
+            ui.add(
+                egui::ProgressBar::new((gr / 20.0).min(1.0))
+                    .desired_width(160.0)
+                    .text(format!("-{gr:.1} dB")),
+            );
+        });
+
+        if changed {
+            self.send_radio_msg(ClientRadioMessage::SetTxLimiter {
+                enabled: state.tx_limiter_enabled,
+                threshold_percent: state.tx_limiter_threshold_percent as f32,
             });
         }
     }

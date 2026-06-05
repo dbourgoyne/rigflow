@@ -11,6 +11,7 @@ use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::tx_tune::{compute_swr, compute_swr_from_raw, TxTuneResult, TxTuneStatus};
 
 use crate::dsp::audio::dc_blocker::DcBlocker;
+use crate::dsp::audio::tx_limiter::TxLimiter;
 use crate::dsp::demod::Sideband;
 use crate::dsp::pipeline::ComplexSidebandFir;
 use crate::source::IqSource;
@@ -1687,6 +1688,8 @@ impl IqSource for HermesLite2Source {
         target_freq_hz: u64,
         usb: bool,
         tx_drive_percent: f32,
+        limiter_enabled: bool,
+        limiter_threshold: f32,
         active: &std::sync::atomic::AtomicBool,
         abort: &std::sync::atomic::AtomicBool,
         pull_audio: &mut dyn FnMut(usize, &mut Vec<f32>) -> usize,
@@ -1712,6 +1715,11 @@ impl IqSource for HermesLite2Source {
         const DIAG_CLIP_THRESH: f32 = 0.99;
         const DIAG_PEAK_HOLD: Duration = Duration::from_millis(500);
         const DIAG_CLIP_HOLD: Duration = Duration::from_millis(1000);
+        // TX soft peak limiter (ALC Phase 1): fast attack, slow release for
+        // natural, pump-free limiting.  Engaged/released logged on the edge.
+        const LIM_ATTACK_MS: f32 = 2.0;
+        const LIM_RELEASE_MS: f32 = 120.0;
+        const LIM_ENGAGE_DB: f32 = 0.5; // GR above this = "engaged" (for logs)
 
         let tx_drive_percent = tx_drive_percent.clamp(0.0, 100.0);
         let drive_level = (tx_drive_percent * 255.0 / 100.0).round().clamp(0.0, 255.0) as u8;
@@ -1752,6 +1760,18 @@ impl IqSource for HermesLite2Source {
             if usb { Usb } else { Lsb },
         );
 
+        // TX soft peak limiter, inserted after DC/band-limit and before the
+        // modulator.  `limiter_enabled` gates it; the threshold is a fraction
+        // of full scale (UI percent / 100).
+        let mut limiter = TxLimiter::new(
+            TX_SAMPLE_RATE_HZ,
+            limiter_threshold,
+            LIM_ATTACK_MS,
+            LIM_RELEASE_MS,
+        );
+        // Edge-tracked logging of limiter engage/release.
+        let mut lim_engaged = false;
+
         // Shared TX-start sequencing: assert PTT + lead delay (no RF yet).
         self.tx_seq_begin(target_u32)?;
         debug!("[hl2 mic] ptt asserted");
@@ -1771,6 +1791,7 @@ impl IqSource for HermesLite2Source {
         let mut win_count = 0usize;
         let mut win_peak = 0.0f32;
         let mut win_clip = false;
+        let mut win_gr_db = 0.0f32;
         let mut held_peak = 0.0f32;
         let mut peak_at = Instant::now();
         let mut clip_until: Option<Instant> = None;
@@ -1810,8 +1831,29 @@ impl IqSource for HermesLite2Source {
             }
             dc.process_in_place(&mut audio);
 
-            // TX audio diagnostics: measure the post-DC audio that feeds the
-            // modulator (diagnostics only — `audio` is not modified here).
+            // TX soft peak limiter (before the modulator).  Reduces clipping
+            // and splatter; reports gain reduction for the meter.  When
+            // disabled, audio passes through untouched.
+            let block_gr_db = if limiter_enabled {
+                limiter.process_in_place(&mut audio)
+            } else {
+                0.0
+            };
+            if block_gr_db > win_gr_db {
+                win_gr_db = block_gr_db;
+            }
+            // Edge-logged engage/release (debug only).
+            let now_engaged = block_gr_db >= LIM_ENGAGE_DB;
+            if now_engaged && !lim_engaged {
+                debug!("[hl2 mic] limiter engaged (gain reduction {block_gr_db:.1} dB)");
+            } else if !now_engaged && lim_engaged {
+                debug!("[hl2 mic] limiter released");
+            }
+            lim_engaged = now_engaged;
+
+            // TX audio diagnostics: measure the post-limiter audio that feeds
+            // the modulator (diagnostics only — `audio` is not modified here).
+            // Clip detection here reflects the limiter's effect.
             for &s in &audio {
                 let a = s.abs();
                 win_sumsq += (s as f64) * (s as f64);
@@ -1842,11 +1884,12 @@ impl IqSource for HermesLite2Source {
                 if !clipping {
                     clip_until = None;
                 }
-                crate::tx_diag::set_levels(rms, held_peak, clipping);
+                crate::tx_diag::set_levels(rms, held_peak, clipping, win_gr_db);
                 win_sumsq = 0.0;
                 win_count = 0;
                 win_peak = 0.0;
                 win_clip = false;
+                win_gr_db = 0.0;
             }
 
             // Real audio → complex (imag 0) → sideband FIR → baseband IQ.

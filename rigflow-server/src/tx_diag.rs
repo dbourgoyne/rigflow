@@ -15,15 +15,18 @@ use rigflow_core::radio::tx_audio_diag::TxAudioDiag;
 static RMS_BITS: AtomicU32 = AtomicU32::new(0);
 static PEAK_BITS: AtomicU32 = AtomicU32::new(0);
 static CLIPPING: AtomicBool = AtomicBool::new(false);
+static GAIN_REDUCTION_BITS: AtomicU32 = AtomicU32::new(0);
 static UNDERRUNS: AtomicU64 = AtomicU64::new(0);
 static OVERRUNS: AtomicU64 = AtomicU64::new(0);
 
 /// Publish the live meters for the current measurement window (called ~20 Hz
-/// from the mic-TX loop while keyed).  `clipping` is already held by the caller.
-pub fn set_levels(rms: f32, peak: f32, clipping: bool) {
+/// from the mic-TX loop while keyed).  `clipping` is already held by the caller;
+/// `gain_reduction_db` is the TX-limiter gain reduction (≥0).
+pub fn set_levels(rms: f32, peak: f32, clipping: bool, gain_reduction_db: f32) {
     RMS_BITS.store(rms.to_bits(), Ordering::Relaxed);
     PEAK_BITS.store(peak.to_bits(), Ordering::Relaxed);
     CLIPPING.store(clipping, Ordering::Relaxed);
+    GAIN_REDUCTION_BITS.store(gain_reduction_db.to_bits(), Ordering::Relaxed);
 }
 
 /// Drop the live meters to silence (called on key-up) so the meter falls to
@@ -32,6 +35,7 @@ pub fn clear_levels() {
     RMS_BITS.store(0, Ordering::Relaxed);
     PEAK_BITS.store(0, Ordering::Relaxed);
     CLIPPING.store(false, Ordering::Relaxed);
+    GAIN_REDUCTION_BITS.store(0, Ordering::Relaxed);
 }
 
 /// One TX-audio underrun event (modulator requested audio, buffer was empty).
@@ -56,6 +60,7 @@ pub fn snapshot() -> TxAudioDiag {
         rms: f32::from_bits(RMS_BITS.load(Ordering::Relaxed)),
         peak: f32::from_bits(PEAK_BITS.load(Ordering::Relaxed)),
         clipping: CLIPPING.load(Ordering::Relaxed),
+        gain_reduction_db: f32::from_bits(GAIN_REDUCTION_BITS.load(Ordering::Relaxed)),
         underruns: UNDERRUNS.load(Ordering::Relaxed),
         overruns: OVERRUNS.load(Ordering::Relaxed),
     }

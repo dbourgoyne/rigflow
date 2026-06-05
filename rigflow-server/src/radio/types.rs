@@ -209,6 +209,11 @@ pub enum WorkerCommand {
         tone_b_hz: f32,
         level_percent: f32,
     },
+    /// Configure the TX soft peak limiter (ALC Phase 1).
+    SetTxLimiter {
+        enabled: bool,
+        threshold_percent: f32,
+    },
     SetSourceN2adrEnabled {
         enabled: bool,
     },

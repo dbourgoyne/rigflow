@@ -51,10 +51,7 @@ impl Agc {
             attack > 0.0 && attack < 1.0,
             "attack must be between 0 and 1"
         );
-        assert!(
-            decay > 0.0 && decay < 1.0,
-            "decay must be between 0 and 1"
-        );
+        assert!(decay > 0.0 && decay < 1.0, "decay must be between 0 and 1");
         assert!(max_gain > 0.0, "max_gain must be > 0");
 
         Self {
@@ -194,8 +191,14 @@ mod tests {
         let input = vec![0.001f32; 4096];
         let out = agc.process(&input);
         assert!(out.iter().all(|s| s.is_finite()), "no NaN/Inf");
-        assert!(agc.current_gain() <= 20.0 + 1e-3, "gain bounded by max_gain");
-        assert!(out.iter().all(|s| s.abs() <= 0.001 * 20.0 + 1e-6), "output bounded");
+        assert!(
+            agc.current_gain() <= 20.0 + 1e-3,
+            "gain bounded by max_gain"
+        );
+        assert!(
+            out.iter().all(|s| s.abs() <= 0.001 * 20.0 + 1e-6),
+            "output bounded"
+        );
     }
 
     #[test]
@@ -215,7 +218,10 @@ mod tests {
         agc.set_strength(1.0);
         let fast_attack = agc.attack;
         agc.set_strength(0.0);
-        assert!(agc.attack > fast_attack, "lower strength is slower (attack closer to 1)");
+        assert!(
+            agc.attack > fast_attack,
+            "lower strength is slower (attack closer to 1)"
+        );
     }
 
     #[test]

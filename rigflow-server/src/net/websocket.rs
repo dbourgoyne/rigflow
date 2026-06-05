@@ -859,6 +859,28 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetTxLimiter {
+            enabled,
+            threshold_percent,
+        } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetTxLimiter {
+                    enabled,
+                    threshold_percent,
+                },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_tx_limiter_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetCwHangTime { hang_ms } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

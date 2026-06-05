@@ -116,14 +116,17 @@ pub trait IqSource {
     /// (USB above carrier, `usb=false` below) and keys the transmitter until
     /// `active` clears.  `pull_audio(n, out)` appends up to `n` mic samples
     /// (returns how many; fewer = underrun → pad silence).  `abort` (worker
-    /// stop) forces release.  RX IQ goes to `on_rx_iq` (FDX).  Default: not
-    /// supported.
+    /// stop) forces release.  RX IQ goes to `on_rx_iq` (FDX).  When
+    /// `limiter_enabled`, a soft peak limiter at `limiter_threshold` (0..1) runs
+    /// before the modulator.  Default: not supported.
     #[allow(clippy::too_many_arguments)]
     fn tx_ssb_mic(
         &mut self,
         _target_freq_hz: u64,
         _usb: bool,
         _tx_drive_percent: f32,
+        _limiter_enabled: bool,
+        _limiter_threshold: f32,
         _active: &std::sync::atomic::AtomicBool,
         _abort: &std::sync::atomic::AtomicBool,
         _pull_audio: &mut dyn FnMut(usize, &mut Vec<f32>) -> usize,
