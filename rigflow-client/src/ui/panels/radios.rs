@@ -31,17 +31,6 @@ impl RigflowApp {
         egui::CollapsingHeader::new("Radios")
             .default_open(true)
             .show(ui, |ui| {
-                // Re-scan the server for radios (e.g. to pick up a freshly
-                // recorded WAV file) without restarting it.
-                if snapshot.server_connected
-                    && ui
-                        .add_enabled(!snapshot.radio_acquired, egui::Button::new("⟳ Rescan"))
-                        .on_hover_text("Re-scan for radios (incl. new IQ recordings)")
-                        .clicked()
-                {
-                    self.send_radio_msg(ClientRadioMessage::RescanRadios);
-                }
-
                 if snapshot.available_radios.is_empty() | !snapshot.server_connected {
                     ui.label("no radios");
                 } else {
@@ -136,6 +125,16 @@ impl RigflowApp {
                             .clicked()
                         {
                             let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
+                        }
+
+                        // Re-scan the server for radios (e.g. to pick up a
+                        // freshly recorded WAV file) without restarting it.
+                        if ui
+                            .add_enabled(!snapshot.radio_acquired, egui::Button::new("⟳ Rescan"))
+                            .on_hover_text("Re-scan for radios (incl. new IQ recordings)")
+                            .clicked()
+                        {
+                            self.send_radio_msg(ClientRadioMessage::RescanRadios);
                         }
                     });
                 }
