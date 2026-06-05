@@ -9,14 +9,18 @@
 //! fills, blocks are dropped (counted, logged) and the radio keeps running.
 //!
 //! File format: canonical RIFF/WAVE, `WAVE_FORMAT_IEEE_FLOAT`, 2 channels
-//! (ch0 = I, ch1 = Q), 32-bit float, at the source sample rate — directly
-//! replayable as IQ.  An `auxi` chunk (the SDR convention used by HDSDR /
-//! SDR Console) carries the center frequency, sample rate, and start time so
-//! Phase 2 playback can recover the tuning without a format change.
+//! (ch0 = I, ch1 = Q), 32-bit float, at the source sample rate — this is
+//! exactly what Rigflow's WAV source (`source::wav::IqWavReader`) already plays
+//! back, so a recording dropped into the wav directory shows up in the radio
+//! list and replays directly.  The center frequency is embedded in the
+//! filename (`..._<hz>Hz.wav`) because that is how playback recovers tuning
+//! (`wav_metadata::parse_center_freq_hz_from_filename`).  An `auxi` chunk (the
+//! SDR convention used by HDSDR / SDR Console) additionally carries center
+//! frequency, sample rate, and start time for interop with other SDR tools.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
@@ -24,9 +28,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use num_complex::Complex32;
-
-/// Default recording directory (created on demand).
-pub const DEFAULT_RECORDING_DIR: &str = "recordings";
 
 /// Bounded channel depth (IQ blocks).  Generous enough to ride out short disk
 /// stalls without unbounded memory growth.
@@ -53,14 +54,19 @@ pub struct IqRecorder {
 }
 
 impl IqRecorder {
-    /// Begin a recording, spawning the background writer thread.  Creates the
-    /// recording directory and a timestamped file.  Returns an error (without
-    /// side effects on the caller) if the file can't be created.
-    pub fn start(params: RecordParams) -> Result<Self, String> {
-        let dir = PathBuf::from(DEFAULT_RECORDING_DIR);
-        fs::create_dir_all(&dir).map_err(|e| format!("create {DEFAULT_RECORDING_DIR}/: {e}"))?;
+    /// Begin a recording, spawning the background writer thread.  Writes into
+    /// `dir` (the server's wav directory, so recordings auto-appear in the radio
+    /// list) and creates it if needed.  Returns an error (without side effects
+    /// on the caller) if the file can't be created.
+    pub fn start(dir: &Path, params: RecordParams) -> Result<Self, String> {
+        fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 
-        let filename = format!("iq_{}.wav", timestamp_compact());
+        // Embed the center frequency in the name so Rigflow's existing WAV
+        // playback (which recovers tuning from the filename via
+        // `wav_metadata::parse_center_freq_hz_from_filename`) plays the file
+        // back at the correct center frequency when it is dropped into the
+        // wav directory.
+        let filename = format!("iq_{}_{}Hz.wav", timestamp_compact(), params.center_freq_hz);
         let path = dir.join(&filename);
 
         let file = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;

@@ -1390,7 +1390,10 @@ fn spawn_capture_thread(
                         ppm: control_snapshot.source_control.ppm_correction as f32,
                         source: format!("{:?}", descriptor.hardware_kind),
                     };
-                    match crate::recording::iq_recorder::IqRecorder::start(params) {
+                    // Record into the server's wav directory so the file is
+                    // auto-discovered as a `wav:N` radio for playback.
+                    let rec_dir = std::path::Path::new(&server_cfg.wav_dir);
+                    match crate::recording::iq_recorder::IqRecorder::start(rec_dir, params) {
                         Ok(rec) => iq_rec = Some(rec),
                         Err(e) => warn!(
                             "[radio-worker {}] IQ record start failed: {e}",

@@ -59,6 +59,10 @@ pub enum ClientRadioMessage {
     /// Request a list of available radios.
     ListRadios,
 
+    /// Re-scan the server for radios (e.g. to pick up a freshly recorded WAV
+    /// file) and return an updated `RadiosListed` without a restart.
+    RescanRadios,
+
     /// Acquire a lease on a radio and start streaming.
     ///
     /// Includes initial tuning parameters and UDP endpoints.

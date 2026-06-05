@@ -133,6 +133,18 @@ async fn handle_radio_message(
             send_radio(local_tx, ServerRadioMessage::RadiosListed { radios });
         }
 
+        ClientRadioMessage::RescanRadios => {
+            let radios = app_state
+                .radio_manager
+                .rescan_radios()
+                .await
+                .into_iter()
+                .map(radio_summary_to_protocol)
+                .collect();
+
+            send_radio(local_tx, ServerRadioMessage::RadiosListed { radios });
+        }
+
         ClientRadioMessage::AcquireRadio {
             radio_id,
             center_freq_hz,
