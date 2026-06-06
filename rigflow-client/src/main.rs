@@ -112,6 +112,7 @@ mod cw_decode;
 mod cw_text;
 mod digital_audio;
 mod digital_rx;
+mod digital_tx;
 mod mic;
 mod net;
 mod persistence;

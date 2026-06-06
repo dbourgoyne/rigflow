@@ -29,6 +29,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
+use crate::digital_tx::DigitalTxInput;
 use crate::net::control::ControlCommand;
 use crate::ui::freq_limits::{active_freq_limits, clamp_center};
 use crate::ui::state::UiState;
@@ -47,6 +48,9 @@ struct RigctlShared {
     /// forever trying to "fix" the mode.  Cleared/ignored once the underlying
     /// demod is changed elsewhere (UI).
     last_cat_mode: Mutex<Option<String>>,
+    /// Routes the digital app's TX audio (`RigflowDigitalInput.monitor`) into the
+    /// mic-TX path while PTT is keyed, so WSJT-X actually transmits.
+    digital_tx: Arc<DigitalTxInput>,
 }
 
 /// The CAT (rigctl) TCP server.
@@ -57,12 +61,19 @@ pub struct RigctlServer {
 
 impl RigctlServer {
     pub fn new(ui_state: Arc<Mutex<UiState>>, cmd_tx: UnboundedSender<ControlCommand>) -> Self {
+        // Share the same mic-TX state the UI/microphone use, so captured digital
+        // audio rides the existing media-thread → server mic-TX path.
+        let mic_shared = ui_state
+            .lock()
+            .map(|s| Arc::clone(&s.mic_shared))
+            .unwrap_or_default();
         Self {
             port: DEFAULT_RIGCTL_PORT,
             shared: Arc::new(RigctlShared {
                 ui_state,
                 cmd_tx,
                 last_cat_mode: Mutex::new(None),
+                digital_tx: DigitalTxInput::new(mic_shared),
             }),
         }
     }
@@ -344,12 +355,19 @@ fn set_mode(shared: &RigctlShared, mode: DemodMode, passband: Option<f32>) {
 }
 
 /// Key/unkey the transmitter.  Reuses the SSB mic-TX path (`Start/StopMicTx`),
-/// which keys PTT on the server; TX audio routing is intentionally not done yet.
+/// which keys PTT on the server, and drives the digital TX router so the audio
+/// the digital app plays into `RigflowDigitalInput` is captured and transmitted.
 fn set_ptt(shared: &RigctlShared, on: bool) {
     // Record the commanded PTT so the status bar shows TX and `t` reads it back.
     if let Ok(mut s) = shared.ui_state.lock() {
         s.cat_ptt = on;
     }
+
+    // Start/stop capturing the digital app's TX audio into the mic-TX ring.  On
+    // key-up this enables mic-TX streaming first, so the audio the media thread
+    // forwards is ready by the time the server's PTT engages.
+    shared.digital_tx.set_active(on);
+
     let msg = if on {
         ClientRadioMessage::StartMicTx
     } else {

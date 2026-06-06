@@ -91,8 +91,9 @@ impl MicShared {
         self.tx_streaming.load(Ordering::Relaxed)
     }
     /// Append captured 48 kHz mono samples (callback side); drop oldest on
-    /// overflow.  No-op unless streaming.
-    fn push_tx(&self, samples: &[f32]) {
+    /// overflow.  No-op unless streaming.  Also used by the digital TX router
+    /// to inject WSJT-X audio into the same mic-TX ring.
+    pub fn push_tx(&self, samples: &[f32]) {
         if !self.tx_streaming.load(Ordering::Relaxed) {
             return;
         }
