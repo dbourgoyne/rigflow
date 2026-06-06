@@ -1,5 +1,5 @@
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 //use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
@@ -16,7 +16,7 @@ use rigflow_core::{
 };
 
 use crate::{
-    net::udp::{handle_media_packet, MediaPacketStats},
+    net::udp::{MediaPacketStats, handle_media_packet},
     sidetone::SidetoneShared,
     ui::{
         layout::{

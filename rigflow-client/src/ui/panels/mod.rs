@@ -1,5 +1,5 @@
-use crate::ui::app::RigflowApp;
 use crate::UiState;
+use crate::ui::app::RigflowApp;
 use eframe::egui;
 
 mod bookmarks;

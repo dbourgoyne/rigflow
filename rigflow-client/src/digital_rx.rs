@@ -130,7 +130,9 @@ fn writer_loop(shared: Arc<DigitalRxOutput>) {
                 }
                 None => {
                     shared.available.store(false, Ordering::Relaxed);
-                    log::warn!("[digital-rx] RX digital output unavailable (no pacat/pw-cat or sink missing)");
+                    log::warn!(
+                        "[digital-rx] RX digital output unavailable (no pacat/pw-cat or sink missing)"
+                    );
                     thread::sleep(Duration::from_millis(1000));
                     continue;
                 }

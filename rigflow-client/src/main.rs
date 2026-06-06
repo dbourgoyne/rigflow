@@ -115,6 +115,7 @@ mod digital_rx;
 mod mic;
 mod net;
 mod persistence;
+mod rigctl_server;
 mod sidetone;
 mod ui;
 mod widgets;
@@ -188,6 +189,19 @@ fn main() -> Result<(), eframe::Error> {
             {
                 error!("WebSocket control task failed: {error}");
             }
+        });
+    }
+
+    // CAT (Hamlib NET rigctl) server on 127.0.0.1:4532 for WSJT-X et al.  Reads
+    // frequency/mode from UiState and issues control commands through the same
+    // channel as the UI.
+    {
+        let ui_state_for_cat = Arc::clone(&ui_state);
+        let cmd_tx_for_cat = ws_cmd_tx.clone();
+        rt.spawn(async move {
+            rigctl_server::RigctlServer::new(ui_state_for_cat, cmd_tx_for_cat)
+                .run()
+                .await;
         });
     }
 

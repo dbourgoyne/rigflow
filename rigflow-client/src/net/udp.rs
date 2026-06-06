@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
     net::udp_framing::{
-        is_valid_header, parse_media_header, STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL,
+        STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL, is_valid_header, parse_media_header,
     },
 };
 
@@ -52,7 +52,6 @@ enum StreamKind {
     Waterfall,
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn handle_media_packet(
     packet: &[u8],

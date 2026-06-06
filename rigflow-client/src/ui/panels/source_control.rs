@@ -1,12 +1,12 @@
-use crate::ui::app::RigflowApp;
 use crate::UiState;
+use crate::ui::app::RigflowApp;
 use eframe::egui;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::ham_band::{
-    band_from_frequency, default_frequency_for_band, default_mode_for_band, HamBand,
+    HamBand, band_from_frequency, default_frequency_for_band, default_mode_for_band,
 };
 use rigflow_core::radio::source_control::{DirectSamplingMode, GainMode};
-use rigflow_core::radio::swr_sweep::{validate_sweep_range, SWR_SWEEP_POINTS};
+use rigflow_core::radio::swr_sweep::{SWR_SWEEP_POINTS, validate_sweep_range};
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
 impl RigflowApp {

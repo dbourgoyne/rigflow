@@ -6,9 +6,8 @@ use crate::ui::{
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
     layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
     om_bands::{
-        visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
-        COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
-        COLOR_OM_USB_PHONE_CW_RTTY_DATA,
+        COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL, COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA,
+        COLOR_OM_SSB_PHONE, COLOR_OM_USB_PHONE_CW_RTTY_DATA, OmKind, visible_om_segments,
     },
     spectrum_utils::zoom_window,
     state::UiState,
