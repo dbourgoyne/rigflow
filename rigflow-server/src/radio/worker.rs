@@ -338,19 +338,6 @@ fn pipeline_cfg_for_source(
     }
 }
 
-/// Receive-volume gain from a percent (0–100).
-///
-/// `0%` → silence; `50%` → unity; `100%` → +12 dB.  In dB:
-/// `gain_db = ((vp - 50) / 50) * 12`, then `gain = 10^(gain_db/20)`.
-/// (50% = 1.0×, 75% ≈ +6 dB ≈ 2.0×, 100% = +12 dB ≈ 3.98×.)
-fn volume_gain(volume_percent: u8) -> f32 {
-    if volume_percent == 0 {
-        return 0.0;
-    }
-    let db = ((volume_percent.min(100) as f32 - 50.0) / 50.0) * 12.0;
-    10.0_f32.powf(db / 20.0)
-}
-
 /// Soft limiter applied after the volume boost so loud/boosted audio can't
 /// hard-clip harshly at the i16 conversion.
 ///
@@ -1922,12 +1909,6 @@ fn spawn_dsp_thread(
         let mut smoothed_channel_power: f32 = 0.0;
         let mut last_smeter_update = Instant::now();
 
-        // Volume: final audio gain.  `applied_volume_gain` ramps toward the
-        // target across each block to avoid clicks when the slider moves.
-        // Initialised to unity (the 50 % default).
-        let mut applied_volume_gain: f32 = 1.0;
-        let mut last_volume_log = Instant::now();
-
         // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
         // Only engaged while enabled; reset on demod-mode / sample-rate change.
         let mut nr2 = Nr2::new();
@@ -2268,32 +2249,14 @@ fn spawn_dsp_thread(
                         }
                     }
 
-                    // ── Volume (+ soft limiter) ──────────────────────────────
-                    // Final receive-audio gain (after demod/AGC/NR2/squelch,
-                    // before packetization).  Mapping: 0% → silence, 50% →
-                    // unity, 100% → +12 dB; in dB, gain = ((vp-50)/50)*12.  The
-                    // gain ramps linearly across the block from the previously-
-                    // applied value to the target so slider moves are click-free.
-                    // A soft limiter (see soft_clip) follows so the boost can't
-                    // produce harsh clipping.  Affects only listening loudness.
-                    let target_volume_gain = volume_gain(current.volume_percent);
-                    let n = audio_f32.len();
-                    if n > 0 {
-                        let step = (target_volume_gain - applied_volume_gain) / n as f32;
-                        let mut g = applied_volume_gain;
-                        for s in audio_f32.iter_mut() {
-                            g += step;
-                            *s = soft_clip(*s * g);
-                        }
-                    }
-                    applied_volume_gain = target_volume_gain;
-
-                    if last_volume_log.elapsed() >= Duration::from_millis(1000) {
-                        debug!(
-                            "[volume] volume_percent={} volume_gain={:.3}",
-                            current.volume_percent, target_volume_gain
-                        );
-                        last_volume_log = Instant::now();
+                    // ── Soft limiter (safety) ────────────────────────────────
+                    // Receive **Volume is now applied on the client** (so the
+                    // Digital Audio Interface RX tap stays at fixed unity gain,
+                    // independent of speaker volume).  The server streams the
+                    // unity-level audio; we still soft-limit here so any demod
+                    // overshoot can't hard-clip at the i16 conversion below.
+                    for s in audio_f32.iter_mut() {
+                        *s = soft_clip(*s);
                     }
 
                     let mut audio_i16 = Vec::with_capacity(audio_f32.len());
@@ -2372,17 +2335,6 @@ fn normalize_initial_frequencies(
 #[cfg(test)]
 mod volume_tests {
     use super::*;
-
-    #[test]
-    fn volume_gain_mapping() {
-        assert_eq!(volume_gain(0), 0.0); // silence
-        assert!((volume_gain(50) - 1.0).abs() < 1e-4); // unity
-        assert!((volume_gain(75) - 2.0).abs() < 0.05); // ~+6 dB ≈ 2.0x
-        assert!((volume_gain(100) - 3.981).abs() < 0.01); // +12 dB ≈ 3.98x
-                                                          // Monotonic increasing above 0%.
-        assert!(volume_gain(60) > volume_gain(50));
-        assert!(volume_gain(100) > volume_gain(75));
-    }
 
     #[test]
     fn soft_clip_transparent_below_threshold() {

@@ -215,9 +215,13 @@ pub struct UiState {
     /// Receive IQ recording status (Phase 1), from the server.
     pub iq_recording_status: IqRecordingStatus,
 
-    /// Digital Audio Interface (Phase 1): whether the virtual audio endpoints
-    /// were created/found at startup.  Informational only.
+    /// Digital Audio Interface: whether the virtual audio endpoints were
+    /// created/found at startup.  Informational only.
+    /// `digital_rx_available` = `RigflowDigitalRX` source (apps record from);
+    /// `digital_input_available` = `RigflowDigitalInput` sink (apps play TX to);
+    /// `digital_output_available` = internal `RigflowDigitalOutput` sink.
     pub digital_output_available: bool,
+    pub digital_rx_available: bool,
     pub digital_input_available: bool,
 
     /// Digital Audio Interface (Phase 2): RX audio router to
@@ -453,6 +457,7 @@ impl Default for UiState {
             source_status: SourceStatus::default(),
             iq_recording_status: IqRecordingStatus::default(),
             digital_output_available: false,
+            digital_rx_available: false,
             digital_input_available: false,
             digital_rx: crate::digital_rx::DigitalRxOutput::new(),
             tx_audio_diag: TxAudioDiag::default(),

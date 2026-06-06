@@ -32,8 +32,10 @@ pub struct RigflowApp {
     /// frame).  `""` = system default.
     pub mic_requested: Option<String>,
 
-    /// Virtual digital-mode audio endpoints (Digital Audio Interface Phase 1).
-    /// Created at startup; Drop unloads any devices this process created.
+    /// Virtual digital-mode audio endpoints.  Held purely for its `Drop` (an
+    /// RAII guard that unloads the devices this process created on exit), so the
+    /// field is never read directly.
+    #[allow(dead_code)]
     pub digital_audio: crate::digital_audio::DigitalAudio,
 }
 
@@ -47,10 +49,9 @@ impl RigflowApp {
     ) -> Self {
         // Create the virtual digital-audio endpoints once, at startup.
         let digital_audio = crate::digital_audio::DigitalAudio::start();
-        let (digital_output_available, digital_input_available) = (
-            digital_audio.output_available(),
-            digital_audio.input_available(),
-        );
+        let digital_output_available = digital_audio.output_available();
+        let digital_rx_available = digital_audio.rx_available();
+        let digital_input_available = digital_audio.input_available();
 
         let app = Self {
             state,
@@ -72,6 +73,7 @@ impl RigflowApp {
         if let Ok(mut state) = app.state.lock() {
             state.mic_devices = devices;
             state.digital_output_available = digital_output_available;
+            state.digital_rx_available = digital_rx_available;
             state.digital_input_available = digital_input_available;
         }
 

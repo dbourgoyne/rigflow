@@ -629,11 +629,11 @@ impl RigflowApp {
         }
     }
 
-    /// Digital Interface (informational): shows the virtual audio endpoints
-    /// (Digital Audio Interface Phase 1) and whether each is available.  No
-    /// configuration in Phase 1 — routing/CAT/PTT come later.
+    /// Digital Interface (informational): the virtual audio endpoints to set in
+    /// a digital app (WSJT-X etc.), named from the app's point of view, plus the
+    /// RX routing toggle.  No CAT/PTT yet.
     fn draw_digital_interface_row(&self, ui: &mut egui::Ui, snapshot: &UiState) {
-        use crate::digital_audio::{DIGITAL_INPUT_NAME, DIGITAL_OUTPUT_NAME};
+        use crate::digital_audio::{DIGITAL_INPUT_NAME, DIGITAL_RX_NAME};
 
         ui.separator();
         ui.label(RichText::new("Digital Interface").strong());
@@ -646,18 +646,20 @@ impl RigflowApp {
             }
         };
 
+        // App-facing devices: WSJT-X Input = RigflowDigitalRX (records),
+        // Output = RigflowDigitalInput (plays TX into).
         egui::Grid::new("digital_interface_grid")
             .num_columns(2)
             .spacing([8.0, 2.0])
             .show(ui, |ui| {
-                ui.label("Digital Output");
-                ui.label(RichText::new(DIGITAL_OUTPUT_NAME).monospace());
+                ui.label("App Input (record)");
+                ui.label(RichText::new(DIGITAL_RX_NAME).monospace());
                 ui.end_row();
                 ui.label("");
-                status(ui, snapshot.digital_output_available);
+                status(ui, snapshot.digital_rx_available);
                 ui.end_row();
 
-                ui.label("Digital Input");
+                ui.label("App Output (TX in)");
                 ui.label(RichText::new(DIGITAL_INPUT_NAME).monospace());
                 ui.end_row();
                 ui.label("");
@@ -665,8 +667,8 @@ impl RigflowApp {
                 ui.end_row();
             });
 
-        // RX audio routing (Phase 2): mirror received audio to
-        // RigflowDigitalOutput (external apps record its .monitor).
+        // RX audio routing: mirror received audio into RigflowDigitalOutput;
+        // apps record it from RigflowDigitalRX.
         ui.add_space(4.0);
         let mut rx_enabled = snapshot.digital_rx.is_enabled();
         if ui

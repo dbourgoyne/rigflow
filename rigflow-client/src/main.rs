@@ -106,6 +106,7 @@
 //! - `rigflow-core` — shared DSP, audio, and utilities
 //! - `rigflow-protocol` — shared WebSocket protocol types
 
+mod alsa_quiet;
 mod client_runtime;
 mod cw_decode;
 mod cw_text;
@@ -138,6 +139,9 @@ fn main() -> Result<(), eframe::Error> {
     env_logger::Builder::from_default_env()
         .format_timestamp_millis()
         .init();
+
+    // Mute libasound's harmless stderr diagnostics (e.g. find_matching_chmap).
+    alsa_quiet::silence_alsa_errors();
 
     // Load persisted startup state first, then wrap it in shared UI state.
     let (initial_ui_state, persistence_store) = match load_initial_ui_state(None) {
