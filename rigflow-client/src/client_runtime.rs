@@ -173,6 +173,13 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.mic_shared))
         .unwrap_or_default();
 
+    // Digital RX router: when enabled, a copy of received audio is mirrored to
+    // the RigflowDigitalOutput sink (Digital Audio Interface Phase 2).
+    let digital_rx = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.digital_rx))
+        .unwrap_or_else(|_| crate::digital_rx::DigitalRxOutput::new());
+
     // --- Media thread ------------------------------------------------------
 
     thread::spawn(move || {
@@ -319,6 +326,7 @@ pub fn start_media_runtime(
                             &ui_state_for_thread,
                             &stats_for_thread,
                             &mut cw_decoder,
+                            &digital_rx,
                         );
                     }
                 }

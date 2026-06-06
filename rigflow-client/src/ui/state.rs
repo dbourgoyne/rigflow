@@ -220,6 +220,10 @@ pub struct UiState {
     pub digital_output_available: bool,
     pub digital_input_available: bool,
 
+    /// Digital Audio Interface (Phase 2): RX audio router to
+    /// `RigflowDigitalOutput`.  Shared with the media thread; the UI toggles it.
+    pub digital_rx: Arc<crate::digital_rx::DigitalRxOutput>,
+
     /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
     pub tx_audio_diag: TxAudioDiag,
 
@@ -450,6 +454,7 @@ impl Default for UiState {
             iq_recording_status: IqRecordingStatus::default(),
             digital_output_available: false,
             digital_input_available: false,
+            digital_rx: crate::digital_rx::DigitalRxOutput::new(),
             tx_audio_diag: TxAudioDiag::default(),
             two_tone_enabled: false,
             two_tone_a_hz: 700.0,

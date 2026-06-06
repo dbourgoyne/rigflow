@@ -664,6 +664,26 @@ impl RigflowApp {
                 status(ui, snapshot.digital_input_available);
                 ui.end_row();
             });
+
+        // RX audio routing (Phase 2): mirror received audio to
+        // RigflowDigitalOutput (external apps record its .monitor).
+        ui.add_space(4.0);
+        let mut rx_enabled = snapshot.digital_rx.is_enabled();
+        if ui
+            .checkbox(&mut rx_enabled, "RX Digital Output")
+            .on_hover_text("Send received audio to RigflowDigitalOutput")
+            .changed()
+        {
+            snapshot.digital_rx.set_enabled(rx_enabled);
+        }
+        ui.horizontal(|ui| {
+            ui.label("RX Digital Output:");
+            if snapshot.digital_rx.is_active() {
+                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Active");
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "Inactive");
+            }
+        });
     }
 
     /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
