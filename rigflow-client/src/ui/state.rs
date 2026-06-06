@@ -215,6 +215,11 @@ pub struct UiState {
     /// Receive IQ recording status (Phase 1), from the server.
     pub iq_recording_status: IqRecordingStatus,
 
+    /// Digital Audio Interface (Phase 1): whether the virtual audio endpoints
+    /// were created/found at startup.  Informational only.
+    pub digital_output_available: bool,
+    pub digital_input_available: bool,
+
     /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
     pub tx_audio_diag: TxAudioDiag,
 
@@ -443,6 +448,8 @@ impl Default for UiState {
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
             iq_recording_status: IqRecordingStatus::default(),
+            digital_output_available: false,
+            digital_input_available: false,
             tx_audio_diag: TxAudioDiag::default(),
             two_tone_enabled: false,
             two_tone_a_hz: 700.0,

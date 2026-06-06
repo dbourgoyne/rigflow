@@ -119,11 +119,13 @@ impl RigflowApp {
                         }
                     });
 
-                // ── Advanced (default collapsed): empty for now ──────────────
+                // ── Advanced (default collapsed) ─────────────────────────────
                 egui::CollapsingHeader::new("Advanced")
                     .id_salt("rc_advanced")
                     .default_open(false)
-                    .show(ui, |_ui| {});
+                    .show(ui, |ui| {
+                        self.draw_digital_interface_row(ui, snapshot);
+                    });
 
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
@@ -625,6 +627,43 @@ impl RigflowApp {
                 level_percent: state.two_tone_level_percent as f32,
             });
         }
+    }
+
+    /// Digital Interface (informational): shows the virtual audio endpoints
+    /// (Digital Audio Interface Phase 1) and whether each is available.  No
+    /// configuration in Phase 1 — routing/CAT/PTT come later.
+    fn draw_digital_interface_row(&self, ui: &mut egui::Ui, snapshot: &UiState) {
+        use crate::digital_audio::{DIGITAL_INPUT_NAME, DIGITAL_OUTPUT_NAME};
+
+        ui.separator();
+        ui.label(RichText::new("Digital Interface").strong());
+
+        let status = |ui: &mut egui::Ui, available: bool| {
+            if available {
+                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Available");
+            } else {
+                ui.colored_label(egui::Color32::from_rgb(210, 130, 130), "Unavailable");
+            }
+        };
+
+        egui::Grid::new("digital_interface_grid")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                ui.label("Digital Output");
+                ui.label(RichText::new(DIGITAL_OUTPUT_NAME).monospace());
+                ui.end_row();
+                ui.label("");
+                status(ui, snapshot.digital_output_available);
+                ui.end_row();
+
+                ui.label("Digital Input");
+                ui.label(RichText::new(DIGITAL_INPUT_NAME).monospace());
+                ui.end_row();
+                ui.label("");
+                status(ui, snapshot.digital_input_available);
+                ui.end_row();
+            });
     }
 
     /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
