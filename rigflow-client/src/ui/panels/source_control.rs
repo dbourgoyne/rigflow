@@ -80,6 +80,13 @@ impl RigflowApp {
                         .show(ui, |ui| {
                             if let Ok(mut state) = self.state.lock() {
                                 // -----------------------------
+                                // Band Control + N2ADR (HL2).
+                                // -----------------------------
+                                if state.source_capabilities.supports_band_control {
+                                    save_source_control |= self.draw_band_control(ui, &mut state);
+                                }
+
+                                // -----------------------------
                                 // Sample rate
                                 // -----------------------------
                                 if state.source_capabilities.supports_sample_rate {
@@ -331,13 +338,6 @@ impl RigflowApp {
                                             save_source_control = true;
                                         }
                                     }
-                                }
-
-                                // -----------------------------
-                                // Band Control + N2ADR (HL2).
-                                // -----------------------------
-                                if state.source_capabilities.supports_band_control {
-                                    save_source_control |= self.draw_band_control(ui, &mut state);
                                 }
 
                                 // -----------------------------
