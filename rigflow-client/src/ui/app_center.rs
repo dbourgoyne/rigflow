@@ -298,7 +298,8 @@ impl RigflowApp {
         let transmitting = snapshot.ssb_ptt_down
             || snapshot.cw_key_down
             || snapshot.tx_tone_running
-            || snapshot.tx_tune_running;
+            || snapshot.tx_tune_running
+            || snapshot.cat_ptt;
         if transmitting {
             ui.label(
                 egui::RichText::new("TX")

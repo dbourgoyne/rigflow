@@ -302,6 +302,10 @@ pub struct UiState {
     /// for edge detection (StartMicTx/StopMicTx).
     pub ssb_ptt_down: bool,
 
+    /// PTT commanded over CAT (rigctl `T 1`/`T 0`, e.g. WSJT-X).  Drives the
+    /// status-bar TX indicator and the rigctl `t` readback.
+    pub cat_ptt: bool,
+
     // ── CW sidetone (client-local; never sent to server) ────────────────
     /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
     pub cw_sidetone_volume: u8,
@@ -487,6 +491,7 @@ impl Default for UiState {
             tx_tone_running: false,
             cw_key_down: false,
             ssb_ptt_down: false,
+            cat_ptt: false,
             cw_sidetone_volume: 25,
             cw_hang_ms: 300,
             cw_message: String::new(),

@@ -20,7 +20,6 @@
 //! duplicate frequency/mode state is introduced (PTT keeps a small commanded
 //! flag, since the client has no single readback of "transmitting").
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -41,8 +40,6 @@ pub const DEFAULT_RIGCTL_PORT: u16 = 4532;
 struct RigctlShared {
     ui_state: Arc<Mutex<UiState>>,
     cmd_tx: UnboundedSender<ControlCommand>,
-    /// PTT we have commanded over CAT (reported by the `t` command).
-    cat_ptt: AtomicBool,
     /// The exact rigctl mode string last set over CAT (e.g. `PKTUSB`).  Echoed
     /// back by `m` so a client's read-after-write matches — Rigflow has no
     /// distinct data/packet mode (`PKTUSB`/`USB` both map to `DemodMode::Usb`),
@@ -65,7 +62,6 @@ impl RigctlServer {
             shared: Arc::new(RigctlShared {
                 ui_state,
                 cmd_tx,
-                cat_ptt: AtomicBool::new(false),
                 last_cat_mode: Mutex::new(None),
             }),
         }
@@ -184,12 +180,8 @@ fn handle_command(line: &str, shared: &RigctlShared) -> Reply {
 
         // ── Get PTT ──────────────────────────────────────────────────────
         "t" | "\\get_ptt" => {
-            let ptt = if shared.cat_ptt.load(Ordering::Relaxed) {
-                1
-            } else {
-                0
-            };
-            Reply::Send(format!("{ptt}\n"))
+            let ptt = shared.ui_state.lock().map(|s| s.cat_ptt).unwrap_or(false);
+            Reply::Send(format!("{}\n", if ptt { 1 } else { 0 }))
         }
 
         // ── Set PTT ──────────────────────────────────────────────────────
@@ -354,7 +346,10 @@ fn set_mode(shared: &RigctlShared, mode: DemodMode, passband: Option<f32>) {
 /// Key/unkey the transmitter.  Reuses the SSB mic-TX path (`Start/StopMicTx`),
 /// which keys PTT on the server; TX audio routing is intentionally not done yet.
 fn set_ptt(shared: &RigctlShared, on: bool) {
-    shared.cat_ptt.store(on, Ordering::Relaxed);
+    // Record the commanded PTT so the status bar shows TX and `t` reads it back.
+    if let Ok(mut s) = shared.ui_state.lock() {
+        s.cat_ptt = on;
+    }
     let msg = if on {
         ClientRadioMessage::StartMicTx
     } else {
