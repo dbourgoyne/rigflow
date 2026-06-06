@@ -86,7 +86,7 @@ fn discover_wav_radios(dir: &Path) -> Vec<RadioDescriptor> {
         .filter(|path| is_wav_file(path))
         .collect();
 
-    // Stable ordering ensures deterministic radio IDs (wav:0, wav:1, ...)
+    // Stable ordering for a deterministic `index` / display order.
     wav_paths.sort();
 
     wav_paths
@@ -99,7 +99,10 @@ fn discover_wav_radios(dir: &Path) -> Vec<RadioDescriptor> {
                 .unwrap_or("unknown.wav");
 
             RadioDescriptor {
-                id: RadioId(format!("wav:{idx}")),
+                // ID is derived from the file name (not position) so it stays
+                // stable across re-scans when files are added/removed — a new
+                // recording never shifts the IDs of existing WAV radios.
+                id: RadioId(format!("wav:{file_name}")),
                 display_name: format!("WAV {}", file_name),
                 hardware_kind: HardwareKind::WavFile,
                 index: idx as u32,

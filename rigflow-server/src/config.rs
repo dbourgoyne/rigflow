@@ -57,11 +57,11 @@ impl Default for ServerConfig {
             wav_file: "input_iq.wav".to_string(),
             wav_dir: "./".to_string(),
 
-	    // Use a high enough fake sample rate so the existing mode-dependent
-	    // pipeline cutoffs (especially WFM) remain valid without hitting
-	    // Nyquist assertions. This keeps the fake source compatible with
-	    // the current RTL-oriented DSP pipeline until cutoffs are derived
-	    // from sample rate + decimation more robustly.
+            // Use a high enough fake sample rate so the existing mode-dependent
+            // pipeline cutoffs (especially WFM) remain valid without hitting
+            // Nyquist assertions. This keeps the fake source compatible with
+            // the current RTL-oriented DSP pipeline until cutoffs are derived
+            // from sample rate + decimation more robustly.
             fake_sample_rate_hz: 1_024_000.0,
             fake_tone_hz: 1_500.0,
             fake_center_freq_hz: 101_100_000.0,
@@ -94,8 +94,9 @@ impl ServerConfig {
             match arg.as_str() {
                 "--demod" => {
                     let value = next_arg(&mut args, "--demod")?;
-		    cfg.demod = value.parse::<DemodMode>()
-			.map_err(|_| format!("invalid demod mode: {value}"))?;
+                    cfg.demod = value
+                        .parse::<DemodMode>()
+                        .map_err(|_| format!("invalid demod mode: {value}"))?;
                 }
 
                 "--wav-dir" => {
@@ -113,8 +114,11 @@ impl ServerConfig {
                 }
 
                 "--fake-sample-rate" => {
-                    cfg.fake_sample_rate_hz =
-                        parse_next_arg(&mut args, "--fake-sample-rate", "invalid --fake-sample-rate")?;
+                    cfg.fake_sample_rate_hz = parse_next_arg(
+                        &mut args,
+                        "--fake-sample-rate",
+                        "invalid --fake-sample-rate",
+                    )?;
                 }
 
                 "--fake-tone" => {
@@ -128,8 +132,11 @@ impl ServerConfig {
                 }
 
                 "--rtl-sample-rate" => {
-                    cfg.rtlsdr_sample_rate_hz =
-                        parse_next_arg(&mut args, "--rtl-sample-rate", "invalid --rtl-sample-rate")?;
+                    cfg.rtlsdr_sample_rate_hz = parse_next_arg(
+                        &mut args,
+                        "--rtl-sample-rate",
+                        "invalid --rtl-sample-rate",
+                    )?;
                 }
 
                 "--rtl-gain" => {
@@ -154,18 +161,19 @@ impl ServerConfig {
                 }
 
                 "--hl2-sample-rate" => {
-                    cfg.hl2_sample_rate_hz =
-                        parse_next_arg(&mut args, "--hl2-sample-rate", "invalid --hl2-sample-rate")?;
+                    cfg.hl2_sample_rate_hz = parse_next_arg(
+                        &mut args,
+                        "--hl2-sample-rate",
+                        "invalid --hl2-sample-rate",
+                    )?;
                 }
 
                 "--center" => {
-                    cfg.center_freq_hz =
-                        parse_next_arg(&mut args, "--center", "invalid --center")?;
+                    cfg.center_freq_hz = parse_next_arg(&mut args, "--center", "invalid --center")?;
                 }
 
                 "--target" => {
-                    cfg.target_freq_hz =
-                        parse_next_arg(&mut args, "--target", "invalid --target")?;
+                    cfg.target_freq_hz = parse_next_arg(&mut args, "--target", "invalid --target")?;
                 }
 
                 "--help" | "-h" => {
@@ -262,7 +270,8 @@ pub fn choose_decimation(sample_rate_hz: f32) -> usize {
 }
 
 fn next_arg(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    args.next().ok_or_else(|| format!("{flag} requires a value"))
+    args.next()
+        .ok_or_else(|| format!("{flag} requires a value"))
 }
 
 fn parse_next_arg<T>(

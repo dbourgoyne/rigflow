@@ -20,9 +20,8 @@ impl RigflowApp {
             return;
         }
 
-        // Read-only status (S-meter, extensible for future fields), shown above
-        // the controls.
-        self.draw_radio_status_section(ui, snapshot);
+        // Live telemetry (S-meter, etc.) now lives in the top status bar; the
+        // left panel holds configuration and controls only.
 
         egui::CollapsingHeader::new("Radio Control")
             .default_open(true)
@@ -32,8 +31,9 @@ impl RigflowApp {
                 let mut save_cw = false;
                 let mut save_mic = false;
 
+                // Preamble (runs every frame, independent of section state):
+                // apply persisted per-demod controls when the mode changes.
                 if let Ok(mut state) = self.state.lock() {
-                    // Apply persisted per-demod controls when the mode changes.
                     let should_apply = state.pending_apply_mode_controls
                         || state.last_demod_mode_for_controls != Some(snapshot.demod_mode);
 
@@ -60,28 +60,70 @@ impl RigflowApp {
                             volume_percent: state.volume_percent,
                         });
                     }
-
-                    save_demod_prefs |=
-                        self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |=
-                        self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
-
-                    self.draw_squelch_row(ui, &mut state);
-                    self.draw_nr2_row(ui, &mut state);
-                    self.draw_agc_row(ui, &mut state);
-                    save_volume = self.draw_volume_row(ui, &mut state);
-                    save_mic = self.draw_microphone_row(ui, &mut state);
-                    self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
-                    save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
-                    save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
                 }
 
-                save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
+                // ── Receive (default expanded): frequently-used RX controls ──
+                egui::CollapsingHeader::new("Receive")
+                    .id_salt("rc_receive")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            save_demod_prefs |=
+                                self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
+                            save_demod_prefs |=
+                                self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
+                            save_demod_prefs |=
+                                self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
+                            self.draw_squelch_row(ui, &mut state);
+                            self.draw_nr2_row(ui, &mut state);
+                            self.draw_agc_row(ui, &mut state);
+                            self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                        // Demod mode buttons (locks state internally → outside).
+                        save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
+                    });
+
+                // ── Audio (default expanded) ─────────────────────────────────
+                egui::CollapsingHeader::new("Audio")
+                    .id_salt("rc_audio")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            save_volume = self.draw_volume_row(ui, &mut state);
+                            save_mic = self.draw_microphone_row(ui, &mut state);
+                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
+                // ── Transmit (default collapsed): TX setup ───────────────────
+                egui::CollapsingHeader::new("Transmit")
+                    .id_salt("rc_transmit")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
+                            save_cw |=
+                                self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
+                            save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
+                // ── Diagnostics (default collapsed) ──────────────────────────
+                egui::CollapsingHeader::new("Diagnostics")
+                    .id_salt("rc_diagnostics")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                            self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
+                // ── Advanced (default collapsed): empty for now ──────────────
+                egui::CollapsingHeader::new("Advanced")
+                    .id_salt("rc_advanced")
+                    .default_open(false)
+                    .show(ui, |_ui| {});
 
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
@@ -730,26 +772,6 @@ impl RigflowApp {
         });
     }
 
-    /// Read-only "Radio Status" section (S-meter for now; extensible).
-    fn draw_radio_status_section(&self, ui: &mut egui::Ui, snapshot: &UiState) {
-        egui::CollapsingHeader::new("Radio Status")
-            .default_open(true)
-            .show(ui, |ui| {
-                egui::Grid::new("radio_status_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.label("Signal");
-                        ui.label(format!(
-                            "{} ({:.0} dBm)",
-                            s_meter_label(snapshot.signal_dbm),
-                            snapshot.signal_dbm
-                        ));
-                        ui.end_row();
-                    });
-            });
-    }
-
     /// AGC enable + strength.  A radio (DSP) control sent to the server;
     /// applied to demodulated receive audio (before NR2/squelch). Not persisted.
     fn draw_agc_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
@@ -1070,7 +1092,7 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
 ///
 /// HF convention: S9 = -73 dBm, 6 dB per S-unit.  Below S1 clamps to "S0";
 /// above S9 shows "S9+N dB" (N rounded to the nearest 10 dB, as is customary).
-fn s_meter_label(dbm: f32) -> String {
+pub(crate) fn s_meter_label(dbm: f32) -> String {
     const S9_DBM: f32 = -73.0;
     const DB_PER_S_UNIT: f32 = 6.0;
 

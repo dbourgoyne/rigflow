@@ -133,6 +133,18 @@ async fn handle_radio_message(
             send_radio(local_tx, ServerRadioMessage::RadiosListed { radios });
         }
 
+        ClientRadioMessage::RescanRadios => {
+            let radios = app_state
+                .radio_manager
+                .rescan_radios()
+                .await
+                .into_iter()
+                .map(radio_summary_to_protocol)
+                .collect();
+
+            send_radio(local_tx, ServerRadioMessage::RadiosListed { radios });
+        }
+
         ClientRadioMessage::AcquireRadio {
             radio_id,
             center_freq_hz,
@@ -897,6 +909,32 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::StartIqRecording => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StartIqRecording)
+                    .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "start_iq_recording_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::StopIqRecording => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::StopIqRecording)
+                    .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "stop_iq_recording_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetCwHangTime { hang_ms } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,
@@ -1055,6 +1093,9 @@ fn runtime_changed_from_runtime(
     let tx_audio_diag =
         (current.tx_audio_diag != previous.tx_audio_diag).then_some(current.tx_audio_diag);
 
+    let iq_recording_status = (current.iq_recording_status != previous.iq_recording_status)
+        .then_some(current.iq_recording_status.clone());
+
     // `last_tx_tune_result` is itself an `Option<TxTuneResult>`, so we cannot
     // use `.then_some(…)` here — that would produce `Option<Option<…>>`.
     // A plain if/else gives the `Option<TxTuneResult>` the protocol expects.
@@ -1095,6 +1136,7 @@ fn runtime_changed_from_runtime(
         || volume_percent.is_some()
         || source_control.is_some()
         || source_status.is_some()
+        || iq_recording_status.is_some()
         || tx_audio_diag.is_some()
         || tx_tune_result.is_some()
         || swr_sweep_result.is_some()
@@ -1122,6 +1164,7 @@ fn runtime_changed_from_runtime(
         volume_percent,
         source_control,
         source_status,
+        iq_recording_status,
         tx_audio_diag,
         tx_tune_result,
         swr_sweep_result,
@@ -1162,6 +1205,7 @@ fn runtime_snapshot_from_status(
             volume_percent: runtime.volume_percent,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
+            iq_recording_status: runtime.iq_recording_status.clone(),
             tx_audio_diag: runtime.tx_audio_diag,
             tx_tune_result: runtime.last_tx_tune_result.clone(),
             swr_sweep_result: runtime.last_swr_sweep_result.clone(),

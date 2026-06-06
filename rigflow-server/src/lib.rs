@@ -6,6 +6,7 @@ pub mod net;
 pub mod plugin_api;
 pub mod plugins;
 pub mod radio;
+pub mod recording;
 pub mod source;
 pub mod tx_diag;
 pub mod waterfall;

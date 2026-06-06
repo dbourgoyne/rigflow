@@ -2,6 +2,29 @@ use crate::net::control::ControlCommand;
 use crate::ui::app::RigflowApp;
 use crate::UiState;
 use eframe::egui;
+use rigflow_core::radio::RadioSourceKind;
+use rigflow_protocol::ClientRadioMessage;
+
+/// Fixed display order for the radio categories (server-provided `source_kind`;
+/// the client never infers this from names).  Lower = shown first.
+fn category_order(kind: RadioSourceKind) -> u8 {
+    match kind {
+        RadioSourceKind::Hardware => 0,
+        RadioSourceKind::Recording => 1,
+        RadioSourceKind::Virtual => 2,
+        RadioSourceKind::Unknown => 3,
+    }
+}
+
+/// Category header text.
+fn category_label(kind: RadioSourceKind) -> &'static str {
+    match kind {
+        RadioSourceKind::Hardware => "Hardware",
+        RadioSourceKind::Recording => "Recordings",
+        RadioSourceKind::Virtual => "Virtual",
+        RadioSourceKind::Unknown => "Other",
+    }
+}
 
 impl RigflowApp {
     pub(crate) fn draw_radios_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
@@ -13,7 +36,34 @@ impl RigflowApp {
                 } else {
                     let mut selected = snapshot.selected_radio_id.clone();
 
-                    for radio in &snapshot.available_radios {
+                    // Group + order by the server-provided `source_kind`:
+                    // (category_order, display_name asc).  Categories always
+                    // appear in the same order; empty ones are simply absent.
+                    let mut ordered: Vec<_> = snapshot.available_radios.iter().collect();
+                    ordered.sort_by(|a, b| {
+                        category_order(a.source_kind)
+                            .cmp(&category_order(b.source_kind))
+                            .then_with(|| {
+                                a.display_name
+                                    .to_lowercase()
+                                    .cmp(&b.display_name.to_lowercase())
+                            })
+                    });
+
+                    let mut current_category: Option<RadioSourceKind> = None;
+                    for radio in ordered {
+                        // Emit a header when the category changes.
+                        if current_category != Some(radio.source_kind) {
+                            if current_category.is_some() {
+                                ui.add_space(6.0);
+                            }
+                            ui.label(
+                                egui::RichText::new(category_label(radio.source_kind)).strong(),
+                            );
+                            ui.separator();
+                            current_category = Some(radio.source_kind);
+                        }
+
                         let label = if radio.is_leased {
                             format!("{} (busy)", radio.display_name)
                         } else {
@@ -75,6 +125,16 @@ impl RigflowApp {
                             .clicked()
                         {
                             let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
+                        }
+
+                        // Re-scan the server for radios (e.g. to pick up a
+                        // freshly recorded WAV file) without restarting it.
+                        if ui
+                            .add_enabled(!snapshot.radio_acquired, egui::Button::new("⟳ Rescan"))
+                            .on_hover_text("Re-scan for radios (incl. new IQ recordings)")
+                            .clicked()
+                        {
+                            self.send_radio_msg(ClientRadioMessage::RescanRadios);
                         }
                     });
                 }

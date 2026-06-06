@@ -56,10 +56,7 @@ impl WaterfallGenerator {
         // w[n] = 0.5 - 0.5 cos(2πn / (N-1))
         let window: Vec<f32> = (0..fft_size)
             .map(|i| {
-                0.5
-                    - 0.5
-                        * (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32 - 1.0))
-                            .cos()
+                0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (fft_size as f32 - 1.0)).cos()
             })
             .collect();
 

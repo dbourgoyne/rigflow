@@ -46,6 +46,42 @@ pub enum HardwareKind {
     Unknown,
 }
 
+/// High-level category of a radio source, for client-side grouping and
+/// deterministic ordering.  The server is authoritative — the client never
+/// infers this from radio names.
+///
+/// Serialized as snake_case for a stable wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadioSourceKind {
+    /// Real radio hardware (RTL-SDR, Hermes Lite 2, SoapySDR, …).
+    Hardware,
+    /// File-backed IQ source (WAV recording / playback).
+    Recording,
+    /// Synthetic source (fake tone, test pattern, …).
+    Virtual,
+    /// Unclassified — forward-compat fallback so an old client never fails to
+    /// parse a future variant.  Normally empty (and hidden) in the UI.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+impl HardwareKind {
+    /// Classify this hardware kind into a presentation [`RadioSourceKind`].
+    /// This is the single, server-side source of truth for categorization.
+    pub fn source_kind(self) -> RadioSourceKind {
+        match self {
+            HardwareKind::RtlSdr | HardwareKind::Soapy | HardwareKind::HermesLite2 => {
+                RadioSourceKind::Hardware
+            }
+            HardwareKind::WavFile => RadioSourceKind::Recording,
+            HardwareKind::FakeTone => RadioSourceKind::Virtual,
+            HardwareKind::Unknown => RadioSourceKind::Unknown,
+        }
+    }
+}
+
 /// Capabilities of a radio device.
 ///
 /// These are used by the client to:

@@ -1,7 +1,7 @@
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use log::{debug,error,info};
 
 use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
@@ -157,12 +157,7 @@ impl RadioManager {
 
             for (radio_id, client_id, lease_id) in expired {
                 let _ = manager
-                    .release_radio(
-                        &client_id,
-                        &radio_id,
-                        &lease_id,
-                        StopReason::LeaseExpired,
-                    )
+                    .release_radio(&client_id, &radio_id, &lease_id, StopReason::LeaseExpired)
                     .await;
             }
         }
@@ -179,6 +174,41 @@ impl RadioManager {
                 is_leased: radio.lease.is_some(),
             })
             .collect()
+    }
+
+    /// Re-scan for radios so changes on disk (e.g. a freshly recorded WAV file)
+    /// appear without a server restart.  Newly discovered radios are added as
+    /// `Available`; WAV radios whose file disappeared are pruned — but only when
+    /// idle, so a leased/running radio is never disturbed.  Hardware radios that
+    /// remain in the map are left untouched (their live state is preserved).
+    pub async fn rescan_radios(&self) -> Vec<RadioSummary> {
+        let fresh = crate::radio::discovery::discover_radios(&self.server_cfg);
+        let fresh_ids: std::collections::HashSet<RadioId> =
+            fresh.iter().map(|d| d.id.clone()).collect();
+
+        {
+            let mut radios = self.radios.write().await;
+
+            // Add newly-discovered radios; keep existing entries (and their
+            // live lease/runtime state) untouched.
+            for descriptor in fresh {
+                radios.entry(descriptor.id.clone()).or_insert(ManagedRadio {
+                    descriptor,
+                    state: RadioState::Available,
+                    lease: None,
+                    runtime: None,
+                });
+            }
+
+            // Prune WAV radios whose file vanished, but only if idle.
+            radios.retain(|id, radio| {
+                let stale_wav = id.0.starts_with("wav:") && !fresh_ids.contains(id);
+                let idle = radio.lease.is_none() && matches!(radio.state, RadioState::Available);
+                !(stale_wav && idle)
+            });
+        }
+
+        self.list_radios().await
     }
 
     /// Acquires a lease for a radio and starts its worker.
@@ -375,7 +405,8 @@ impl RadioManager {
                 _ => return Err(RadioManagerError::RadioNotRunning),
             }
 
-            radio.runtime
+            radio
+                .runtime
                 .as_ref()
                 .ok_or(RadioManagerError::RadioNotRunning)?
                 .worker_tx
@@ -417,7 +448,8 @@ impl RadioManager {
 
             radio.state = RadioState::Stopping;
 
-            radio.runtime
+            radio
+                .runtime
                 .take()
                 .ok_or(RadioManagerError::RadioNotRunning)?
         };

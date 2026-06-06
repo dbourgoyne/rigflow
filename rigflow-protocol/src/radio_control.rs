@@ -1,12 +1,13 @@
 use rigflow_core::{
     dsp::modes::{DeemphasisMode, DemodMode, Sideband},
     radio::{
+        iq_recording::IqRecordingStatus,
         source_control::{DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState},
         source_status::SourceStatus,
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
-        HardwareKind, LeaseId, RadioCapabilities, RadioId,
+        HardwareKind, LeaseId, RadioCapabilities, RadioId, RadioSourceKind,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,10 @@ pub fn default_volume_percent() -> u8 {
 pub enum ClientRadioMessage {
     /// Request a list of available radios.
     ListRadios,
+
+    /// Re-scan the server for radios (e.g. to pick up a freshly recorded WAV
+    /// file) and return an updated `RadiosListed` without a restart.
+    RescanRadios,
 
     /// Acquire a lease on a radio and start streaming.
     ///
@@ -276,6 +281,13 @@ pub enum ClientRadioMessage {
         level: u8,
     },
 
+    /// Start receive IQ recording on the server (IQ Recording Phase 1).  The
+    /// server records raw post-source IQ to a WAV file; status is reported in
+    /// `IqRecordingStatus`.
+    StartIqRecording,
+    /// Stop the in-progress receive IQ recording (finalizes the WAV file).
+    StopIqRecording,
+
     /// Request an SWR sweep across `[start_hz, stop_hz]` (one band, 25 points).
     /// The server validates the range and runs Spot/SWR at each point.
     RequestSwrSweep {
@@ -388,6 +400,10 @@ pub enum ServerRadioMessage {
         /// Current source telemetry / status fields.
         source_status: SourceStatus,
 
+        /// Receive IQ recording status (Phase 1).
+        #[serde(default)]
+        iq_recording_status: IqRecordingStatus,
+
         /// Live TX-audio diagnostics for SSB mic transmit (zero when idle).
         #[serde(default)]
         tx_audio_diag: TxAudioDiag,
@@ -447,6 +463,10 @@ pub enum ServerRadioMessage {
         /// Changed source telemetry; `None` means no change since last update.
         source_status: Option<SourceStatus>,
 
+        /// Changed IQ recording status; `None` means no change since last update.
+        #[serde(default)]
+        iq_recording_status: Option<IqRecordingStatus>,
+
         /// Changed TX-audio diagnostics; `None` means no change since last update.
         #[serde(default)]
         tx_audio_diag: Option<TxAudioDiag>,
@@ -483,6 +503,12 @@ pub struct RadioInfo {
 
     /// Hardware/source type
     pub hardware_kind: HardwareKind,
+
+    /// Presentation category (Hardware / Recording / Virtual).  Server-provided;
+    /// the client groups and orders radios by this.  `#[serde(default)]` keeps
+    /// older servers (which omit it) parseable — they decode as `Unknown`.
+    #[serde(default)]
+    pub source_kind: RadioSourceKind,
 
     /// Device index (e.g., RTL device index)
     pub index: u32,

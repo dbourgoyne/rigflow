@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{
+    iq_recording::IqRecordingStatus,
     source_control::{DirectSamplingMode, GainMode, SourceControlState},
     source_status::SourceStatus,
     swr_sweep::{SwrSweepProgress, SwrSweepResult},
@@ -98,6 +99,8 @@ pub struct WorkerRuntimeState {
     pub volume_percent: u8,
     pub source_control: SourceControlState,
     pub source_status: SourceStatus,
+    /// Live receive IQ recording status (Phase 1).
+    pub iq_recording_status: IqRecordingStatus,
     /// Live TX-audio diagnostics for SSB mic transmit (zero when idle).
     pub tx_audio_diag: TxAudioDiag,
     /// Result of the most recent TX tune test executed by this worker.
@@ -219,6 +222,9 @@ pub enum WorkerCommand {
         enabled: bool,
         level: u8,
     },
+    /// Start / stop receive IQ recording (Phase 1).
+    StartIqRecording,
+    StopIqRecording,
     SetSourceN2adrEnabled {
         enabled: bool,
     },

@@ -6,6 +6,9 @@ mod bookmarks;
 mod operator;
 mod radio_control;
 mod radios;
+
+/// Shared S-meter label formatter (also used by the top status bar).
+pub(crate) use radio_control::s_meter_label;
 mod server;
 mod source_control;
 mod source_status;
@@ -37,8 +40,6 @@ impl RigflowApp {
                         self.draw_radio_control_panel(ui, snapshot);
                         ui.separator();
                         self.draw_source_control_panel(ui, snapshot);
-                        self.draw_source_status_panel(ui, snapshot);
-                        self.draw_tx_tune_test_panel(ui, snapshot);
                         ui.separator();
                         self.draw_waterfall_control_panel(ui);
                         ui.separator();
