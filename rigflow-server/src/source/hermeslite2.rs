@@ -1818,6 +1818,17 @@ impl IqSource for HermesLite2Source {
         // per starved packet, so the counter reflects events not frames.
         let mut starved = false;
 
+        // TX jitter cushion.  The client delivers mic audio steadily but in
+        // ~20 ms granules, and with the producer/consumer rate-matched the queue
+        // would otherwise sit near empty and dip below one packet on normal
+        // jitter (occasional single-packet underruns).  So at key-down we pad
+        // silence until a small backlog accumulates, then drain with that
+        // cushion in hand.  Bounded by a deadline so we never hang if the client
+        // is slow to start streaming.  ~100 ms — within FT8's timing tolerance.
+        const PREFILL_SAMPLES: usize = 4_800;
+        const PREFILL_MAX_MS: u128 = 500;
+        let mut prefilled = false;
+
         loop {
             let now = Instant::now();
             if abort.load(Ordering::Relaxed) || !active.load(Ordering::Relaxed) {
@@ -1835,18 +1846,29 @@ impl IqSource for HermesLite2Source {
                 next_tick = now + packet_period;
             }
 
-            // Pull one packet of mic audio (pad silence on underrun).
+            // Hold (pad silence) until the jitter cushion has filled, then drain.
             audio.clear();
-            let got = pull_audio(n, &mut audio);
-            if got < n {
-                if !starved {
-                    starved = true;
-                    crate::tx_diag::incr_underruns();
-                    debug!("[hl2 mic] tx audio underrun ({got}/{n})");
-                }
+            if !prefilled
+                && crate::net::udp::mic_audio::mic_queue_len() < PREFILL_SAMPLES
+                && session_start.elapsed().as_millis() < PREFILL_MAX_MS
+            {
+                // Still pre-filling: feed silence, don't drain, don't count it as
+                // an underrun (the queue is intentionally being allowed to build).
                 audio.resize(n, 0.0);
             } else {
-                starved = false;
+                prefilled = true;
+                // Pull one packet of mic audio (pad silence on underrun).
+                let got = pull_audio(n, &mut audio);
+                if got < n {
+                    if !starved {
+                        starved = true;
+                        crate::tx_diag::incr_underruns();
+                        debug!("[hl2 mic] tx audio underrun ({got}/{n})");
+                    }
+                    audio.resize(n, 0.0);
+                } else {
+                    starved = false;
+                }
             }
             dc.process_in_place(&mut audio);
 

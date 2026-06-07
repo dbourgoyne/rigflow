@@ -36,6 +36,12 @@ pub struct MicShared {
     /// True while SSB mic TX is keyed: the callback buffers gained 48 kHz mono
     /// audio into `tx_ring` for the media thread to send to the server.
     tx_streaming: AtomicBool,
+    /// True when an *external* source (e.g. the digital TX router capturing
+    /// WSJT-X audio) is feeding `tx_ring` directly.  The mic callback then
+    /// suppresses its own push so the ring has a single producer — otherwise the
+    /// always-on capture and the external source both fill it (≈2× the consume
+    /// rate), pinning the server queue and dropping ~half the samples.
+    external_tx_source: AtomicBool,
     /// Outbound mic-TX audio ring (48 kHz mono f32).
     tx_ring: Mutex<VecDeque<f32>>,
 }
@@ -47,6 +53,7 @@ impl Default for MicShared {
             peak_bits: AtomicU32::new(0),
             clipped: AtomicBool::new(false),
             tx_streaming: AtomicBool::new(false),
+            external_tx_source: AtomicBool::new(false),
             tx_ring: Mutex::new(VecDeque::new()),
         }
     }
@@ -90,9 +97,19 @@ impl MicShared {
     pub fn tx_streaming(&self) -> bool {
         self.tx_streaming.load(Ordering::Relaxed)
     }
+    /// Mark/unmark that an external source owns the TX ring (digital TX router).
+    /// While set, the mic capture callback does not push, leaving the external
+    /// source as the ring's sole producer.
+    pub fn set_external_tx_source(&self, on: bool) {
+        self.external_tx_source.store(on, Ordering::Relaxed);
+    }
+    pub fn external_tx_source(&self) -> bool {
+        self.external_tx_source.load(Ordering::Relaxed)
+    }
     /// Append captured 48 kHz mono samples (callback side); drop oldest on
-    /// overflow.  No-op unless streaming.
-    fn push_tx(&self, samples: &[f32]) {
+    /// overflow.  No-op unless streaming.  Also used by the digital TX router
+    /// to inject WSJT-X audio into the same mic-TX ring.
+    pub fn push_tx(&self, samples: &[f32]) {
         if !self.tx_streaming.load(Ordering::Relaxed) {
             return;
         }
@@ -343,7 +360,9 @@ impl MicProc {
         }
         self.shared.report(peak, clipped);
 
-        if self.shared.tx_streaming() {
+        // Push mic audio only when keyed AND no external source owns the ring
+        // (the digital TX router feeds it directly while transmitting WSJT-X).
+        if self.shared.tx_streaming() && !self.shared.external_tx_source() {
             if (self.in_rate - TX_RATE_HZ as f32).abs() < 1.0 {
                 self.shared.push_tx(&self.mono);
             } else {

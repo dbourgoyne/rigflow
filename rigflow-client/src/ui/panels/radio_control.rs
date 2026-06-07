@@ -1,16 +1,16 @@
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use crate::UiState;
 use crate::ui::app::RigflowApp;
 use crate::ui::state::DebounceState;
 use crate::ui::utils::should_send_debounced;
-use crate::UiState;
 use eframe::egui;
 use egui::RichText;
 use rigflow_core::dsp::modes::{
-    clamp_filter_bandwidth, default_deemphasis_mode, filter_bandwidth_limits, pitch_limits,
-    DeemphasisMode, DemodMode, Sideband,
+    DeemphasisMode, DemodMode, Sideband, clamp_filter_bandwidth, default_deemphasis_mode,
+    filter_bandwidth_limits, pitch_limits,
 };
 use rigflow_protocol::radio_control::ClientRadioMessage;
 
@@ -119,11 +119,13 @@ impl RigflowApp {
                         }
                     });
 
-                // ── Advanced (default collapsed): empty for now ──────────────
+                // ── Advanced (default collapsed) ─────────────────────────────
                 egui::CollapsingHeader::new("Advanced")
                     .id_salt("rc_advanced")
                     .default_open(false)
-                    .show(ui, |_ui| {});
+                    .show(ui, |ui| {
+                        self.draw_digital_interface_row(ui, snapshot);
+                    });
 
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
@@ -627,6 +629,65 @@ impl RigflowApp {
         }
     }
 
+    /// Digital Interface (informational): the virtual audio endpoints to set in
+    /// a digital app (WSJT-X etc.), named from the app's point of view, plus the
+    /// RX routing toggle.  No CAT/PTT yet.
+    fn draw_digital_interface_row(&self, ui: &mut egui::Ui, snapshot: &UiState) {
+        use crate::digital_audio::{DIGITAL_INPUT_NAME, DIGITAL_RX_NAME};
+
+        ui.separator();
+        ui.label(RichText::new("Digital Interface").strong());
+
+        let status = |ui: &mut egui::Ui, available: bool| {
+            if available {
+                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Available");
+            } else {
+                ui.colored_label(egui::Color32::from_rgb(210, 130, 130), "Unavailable");
+            }
+        };
+
+        // App-facing devices: WSJT-X Input = RigflowDigitalRX (records),
+        // Output = RigflowDigitalInput (plays TX into).
+        egui::Grid::new("digital_interface_grid")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                ui.label("App Input (record)");
+                ui.label(RichText::new(DIGITAL_RX_NAME).monospace());
+                ui.end_row();
+                ui.label("");
+                status(ui, snapshot.digital_rx_available);
+                ui.end_row();
+
+                ui.label("App Output (TX in)");
+                ui.label(RichText::new(DIGITAL_INPUT_NAME).monospace());
+                ui.end_row();
+                ui.label("");
+                status(ui, snapshot.digital_input_available);
+                ui.end_row();
+            });
+
+        // RX audio routing: mirror received audio into RigflowDigitalOutput;
+        // apps record it from RigflowDigitalRX.
+        ui.add_space(4.0);
+        let mut rx_enabled = snapshot.digital_rx.is_enabled();
+        if ui
+            .checkbox(&mut rx_enabled, "RX Digital Output")
+            .on_hover_text("Send received audio to RigflowDigitalOutput")
+            .changed()
+        {
+            snapshot.digital_rx.set_enabled(rx_enabled);
+        }
+        ui.horizontal(|ui| {
+            ui.label("RX Digital Output:");
+            if snapshot.digital_rx.is_active() {
+                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Active");
+            } else {
+                ui.colored_label(egui::Color32::GRAY, "Inactive");
+            }
+        });
+    }
+
     /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
     /// Enable + threshold are operator controls (sent via `SetTxLimiter`); the
     /// gain-reduction meter is read from server telemetry (`tx_audio_diag`).
@@ -765,7 +826,8 @@ impl RigflowApp {
         // Transport-health counters + reset (server-side counters).
         ui.horizontal(|ui| {
             ui.label(format!("Underruns: {}", diag.underruns));
-            ui.label(format!("Overruns: {}", diag.overruns));
+            // `overruns` counts dropped samples (clock-drift surplus), not events.
+            ui.label(format!("Overrun drops: {} smp", diag.overruns));
             if ui.button("Reset Counters").clicked() {
                 self.send_radio_msg(ClientRadioMessage::ResetTxAudioDiag);
             }

@@ -31,6 +31,12 @@ pub struct RigflowApp {
     /// when the selection actually changes (and don't retry a failure every
     /// frame).  `""` = system default.
     pub mic_requested: Option<String>,
+
+    /// Virtual digital-mode audio endpoints.  Held purely for its `Drop` (an
+    /// RAII guard that unloads the devices this process created on exit), so the
+    /// field is never read directly.
+    #[allow(dead_code)]
+    pub digital_audio: crate::digital_audio::DigitalAudio,
 }
 
 impl RigflowApp {
@@ -41,6 +47,12 @@ impl RigflowApp {
         spectrum_db: Arc<Mutex<Vec<f32>>>,
         persistence_store: PersistenceStore,
     ) -> Self {
+        // Create the virtual digital-audio endpoints once, at startup.
+        let digital_audio = crate::digital_audio::DigitalAudio::start();
+        let digital_output_available = digital_audio.output_available();
+        let digital_rx_available = digital_audio.rx_available();
+        let digital_input_available = digital_audio.input_available();
+
         let app = Self {
             state,
             ws_cmd_tx,
@@ -52,6 +64,7 @@ impl RigflowApp {
             cw_text_sending: Arc::new(AtomicBool::new(false)),
             mic: None,
             mic_requested: None,
+            digital_audio,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -59,6 +72,9 @@ impl RigflowApp {
         let devices = crate::mic::list_input_devices();
         if let Ok(mut state) = app.state.lock() {
             state.mic_devices = devices;
+            state.digital_output_available = digital_output_available;
+            state.digital_rx_available = digital_rx_available;
+            state.digital_input_available = digital_input_available;
         }
 
         app

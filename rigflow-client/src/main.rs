@@ -106,12 +106,17 @@
 //! - `rigflow-core` — shared DSP, audio, and utilities
 //! - `rigflow-protocol` — shared WebSocket protocol types
 
+mod alsa_quiet;
 mod client_runtime;
 mod cw_decode;
 mod cw_text;
+mod digital_audio;
+mod digital_rx;
+mod digital_tx;
 mod mic;
 mod net;
 mod persistence;
+mod rigctl_server;
 mod sidetone;
 mod ui;
 mod widgets;
@@ -136,6 +141,9 @@ fn main() -> Result<(), eframe::Error> {
     env_logger::Builder::from_default_env()
         .format_timestamp_millis()
         .init();
+
+    // Mute libasound's harmless stderr diagnostics (e.g. find_matching_chmap).
+    alsa_quiet::silence_alsa_errors();
 
     // Load persisted startup state first, then wrap it in shared UI state.
     let (initial_ui_state, persistence_store) = match load_initial_ui_state(None) {
@@ -182,6 +190,19 @@ fn main() -> Result<(), eframe::Error> {
             {
                 error!("WebSocket control task failed: {error}");
             }
+        });
+    }
+
+    // CAT (Hamlib NET rigctl) server on 127.0.0.1:4532 for WSJT-X et al.  Reads
+    // frequency/mode from UiState and issues control commands through the same
+    // channel as the UI.
+    {
+        let ui_state_for_cat = Arc::clone(&ui_state);
+        let cmd_tx_for_cat = ws_cmd_tx.clone();
+        rt.spawn(async move {
+            rigctl_server::RigctlServer::new(ui_state_for_cat, cmd_tx_for_cat)
+                .run()
+                .await;
         });
     }
 

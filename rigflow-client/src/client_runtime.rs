@@ -1,5 +1,5 @@
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 //use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
@@ -16,7 +16,7 @@ use rigflow_core::{
 };
 
 use crate::{
-    net::udp::{handle_media_packet, MediaPacketStats},
+    net::udp::{MediaPacketStats, handle_media_packet},
     sidetone::SidetoneShared,
     ui::{
         layout::{
@@ -123,12 +123,19 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.sidetone))
         .unwrap_or_default();
 
+    // Receive Volume is applied here on the client (speaker path only), so the
+    // Digital Audio Interface RX tap stays at fixed unity gain.  The media
+    // thread mirrors `UiState.volume_percent` into this lock-free atomic; the
+    // real-time audio callback reads it without locking.
+    let rx_volume = Arc::new(AtomicU8::new(50));
+
     let audio_stream = build_output_stream(
         &device,
         &config,
         Arc::clone(&jitter),
         Arc::clone(&stats_logger),
         sidetone,
+        Arc::clone(&rx_volume),
     )?;
     audio_stream.play()?;
 
@@ -173,6 +180,49 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.mic_shared))
         .unwrap_or_default();
 
+    // Digital RX router: when enabled, a copy of received audio is mirrored to
+    // the RigflowDigitalOutput sink (Digital Audio Interface Phase 2).
+    let digital_rx = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.digital_rx))
+        .unwrap_or_else(|_| crate::digital_rx::DigitalRxOutput::new());
+
+    // --- Dedicated mic-TX send thread -------------------------------------
+    // Mic / digital-TX audio is sent from its own paced thread, NOT the media
+    // loop.  The media loop processes the inbound full-duplex RX/waterfall flood
+    // and locks `ui_state` every iteration, so a slow UI frame holding that lock
+    // stalled the mic send for tens of ms — long enough to drain the server's TX
+    // queue and starve the modulator (underruns).  This thread only drains the
+    // mic ring and sends UDP, never locking `ui_state`, so delivery stays smooth.
+    // The server address is learned by the media loop at RegisterUdp and shared.
+    let mic_server_addr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    {
+        let mic_socket = socket.try_clone()?;
+        let mic_addr = Arc::clone(&mic_server_addr);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(5));
+                let samples = mic_shared.drain_tx();
+                if samples.is_empty() {
+                    continue;
+                }
+                let Some(addr) = mic_addr.lock().ok().and_then(|g| g.clone()) else {
+                    continue;
+                };
+                for chunk in samples.chunks(256) {
+                    let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
+                    pkt.extend_from_slice(&MAGIC.to_be_bytes());
+                    pkt.push(VERSION);
+                    pkt.push(STREAM_TYPE_MIC_AUDIO);
+                    for &s in chunk {
+                        pkt.extend_from_slice(&s.to_le_bytes());
+                    }
+                    let _ = mic_socket.send_to(&pkt, &addr);
+                }
+            }
+        });
+    }
+
     // --- Media thread ------------------------------------------------------
 
     thread::spawn(move || {
@@ -183,15 +233,18 @@ pub fn start_media_runtime(
         let mut cw_decoder =
             crate::cw_decode::CwDecoder::new(cw_decode_shared, OUTPUT_SAMPLE_RATE as f32);
 
-        // Server address for outbound mic-audio packets (learned at RegisterUdp).
-        let mut mic_server_addr: Option<String> = None;
-
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
 
         // let mut last_stats_log = Instant::now();  // Needed for periodic jitter logging
 
         loop {
+            // Mirror the current receive volume into the lock-free atomic the
+            // audio callback reads (volume is applied client-side, speaker only).
+            if let Ok(s) = ui_state.lock() {
+                rx_volume.store(s.volume_percent, Ordering::Relaxed);
+            }
+
             // --- Session change detection (radio switch) -------------------
 
             let current = audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -264,32 +317,16 @@ pub fn start_media_runtime(
                             Ok(_) => info!("Sent UDP registration to {}", addr),
                             Err(e) => error!("UDP registration failed to {}: {}", addr, e),
                         }
-                        // Same endpoint receives mic-audio packets.
-                        mic_server_addr = Some(addr);
-                    }
-                }
-            }
-
-            // --- Send buffered mic audio (SSB mic TX) ---------------------
-            // Drain the capture ring and send mono-f32 packets to the server.
-            // Loss-tolerant; only active while keyed (ring is empty otherwise).
-            {
-                let mic = mic_shared.drain_tx();
-                if !mic.is_empty() {
-                    if let Some(addr) = &mic_server_addr {
-                        for chunk in mic.chunks(256) {
-                            let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
-                            pkt.extend_from_slice(&MAGIC.to_be_bytes());
-                            pkt.push(VERSION);
-                            pkt.push(STREAM_TYPE_MIC_AUDIO);
-                            for &s in chunk {
-                                pkt.extend_from_slice(&s.to_le_bytes());
-                            }
-                            let _ = socket.send_to(&pkt, addr);
+                        // Same endpoint receives mic-audio packets — hand it to
+                        // the dedicated mic-send thread.
+                        if let Ok(mut g) = mic_server_addr.lock() {
+                            *g = Some(addr);
                         }
                     }
                 }
             }
+
+            // (Mic-TX audio is sent from the dedicated thread above, not here.)
 
             // --- Receive UDP packets --------------------------------------
 
@@ -319,6 +356,7 @@ pub fn start_media_runtime(
                             &ui_state_for_thread,
                             &stats_for_thread,
                             &mut cw_decoder,
+                            &digital_rx,
                         );
                     }
                 }
@@ -360,6 +398,7 @@ fn build_output_stream(
     jitter: Arc<Mutex<JitterBuffer>>,
     stats_logger: Arc<Mutex<ClientStatsLogger>>,
     sidetone: Arc<SidetoneShared>,
+    rx_volume: Arc<AtomicU8>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
     let supported_configs = device.supported_output_configs()?;
 
@@ -407,6 +446,8 @@ fn build_output_stream(
     let env_step = 1.0 / (0.005 * stream_sample_rate).max(1.0);
     let mut phase: f32 = 0.0;
     let mut env: f32 = 0.0;
+    // Client-side receive-Volume gain, ramped across each callback (click-free).
+    let mut applied_gain: f32 = 1.0;
 
     let stream = device.build_output_stream(
         &selected_config,
@@ -418,6 +459,25 @@ fn build_output_stream(
                 for sample in data.iter_mut() {
                     *sample = 0.0;
                 }
+            }
+
+            // --- Receive Volume (applied here, speaker path only) ----------
+            // Volume moved from the server to the client so the Digital Audio
+            // Interface RX tap stays at fixed unity gain.  Ramp toward the
+            // target across the callback (no clicks) and soft-limit so a boost
+            // can't hard-clip the speaker.  Mapping: 0% silence, 50% unity,
+            // 100% +12 dB.  Applied before the sidetone mix (sidetone has its
+            // own volume).
+            let target_gain = volume_gain(rx_volume.load(Ordering::Relaxed));
+            let n = data.len();
+            if n > 0 {
+                let step = (target_gain - applied_gain) / n as f32;
+                let mut g = applied_gain;
+                for sample in data.iter_mut() {
+                    g += step;
+                    *sample = soft_clip(*sample * g);
+                }
+                applied_gain = target_gain;
             }
 
             // --- Mix in the local CW sidetone (never sent to the server) ---
@@ -453,4 +513,29 @@ fn build_output_stream(
     )?;
 
     Ok(stream)
+}
+
+/// Receive-volume gain from a percent (0–100).  Moved client-side (from the
+/// server) so the digital RX tap stays at unity.  `0%` → silence, `50%` →
+/// unity, `100%` → +12 dB: `gain = 10^(((vp-50)/50)*12/20)`.
+fn volume_gain(volume_percent: u8) -> f32 {
+    if volume_percent == 0 {
+        return 0.0;
+    }
+    let db = ((volume_percent.min(100) as f32 - 50.0) / 50.0) * 12.0;
+    10.0_f32.powf(db / 20.0)
+}
+
+/// Soft limiter: transparent for `|x| <= 0.95`, then a smooth tanh knee that
+/// asymptotes to ±1.0 so a volume boost can't hard-clip the speaker.  Matches
+/// the server's `soft_clip` so behaviour is identical after moving Volume.
+fn soft_clip(x: f32) -> f32 {
+    const THRESHOLD: f32 = 0.95;
+    let a = x.abs();
+    if a <= THRESHOLD {
+        x
+    } else {
+        let over = (a - THRESHOLD) / (1.0 - THRESHOLD);
+        x.signum() * (THRESHOLD + (1.0 - THRESHOLD) * over.tanh())
+    }
 }

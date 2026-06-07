@@ -7,13 +7,13 @@ use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::RadioCapabilities;
 use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
 use rigflow_core::radio::tx_audio_diag::TxAudioDiag;
 use rigflow_core::radio::tx_tune::TxTuneResult;
-use rigflow_core::radio::RadioCapabilities;
 
 /// A single CW memory macro: a short button label and the text to transmit.
 #[derive(Debug, Clone, Default)]
@@ -215,6 +215,19 @@ pub struct UiState {
     /// Receive IQ recording status (Phase 1), from the server.
     pub iq_recording_status: IqRecordingStatus,
 
+    /// Digital Audio Interface: whether the virtual audio endpoints were
+    /// created/found at startup.  Informational only.
+    /// `digital_rx_available` = `RigflowDigitalRX` source (apps record from);
+    /// `digital_input_available` = `RigflowDigitalInput` sink (apps play TX to);
+    /// `digital_output_available` = internal `RigflowDigitalOutput` sink.
+    pub digital_output_available: bool,
+    pub digital_rx_available: bool,
+    pub digital_input_available: bool,
+
+    /// Digital Audio Interface (Phase 2): RX audio router to
+    /// `RigflowDigitalOutput`.  Shared with the media thread; the UI toggles it.
+    pub digital_rx: Arc<crate::digital_rx::DigitalRxOutput>,
+
     /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
     pub tx_audio_diag: TxAudioDiag,
 
@@ -288,6 +301,10 @@ pub struct UiState {
     /// Tracks whether the Space bar is currently keying SSB mic TX (USB/LSB),
     /// for edge detection (StartMicTx/StopMicTx).
     pub ssb_ptt_down: bool,
+
+    /// PTT commanded over CAT (rigctl `T 1`/`T 0`, e.g. WSJT-X).  Drives the
+    /// status-bar TX indicator and the rigctl `t` readback.
+    pub cat_ptt: bool,
 
     // ── CW sidetone (client-local; never sent to server) ────────────────
     /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
@@ -443,6 +460,10 @@ impl Default for UiState {
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
             iq_recording_status: IqRecordingStatus::default(),
+            digital_output_available: false,
+            digital_rx_available: false,
+            digital_input_available: false,
+            digital_rx: crate::digital_rx::DigitalRxOutput::new(),
             tx_audio_diag: TxAudioDiag::default(),
             two_tone_enabled: false,
             two_tone_a_hz: 700.0,
@@ -470,6 +491,7 @@ impl Default for UiState {
             tx_tone_running: false,
             cw_key_down: false,
             ssb_ptt_down: false,
+            cat_ptt: false,
             cw_sidetone_volume: 25,
             cw_hang_ms: 300,
             cw_message: String::new(),

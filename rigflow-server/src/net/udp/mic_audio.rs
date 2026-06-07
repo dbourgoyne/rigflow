@@ -9,7 +9,15 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// ~0.5 s at 48 kHz — enough to ride out jitter without adding much latency.
+/// ~0.5 s at 48 kHz.  This is **burst-absorption headroom**, not idle latency:
+/// the client does not deliver mic audio as a smooth 48 kHz stream.  During
+/// full-duplex TX the client's media thread is busy servicing the inbound RX
+/// audio/waterfall flood, so it batches the mic send and the samples arrive in
+/// large bursts (observed ~14k = ~290 ms at once).  The queue must be larger
+/// than the worst-case burst, or each burst overflows instantly and the
+/// consumer starves between bursts (overrun + underrun thrash).  A buffer this
+/// size turns bursty delivery into a steady 48 kHz drain.
+/// (A 50 ms cap was tried and badly thrashed — see the overrun/underrun storm.)
 const MAX_SAMPLES: usize = 24_000;
 
 static MIC_QUEUE: Mutex<VecDeque<f32>> = Mutex::new(VecDeque::new());
@@ -21,8 +29,7 @@ pub fn push_mic_samples(samples: &[f32]) {
         if q.len() > MAX_SAMPLES {
             let drop = q.len() - MAX_SAMPLES;
             q.drain(..drop);
-            crate::tx_diag::incr_overruns();
-            log::debug!("[mic-rx] tx audio overrun — dropped {drop} samples");
+            crate::tx_diag::add_overrun_drops(drop as u64);
         }
     }
 }
@@ -43,6 +50,11 @@ pub fn drain_mic_samples(out: &mut Vec<f32>, max: usize) -> usize {
         }
     }
     n
+}
+
+/// Current number of buffered mic samples (for the TX prefill cushion).
+pub fn mic_queue_len() -> usize {
+    MIC_QUEUE.lock().map(|q| q.len()).unwrap_or(0)
 }
 
 /// Discard any buffered mic audio (called when a key-up/stop occurs so stale

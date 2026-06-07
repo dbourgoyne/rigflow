@@ -3,8 +3,8 @@
 //! client; the server only ever sees key-down/key-up events (it cannot tell
 //! Space-bar keying from Text-to-CW) and keeps owning PTT/sequencing/safety.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn timing_units_and_gaps() {
         let unit = Duration::from_secs_f32(1200.0 / 20.0 / 1000.0); // 60 ms
-                                                                    // "A" = .-  → dit(1u) gap(1u) dah(3u), no trailing gap (end of msg).
+        // "A" = .-  → dit(1u) gap(1u) dah(3u), no trailing gap (end of msg).
         let a = encode_schedule("A", 20);
         assert_eq!(a.len(), 2);
         assert_eq!(a[0], (unit, unit)); // dit, intra-char gap = 1u

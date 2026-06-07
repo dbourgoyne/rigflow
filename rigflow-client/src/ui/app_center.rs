@@ -1,11 +1,11 @@
 use super::app::RigflowApp;
-use crate::ui::layout::{LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH};
-use crate::ui::spectrum_view::{
-    draw_spectrum_plot, x_frac_to_frequency_hz, zoomed_visible_freq_range_hz, SpectrumInteraction,
-};
-use crate::ui::view_interaction::ViewMouseResult;
 use crate::ControlCommand;
 use crate::UiState;
+use crate::ui::layout::{LEFT_GUTTER, RIGHT_GUTTER, WATERFALL_IMAGE_HEIGHT, WATERFALL_IMAGE_WIDTH};
+use crate::ui::spectrum_view::{
+    SpectrumInteraction, draw_spectrum_plot, x_frac_to_frequency_hz, zoomed_visible_freq_range_hz,
+};
+use crate::ui::view_interaction::ViewMouseResult;
 use eframe::egui;
 use log::warn;
 
@@ -298,7 +298,8 @@ impl RigflowApp {
         let transmitting = snapshot.ssb_ptt_down
             || snapshot.cw_key_down
             || snapshot.tx_tone_running
-            || snapshot.tx_tune_running;
+            || snapshot.tx_tune_running
+            || snapshot.cat_ptt;
         if transmitting {
             ui.label(
                 egui::RichText::new("TX")

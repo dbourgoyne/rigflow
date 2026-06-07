@@ -47,9 +47,14 @@ pub fn incr_underruns() {
     UNDERRUNS.fetch_add(1, Ordering::Relaxed);
 }
 
-/// One TX-audio overrun event (producer outran the consumer; samples dropped).
-pub fn incr_overruns() {
-    OVERRUNS.fetch_add(1, Ordering::Relaxed);
+/// Record an overrun: the producer outran the consumer and `samples` were
+/// dropped.  This counts **dropped samples**, not events — with two free-running
+/// 48 kHz clocks the buffer pins at its cap and trims on nearly every packet, so
+/// an event count just tracks the packet rate; the dropped-sample total reflects
+/// the actual surplus (the clock-drift rate), which is what tells you whether
+/// there's a real problem.
+pub fn add_overrun_drops(samples: u64) {
+    OVERRUNS.fetch_add(samples, Ordering::Relaxed);
 }
 
 /// Reset the underrun/overrun counters (operator "Reset Counters").

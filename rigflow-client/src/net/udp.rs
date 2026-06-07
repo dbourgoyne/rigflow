@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
     net::udp_framing::{
-        is_valid_header, parse_media_header, STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL,
+        STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL, is_valid_header, parse_media_header,
     },
 };
 
@@ -61,6 +61,7 @@ pub fn handle_media_packet(
     ui_state: &Arc<Mutex<UiState>>,
     stats: &Arc<Mutex<MediaPacketStats>>,
     cw_decoder: &mut crate::cw_decode::CwDecoder,
+    digital_rx: &crate::digital_rx::DigitalRxOutput,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -83,7 +84,7 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
-            handle_audio_packet(payload, header.sequence, jitter, cw_decoder);
+            handle_audio_packet(payload, header.sequence, jitter, cw_decoder, digital_rx);
         }
 
         STREAM_TYPE_WATERFALL => {
@@ -136,6 +137,7 @@ fn handle_audio_packet(
     sequence: u32,
     jitter: &Arc<Mutex<JitterBuffer>>,
     cw_decoder: &mut crate::cw_decode::CwDecoder,
+    digital_rx: &crate::digital_rx::DigitalRxOutput,
 ) {
     if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
@@ -151,6 +153,10 @@ fn handle_audio_packet(
     // Feed the received audio to the CW decoder (no-op unless enabled).  This
     // only reads the samples — the receive audio path is untouched.
     cw_decoder.process(&samples);
+
+    // Mirror a copy to the digital RX output sink (no-op unless enabled).  This
+    // tap is post-server-volume; the speaker path below is unaffected.
+    digital_rx.push(&samples);
 
     if let Ok(mut jb) = jitter.lock() {
         jb.push_packet(sequence, samples);
