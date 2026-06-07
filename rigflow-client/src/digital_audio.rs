@@ -26,7 +26,8 @@
 //! through the `pactl` CLI (works under both via the Pulse compat layer), so no
 //! extra crate dependency is needed.  Format is fixed mono / 48000 Hz / float32.
 
-use std::process::Command;
+use std::fs::File;
+use std::process::{Child, Command, Stdio};
 
 /// Sink Rigflow plays RX audio into (the remap master).
 pub const DIGITAL_OUTPUT_NAME: &str = "RigflowDigitalOutput";
@@ -52,6 +53,9 @@ pub struct DigitalAudio {
     rx_module: Option<u32>,
     /// `module-null-sink` for `RigflowDigitalInput`, if we created it.
     input_module: Option<u32>,
+    /// Silent playback that holds `RigflowDigitalInput` active so its monitor
+    /// never suspends (keeps TX capture warm at key-down).  Killed on Drop.
+    input_keepalive: Option<Child>,
     output_available: bool,
     rx_available: bool,
     input_available: bool,
@@ -67,10 +71,33 @@ impl DigitalAudio {
         let (rx_available, rx_module) = ensure_rx_remap_source();
         let (input_available, input_module) = ensure_input_sink();
 
+        // Hold the input sink permanently active with a silent playback stream so
+        // PipeWire/Pulse never suspends it on idle.  A monitor capture alone does
+        // not keep a sink busy, so without this the monitor sleeps between overs
+        // and the TX capture (parec) starves for ~1 s at the next key-down.  The
+        // silence mixes harmlessly with the app's TX audio (silence + FT8 = FT8).
+        let input_keepalive = if input_available {
+            match spawn_input_keepalive() {
+                Some(c) => {
+                    log::info!("[digital-audio] {DIGITAL_INPUT_NAME} keep-alive started");
+                    Some(c)
+                }
+                None => {
+                    log::warn!(
+                        "[digital-audio] {DIGITAL_INPUT_NAME} keep-alive unavailable (no pacat/pw-cat)"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             output_module,
             rx_module,
             input_module,
+            input_keepalive,
             output_available,
             rx_available,
             input_available,
@@ -95,6 +122,12 @@ impl DigitalAudio {
 
 impl Drop for DigitalAudio {
     fn drop(&mut self) {
+        // Stop the silence keep-alive before unloading its sink.
+        if let Some(mut c) = self.input_keepalive.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+            log::info!("[digital-audio] {DIGITAL_INPUT_NAME} keep-alive stopped");
+        }
         // Unload in reverse dependency order; only modules we created.
         if let Some(id) = self.input_module.take() {
             log::info!(
@@ -217,6 +250,51 @@ fn ensure_input_sink() -> (bool, Option<u32>) {
             (false, None)
         }
     }
+}
+
+/// Spawn a silent playback into `RigflowDigitalInput` to keep the sink active
+/// (so its monitor never suspends).  Reads zeros from `/dev/zero` — pacat paces
+/// reads to the sink rate, so this is real-time silence, not a busy loop.  Tries
+/// `pacat` (Pulse/PipeWire-pulse) then `pw-cat` (PipeWire-native).
+fn spawn_input_keepalive() -> Option<Child> {
+    let zero = File::open("/dev/zero").ok()?;
+    let pacat = Command::new("pacat")
+        .args([
+            "--playback",
+            "--raw",
+            &format!("--device={DIGITAL_INPUT_NAME}"),
+            &format!("--rate={RATE_HZ}"),
+            &format!("--channels={CHANNELS}"),
+            &format!("--format={FORMAT}"),
+        ])
+        .stdin(Stdio::from(zero))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    if let Ok(c) = pacat {
+        return Some(c);
+    }
+
+    let zero = File::open("/dev/zero").ok()?;
+    Command::new("pw-cat")
+        .args([
+            "--playback",
+            "--raw",
+            "--target",
+            DIGITAL_INPUT_NAME,
+            "--rate",
+            RATE_HZ,
+            "--channels",
+            CHANNELS,
+            "--format",
+            "f32",
+            "-",
+        ])
+        .stdin(Stdio::from(zero))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()
 }
 
 /// Return true if a `pactl list short <kind>` entry with `name` exists.

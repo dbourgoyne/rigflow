@@ -187,6 +187,42 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.digital_rx))
         .unwrap_or_else(|_| crate::digital_rx::DigitalRxOutput::new());
 
+    // --- Dedicated mic-TX send thread -------------------------------------
+    // Mic / digital-TX audio is sent from its own paced thread, NOT the media
+    // loop.  The media loop processes the inbound full-duplex RX/waterfall flood
+    // and locks `ui_state` every iteration, so a slow UI frame holding that lock
+    // stalled the mic send for tens of ms — long enough to drain the server's TX
+    // queue and starve the modulator (underruns).  This thread only drains the
+    // mic ring and sends UDP, never locking `ui_state`, so delivery stays smooth.
+    // The server address is learned by the media loop at RegisterUdp and shared.
+    let mic_server_addr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    {
+        let mic_socket = socket.try_clone()?;
+        let mic_addr = Arc::clone(&mic_server_addr);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(5));
+                let samples = mic_shared.drain_tx();
+                if samples.is_empty() {
+                    continue;
+                }
+                let Some(addr) = mic_addr.lock().ok().and_then(|g| g.clone()) else {
+                    continue;
+                };
+                for chunk in samples.chunks(256) {
+                    let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
+                    pkt.extend_from_slice(&MAGIC.to_be_bytes());
+                    pkt.push(VERSION);
+                    pkt.push(STREAM_TYPE_MIC_AUDIO);
+                    for &s in chunk {
+                        pkt.extend_from_slice(&s.to_le_bytes());
+                    }
+                    let _ = mic_socket.send_to(&pkt, &addr);
+                }
+            }
+        });
+    }
+
     // --- Media thread ------------------------------------------------------
 
     thread::spawn(move || {
@@ -196,9 +232,6 @@ pub fn start_media_runtime(
         // packet (no-op unless the operator enabled decode).
         let mut cw_decoder =
             crate::cw_decode::CwDecoder::new(cw_decode_shared, OUTPUT_SAMPLE_RATE as f32);
-
-        // Server address for outbound mic-audio packets (learned at RegisterUdp).
-        let mut mic_server_addr: Option<String> = None;
 
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -284,32 +317,16 @@ pub fn start_media_runtime(
                             Ok(_) => info!("Sent UDP registration to {}", addr),
                             Err(e) => error!("UDP registration failed to {}: {}", addr, e),
                         }
-                        // Same endpoint receives mic-audio packets.
-                        mic_server_addr = Some(addr);
-                    }
-                }
-            }
-
-            // --- Send buffered mic audio (SSB mic TX) ---------------------
-            // Drain the capture ring and send mono-f32 packets to the server.
-            // Loss-tolerant; only active while keyed (ring is empty otherwise).
-            {
-                let mic = mic_shared.drain_tx();
-                if !mic.is_empty() {
-                    if let Some(addr) = &mic_server_addr {
-                        for chunk in mic.chunks(256) {
-                            let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
-                            pkt.extend_from_slice(&MAGIC.to_be_bytes());
-                            pkt.push(VERSION);
-                            pkt.push(STREAM_TYPE_MIC_AUDIO);
-                            for &s in chunk {
-                                pkt.extend_from_slice(&s.to_le_bytes());
-                            }
-                            let _ = socket.send_to(&pkt, addr);
+                        // Same endpoint receives mic-audio packets — hand it to
+                        // the dedicated mic-send thread.
+                        if let Ok(mut g) = mic_server_addr.lock() {
+                            *g = Some(addr);
                         }
                     }
                 }
             }
+
+            // (Mic-TX audio is sent from the dedicated thread above, not here.)
 
             // --- Receive UDP packets --------------------------------------
 

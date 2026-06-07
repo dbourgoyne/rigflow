@@ -71,10 +71,15 @@ impl DigitalTxInput {
     pub fn set_active(&self, on: bool) {
         if self.active.swap(on, Ordering::Relaxed) != on {
             if on {
+                // Claim the TX ring as the sole producer, then enable streaming so
+                // the media thread forwards it.  Without claiming it, the always-on
+                // mic capture would also push (≈2× the consume rate → overrun).
+                self.mic_shared.set_external_tx_source(true);
                 self.mic_shared.set_tx_streaming(true);
                 log::info!("[digital-tx] routing {DIGITAL_INPUT_NAME}.monitor → TX");
             } else {
                 self.mic_shared.set_tx_streaming(false);
+                self.mic_shared.set_external_tx_source(false);
                 log::info!("[digital-tx] TX audio routing stopped");
             }
         }
@@ -94,28 +99,38 @@ impl DigitalTxInput {
 
 /// Capture thread: owns the `parec`/`pw-record` child and pumps its stdout into
 /// the mic-TX ring.  The blocking read paces us to real time (monitor sources
-/// produce ~48 kHz continuously), so no extra sleeping is needed while keyed.
+/// produce ~48 kHz continuously), so no extra sleeping is needed.
+///
+/// The recorder is kept **warm across overs**: `parec`'s PulseAudio connection
+/// takes ~1–2 s to start streaming, so restarting it on every key-down put
+/// silence at the front of each transmission (startup underruns).  Once we've
+/// been keyed at least once we leave the recorder running and just *discard* its
+/// samples while unkeyed — so the next key-down forwards live audio instantly.
 fn capture_loop(shared: Arc<DigitalTxInput>) {
     let mut child: Option<Child> = None;
     // Holds a partial float across reads so 4-byte samples stay aligned.
     let mut leftover: Vec<u8> = Vec::new();
     let mut buf = [0u8; 4096];
+    // Set once the recorder has ever been started; from then on we keep it warm.
+    let mut warmed = false;
 
     loop {
-        // Unkeyed → stop the recorder and idle.
-        if !shared.active.load(Ordering::Relaxed) {
-            stop_child(&mut child);
+        let active = shared.active.load(Ordering::Relaxed);
+
+        // Idle without spawning until the first key-down, so a never-used digital
+        // interface doesn't hold an open recorder (or spam if the source is gone).
+        if !active && !warmed {
             shared.available.store(false, Ordering::Relaxed);
-            leftover.clear();
             thread::sleep(Duration::from_millis(100));
             continue;
         }
 
-        // Keyed → ensure a recorder is running.
+        // Ensure a recorder is running (kept alive between overs once warmed).
         if child.is_none() {
             match spawn_recorder() {
                 Some(c) => {
                     child = Some(c);
+                    warmed = true;
                     shared.available.store(true, Ordering::Relaxed);
                     log::info!("[digital-tx] capturing {DIGITAL_INPUT_NAME}.monitor");
                 }
@@ -141,7 +156,8 @@ fn capture_loop(shared: Arc<DigitalTxInput>) {
             }
         }
 
-        // Read a chunk from stdout (blocks ~ real time).
+        // Read a chunk from stdout (blocks ~ real time).  We read whether or not
+        // we're keyed, to keep the recorder's pipe drained and its stream live.
         let read = child
             .as_mut()
             .and_then(|c| c.stdout.as_mut())
@@ -163,17 +179,18 @@ fn capture_loop(shared: Arc<DigitalTxInput>) {
             None => continue,
         };
 
-        // Convert leftover + new bytes into f32 LE samples; keep any remainder.
+        // Accumulate bytes; forward whole f32 samples only while keyed, otherwise
+        // discard them (recorder stays warm but the ring isn't fed).
         leftover.extend_from_slice(&buf[..n]);
         let full = leftover.len() / 4;
         if full > 0 {
-            let mut samples = Vec::with_capacity(full);
-            for chunk in leftover[..full * 4].chunks_exact(4) {
-                samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+            if active {
+                let mut samples = Vec::with_capacity(full);
+                for chunk in leftover[..full * 4].chunks_exact(4) {
+                    samples.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+                }
+                shared.mic_shared.push_tx(&samples);
             }
-            // No-op unless mic-TX streaming is on (set in set_active), so a stray
-            // read during teardown can't leak into the next over.
-            shared.mic_shared.push_tx(&samples);
             leftover.drain(..full * 4);
         }
     }

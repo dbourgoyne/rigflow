@@ -826,7 +826,8 @@ impl RigflowApp {
         // Transport-health counters + reset (server-side counters).
         ui.horizontal(|ui| {
             ui.label(format!("Underruns: {}", diag.underruns));
-            ui.label(format!("Overruns: {}", diag.overruns));
+            // `overruns` counts dropped samples (clock-drift surplus), not events.
+            ui.label(format!("Overrun drops: {} smp", diag.overruns));
             if ui.button("Reset Counters").clicked() {
                 self.send_radio_msg(ClientRadioMessage::ResetTxAudioDiag);
             }
