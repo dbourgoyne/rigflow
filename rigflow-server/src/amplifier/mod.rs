@@ -1,9 +1,8 @@
 //! Amplifier integration (Phase 1: Hardrock-50, read-only).
 //!
-//! Auto-detects an amplifier over a bidirectional transport (the Pi USB serial
-//! link) and polls its status ~1 Hz, publishing a generic [`AmplifierStatus`].
-//! Detection and polling are skipped for a one-way transport, so an unconfigured
-//! or write-only link correctly reports "no amplifier".
+//! Auto-detects an amplifier over the USB serial link and polls its status
+//! ~1 Hz, publishing a generic [`AmplifierStatus`].  When no amplifier replies
+//! (port absent or nothing connected) the status stays at `model: None`.
 
 pub mod hr50;
 pub mod serial;
@@ -28,8 +27,7 @@ const DETECT_RETRY: Duration = Duration::from_millis(2000);
 const MAX_POLL_FAILS: u32 = 3;
 
 /// Run the detect + poll loop until `stop` is set, invoking `publish` with the
-/// current status whenever it changes.  Returns immediately for a non-bidirectional
-/// transport (status needs replies).
+/// current status whenever it changes.
 pub fn run_amplifier_poller<F>(
     mut transport: Box<dyn AmplifierTransport>,
     stop: Arc<AtomicBool>,
@@ -37,10 +35,6 @@ pub fn run_amplifier_poller<F>(
 ) where
     F: FnMut(&AmplifierStatus),
 {
-    if !transport.is_bidirectional() {
-        return;
-    }
-
     let mut status = AmplifierStatus::default();
     let mut detected = false;
     let mut fails = 0u32;

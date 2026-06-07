@@ -148,10 +148,6 @@ impl AmplifierTransport for SerialTransport {
             }
         }
     }
-
-    fn is_bidirectional(&self) -> bool {
-        true
-    }
 }
 
 impl Drop for SerialTransport {
