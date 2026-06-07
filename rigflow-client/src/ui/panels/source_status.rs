@@ -112,24 +112,22 @@ impl RigflowApp {
                 );
                 ui.end_row();
 
-                // Last-transmission telemetry (HRMX), shown once a TX has happened.
-                if amp.tx_pep_w.is_some() || amp.tx_avg_w.is_some() || amp.tx_swr.is_some() {
-                    ui.label("    Last TX");
-                    let pep = amp
-                        .tx_pep_w
-                        .map(|w| format!("PEP {w:.0} W"))
-                        .unwrap_or_default();
-                    let avg = amp
-                        .tx_avg_w
-                        .map(|w| format!("Avg {w:.0} W"))
-                        .unwrap_or_default();
-                    let swr = amp
-                        .tx_swr
-                        .map(|s| format!("SWR {s:.1}"))
-                        .unwrap_or_else(|| "SWR —".to_string());
-                    ui.label(format!("{pep}  {avg}  {swr}").trim().to_string());
-                    ui.end_row();
-                }
+                // Last-transmission telemetry (HRMX).  Always rendered (with "—"
+                // placeholders) so the panel height stays constant across TX/RX —
+                // a row that pops in/out makes the menu jump.
+                ui.label("    Last TX");
+                let dash = || "—".to_string();
+                let pep = amp
+                    .tx_pep_w
+                    .map(|w| format!("{w:.0} W"))
+                    .unwrap_or_else(dash);
+                let avg = amp
+                    .tx_avg_w
+                    .map(|w| format!("{w:.0} W"))
+                    .unwrap_or_else(dash);
+                let swr = amp.tx_swr.map(|s| format!("{s:.1}")).unwrap_or_else(dash);
+                ui.label(format!("PEP {pep}  Avg {avg}  SWR {swr}"));
+                ui.end_row();
 
                 // ATU controls — only when the amp reports an ATU is installed.
                 if amp.atu_present {

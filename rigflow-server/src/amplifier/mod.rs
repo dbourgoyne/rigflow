@@ -37,8 +37,11 @@ const SET_DRAIN: Duration = Duration::from_millis(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(1000);
 /// Retry cadence while no amplifier is detected.
 const DETECT_RETRY: Duration = Duration::from_millis(2000);
-/// Consecutive poll failures before declaring the amplifier gone.
-const MAX_POLL_FAILS: u32 = 3;
+/// Consecutive poll failures before declaring the amplifier gone.  Generous so a
+/// transmission doesn't blank the panel: TX RF commonly garbles the serial line
+/// for the length of an over (e.g. a 15 s FT8 over), and the amp is still there —
+/// we keep showing the last-known status until it's been silent this long.
+const MAX_POLL_FAILS: u32 = 30;
 
 /// A control command for the amplifier, queued from the worker to the poller.
 #[derive(Debug, Clone, Copy)]
