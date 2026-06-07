@@ -1,6 +1,7 @@
 use crate::UiState;
 use crate::ui::app::RigflowApp;
 use eframe::egui;
+use rigflow_core::radio::amplifier::AmplifierStatus;
 use rigflow_core::radio::source_status::SourceStatus;
 
 impl RigflowApp {
@@ -43,7 +44,55 @@ impl RigflowApp {
         draw_health_group(ui, status);
         ui.add_space(4.0);
         draw_rf_power_group(ui, status);
+
+        // Generic amplifier row — always shown (Phase 1: HR50).  Kept
+        // amplifier-agnostic so future models need no UI redesign.
+        ui.add_space(4.0);
+        draw_amplifier_group(ui, &snapshot.amplifier_status);
     }
+}
+
+/// Amplifier status: a generic top-level "Amplifier: <model|None>" row, with
+/// detail fields shown only when a model is detected.
+fn draw_amplifier_group(ui: &mut egui::Ui, amp: &AmplifierStatus) {
+    egui::Grid::new("amplifier_status_grid")
+        .num_columns(2)
+        .spacing([8.0, 2.0])
+        .show(ui, |ui| {
+            ui.label("Amplifier");
+            match amp.model {
+                Some(model) => ui.strong(model.label()),
+                None => ui.label("None"),
+            };
+            ui.end_row();
+
+            // Detail fields only when an amplifier is present.
+            if amp.model.is_some() {
+                ui.label("    Mode");
+                ui.label(amp.mode.as_deref().unwrap_or("—"));
+                ui.end_row();
+
+                ui.label("    Band");
+                ui.label(amp.band.as_deref().unwrap_or("—"));
+                ui.end_row();
+
+                ui.label("    Temperature");
+                ui.label(
+                    amp.temperature_c
+                        .map(|t| format!("{t:.0} °C"))
+                        .unwrap_or_else(|| "—".to_string()),
+                );
+                ui.end_row();
+
+                ui.label("    Voltage");
+                ui.label(
+                    amp.voltage_v
+                        .map(|v| format!("{v:.1} V"))
+                        .unwrap_or_else(|| "—".to_string()),
+                );
+                ui.end_row();
+            }
+        });
 }
 
 /// "Health" group: firmware version, ADC overload, temperature, current.

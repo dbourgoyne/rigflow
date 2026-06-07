@@ -1,13 +1,14 @@
 use rigflow_core::{
     dsp::modes::{DeemphasisMode, DemodMode, Sideband},
     radio::{
+        HardwareKind, LeaseId, RadioCapabilities, RadioId, RadioSourceKind,
+        amplifier::AmplifierStatus,
         iq_recording::IqRecordingStatus,
         source_control::{DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState},
         source_status::SourceStatus,
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
-        HardwareKind, LeaseId, RadioCapabilities, RadioId, RadioSourceKind,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -400,6 +401,10 @@ pub enum ServerRadioMessage {
         /// Current source telemetry / status fields.
         source_status: SourceStatus,
 
+        /// Attached amplifier status (Phase 1: HR50). `model: None` = no amp.
+        #[serde(default)]
+        amplifier_status: AmplifierStatus,
+
         /// Receive IQ recording status (Phase 1).
         #[serde(default)]
         iq_recording_status: IqRecordingStatus,
@@ -462,6 +467,10 @@ pub enum ServerRadioMessage {
 
         /// Changed source telemetry; `None` means no change since last update.
         source_status: Option<SourceStatus>,
+
+        /// Changed amplifier status; `None` means no change since last update.
+        #[serde(default)]
+        amplifier_status: Option<AmplifierStatus>,
 
         /// Changed IQ recording status; `None` means no change since last update.
         #[serde(default)]

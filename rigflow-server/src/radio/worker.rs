@@ -30,6 +30,7 @@ use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
+use rigflow_core::radio::amplifier::AmplifierStatus;
 use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
 use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
@@ -79,6 +80,8 @@ struct SharedControlState {
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
+    /// Latest amplifier status (read-only, written by the amplifier poller thread).
+    pub amplifier_status: AmplifierStatus,
 
     /// Set by command thread when a Spot/SWR measurement arrives; consumed
     /// (taken) by the capture thread which owns the IQ source.  TX drive comes
@@ -380,6 +383,7 @@ fn build_runtime_state(
         volume_percent: control.volume_percent,
         source_control: control.source_control.clone(),
         source_status: control.source_status.clone(),
+        amplifier_status: control.amplifier_status.clone(),
         iq_recording_status: control.iq_recording_status.clone(),
         tx_audio_diag: crate::tx_diag::snapshot(),
         last_tx_tune_result: control.last_tx_tune_result.clone(),
@@ -466,6 +470,7 @@ fn run_iq_worker_threads(
         volume_percent: 50,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
+        amplifier_status: AmplifierStatus::default(),
         pending_tx_tune_test: None,
         last_tx_tune_result: None,
         pending_swr_sweep: None,
@@ -582,6 +587,20 @@ fn run_iq_worker_threads(
         startup_info.runtime.waterfall_frame_rate_hz,
     );
 
+    // Amplifier (HR50) status poller — Phase 1, HL2 only, when a serial device
+    // is configured.  Runs read-only; updates `control.amplifier_status`, which
+    // the DSP/status path publishes to clients like any other telemetry.
+    let amplifier_thread = if matches!(source_kind, SourceKind::HermesLite2) {
+        spawn_amplifier_thread(
+            descriptor.clone(),
+            server_cfg.clone(),
+            control.clone(),
+            stop_flag.clone(),
+        )
+    } else {
+        None
+    };
+
     let exit = loop {
         if stop_requested(&stop_flag) {
             break WorkerExit::Clean {
@@ -607,6 +626,9 @@ fn run_iq_worker_threads(
     let _ = capture_thread.join();
     let _ = dsp_thread.join();
     let _ = waterfall_thread.join();
+    if let Some(h) = amplifier_thread {
+        let _ = h.join();
+    }
 
     match &exit {
         WorkerExit::Clean { reason } => {
@@ -630,6 +652,40 @@ fn run_iq_worker_threads(
     );
 
     exit
+}
+
+/// Spawn the amplifier status poller for an HL2 worker (Phase 1).
+///
+/// Returns `None` (no thread) when no `--hr50-serial` is configured or the port
+/// can't be opened — in which case `amplifier_status` stays at its default
+/// (`model: None`) and the UI shows "Amplifier: None".  The poller writes
+/// `control.amplifier_status` on change; the existing status path publishes it.
+fn spawn_amplifier_thread(
+    descriptor: RadioDescriptor,
+    server_cfg: ServerConfig,
+    control: Arc<Mutex<SharedControlState>>,
+    stop_flag: Arc<AtomicBool>,
+) -> Option<thread::JoinHandle<()>> {
+    let path = server_cfg.hr50_serial.clone()?;
+    let baud = server_cfg.hr50_baud;
+    let radio_id = descriptor.id.0;
+
+    Some(thread::spawn(move || {
+        let transport = match crate::amplifier::serial::SerialTransport::open(&path, baud) {
+            Ok(t) => t,
+            Err(e) => {
+                warn!("[radio-worker {radio_id}] HR50 serial '{path}' open failed: {e}");
+                return;
+            }
+        };
+        info!("[radio-worker {radio_id}] HR50 amplifier polling on {path} @ {baud} 8N1");
+        crate::amplifier::run_amplifier_poller(Box::new(transport), stop_flag, |status| {
+            if let Ok(mut cs) = control.lock() {
+                cs.amplifier_status = status.clone();
+            }
+        });
+        debug!("[radio-worker {radio_id}] HR50 amplifier poller stopped");
+    }))
 }
 
 fn spawn_command_thread(

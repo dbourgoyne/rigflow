@@ -44,6 +44,15 @@ pub struct ServerConfig {
 
     pub hl2_sample_rate_hz: u32,
 
+    /// Serial device for the Hardrock-50 amplifier (Phase 1, read-only status).
+    /// Defaults to `/dev/ttyUSB0` (the FTDI ACC link on the rack Pi); override
+    /// with `--hr50-serial`. If the device is absent the poller fails to open it
+    /// and the UI shows "Amplifier: None". `None` disables amplifier polling.
+    pub hr50_serial: Option<String>,
+    /// Baud rate for the HR50 serial link. Defaults to 19200 (the amp's ACC Baud
+    /// Rate in this rig); override with `--hr50-baud`.
+    pub hr50_baud: u32,
+
     pub center_freq_hz: f32,
     pub target_freq_hz: f32,
 }
@@ -74,6 +83,9 @@ impl Default for ServerConfig {
             rtlsdr_direct_sampling: false,
 
             hl2_sample_rate_hz: 384_000,
+
+            hr50_serial: Some("/dev/ttyUSB0".to_string()),
+            hr50_baud: 19200,
 
             center_freq_hz: 101_100_000.0,
             target_freq_hz: 101_100_000.0,
@@ -111,6 +123,21 @@ impl ServerConfig {
 
                 "--wav-file" => {
                     cfg.wav_file = next_arg(&mut args, "--wav-file")?;
+                }
+
+                "--hr50-serial" => {
+                    let value = next_arg(&mut args, "--hr50-serial")?;
+                    // `none`/empty disables amplifier polling (default opens the port).
+                    cfg.hr50_serial = if value.is_empty() || value.eq_ignore_ascii_case("none") {
+                        None
+                    } else {
+                        Some(value)
+                    };
+                }
+
+                "--hr50-baud" => {
+                    cfg.hr50_baud =
+                        parse_next_arg(&mut args, "--hr50-baud", "invalid --hr50-baud")?;
                 }
 
                 "--fake-sample-rate" => {
@@ -219,6 +246,11 @@ RTL-SDR source:
 
 Hermes Lite 2 source:
   --hl2-sample-rate HZ   (default: 384000)
+
+Amplifier (Phase 1, read-only status):
+  --hr50-serial PATH     serial device for the Hardrock-50 (default: /dev/ttyUSB0;
+                         "none" to disable amplifier polling)
+  --hr50-baud RATE       (default: 19200)
 "#
         .to_string()
     }
