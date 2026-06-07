@@ -8,7 +8,7 @@ pub mod swr_sweep;
 pub mod tx_audio_diag;
 pub mod tx_tune;
 
-pub use amplifier::{AmplifierModel, AmplifierStatus};
+pub use amplifier::{AmplifierAtuMode, AmplifierKeyingMode, AmplifierModel, AmplifierStatus};
 pub use iq_recording::IqRecordingStatus;
 pub use model::{
     HardwareKind, LeaseId, RadioCapabilities, RadioDescriptor, RadioId, RadioSourceKind,

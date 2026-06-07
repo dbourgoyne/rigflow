@@ -1,21 +1,49 @@
-//! Hardrock-50 (HR50) serial protocol — Phase 1, read-only.
+//! Hardrock-50 (HR50) serial protocol.
 //!
-//! Only the two commands Phase 1 needs are used (per the integration spec):
-//!
-//! - `HRRX;` → `RX,<mode>,<band>,<temp>,<voltage>;`  e.g. `RX,QRP,12M,27C,13.2V;`
-//! - `HRVT;` → `HRVTxx.xV;`                          e.g. `HRVT13.2V;`
+//! Phase 1 (read-only): `HRRX;` (mode/band/temp/voltage), `HRVT;` (voltage).
+//! Phase 2 adds frequency tracking + control + TX/ATU telemetry:
+//! - `FAxxxxxxxxxxx;` — set VFO freq so the amp picks band/segment (fire-and-forget).
+//! - `HRMDx;`         — keying mode 0=OFF 1=PTT 2=COR 3=QRP.
+//! - `HRATx;`         — ATU 0=not present, 1=bypass, 2=active (SET/GET).
+//! - `HRTU1;`         — tune on the next TX.
+//! - `HRMX;` → `HRMX P40 A25 S12 T28C` — last TX PEP/avg/SWR/temp (SWR = S/10; S00 = too low).
 //!
 //! Commands are ASCII, semicolon-terminated; the HR50 always replies in upper
-//! case. Temperature in the `HRRX;` reply carries its scale as a trailing letter
-//! (`C` or `F`) — the user's amp is set to Fahrenheit, so we **normalize to °C**.
+//! case. Temperature carries its scale as a trailing `C`/`F`, normalized to °C.
 //!
 //! These parsers are transport-independent (they take the decoded response
 //! string) so they can be unit-tested without hardware.
+
+use rigflow_core::radio::amplifier::AmplifierKeyingMode;
 
 /// Command to read the HR50 RX status (mode, band, temperature, voltage).
 pub const CMD_HRRX: &[u8] = b"HRRX;";
 /// Command to read the HR50 DC input voltage.
 pub const CMD_HRVT: &[u8] = b"HRVT;";
+/// Command to read the last-transmission PEP/avg/SWR/temp.
+pub const CMD_HRMX: &[u8] = b"HRMX;";
+/// Command to read the ATU mode/presence (`HRATx;` GET).
+pub const CMD_HRAT: &[u8] = b"HRAT;";
+
+/// Build a `FAxxxxxxxxxxx;` frequency command (11-digit Hz).
+pub fn cmd_fa(hz: u64) -> Vec<u8> {
+    format!("FA{hz:011};").into_bytes()
+}
+
+/// Build a `HRMDx;` keying-mode SET command.
+pub fn cmd_hrmd(mode: AmplifierKeyingMode) -> Vec<u8> {
+    format!("HRMD{};", mode.hr50_code()).into_bytes()
+}
+
+/// Build a `HRATx;` ATU-mode SET command (`code` from `AmplifierAtuMode::hr50_code`).
+pub fn cmd_hrat(code: u8) -> Vec<u8> {
+    format!("HRAT{code};").into_bytes()
+}
+
+/// Build the `HRTU1;` "tune on next TX" command.
+pub fn cmd_hrtu() -> Vec<u8> {
+    b"HRTU1;".to_vec()
+}
 
 /// Parsed fields of an `HRRX;` response.  All fields are optional so a partially
 /// malformed reply still yields whatever was readable.
@@ -63,6 +91,57 @@ pub fn parse_hrvt(resp: &str) -> Option<f32> {
     let rest = &resp[start + 4..];
     let end = rest.find(';').unwrap_or(rest.len());
     parse_voltage(&rest[..end])
+}
+
+/// Parsed fields of an `HRMX;` response (last transmission).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Hr50Mx {
+    /// Peak envelope power, watts.
+    pub pep_w: Option<f32>,
+    /// Average forward power, watts.
+    pub avg_w: Option<f32>,
+    /// SWR; `None` when the amp reported `S00` (power too low to measure).
+    pub swr: Option<f32>,
+}
+
+/// Parse `HRMX P40 A25 S12 T28C` → PEP 40 W, avg 25 W, SWR 1.2.  Tokens are
+/// space-separated and order-independent; `S00` means SWR was unmeasurable.
+pub fn parse_hrmx(resp: &str) -> Option<Hr50Mx> {
+    let start = resp.find("HRMX")?;
+    let rest = &resp[start + 4..];
+    let body = match rest.find(';') {
+        Some(end) => &rest[..end],
+        None => rest,
+    };
+
+    let mut mx = Hr50Mx::default();
+    for tok in body.split_whitespace() {
+        let (tag, val) = tok.split_at(1);
+        match tag {
+            "P" | "p" => mx.pep_w = val.trim().parse().ok(),
+            "A" | "a" => mx.avg_w = val.trim().parse().ok(),
+            "S" | "s" => {
+                // SWR is reported ×10 (S12 = 1.2); S00 = too low to measure.
+                mx.swr = val.trim().parse::<f32>().ok().and_then(|s| {
+                    if s <= 0.0 {
+                        None
+                    } else {
+                        Some(s / 10.0)
+                    }
+                });
+            }
+            _ => {} // T<temp> etc. ignored — temperature comes from HRRX.
+        }
+    }
+    Some(mx)
+}
+
+/// Parse an `HRATx;` response → ATU code (0 = not present, 1 = bypass, 2 = active).
+pub fn parse_hrat(resp: &str) -> Option<u8> {
+    let start = resp.find("HRAT")?;
+    let rest = &resp[start + 4..];
+    let end = rest.find(';').unwrap_or(rest.len());
+    rest[..end].trim().parse().ok()
 }
 
 /// Parse a temperature token like `27C` or `80F`, returning **degrees Celsius**.
@@ -155,5 +234,44 @@ mod tests {
         assert!(parse_hrvt("RX,QRP,12M,27C,13.2V;").is_none());
         assert!(parse_hrvt("HRVT;").is_none());
         assert!(parse_hrvt("").is_none());
+    }
+
+    #[test]
+    fn hrmx_example() {
+        let mx = parse_hrmx("HRMX P40 A25 S12 T28C").unwrap();
+        assert!((mx.pep_w.unwrap() - 40.0).abs() < 0.01);
+        assert!((mx.avg_w.unwrap() - 25.0).abs() < 0.01);
+        assert!((mx.swr.unwrap() - 1.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn hrmx_low_power_swr_is_none() {
+        // S00 = not enough power to measure SWR.
+        let mx = parse_hrmx("HRMX P02 A01 S00 T30C;").unwrap();
+        assert!((mx.pep_w.unwrap() - 2.0).abs() < 0.01);
+        assert_eq!(mx.swr, None);
+    }
+
+    #[test]
+    fn hrmx_malformed_is_none() {
+        assert!(parse_hrmx("RX,QRP,12M,27C,13.2V;").is_none());
+        assert!(parse_hrmx("").is_none());
+    }
+
+    #[test]
+    fn hrat_codes() {
+        assert_eq!(parse_hrat("HRAT0;"), Some(0)); // no ATU
+        assert_eq!(parse_hrat("HRAT1;"), Some(1)); // bypass
+        assert_eq!(parse_hrat("HRAT2;"), Some(2)); // active
+        assert_eq!(parse_hrat("noise HRAT 2 ;"), Some(2));
+        assert_eq!(parse_hrat("HRVT13.2V;"), None);
+    }
+
+    #[test]
+    fn command_builders() {
+        assert_eq!(cmd_fa(14_074_000), b"FA00014074000;".to_vec());
+        assert_eq!(cmd_hrmd(AmplifierKeyingMode::Ptt), b"HRMD1;".to_vec());
+        assert_eq!(cmd_hrat(2), b"HRAT2;".to_vec());
+        assert_eq!(cmd_hrtu(), b"HRTU1;".to_vec());
     }
 }

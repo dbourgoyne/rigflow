@@ -25,6 +25,90 @@ impl AmplifierModel {
     }
 }
 
+/// Amplifier keying mode (Phase 2 control).  HR50: OFF/PTT/COR/QRP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmplifierKeyingMode {
+    Off,
+    Ptt,
+    Cor,
+    Qrp,
+}
+
+impl AmplifierKeyingMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AmplifierKeyingMode::Off => "OFF",
+            AmplifierKeyingMode::Ptt => "PTT",
+            AmplifierKeyingMode::Cor => "COR",
+            AmplifierKeyingMode::Qrp => "QRP",
+        }
+    }
+
+    /// HR50 `HRMDx;` numeric code.
+    pub fn hr50_code(&self) -> u8 {
+        match self {
+            AmplifierKeyingMode::Off => 0,
+            AmplifierKeyingMode::Ptt => 1,
+            AmplifierKeyingMode::Cor => 2,
+            AmplifierKeyingMode::Qrp => 3,
+        }
+    }
+
+    /// Parse the keying-mode string the amp reports in `HRRX;` (mode field).
+    pub fn from_label(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "OFF" => Some(AmplifierKeyingMode::Off),
+            "PTT" => Some(AmplifierKeyingMode::Ptt),
+            "COR" => Some(AmplifierKeyingMode::Cor),
+            "QRP" => Some(AmplifierKeyingMode::Qrp),
+            _ => None,
+        }
+    }
+
+    /// All modes, for UI selectors.
+    pub const ALL: [AmplifierKeyingMode; 4] = [
+        AmplifierKeyingMode::Off,
+        AmplifierKeyingMode::Ptt,
+        AmplifierKeyingMode::Cor,
+        AmplifierKeyingMode::Qrp,
+    ];
+}
+
+/// Amplifier ATU engagement mode (Phase 2 control).  HR50: bypass/active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmplifierAtuMode {
+    Bypass,
+    Active,
+}
+
+impl AmplifierAtuMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AmplifierAtuMode::Bypass => "Bypass",
+            AmplifierAtuMode::Active => "Active",
+        }
+    }
+
+    /// HR50 `HRATx;` numeric code (1=bypass, 2=active; 0 = not present).
+    pub fn hr50_code(&self) -> u8 {
+        match self {
+            AmplifierAtuMode::Bypass => 1,
+            AmplifierAtuMode::Active => 2,
+        }
+    }
+
+    /// Map an `HRATx;` reply code to a mode (0 = not present → `None`).
+    pub fn from_hr50_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(AmplifierAtuMode::Bypass),
+            2 => Some(AmplifierAtuMode::Active),
+            _ => None,
+        }
+    }
+}
+
 /// Read-only amplifier telemetry, carried in the runtime state to the client.
 ///
 /// `model == None` means **no amplifier detected** → the UI shows
@@ -48,6 +132,18 @@ pub struct AmplifierStatus {
 
     /// DC input voltage in volts.
     pub voltage_v: Option<f32>,
+
+    /// Last transmission peak envelope power, watts (HR50 `HRMX`).
+    pub tx_pep_w: Option<f32>,
+    /// Last transmission average forward power, watts (HR50 `HRMX`).
+    pub tx_avg_w: Option<f32>,
+    /// Last transmission SWR (HR50 `HRMX`); `None` when power was too low to measure.
+    pub tx_swr: Option<f32>,
+
+    /// Whether an automatic antenna tuner is installed (HR50 `HRAT` ≠ 0).
+    pub atu_present: bool,
+    /// Current ATU engagement mode, when an ATU is present.
+    pub atu_mode: Option<AmplifierAtuMode>,
 
     /// Last communication/parse error (diagnostic only; not shown as a field).
     pub last_error: Option<String>,

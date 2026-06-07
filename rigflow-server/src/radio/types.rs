@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::{
-    amplifier::AmplifierStatus,
+    amplifier::{AmplifierAtuMode, AmplifierKeyingMode, AmplifierStatus},
     iq_recording::IqRecordingStatus,
     source_control::{DirectSamplingMode, GainMode, SourceControlState},
     source_status::SourceStatus,
@@ -253,6 +253,17 @@ pub enum WorkerCommand {
     },
     /// Stop a running TX test tone (release PTT, return to RX).
     StopTxTestTone,
+
+    /// Set the attached amplifier's keying mode (HR50: OFF/PTT/COR/QRP).
+    SetAmplifierKeyingMode {
+        mode: AmplifierKeyingMode,
+    },
+    /// Set the amplifier ATU engagement mode (bypass/active).
+    SetAmplifierAtuMode {
+        mode: AmplifierAtuMode,
+    },
+    /// Ask the amplifier ATU to tune on the next transmission.
+    TuneAmplifierAtu,
 }
 
 /// Worker lifecycle/status updates.

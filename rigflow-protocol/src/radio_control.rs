@@ -2,7 +2,7 @@ use rigflow_core::{
     dsp::modes::{DeemphasisMode, DemodMode, Sideband},
     radio::{
         HardwareKind, LeaseId, RadioCapabilities, RadioId, RadioSourceKind,
-        amplifier::AmplifierStatus,
+        amplifier::{AmplifierAtuMode, AmplifierKeyingMode, AmplifierStatus},
         iq_recording::IqRecordingStatus,
         source_control::{DirectSamplingMode, GainMode, SourceCapabilities, SourceControlState},
         source_status::SourceStatus,
@@ -298,6 +298,19 @@ pub enum ClientRadioMessage {
 
     /// Cancel an in-flight SWR sweep.
     CancelSwrSweep,
+
+    /// Set the attached amplifier's keying mode (HR50: OFF/PTT/COR/QRP).
+    SetAmplifierKeyingMode {
+        mode: AmplifierKeyingMode,
+    },
+
+    /// Set the amplifier ATU engagement mode (bypass/active).  No-op if no ATU.
+    SetAmplifierAtuMode {
+        mode: AmplifierAtuMode,
+    },
+
+    /// Ask the amplifier ATU to tune on the next transmission.
+    TuneAmplifierAtu,
 }
 
 /// Messages sent from server → client over WebSocket.

@@ -980,6 +980,51 @@ async fn handle_radio_message(
                 );
             }
         }
+
+        ClientRadioMessage::SetAmplifierKeyingMode { mode } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetAmplifierKeyingMode { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "amp_keying_mode_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::SetAmplifierAtuMode { mode } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetAmplifierAtuMode { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "amp_atu_mode_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::TuneAmplifierAtu => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::TuneAmplifierAtu)
+                    .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "amp_atu_tune_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
     }
 }
 

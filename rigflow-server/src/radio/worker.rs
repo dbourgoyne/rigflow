@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc as std_mpsc, Arc, Mutex,
 };
 use std::thread;
@@ -508,6 +508,14 @@ fn run_iq_worker_threads(
     // thread. Using AtomicU32 avoids a mutex on the hot path.
     let confirmed_sample_rate_hz = Arc::new(AtomicU32::new(0));
 
+    // Amplifier control channel + current-frequency mirror (for the HR50 poller,
+    // which owns the serial port). The command thread sends control commands and
+    // mirrors the tuned frequency here; the poller drains them.
+    let (amp_cmd_tx, amp_cmd_rx) = std_mpsc::channel::<crate::amplifier::AmpCommand>();
+    let amp_freq = Arc::new(AtomicU64::new(
+        control.lock().map(|c| c.target_freq_hz).unwrap_or(0),
+    ));
+
     // HL2 has a watchdog: if no C&C packets arrive in ~60 s it stops streaming.
     // The capture thread sends a keepalive C&C every 30 s to prevent this.
     let needs_cc_keepalive = matches!(source_kind, SourceKind::HermesLite2);
@@ -518,6 +526,8 @@ fn run_iq_worker_threads(
         stop_flag.clone(),
         stop_reason.clone(),
         fatal_tx.clone(),
+        amp_cmd_tx,
+        amp_freq.clone(),
     );
 
     let capture_thread = spawn_capture_thread(
@@ -587,15 +597,17 @@ fn run_iq_worker_threads(
         startup_info.runtime.waterfall_frame_rate_hz,
     );
 
-    // Amplifier (HR50) status poller — Phase 1, HL2 only, when a serial device
-    // is configured.  Runs read-only; updates `control.amplifier_status`, which
-    // the DSP/status path publishes to clients like any other telemetry.
+    // Amplifier (HR50) poller — HL2 only, when a serial device is configured.
+    // Detects + polls status, tracks frequency (FA) and applies control commands;
+    // updates `control.amplifier_status`, which the status path publishes.
     let amplifier_thread = if matches!(source_kind, SourceKind::HermesLite2) {
         spawn_amplifier_thread(
             descriptor.clone(),
             server_cfg.clone(),
             control.clone(),
             stop_flag.clone(),
+            amp_cmd_rx,
+            amp_freq.clone(),
         )
     } else {
         None
@@ -665,6 +677,8 @@ fn spawn_amplifier_thread(
     server_cfg: ServerConfig,
     control: Arc<Mutex<SharedControlState>>,
     stop_flag: Arc<AtomicBool>,
+    amp_cmd_rx: std_mpsc::Receiver<crate::amplifier::AmpCommand>,
+    amp_freq: Arc<AtomicU64>,
 ) -> Option<thread::JoinHandle<()>> {
     let path = server_cfg.hr50_serial.clone()?;
     let baud = server_cfg.hr50_baud;
@@ -679,21 +693,30 @@ fn spawn_amplifier_thread(
             }
         };
         info!("[radio-worker {radio_id}] HR50 amplifier polling on {path} @ {baud} 8N1");
-        crate::amplifier::run_amplifier_poller(Box::new(transport), stop_flag, |status| {
-            if let Ok(mut cs) = control.lock() {
-                cs.amplifier_status = status.clone();
-            }
-        });
+        crate::amplifier::run_amplifier_poller(
+            Box::new(transport),
+            stop_flag,
+            amp_cmd_rx,
+            amp_freq,
+            |status| {
+                if let Ok(mut cs) = control.lock() {
+                    cs.amplifier_status = status.clone();
+                }
+            },
+        );
         debug!("[radio-worker {radio_id}] HR50 amplifier poller stopped");
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_command_thread(
     cmd_rx: std_mpsc::Receiver<WorkerCommand>,
     control: Arc<Mutex<SharedControlState>>,
     stop_flag: Arc<AtomicBool>,
     stop_reason: Arc<Mutex<StopReason>>,
     fatal_tx: std_mpsc::Sender<WorkerExit>,
+    amp_cmd_tx: std_mpsc::Sender<crate::amplifier::AmpCommand>,
+    amp_freq: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop_requested(&stop_flag) {
@@ -703,6 +726,8 @@ fn spawn_command_thread(
                         if let Ok(mut control_state) = control.lock() {
                             control_state.target_freq_hz = hz;
                         }
+                        // Mirror to the amplifier poller for FA band tracking.
+                        amp_freq.store(hz, Ordering::Relaxed);
                     }
                     WorkerCommand::SetCenterFrequency { hz } => {
                         if let Ok(mut control_state) = control.lock() {
@@ -997,6 +1022,18 @@ fn spawn_command_thread(
                             cs.pending_iq_record_stop = true;
                             cs.pending_iq_record_start = false;
                         }
+                    }
+
+                    // Amplifier control — forwarded to the poller thread (which
+                    // owns the serial port).  Harmlessly dropped if no poller.
+                    WorkerCommand::SetAmplifierKeyingMode { mode } => {
+                        let _ = amp_cmd_tx.send(crate::amplifier::AmpCommand::SetKeyingMode(mode));
+                    }
+                    WorkerCommand::SetAmplifierAtuMode { mode } => {
+                        let _ = amp_cmd_tx.send(crate::amplifier::AmpCommand::SetAtuMode(mode));
+                    }
+                    WorkerCommand::TuneAmplifierAtu => {
+                        let _ = amp_cmd_tx.send(crate::amplifier::AmpCommand::TuneAtu);
                     }
                 },
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
