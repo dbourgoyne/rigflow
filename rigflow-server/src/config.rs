@@ -2,8 +2,6 @@ use std::env;
 
 use rigflow_core::dsp::modes::DemodMode;
 
-use crate::source::factory::SourceConfig;
-
 pub const WATERFALL_BINS: usize = 1024;
 pub const WATERFALL_FRAME_RATE_HZ: f32 = 20.0;
 
@@ -26,17 +24,15 @@ pub enum SourceKind {
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub demod: DemodMode,
-    pub source: SourceKind,
 
-    pub wav_file: String,
-    pub wav_dir: String,
+    /// Directory for IQ recordings and WAV-file "radio" discovery.
+    pub recordings_dir: String,
 
     pub fake_sample_rate_hz: f32,
     pub fake_tone_hz: f32,
     pub fake_center_freq_hz: f32,
     pub fake_target_freq_hz: f32,
 
-    pub rtlsdr_device_index: usize,
     pub rtlsdr_sample_rate_hz: u32,
     pub rtlsdr_gain_tenths_db: Option<i32>,
     pub rtlsdr_ppm_correction: i32,
@@ -44,19 +40,12 @@ pub struct ServerConfig {
 
     pub hl2_sample_rate_hz: u32,
 
-    /// Serial device for the Hardrock-50 amplifier.
-    ///
-    /// `Some("auto")` (the default) auto-detects: USB-serial ports are narrowed
-    /// by USB VID/PID to known converter chips, then each is probed with a
-    /// read-only `HRRX;` and only a port that answers as an HR50 is used — so
-    /// Rigflow never continuously talks to an unrelated serial device. An
-    /// explicit path (e.g. `--hr50-serial /dev/ttyUSB0`) opens that device
-    /// directly. `None` (`--hr50-serial none`) disables amplifier polling.
+    /// Hardrock-50 amplifier serial: `Some("auto")` (the default) auto-detects
+    /// (narrow USB-serial ports by VID/PID, probe each with a read-only `HRRX;`,
+    /// adopt only one that answers as an HR50, baud auto-scanned); `Some(path)`
+    /// or `Some("path:baud")` opens that device directly (default baud 19200);
+    /// `None` (`--hr50-serial none`) disables amplifier polling.
     pub hr50_serial: Option<String>,
-    /// Baud rate for the HR50 serial link. In `auto` mode this is the baud tried
-    /// first before the rest of the probe list; with an explicit path it is the
-    /// baud used. Defaults to 19200 (the amp's ACC baud); override `--hr50-baud`.
-    pub hr50_baud: u32,
 
     pub center_freq_hz: f32,
     pub target_freq_hz: f32,
@@ -66,10 +55,8 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             demod: DemodMode::Lsb,
-            source: SourceKind::Fake,
 
-            wav_file: "input_iq.wav".to_string(),
-            wav_dir: "./".to_string(),
+            recordings_dir: "./".to_string(),
 
             // Use a high enough fake sample rate so the existing mode-dependent
             // pipeline cutoffs (especially WFM) remain valid without hitting
@@ -81,7 +68,6 @@ impl Default for ServerConfig {
             fake_center_freq_hz: 101_100_000.0,
             fake_target_freq_hz: 101_100_000.0,
 
-            rtlsdr_device_index: 0,
             rtlsdr_sample_rate_hz: 2_048_000,
             rtlsdr_gain_tenths_db: None,
             rtlsdr_ppm_correction: 0,
@@ -90,7 +76,6 @@ impl Default for ServerConfig {
             hl2_sample_rate_hz: 384_000,
 
             hr50_serial: Some("auto".to_string()),
-            hr50_baud: 19200,
 
             center_freq_hz: 101_100_000.0,
             target_freq_hz: 101_100_000.0,
@@ -109,103 +94,19 @@ impl ServerConfig {
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
-                "--demod" => {
-                    let value = next_arg(&mut args, "--demod")?;
-                    cfg.demod = value
-                        .parse::<DemodMode>()
-                        .map_err(|_| format!("invalid demod mode: {value}"))?;
-                }
-
-                "--wav-dir" => {
-                    cfg.wav_dir = next_arg(&mut args, "--wav-dir")?;
-                }
-
-                "--source" => {
-                    let value = next_arg(&mut args, "--source")?;
-                    cfg.source = parse_source_kind(&value)
-                        .ok_or_else(|| format!("unknown source '{value}'\n\n{}", Self::usage()))?;
-                }
-
-                "--wav-file" => {
-                    cfg.wav_file = next_arg(&mut args, "--wav-file")?;
+                "--recordings-dir" => {
+                    cfg.recordings_dir = next_arg(&mut args, "--recordings-dir")?;
                 }
 
                 "--hr50-serial" => {
                     let value = next_arg(&mut args, "--hr50-serial")?;
-                    // `none`/empty disables amplifier polling (default opens the port).
+                    // `none`/empty disables amplifier polling; otherwise the value
+                    // is `auto`, `<path>`, or `<path>:baud` (parsed by the worker).
                     cfg.hr50_serial = if value.is_empty() || value.eq_ignore_ascii_case("none") {
                         None
                     } else {
                         Some(value)
                     };
-                }
-
-                "--hr50-baud" => {
-                    cfg.hr50_baud =
-                        parse_next_arg(&mut args, "--hr50-baud", "invalid --hr50-baud")?;
-                }
-
-                "--fake-sample-rate" => {
-                    cfg.fake_sample_rate_hz = parse_next_arg(
-                        &mut args,
-                        "--fake-sample-rate",
-                        "invalid --fake-sample-rate",
-                    )?;
-                }
-
-                "--fake-tone" => {
-                    cfg.fake_tone_hz =
-                        parse_next_arg(&mut args, "--fake-tone", "invalid --fake-tone")?;
-                }
-
-                "--rtl-device" => {
-                    cfg.rtlsdr_device_index =
-                        parse_next_arg(&mut args, "--rtl-device", "invalid --rtl-device")?;
-                }
-
-                "--rtl-sample-rate" => {
-                    cfg.rtlsdr_sample_rate_hz = parse_next_arg(
-                        &mut args,
-                        "--rtl-sample-rate",
-                        "invalid --rtl-sample-rate",
-                    )?;
-                }
-
-                "--rtl-gain" => {
-                    cfg.rtlsdr_gain_tenths_db = Some(parse_next_arg(
-                        &mut args,
-                        "--rtl-gain",
-                        "invalid --rtl-gain",
-                    )?);
-                }
-
-                "--rtl-auto-gain" => {
-                    cfg.rtlsdr_gain_tenths_db = None;
-                }
-
-                "--rtl-ppm" => {
-                    cfg.rtlsdr_ppm_correction =
-                        parse_next_arg(&mut args, "--rtl-ppm", "invalid --rtl-ppm")?;
-                }
-
-                "--rtl-direct-sampling" => {
-                    cfg.rtlsdr_direct_sampling = true;
-                }
-
-                "--hl2-sample-rate" => {
-                    cfg.hl2_sample_rate_hz = parse_next_arg(
-                        &mut args,
-                        "--hl2-sample-rate",
-                        "invalid --hl2-sample-rate",
-                    )?;
-                }
-
-                "--center" => {
-                    cfg.center_freq_hz = parse_next_arg(&mut args, "--center", "invalid --center")?;
-                }
-
-                "--target" => {
-                    cfg.target_freq_hz = parse_next_arg(&mut args, "--target", "invalid --target")?;
                 }
 
                 "--help" | "-h" => {
@@ -223,72 +124,24 @@ impl ServerConfig {
 
     pub fn usage() -> String {
         r#"Usage:
-  rigflow_server --source fake [options]
-  rigflow_server --source wav --wav-file input_iq.wav [options]
-  rigflow_server --source rtlsdr [options]
-  rigflow_server --source hermeslite2 [options]
+  rigflow_server [options]
 
-Common options:
-  --center HZ
-  --target HZ
-  --demod "wfm|lsb|usb"
+All sources (RTL-SDR, Hermes Lite 2, WAV recordings, and a built-in fake tone)
+are discovered automatically; the client selects a radio from the list.
 
-Fake source:
-  --fake-sample-rate HZ
-  --fake-tone HZ
-
-WAV source:
-  --wav-file PATH
-  --wav-dir PATH
-
-RTL-SDR source:
-  --rtl-device INDEX
-  --rtl-sample-rate HZ
-  --rtl-gain TENTHS_DB
-  --rtl-auto-gain
-  --rtl-ppm PPM
-  --rtl-direct-sampling
-
-Hermes Lite 2 source:
-  --hl2-sample-rate HZ   (default: 384000)
-
-Amplifier (Hardrock-50):
-  --hr50-serial PATH     serial device, or "auto" to detect by USB VID/PID +
-                         HR50 probe, or "none" to disable (default: auto)
-  --hr50-baud RATE       baud tried first in auto mode / used with an explicit
-                         path (default: 19200)
+Options:
+  --help, -h               print this help
+  --recordings-dir PATH    directory for IQ recordings and WAV-file "radio"
+                           discovery (default: ./)
+  --hr50-serial VALUE      Hardrock-50 amplifier serial:
+                             auto            detect by USB VID/PID + HR50 probe
+                                             (default)
+                             <path>[:baud]   open that device directly
+                                             (e.g. /dev/ttyUSB0 or
+                                             /dev/ttyUSB0:19200; default baud 19200)
+                             none            disable amplifier polling
 "#
         .to_string()
-    }
-}
-
-/// Builds a source config from the legacy server config.
-///
-/// Keep this only if something still calls it. In the newer radio worker path,
-/// source creation may already happen elsewhere.
-pub fn make_source_config(cfg: &ServerConfig, block_size: usize) -> SourceConfig {
-    match cfg.source {
-        SourceKind::Fake => SourceConfig::Fake {
-            sample_rate_hz: cfg.fake_sample_rate_hz,
-            tone_hz: cfg.fake_tone_hz,
-        },
-        SourceKind::Wav => SourceConfig::WavFile {
-            path: cfg.wav_file.clone(),
-        },
-        SourceKind::RtlSdr => SourceConfig::RtlSdr {
-            device_index: cfg.rtlsdr_device_index,
-            sample_rate_hz: cfg.rtlsdr_sample_rate_hz,
-            center_freq_hz: cfg.center_freq_hz as u32,
-            gain_tenths_db: cfg.rtlsdr_gain_tenths_db,
-            ppm_correction: cfg.rtlsdr_ppm_correction,
-            direct_sampling: cfg.rtlsdr_direct_sampling,
-            block_complex_samples: block_size,
-        },
-        SourceKind::HermesLite2 => SourceConfig::HermesLite2 {
-            addr: String::new(),
-            sample_rate_hz: cfg.hl2_sample_rate_hz as f32,
-            center_freq_hz: cfg.center_freq_hz,
-        },
     }
 }
 
@@ -310,27 +163,4 @@ pub fn choose_decimation(sample_rate_hz: f32) -> usize {
 fn next_arg(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
     args.next()
         .ok_or_else(|| format!("{flag} requires a value"))
-}
-
-fn parse_next_arg<T>(
-    args: &mut impl Iterator<Item = String>,
-    flag: &str,
-    parse_err: &str,
-) -> Result<T, String>
-where
-    T: std::str::FromStr,
-{
-    next_arg(args, flag)?
-        .parse()
-        .map_err(|_| parse_err.to_string())
-}
-
-fn parse_source_kind(value: &str) -> Option<SourceKind> {
-    match value {
-        "fake" => Some(SourceKind::Fake),
-        "wav" => Some(SourceKind::Wav),
-        "rtlsdr" => Some(SourceKind::RtlSdr),
-        "hermeslite2" => Some(SourceKind::HermesLite2),
-        _ => None,
-    }
 }

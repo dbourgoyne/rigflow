@@ -20,7 +20,7 @@ pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
 
     radios.extend(discover_rtl_radios());
-    radios.extend(discover_wav_radios(Path::new(&config.wav_dir)));
+    radios.extend(discover_wav_radios(Path::new(&config.recordings_dir)));
     radios.push(build_fake_tone_radio());
     radios.extend(discover_hl2_radios());
 

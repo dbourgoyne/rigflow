@@ -51,6 +51,10 @@ const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 /// re-acquires and re-initializes a power-cycled device.
 const RX_STALL_GIVE_UP: Duration = Duration::from_secs(10);
 
+/// Baud used for an explicit `--hr50-serial <path>` with no `:baud` suffix, and
+/// the baud tried first when auto-detecting.  (The amp's ACC default.)
+const HR50_DEFAULT_BAUD: u32 = 19200;
+
 /// Spot/SWR pulse duration used for each SWR-sweep point (same as a single Spot).
 const SWR_SWEEP_SPOT_MS: u32 = 250;
 
@@ -281,7 +285,9 @@ fn create_worker_source(
         }
     } else if descriptor.id.0.starts_with("rtl:") {
         SourceConfig::RtlSdr {
-            device_index: server_cfg.rtlsdr_device_index,
+            // Open the device this radio was enumerated as (so rtl:N → device N),
+            // not a single global default.
+            device_index: descriptor.index as usize,
             sample_rate_hz: server_cfg.rtlsdr_sample_rate_hz,
             center_freq_hz: initial_center_freq_hz as u32,
             gain_tenths_db: server_cfg.rtlsdr_gain_tenths_db,
@@ -672,6 +678,18 @@ fn run_iq_worker_threads(
     exit
 }
 
+/// Parse an explicit `--hr50-serial` value of the form `<path>` or `<path>:baud`
+/// into `(path, baud)`.  A missing/unparseable baud suffix falls back to
+/// [`HR50_DEFAULT_BAUD`]; Linux device paths contain no colons.
+fn parse_hr50_path_baud(value: &str) -> (String, u32) {
+    if let Some((path, baud_str)) = value.rsplit_once(':') {
+        if let Ok(baud) = baud_str.parse::<u32>() {
+            return (path.to_string(), baud);
+        }
+    }
+    (value.to_string(), HR50_DEFAULT_BAUD)
+}
+
 /// Publish an amplifier serial-open failure to the client.
 ///
 /// Writes the reason into `amplifier_status.last_error` (and clears `model`) so
@@ -703,15 +721,15 @@ fn spawn_amplifier_thread(
     amp_freq: Arc<AtomicU64>,
 ) -> Option<thread::JoinHandle<()>> {
     let configured = server_cfg.hr50_serial.clone()?;
-    let configured_baud = server_cfg.hr50_baud;
     let radio_id = descriptor.id.0;
 
     Some(thread::spawn(move || {
         // Resolve the serial port. "auto" runs VID/PID-narrowed probing and also
-        // discovers the baud; an explicit path opens directly at the configured
-        // baud (the user has taken responsibility for that device).
+        // discovers the baud; an explicit "<path>[:baud]" opens that device
+        // directly at the given (or default 19200) baud — the user has taken
+        // responsibility for it.
         let (path, baud) = if configured.eq_ignore_ascii_case("auto") {
-            match crate::amplifier::autodetect_serial(configured_baud) {
+            match crate::amplifier::autodetect_serial(HR50_DEFAULT_BAUD) {
                 Some(found) => found,
                 None => {
                     // Expected for any station without an HR50 (auto is the
@@ -724,7 +742,7 @@ fn spawn_amplifier_thread(
                 }
             }
         } else {
-            (configured, configured_baud)
+            parse_hr50_path_baud(&configured)
         };
 
         let transport = match crate::amplifier::serial::SerialTransport::open(&path, baud) {
@@ -1518,9 +1536,9 @@ fn spawn_capture_thread(
                         ppm: control_snapshot.source_control.ppm_correction as f32,
                         source: format!("{:?}", descriptor.hardware_kind),
                     };
-                    // Record into the server's wav directory so the file is
-                    // auto-discovered as a `wav:N` radio for playback.
-                    let rec_dir = std::path::Path::new(&server_cfg.wav_dir);
+                    // Record into the server's recordings directory so the file
+                    // is auto-discovered as a `wav:N` radio for playback.
+                    let rec_dir = std::path::Path::new(&server_cfg.recordings_dir);
                     match crate::recording::iq_recorder::IqRecorder::start(rec_dir, params) {
                         Ok(rec) => iq_rec = Some(rec),
                         Err(e) => warn!(
@@ -2509,6 +2527,28 @@ fn normalize_initial_frequencies(
     );
 
     (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
+}
+
+#[cfg(test)]
+mod hr50_path_tests {
+    use super::*;
+
+    #[test]
+    fn parses_path_and_optional_baud() {
+        assert_eq!(
+            parse_hr50_path_baud("/dev/ttyUSB0"),
+            ("/dev/ttyUSB0".to_string(), HR50_DEFAULT_BAUD)
+        );
+        assert_eq!(
+            parse_hr50_path_baud("/dev/ttyUSB0:9600"),
+            ("/dev/ttyUSB0".to_string(), 9600)
+        );
+        // A non-numeric suffix is part of the path, not a baud.
+        assert_eq!(
+            parse_hr50_path_baud("/dev/serial/by-id/usb-FTDI"),
+            ("/dev/serial/by-id/usb-FTDI".to_string(), HR50_DEFAULT_BAUD)
+        );
+    }
 }
 
 #[cfg(test)]

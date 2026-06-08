@@ -9,6 +9,17 @@
 
 ### Changes
 
+- **The server command line is simplified to three flags.** Everything else
+  (frequency, mode, gain, ppm, sample rate, which source) is driven live by the
+  client and discovery now finds every source automatically, so the old per-source
+  tuning flags were redundant or dead and have been removed. What's left:
+  `--help`/`-h`, `--recordings-dir PATH` (renamed from `--wav-dir`; the IQ-recording
+  + WAV-playback directory), and `--hr50-serial auto|<path>[:baud]|none` — the amp
+  baud is now folded into the value (e.g. `--hr50-serial /dev/ttyUSB0:19200`), so
+  `--hr50-baud` is gone. Run the server with no arguments. As part of this, RTL-SDR
+  device selection now opens the **acquired radio's own device index** (so a second
+  RTL works via the radio list), rather than a single global `--rtl-device`.
+
 - **The radio list now reflects real hardware (no phantom / stale entries).**
   RTL-SDR devices are **really enumerated** over USB — the server lists the
   actual dongles present (none when unplugged) instead of always advertising one
