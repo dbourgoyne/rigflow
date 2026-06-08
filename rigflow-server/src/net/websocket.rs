@@ -343,7 +343,29 @@ async fn handle_radio_message(
                     );
                 }
                 Err(err) => {
-                    send_radio(local_tx, manager_error_to_protocol(err));
+                    // The lease is no longer valid (worker faulted, lease reaped,
+                    // etc.).  Free the radio and reset the session + client so it
+                    // can re-acquire, instead of renewing a dead lease forever.
+                    let _ = app_state
+                        .radio_manager
+                        .release_radio(
+                            &session.client_id,
+                            &acquired.radio_id,
+                            &acquired.lease_id,
+                            StopReason::InternalFault,
+                        )
+                        .await;
+                    session.clear_acquired_radio();
+                    log::info!(
+                        "[ws] lease renew failed ({err:?}); released {} for re-acquire",
+                        acquired.radio_id.0
+                    );
+                    send_radio(
+                        local_tx,
+                        ServerRadioMessage::RadioReleased {
+                            radio_id: acquired.radio_id,
+                        },
+                    );
                 }
             }
         }

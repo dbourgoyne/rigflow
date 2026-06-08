@@ -9,6 +9,18 @@
 
 ### Changes
 
+- **HL2 link loss is now visible and survivable, and a shutdown can't leave the
+  rig keyed.** A brief receive gap (Ethernet blip, switch hiccup) no longer tears
+  the whole radio down: the server keeps the worker alive, shows **"HL2 not
+  responding"** in the Source Status panel and the Problems badge, and resumes RX
+  in place when packets return. Only a *sustained* outage (~10 s) ends the
+  session, after which the client's auto-reconnect re-acquires and
+  re-initializes a power-cycled device. Separately, the server now handles
+  **Ctrl-C / SIGTERM** by stopping all radios before exit, which **un-keys the
+  HL2** — previously a shutdown mid-transmit left PTT asserted until the radio's
+  own watchdog timed out. (A hard kill, `SIGKILL`, still relies on that
+  watchdog.)
+
 - **Corrupt config no longer leaves you stuck or silently wipes everything.** If
   an operator settings file or the app-state file is unparseable, the client now
   quarantines the bad file (renamed to `<name>.corrupt-<timestamp>`), resets just

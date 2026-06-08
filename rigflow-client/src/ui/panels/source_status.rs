@@ -174,6 +174,20 @@ fn draw_health_group(ui: &mut egui::Ui, status: &SourceStatus) {
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
+            if let Some(responding) = status.device_responding {
+                ui.label("Device");
+                if responding {
+                    ui.label(egui::RichText::new("OK").color(egui::Color32::from_rgb(80, 200, 80)));
+                } else {
+                    ui.label(
+                        egui::RichText::new("⚠ NOT RESPONDING")
+                            .color(egui::Color32::from_rgb(255, 80, 40))
+                            .strong(),
+                    );
+                }
+                ui.end_row();
+            }
+
             if let Some(ref ver) = status.firmware_version {
                 ui.label("Firmware");
                 ui.label(ver);

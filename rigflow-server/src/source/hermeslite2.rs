@@ -28,6 +28,10 @@ const P1_SAMPLES_PER_SUBFRAME: usize = 63;
 const P1_SUBFRAME_OFFSETS: [usize; 2] = [8, 520];
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(2);
+/// If no valid IQ packet has arrived within this window, the source reports
+/// `device_responding = Some(false)`.  Just over `RECV_TIMEOUT` so a single
+/// missed receive window flags it.
+const DEVICE_STALL_THRESHOLD: Duration = Duration::from_millis(2500);
 
 // ── Shared TX sequencing constants ──────────────────────────────────────────
 // The HL2 host→device TX IQ stream is fixed at 48 kHz; one packet carries 126
@@ -131,6 +135,9 @@ pub struct HermesLite2Source {
     /// Used by every transmit path (Spot/SWR/sweep/test-tone, future CW).
     tx_ptt_lead_ms: u32,
     tx_ptt_tail_ms: u32,
+    /// When the last valid IQ packet was received.  Drives the `device_responding`
+    /// telemetry so a sustained RX gap surfaces as "HL2 not responding".
+    last_rx: Instant,
 }
 
 impl HermesLite2Source {
@@ -163,6 +170,7 @@ impl HermesLite2Source {
             fdx_iq: Vec::new(),
             tx_ptt_lead_ms: 20,
             tx_ptt_tail_ms: 20,
+            last_rx: Instant::now(),
         };
 
         src.send_run(true)?;
@@ -734,6 +742,7 @@ impl IqSource for HermesLite2Source {
             match self.socket.recv(&mut buf) {
                 Ok(len) if len == P1_PACKET_LEN => {
                     parse_ddc_packet(&buf, &mut self.pending, &mut self.status_regs);
+                    self.last_rx = Instant::now();
                 }
                 Ok(len) => {
                     debug!("HL2: short packet ({len} bytes), discarding");
@@ -842,7 +851,11 @@ impl IqSource for HermesLite2Source {
     }
 
     fn source_status(&self) -> SourceStatus {
-        hl2_status_regs_to_source_status(&self.status_regs)
+        let mut status = hl2_status_regs_to_source_status(&self.status_regs);
+        // Surface a sustained RX gap as "not responding" (drives the on-screen
+        // "HL2 not responding" indicator).
+        status.device_responding = Some(self.last_rx.elapsed() < DEVICE_STALL_THRESHOLD);
+        status
     }
 
     /// HL2 TX tune test — short carrier pulse for SWR measurement.
@@ -2279,6 +2292,8 @@ fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
         swr,
         tx_inhibited,
         recovery_status,
+        // Set by `HermesLite2Source::source_status` from the RX timestamp.
+        device_responding: None,
     }
 }
 

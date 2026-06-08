@@ -36,6 +36,12 @@ pub struct SourceStatus {
     /// ADC under/overflow recovery state.
     /// Human-readable string: "OK", "UNDERFLOW", "OVERFLOW", or "UNKNOWN".
     pub recovery_status: Option<String>,
+
+    /// Whether the device is currently sending IQ.
+    /// `Some(false)` = no data received recently ("not responding", e.g. a link
+    /// blip or the device powered off); `Some(true)` = receiving normally;
+    /// `None` = the source doesn't report this.
+    pub device_responding: Option<bool>,
 }
 
 impl SourceStatus {
@@ -52,5 +58,6 @@ impl SourceStatus {
             || self.swr.is_some()
             || self.tx_inhibited.is_some()
             || self.recovery_status.is_some()
+            || self.device_responding.is_some()
     }
 }

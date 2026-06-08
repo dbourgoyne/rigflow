@@ -600,6 +600,15 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
             detail: err.clone(),
         });
     }
+    // The SDR stopped sending IQ (link blip / device powered off).  Cleared
+    // automatically when RX resumes.
+    if s.source_status.device_responding == Some(false) {
+        errors.push(Problem {
+            severity: ProblemSeverity::Error,
+            source: "Radio",
+            detail: "HL2 not responding".to_string(),
+        });
+    }
 
     // --- Warnings -----------------------------------------------------------
     // rigctl (CAT) server bind failure — affects WSJT-X/digital users only.
@@ -751,5 +760,23 @@ mod problem_tests {
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].severity, ProblemSeverity::Error);
         assert_eq!(problems[0].source, "Server");
+    }
+
+    #[test]
+    fn hl2_not_responding_is_a_radio_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+
+        s.source_status.device_responding = Some(false);
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[0].source, "Radio");
+
+        // Responding / unknown is not a problem.
+        s.source_status.device_responding = Some(true);
+        assert!(collect_problems(&s).is_empty());
+        s.source_status.device_responding = None;
+        assert!(collect_problems(&s).is_empty());
     }
 }

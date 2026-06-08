@@ -185,9 +185,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("UDP registration listener on {UDP_REGISTRATION_ADDR}");
 
     let listener = tokio::net::TcpListener::bind(ws_addr).await?;
-    axum::serve(listener, app).await?;
+    tokio::select! {
+        res = axum::serve(listener, app) => { res?; }
+        _ = shutdown_signal() => {
+            info!("shutdown signal received; stopping radios to un-key hardware");
+            radio_manager.shutdown_all().await;
+        }
+    }
 
     Ok(())
+}
+
+/// Resolve when the process receives SIGINT (Ctrl-C) or SIGTERM, so the server
+/// can stop all radios (un-keying any keyed HL2) before exiting.  A hard kill
+/// (SIGKILL) cannot be intercepted — the HL2's hardware watchdog is the backstop
+/// there.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                log::warn!("failed to install SIGTERM handler: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
 }
 
 /// Parse server configuration, printing a friendly error and exiting on failure.

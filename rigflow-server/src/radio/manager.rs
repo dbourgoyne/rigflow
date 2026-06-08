@@ -349,6 +349,13 @@ impl RadioManager {
             .get_mut(radio_id)
             .ok_or(RadioManagerError::RadioNotFound)?;
 
+        // Has the worker exited on its own (e.g. faulted on sustained RX loss)?
+        // Computed before the mutable lease borrow below.
+        let worker_dead = radio
+            .runtime
+            .as_ref()
+            .map_or(true, |rt| rt.join_handle.is_finished());
+
         let lease = radio
             .lease
             .as_mut()
@@ -360,6 +367,14 @@ impl RadioManager {
 
         if &lease.lease_id != lease_id {
             return Err(RadioManagerError::InvalidLease);
+        }
+
+        // Don't keep renewing a lease whose worker is gone — report it so the
+        // caller releases the radio and the client can re-acquire.
+        if worker_dead {
+            return Err(RadioManagerError::Internal(
+                "worker has exited; lease no longer serviceable".to_string(),
+            ));
         }
 
         lease.last_renewed_at = now;
@@ -454,17 +469,62 @@ impl RadioManager {
                 .ok_or(RadioManagerError::RadioNotRunning)?
         };
 
-        Self::stop_runtime(runtime, reason, self.config.shutdown_timeout).await?;
+        // Clear the lease/state regardless of how the worker stopped.  A worker
+        // that already exited on its own (e.g. faulted on sustained RX loss)
+        // makes `stop_runtime` report an error, but the radio MUST still return
+        // to Available so it can be re-acquired — otherwise it gets stuck leased
+        // with a dead worker and can be neither released nor re-acquired.
+        let stop_result = Self::stop_runtime(runtime, reason, self.config.shutdown_timeout).await;
 
-        let mut radios = self.radios.write().await;
-        let radio = radios
-            .get_mut(radio_id)
-            .ok_or(RadioManagerError::RadioNotFound)?;
+        {
+            let mut radios = self.radios.write().await;
+            let radio = radios
+                .get_mut(radio_id)
+                .ok_or(RadioManagerError::RadioNotFound)?;
+            radio.lease = None;
+            radio.state = RadioState::Available;
+        }
 
-        radio.lease = None;
-        radio.state = RadioState::Available;
+        if let Err(err) = stop_result {
+            log::warn!(
+                "[radio-manager] worker stop for {} reported an error \
+                 (radio still released): {err:?}",
+                radio_id.0
+            );
+        }
 
         Ok(())
+    }
+
+    /// Stop every running worker (process shutdown).  Ignores lease ownership —
+    /// this is a whole-server teardown so the hardware is left safe: stopping an
+    /// HL2 worker un-keys PTT (via the TX stop path) and stops the stream.
+    pub async fn shutdown_all(&self) {
+        // Take every running runtime out under the lock, then stop them.
+        let runtimes: Vec<(RadioId, RadioRuntime)> = {
+            let mut radios = self.radios.write().await;
+            radios
+                .iter_mut()
+                .filter_map(|(id, radio)| {
+                    radio.runtime.take().map(|rt| {
+                        radio.state = RadioState::Stopping;
+                        (id.clone(), rt)
+                    })
+                })
+                .collect()
+        };
+
+        for (id, runtime) in runtimes {
+            if let Err(err) = Self::stop_runtime(
+                runtime,
+                StopReason::ServerShutdown,
+                self.config.shutdown_timeout,
+            )
+            .await
+            {
+                log::warn!("shutdown: failed to stop worker for {}: {err:?}", id.0);
+            }
+        }
     }
 
     /// Handles startup failure by stopping any partially started runtime and

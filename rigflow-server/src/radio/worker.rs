@@ -45,6 +45,12 @@ use rigflow_core::radio::tx_tune::TxTuneResult;
 /// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
 const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Sustained RX-loss window on a realtime source before the worker gives up.
+/// Below this a transient gap is tolerated in place (worker stays alive,
+/// surfacing "not responding"); beyond it the worker fails so the client
+/// re-acquires and re-initializes a power-cycled device.
+const RX_STALL_GIVE_UP: Duration = Duration::from_secs(10);
+
 /// Spot/SWR pulse duration used for each SWR-sweep point (same as a single Spot).
 const SWR_SWEEP_SPOT_MS: u32 = 250;
 
@@ -1262,6 +1268,10 @@ fn spawn_capture_thread(
         let mut next_source_tick = Instant::now();
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
+        // Tracks a sustained RX gap on a realtime source so a brief link blip is
+        // tolerated (worker stays up, surfaces "not responding") while a long
+        // outage still fails the worker for a clean re-acquire.
+        let mut rx_stall_start: Option<Instant> = None;
         let mut last_cc_sent = Instant::now();
         // N2ADR HF filter board (HL2): track the last band we programmed and the
         // enable state so we only reprogram on band change or (re)enable.
@@ -1910,7 +1920,38 @@ fn spawn_capture_thread(
             }
 
             let iq = match source.read_block(block_size) {
-                Ok(samples) => samples,
+                Ok(samples) => {
+                    if let Some(since) = rx_stall_start.take() {
+                        info!(
+                            "[radio-worker {}] RX recovered after {:?}",
+                            descriptor.id.0,
+                            since.elapsed()
+                        );
+                    }
+                    samples
+                }
+                // Realtime sources (HL2): tolerate a transient RX gap. Keep the
+                // worker alive so the ~4 Hz status poll surfaces "not responding"
+                // and RX can resume in place; fail only after a sustained outage
+                // so the client's re-acquire re-initializes a power-cycled device.
+                Err(reason) if realtime => {
+                    let since = *rx_stall_start.get_or_insert_with(|| {
+                        warn!(
+                            "[radio-worker {}] {reason}; tolerating up to {:?}",
+                            descriptor.id.0, RX_STALL_GIVE_UP
+                        );
+                        Instant::now()
+                    });
+                    if since.elapsed() >= RX_STALL_GIVE_UP {
+                        stop_flag.store(true, Ordering::Relaxed);
+                        let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                        break;
+                    }
+                    // Bound the spin if a realtime source errors instantly rather
+                    // than blocking out its receive timeout.
+                    thread::sleep(Duration::from_millis(200));
+                    continue;
+                }
                 Err(reason) => {
                     stop_flag.store(true, Ordering::Relaxed);
                     let _ = fatal_tx.send(WorkerExit::Failed { reason });
