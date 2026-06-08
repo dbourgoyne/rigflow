@@ -79,7 +79,7 @@ impl RigflowApp {
                     .as_deref()
                     .and_then(AmplifierKeyingMode::from_label);
                 let mut selected = current.unwrap_or(AmplifierKeyingMode::Off);
-                egui::ComboBox::from_id_source("amp_keying_mode")
+                egui::ComboBox::from_id_salt("amp_keying_mode")
                     .selected_text(amp.mode.as_deref().unwrap_or("—"))
                     .show_ui(ui, |ui| {
                         for m in AmplifierKeyingMode::ALL {
