@@ -9,6 +9,22 @@
 
 ### Changes
 
+- **Subsystem failures are now shown on screen, not just in the log.** A new
+  always-open **Status / Problems** section at the top of the left panel — plus a
+  `⚠ N` badge in the top status bar (green "● OK" when clear) — lists active
+  failures with their specific reason instead of failing silently. Covered:
+  - **rigctl (CAT) bind failure** — e.g. port 4532 already in use (previously
+    WSJT-X would just say "can't open rig" with no hint from Rigflow).
+  - **Digital / PipeWire unavailability** — virtual audio device creation
+    failures now show the underlying reason (e.g. `pactl` not found / PipeWire
+    down) rather than a red dot buried in *Advanced*.
+  - **Amplifier serial open failure** — an explicitly configured `--hr50-serial`
+    path that can't be opened (wrong path, permission, baud) is surfaced; a bad
+    `dialout` permission no longer fails silently. (Auto-detect finding no
+    amplifier stays log-only, so stations without an HR50 see nothing.)
+  - **Server connection failures** — connect/acquire/connection-drop errors are
+    visible even though the Server panel is collapsed by default.
+
 - **HR50 amplifier serial port is now auto-detected.** `--hr50-serial` defaults to
   `auto`: USB-serial ports are narrowed by USB VID/PID to known converter chips
   (FTDI, Microchip MCP2200, Silicon Labs CP210x, Prolific, CH340), then each is

@@ -666,6 +666,18 @@ fn run_iq_worker_threads(
     exit
 }
 
+/// Publish an amplifier serial-open failure to the client.
+///
+/// Writes the reason into `amplifier_status.last_error` (and clears `model`) so
+/// the existing runtime pipeline carries it to the client's on-screen Problems
+/// area, instead of the failure being log-only.
+fn publish_amplifier_open_error(control: &Arc<Mutex<SharedControlState>>, message: String) {
+    if let Ok(mut cs) = control.lock() {
+        cs.amplifier_status.model = None;
+        cs.amplifier_status.last_error = Some(message);
+    }
+}
+
 /// Spawn the amplifier status poller for an HL2 worker (Phase 1).
 ///
 /// Returns `None` (no thread) when amplifier polling is disabled
@@ -696,6 +708,8 @@ fn spawn_amplifier_thread(
             match crate::amplifier::autodetect_serial(configured_baud) {
                 Some(found) => found,
                 None => {
+                    // Expected for any station without an HR50 (auto is the
+                    // default), so this is log-only — not surfaced as a problem.
                     info!(
                         "[radio-worker {radio_id}] HR50 auto-detect: no amplifier responded on any \
                          USB-serial port; amplifier polling disabled"
@@ -710,7 +724,9 @@ fn spawn_amplifier_thread(
         let transport = match crate::amplifier::serial::SerialTransport::open(&path, baud) {
             Ok(t) => t,
             Err(e) => {
-                warn!("[radio-worker {radio_id}] HR50 serial '{path}' open failed: {e}");
+                let msg = format!("HR50 serial '{path}' open failed: {e}");
+                warn!("[radio-worker {radio_id}] {msg}");
+                publish_amplifier_open_error(&control, msg);
                 return;
             }
         };

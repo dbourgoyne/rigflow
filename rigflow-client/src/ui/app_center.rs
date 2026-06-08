@@ -250,6 +250,36 @@ impl RigflowApp {
     /// future items (TX power, ALC, network status, …) just append more cells.
     fn draw_status_bar(&self, ui: &mut egui::Ui, snapshot: &UiState) {
         use crate::ui::panels::s_meter_label;
+        use crate::ui::state::{ProblemSeverity, collect_problems};
+
+        // Problems badge — always visible (before the no-radio early-return) so a
+        // failure is never hidden.  Derives from the same `collect_problems` the
+        // "Status / Problems" panel uses, so the count and the list always agree.
+        let problems = collect_problems(snapshot);
+        if problems.is_empty() {
+            ui.label(egui::RichText::new("● OK").color(egui::Color32::from_rgb(100, 200, 100)));
+        } else {
+            let has_error = problems
+                .iter()
+                .any(|p| p.severity == ProblemSeverity::Error);
+            let color = if has_error {
+                egui::Color32::from_rgb(235, 80, 80)
+            } else {
+                egui::Color32::from_rgb(255, 160, 40)
+            };
+            let summary = problems
+                .iter()
+                .map(|p| format!("{}: {}", p.source, p.detail))
+                .collect::<Vec<_>>()
+                .join("\n");
+            ui.label(
+                egui::RichText::new(format!("⚠ {}", problems.len()))
+                    .strong()
+                    .color(color),
+            )
+            .on_hover_text(summary);
+        }
+        ui.separator();
 
         // Operator + license first (shown whenever an operator is selected,
         // even before a radio is acquired).  Operator is coloured to stand out;

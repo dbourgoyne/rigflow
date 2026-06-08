@@ -86,10 +86,21 @@ impl RigctlServer {
             Ok(l) => l,
             Err(e) => {
                 log::error!("[rigctl] failed to bind 127.0.0.1:{}: {e}", self.port);
+                // Surface the reason on screen (Problems area), not just the log:
+                // WSJT-X would otherwise just say "can't open rig" with no hint.
+                if let Ok(mut state) = self.shared.ui_state.lock() {
+                    state.rigctl_status = Some(format!(
+                        "CAT server cannot bind 127.0.0.1:{} — {e}",
+                        self.port
+                    ));
+                }
                 return;
             }
         };
         log::info!("[rigctl] CAT server listening on 127.0.0.1:{}", self.port);
+        if let Ok(mut state) = self.shared.ui_state.lock() {
+            state.rigctl_status = None;
+        }
 
         loop {
             match listener.accept().await {

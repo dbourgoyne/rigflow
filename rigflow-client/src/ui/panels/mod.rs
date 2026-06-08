@@ -4,6 +4,7 @@ use eframe::egui;
 
 mod bookmarks;
 mod operator;
+mod problems;
 mod radio_control;
 mod radios;
 
@@ -32,6 +33,8 @@ impl RigflowApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        self.draw_problems_panel(ui, snapshot);
+                        ui.separator();
                         self.draw_operator_panel(ui, snapshot, config_mode);
                         ui.separator();
                         self.draw_server_panel(ui, snapshot, config_mode);
