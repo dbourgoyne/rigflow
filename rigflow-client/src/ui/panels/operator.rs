@@ -62,13 +62,21 @@ impl RigflowApp {
                                             }
                                         }
 
+                                        // Surface any corrupt-config recovery from
+                                        // the loads above; otherwise clear status.
+                                        let notices =
+                                            self.persistence_store.take_recovery_notices();
                                         if let Ok(mut state) = self.state.lock() {
                                             apply_operator_settings_to_ui_state(
                                                 &mut state,
                                                 &operator_settings,
                                                 &app_state,
                                             );
-                                            state.persistence_status.clear();
+                                            if notices.is_empty() {
+                                                state.persistence_status.clear();
+                                            } else {
+                                                state.persistence_status = notices.join("; ");
+                                            }
                                         }
                                     }
                                     Err(err) => {

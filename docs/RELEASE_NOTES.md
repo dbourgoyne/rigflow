@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **Corrupt config no longer leaves you stuck or silently wipes everything.** If
+  an operator settings file or the app-state file is unparseable, the client now
+  quarantines the bad file (renamed to `<name>.corrupt-<timestamp>`), resets just
+  that file to defaults, and shows a Warning in the Status / Problems area —
+  instead of an unusable operator (previously) or a silent reset of *all* settings
+  (previously, on a corrupt app-state file). A file written by a **newer** Rigflow
+  build (e.g. after a downgrade) is **left untouched on disk**: the session runs on
+  defaults and you're told to upgrade to use it, so good settings aren't destroyed.
+
 - **The client now auto-reconnects after a network drop.** A transient blip
   (WiFi hiccup, brief server restart) no longer ends the session: the control
   plane reconnects with exponential backoff (1→2→4→8→16→30 s cap) and
