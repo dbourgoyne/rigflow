@@ -136,26 +136,22 @@ impl JitterBuffer {
         self.packets_received += 1;
 
         if samples.is_empty() {
-	    println!("Empty Packet");
             return;
         }
 
         if samples.len() != self.packet_samples {
-	    println!("Wrong Size Packet");
             self.packets_dropped_invalid_size += 1;
             return;
         }
 
 	if let Some(next) = self.next_sequence {
             if sequence < next {
-		println!("Wrong Sequence Packet");
                 self.packets_dropped_late += 1;
                 return;
             }
         }
 
         if self.buffered_samples() >= self.max_buffer_samples {
-	    println!("Dropping Packet, too many samples");
             self.packets_dropped_overflow += 1;
             return;
         }
