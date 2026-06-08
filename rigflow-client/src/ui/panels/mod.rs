@@ -30,11 +30,18 @@ impl RigflowApp {
                 ui.heading("rigflow");
                 ui.separator();
 
+                // Status console docked at the bottom of the side panel (fixed
+                // height, internally scrollable).  Reserved here, before the
+                // settings scroll area, so that area fills the space above it.
+                let row_h = ui.text_style_height(&egui::TextStyle::Body);
+                egui::TopBottomPanel::bottom("status_console")
+                    .resizable(false)
+                    .exact_height(row_h * 5.0 + 10.0)
+                    .show_inside(ui, |ui| self.draw_status_console(ui, snapshot));
+
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        self.draw_problems_panel(ui, snapshot);
-                        ui.separator();
                         self.draw_operator_panel(ui, snapshot, config_mode);
                         ui.separator();
                         self.draw_server_panel(ui, snapshot, config_mode);

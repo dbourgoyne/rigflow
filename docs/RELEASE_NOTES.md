@@ -67,11 +67,12 @@
     re-triggers an immediate attempt. Auto-reconnecting the *last* radio across a
     full app restart is not yet implemented.
 
-- **Subsystem failures are now shown on screen, not just in the log.** A new
-  always-open **Status / Problems** section at the top of the left panel — plus an
-  **LED-style status light** in the top status bar (green = all OK, amber =
-  warnings only, red = an error; hover for the list) — surfaces active failures
-  with their specific reason instead of failing silently. Covered:
+- **Subsystem failures are now shown on screen, not just in the log.** A
+  fixed **Status console** docked at the bottom of the left panel (always visible,
+  scrollable when the list is long) — plus an **LED-style status light** in the top
+  status bar (green = all OK, amber = warnings only, red = an error; hover for the
+  list) — surfaces active failures with their specific reason instead of failing
+  silently. Covered:
   - **rigctl (CAT) bind failure** — e.g. port 4532 already in use (previously
     WSJT-X would just say "can't open rig" with no hint from Rigflow).
   - **Digital / PipeWire unavailability** — virtual audio device creation
