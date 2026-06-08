@@ -8,6 +8,7 @@ use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
 use rigflow_core::radio::RadioCapabilities;
+use rigflow_core::radio::amplifier::AmplifierStatus;
 use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{SourceCapabilities, SourceControlState};
 use rigflow_core::radio::source_status::SourceStatus;
@@ -211,6 +212,9 @@ pub struct UiState {
     /// Latest read-only telemetry from the active source.
     /// Empty (`SourceStatus::default()`) when the source does not report status.
     pub source_status: SourceStatus,
+
+    /// Attached amplifier status (Phase 1: HR50). `model: None` = no amplifier.
+    pub amplifier_status: AmplifierStatus,
 
     /// Receive IQ recording status (Phase 1), from the server.
     pub iq_recording_status: IqRecordingStatus,
@@ -459,6 +463,7 @@ impl Default for UiState {
             source_capabilities: SourceCapabilities::none(),
             radio_capabilities: RadioCapabilities::default(),
             source_status: SourceStatus::default(),
+            amplifier_status: AmplifierStatus::default(),
             iq_recording_status: IqRecordingStatus::default(),
             digital_output_available: false,
             digital_rx_available: false,

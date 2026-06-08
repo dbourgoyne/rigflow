@@ -1,7 +1,9 @@
 use crate::UiState;
 use crate::ui::app::RigflowApp;
 use eframe::egui;
+use rigflow_core::radio::amplifier::{AmplifierAtuMode, AmplifierKeyingMode, AmplifierStatus};
 use rigflow_core::radio::source_status::SourceStatus;
+use rigflow_protocol::radio_control::ClientRadioMessage;
 
 impl RigflowApp {
     /// Draw the read-only "Source Status" pane.
@@ -43,6 +45,112 @@ impl RigflowApp {
         draw_health_group(ui, status);
         ui.add_space(4.0);
         draw_rf_power_group(ui, status);
+
+        // Generic amplifier row — always shown (Phase 1: HR50).  Kept
+        // amplifier-agnostic so future models need no UI redesign.
+        ui.add_space(4.0);
+        self.draw_amplifier_section(ui, &snapshot.amplifier_status);
+    }
+
+    /// Amplifier section: generic "Amplifier: <model|None>" row plus, when an amp
+    /// is present, status read-outs and Phase 2 controls.  The amp's reported
+    /// status is the single source of truth — controls just send a SET and the
+    /// next poll reflects it.
+    fn draw_amplifier_section(&self, ui: &mut egui::Ui, amp: &AmplifierStatus) {
+        egui::Grid::new("amplifier_status_grid")
+            .num_columns(2)
+            .spacing([8.0, 2.0])
+            .show(ui, |ui| {
+                ui.label("Amplifier");
+                match amp.model {
+                    Some(model) => ui.strong(model.label()),
+                    None => ui.label("None"),
+                };
+                ui.end_row();
+
+                if amp.model.is_none() {
+                    return;
+                }
+
+                // Mode — selector (control): reflects HRRX-reported mode, sets HRMD.
+                ui.label("    Mode");
+                let current = amp
+                    .mode
+                    .as_deref()
+                    .and_then(AmplifierKeyingMode::from_label);
+                let mut selected = current.unwrap_or(AmplifierKeyingMode::Off);
+                egui::ComboBox::from_id_source("amp_keying_mode")
+                    .selected_text(amp.mode.as_deref().unwrap_or("—"))
+                    .show_ui(ui, |ui| {
+                        for m in AmplifierKeyingMode::ALL {
+                            if ui.selectable_value(&mut selected, m, m.label()).clicked() {
+                                self.send_radio_msg(ClientRadioMessage::SetAmplifierKeyingMode {
+                                    mode: m,
+                                });
+                            }
+                        }
+                    });
+                ui.end_row();
+
+                ui.label("    Band");
+                ui.label(amp.band.as_deref().unwrap_or("—"));
+                ui.end_row();
+
+                ui.label("    Temperature");
+                ui.label(
+                    amp.temperature_c
+                        .map(|t| format!("{t:.0} °C"))
+                        .unwrap_or_else(|| "—".to_string()),
+                );
+                ui.end_row();
+
+                ui.label("    Voltage");
+                ui.label(
+                    amp.voltage_v
+                        .map(|v| format!("{v:.1} V"))
+                        .unwrap_or_else(|| "—".to_string()),
+                );
+                ui.end_row();
+
+                // Last-transmission telemetry (HRMX).  Always rendered (with "—"
+                // placeholders) so the panel height stays constant across TX/RX —
+                // a row that pops in/out makes the menu jump.
+                ui.label("    Last TX");
+                let dash = || "—".to_string();
+                let pep = amp
+                    .tx_pep_w
+                    .map(|w| format!("{w:.0} W"))
+                    .unwrap_or_else(dash);
+                let avg = amp
+                    .tx_avg_w
+                    .map(|w| format!("{w:.0} W"))
+                    .unwrap_or_else(dash);
+                let swr = amp.tx_swr.map(|s| format!("{s:.1}")).unwrap_or_else(dash);
+                ui.label(format!("PEP {pep}  Avg {avg}  SWR {swr}"));
+                ui.end_row();
+
+                // ATU controls — only when the amp reports an ATU is installed.
+                if amp.atu_present {
+                    ui.label("    ATU");
+                    ui.horizontal(|ui| {
+                        let active = matches!(amp.atu_mode, Some(AmplifierAtuMode::Active));
+                        if ui.selectable_label(!active, "Bypass").clicked() {
+                            self.send_radio_msg(ClientRadioMessage::SetAmplifierAtuMode {
+                                mode: AmplifierAtuMode::Bypass,
+                            });
+                        }
+                        if ui.selectable_label(active, "Active").clicked() {
+                            self.send_radio_msg(ClientRadioMessage::SetAmplifierAtuMode {
+                                mode: AmplifierAtuMode::Active,
+                            });
+                        }
+                        if ui.button("Tune").clicked() {
+                            self.send_radio_msg(ClientRadioMessage::TuneAmplifierAtu);
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
     }
 }
 

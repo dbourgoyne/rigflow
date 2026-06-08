@@ -396,6 +396,7 @@ pub fn apply_radio_server_message(
             signal_s_units,
             source_control,
             source_status,
+            amplifier_status,
             iq_recording_status,
             tx_audio_diag,
             tx_tune_result,
@@ -426,6 +427,7 @@ pub fn apply_radio_server_message(
                 state.pending_apply_source_control = true;
             }
             state.source_status = source_status;
+            state.amplifier_status = amplifier_status;
             state.iq_recording_status = iq_recording_status;
             state.tx_audio_diag = tx_audio_diag;
             if let Some(result) = tx_tune_result {
@@ -454,6 +456,7 @@ pub fn apply_radio_server_message(
             volume_percent,
             source_control,
             source_status,
+            amplifier_status,
             iq_recording_status,
             tx_audio_diag,
             tx_tune_result,
@@ -531,6 +534,10 @@ pub fn apply_radio_server_message(
 
             if let Some(value) = source_status {
                 state.source_status = value;
+            }
+
+            if let Some(value) = amplifier_status {
+                state.amplifier_status = value;
             }
 
             if let Some(value) = iq_recording_status {

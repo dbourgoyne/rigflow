@@ -980,6 +980,51 @@ async fn handle_radio_message(
                 );
             }
         }
+
+        ClientRadioMessage::SetAmplifierKeyingMode { mode } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetAmplifierKeyingMode { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "amp_keying_mode_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::SetAmplifierAtuMode { mode } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetAmplifierAtuMode { mode },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "amp_atu_mode_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::TuneAmplifierAtu => {
+            if let Err(err) =
+                send_worker_command_for_session(app_state, session, WorkerCommand::TuneAmplifierAtu)
+                    .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "amp_atu_tune_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
     }
 }
 
@@ -1090,6 +1135,9 @@ fn runtime_changed_from_runtime(
     let source_status =
         (current.source_status != previous.source_status).then_some(current.source_status.clone());
 
+    let amplifier_status = (current.amplifier_status != previous.amplifier_status)
+        .then_some(current.amplifier_status.clone());
+
     let tx_audio_diag =
         (current.tx_audio_diag != previous.tx_audio_diag).then_some(current.tx_audio_diag);
 
@@ -1136,6 +1184,7 @@ fn runtime_changed_from_runtime(
         || volume_percent.is_some()
         || source_control.is_some()
         || source_status.is_some()
+        || amplifier_status.is_some()
         || iq_recording_status.is_some()
         || tx_audio_diag.is_some()
         || tx_tune_result.is_some()
@@ -1164,6 +1213,7 @@ fn runtime_changed_from_runtime(
         volume_percent,
         source_control,
         source_status,
+        amplifier_status,
         iq_recording_status,
         tx_audio_diag,
         tx_tune_result,
@@ -1205,6 +1255,7 @@ fn runtime_snapshot_from_status(
             volume_percent: runtime.volume_percent,
             source_control: runtime.source_control.clone(),
             source_status: runtime.source_status.clone(),
+            amplifier_status: runtime.amplifier_status.clone(),
             iq_recording_status: runtime.iq_recording_status.clone(),
             tx_audio_diag: runtime.tx_audio_diag,
             tx_tune_result: runtime.last_tx_tune_result.clone(),
