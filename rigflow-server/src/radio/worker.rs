@@ -1535,7 +1535,14 @@ fn spawn_capture_thread(
             // so the DSP thread can include it in WorkerStatus updates.  The IQ
             // recording status is refreshed on the same cadence.
             if last_status_poll.elapsed() >= status_poll_interval {
-                let new_status = source.source_status();
+                let mut new_status = source.source_status();
+                // Generic "device not responding": while a realtime source is in
+                // a sustained RX stall (e.g. an RTL dongle pulled mid-stream, or
+                // an HL2 link drop), surface it on screen regardless of whether
+                // the source reports its own telemetry.
+                if rx_stall_start.is_some() {
+                    new_status.device_responding = Some(false);
+                }
                 let rec_status = match &iq_rec {
                     Some(rec) => IqRecordingStatus {
                         recording: true,

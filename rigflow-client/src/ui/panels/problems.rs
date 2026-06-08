@@ -31,10 +31,7 @@ impl RigflowApp {
                         ProblemSeverity::Error => COLOR_ERROR,
                         ProblemSeverity::Warning => COLOR_WARNING,
                     };
-                    ui.colored_label(
-                        color,
-                        egui::RichText::new(format!("{}: {}", p.source, p.detail)).small(),
-                    );
+                    ui.colored_label(color, format!("{}: {}", p.source, p.detail));
                 }
             });
     }

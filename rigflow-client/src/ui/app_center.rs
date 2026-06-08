@@ -252,33 +252,37 @@ impl RigflowApp {
         use crate::ui::panels::s_meter_label;
         use crate::ui::state::{ProblemSeverity, collect_problems};
 
-        // Problems badge — always visible (before the no-radio early-return) so a
-        // failure is never hidden.  Derives from the same `collect_problems` the
-        // "Status / Problems" panel uses, so the count and the list always agree.
+        // Status indicator light — always visible (before the no-radio
+        // early-return) so a failure is never hidden.  A filled circle: green =
+        // all OK, amber = warnings only, red = an error.  Hover lists the
+        // details (same source as the "Status / Problems" panel).
         let problems = collect_problems(snapshot);
-        if problems.is_empty() {
-            ui.label(egui::RichText::new("● OK").color(egui::Color32::from_rgb(100, 200, 100)));
+        let has_error = problems
+            .iter()
+            .any(|p| p.severity == ProblemSeverity::Error);
+        let color = if problems.is_empty() {
+            egui::Color32::from_rgb(40, 200, 80) // green: all subsystems OK
+        } else if has_error {
+            egui::Color32::from_rgb(230, 60, 60) // red: error
         } else {
-            let has_error = problems
-                .iter()
-                .any(|p| p.severity == ProblemSeverity::Error);
-            let color = if has_error {
-                egui::Color32::from_rgb(235, 80, 80)
-            } else {
-                egui::Color32::from_rgb(255, 160, 40)
-            };
-            let summary = problems
+            egui::Color32::from_rgb(255, 170, 40) // amber: warnings only
+        };
+        let hover = if problems.is_empty() {
+            "All subsystems OK".to_string()
+        } else {
+            problems
                 .iter()
                 .map(|p| format!("{}: {}", p.source, p.detail))
                 .collect::<Vec<_>>()
-                .join("\n");
-            ui.label(
-                egui::RichText::new(format!("⚠ {}", problems.len()))
-                    .strong()
-                    .color(color),
-            )
-            .on_hover_text(summary);
-        }
+                .join("\n")
+        };
+        // LED-style status light: a solid, color-filled circle.
+        let diameter = 20.0;
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(diameter, diameter), egui::Sense::hover());
+        ui.painter()
+            .circle_filled(rect.center(), diameter * 0.45, color);
+        response.on_hover_text(hover);
         ui.separator();
 
         // Operator + license first (shown whenever an operator is selected,

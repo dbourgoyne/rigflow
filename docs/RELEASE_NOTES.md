@@ -30,8 +30,9 @@
 
 - **HL2 link loss is now visible and survivable, and a shutdown can't leave the
   rig keyed.** A brief receive gap (Ethernet blip, switch hiccup) no longer tears
-  the whole radio down: the server keeps the worker alive, shows **"HL2 not
-  responding"** in the Source Status panel and the Problems badge, and resumes RX
+  the whole radio down: the server keeps the worker alive, surfaces the radio as
+  **"not responding"** (for any SDR — an HL2 link drop or an RTL dongle pulled
+  mid-stream) in the Source Status panel and the status light, and resumes RX
   in place when packets return. Only a *sustained* outage (~10 s) ends the
   session, after which the client's auto-reconnect re-acquires and
   re-initializes a power-cycled device. Separately, the server now handles
@@ -67,9 +68,10 @@
     full app restart is not yet implemented.
 
 - **Subsystem failures are now shown on screen, not just in the log.** A new
-  always-open **Status / Problems** section at the top of the left panel — plus a
-  `⚠ N` badge in the top status bar (green "● OK" when clear) — lists active
-  failures with their specific reason instead of failing silently. Covered:
+  always-open **Status / Problems** section at the top of the left panel — plus an
+  **LED-style status light** in the top status bar (green = all OK, amber =
+  warnings only, red = an error; hover for the list) — surfaces active failures
+  with their specific reason instead of failing silently. Covered:
   - **rigctl (CAT) bind failure** — e.g. port 4532 already in use (previously
     WSJT-X would just say "can't open rig" with no hint from Rigflow).
   - **Digital / PipeWire unavailability** — virtual audio device creation

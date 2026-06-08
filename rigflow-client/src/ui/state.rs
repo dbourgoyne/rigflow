@@ -603,13 +603,14 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
             detail: err.clone(),
         });
     }
-    // The SDR stopped sending IQ (link blip / device powered off).  Cleared
-    // automatically when RX resumes.
-    if s.source_status.device_responding == Some(false) {
+    // The SDR stopped sending IQ (HL2 link blip, RTL dongle pulled, device
+    // powered off, …).  Only while a radio is held (so stale status after a
+    // drop doesn't linger); cleared automatically when RX resumes.
+    if s.radio_acquired && s.source_status.device_responding == Some(false) {
         errors.push(Problem {
             severity: ProblemSeverity::Error,
             source: "Radio",
-            detail: "HL2 not responding".to_string(),
+            detail: "not responding (no data from device)".to_string(),
         });
     }
 
@@ -766,9 +767,10 @@ mod problem_tests {
     }
 
     #[test]
-    fn hl2_not_responding_is_a_radio_error() {
+    fn device_not_responding_is_a_radio_error() {
         let mut s = UiState::default();
         healthy_digital(&mut s);
+        s.radio_acquired = true;
 
         s.source_status.device_responding = Some(false);
         let problems = collect_problems(&s);
@@ -780,6 +782,11 @@ mod problem_tests {
         s.source_status.device_responding = Some(true);
         assert!(collect_problems(&s).is_empty());
         s.source_status.device_responding = None;
+        assert!(collect_problems(&s).is_empty());
+
+        // Not held → not surfaced even if the last status said not-responding.
+        s.radio_acquired = false;
+        s.source_status.device_responding = Some(false);
         assert!(collect_problems(&s).is_empty());
     }
 
