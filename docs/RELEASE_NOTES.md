@@ -9,6 +9,16 @@
 
 ### Changes
 
+- **One client per server, one server per host (enforced).** A server now serves a
+  single client: a second client connecting to a busy server is cleanly rejected
+  ("server already has a client") instead of causing undefined contention — so run
+  one client per server (multiple clients on a host is fine, each to its own
+  server). A second `rigflow-server` on the same host exits immediately with a
+  clear "port already in use" message rather than half-starting. A WebSocket
+  heartbeat detects dead/abandoned connections within ~40 s and frees the slot, so
+  your own client's auto-reconnect after a network outage still works (it retries
+  through the eviction window rather than being locked out).
+
 - **HL2 link loss is now visible and survivable, and a shutdown can't leave the
   rig keyed.** A brief receive gap (Ethernet blip, switch hiccup) no longer tears
   the whole radio down: the server keeps the worker alive, shows **"HL2 not

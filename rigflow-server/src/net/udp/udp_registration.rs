@@ -23,10 +23,9 @@ use crate::net::udp::mic_audio::push_mic_samples;
 /// - stores sender as current UDP audio target
 /// - sends 4-byte ACK (echo header)
 pub async fn run_udp_registration_listener(
-    bind_addr: &str,
+    socket: UdpSocket,
     udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let socket = UdpSocket::bind(bind_addr).await?;
     // Large enough for a mic-audio packet (~240 mono f32 samples + header).
     let mut buf = [0u8; 8192];
 

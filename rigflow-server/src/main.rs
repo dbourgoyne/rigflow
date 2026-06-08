@@ -171,20 +171,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build shared application state used by Axum handlers.
     let app_state = build_app_state(Arc::clone(&radio_manager));
 
-    // Start UDP registration listener in the background.
-    spawn_udp_registration_listener(&app_state);
+    // Bind both server ports up front.  A second rigflow-server on this host
+    // (the one-server-per-host policy) fails here with a clear message instead
+    // of a generic error or a silently half-started process.
+    let ws_addr: SocketAddr = WS_ADDR.parse()?;
+    let listener = bind_or_exit_in_use(tokio::net::TcpListener::bind(ws_addr).await, "WS", WS_ADDR);
+    let udp_socket = bind_or_exit_in_use(
+        tokio::net::UdpSocket::bind(UDP_REGISTRATION_ADDR).await,
+        "UDP registration",
+        UDP_REGISTRATION_ADDR,
+    );
+
+    // Start the (pre-bound) UDP registration listener in the background.
+    spawn_udp_registration_listener(&app_state, udp_socket);
 
     // Build the Axum router.
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(app_state);
 
-    // Start the WebSocket server.
-    let ws_addr: SocketAddr = WS_ADDR.parse()?;
     info!("rigflow_server listening on ws://{ws_addr}/ws");
     info!("UDP registration listener on {UDP_REGISTRATION_ADDR}");
 
-    let listener = tokio::net::TcpListener::bind(ws_addr).await?;
     tokio::select! {
         res = axum::serve(listener, app) => { res?; }
         _ = shutdown_signal() => {
@@ -246,16 +254,33 @@ fn build_app_state(radio_manager: Arc<RadioManager>) -> AppState {
     )
 }
 
-/// Spawn the UDP registration listener used by clients to advertise where
-/// they want audio packets delivered.
-fn spawn_udp_registration_listener(state: &AppState) {
+/// Spawn the UDP registration listener (on a pre-bound socket) used by clients
+/// to advertise where they want audio packets delivered.
+fn spawn_udp_registration_listener(state: &AppState, socket: tokio::net::UdpSocket) {
     let udp_audio_target = state.udp_audio_target.clone();
 
     tokio::spawn(async move {
-        if let Err(err) =
-            run_udp_registration_listener(UDP_REGISTRATION_ADDR, udp_audio_target).await
-        {
+        if let Err(err) = run_udp_registration_listener(socket, udp_audio_target).await {
             error!("UDP registration listener failed: {err}");
         }
     });
+}
+
+/// Unwrap a port-bind result, exiting with a clear message when the port is
+/// already in use — i.e. another rigflow-server is already running on this host
+/// (the one-server-per-host policy).
+fn bind_or_exit_in_use<T>(result: std::io::Result<T>, what: &str, addr: &str) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "another rigflow-server appears to be running — {what} port ({addr}) is already in use"
+            );
+            std::process::exit(1);
+        }
+        Err(err) => {
+            eprintln!("failed to bind {what} socket ({addr}): {err}");
+            std::process::exit(1);
+        }
+    }
 }

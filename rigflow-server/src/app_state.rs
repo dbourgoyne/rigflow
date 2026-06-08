@@ -1,11 +1,12 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use rigflow_protocol::ServerMessage;
 
 use crate::radio::manager::RadioManager;
+use crate::radio::types::ClientId;
 
 /// Shared application state for the WebSocket/API layer.
 ///
@@ -18,6 +19,10 @@ pub struct AppState {
     pub waterfall_tx: broadcast::Sender<Vec<u8>>,
     pub udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
     pub radio_manager: Arc<RadioManager>,
+    /// Single-client policy: the id of the one client currently allowed to be
+    /// connected.  A second connection while this is `Some` is rejected.  Freed
+    /// when that connection closes or is evicted by the heartbeat.
+    pub active_client: Arc<Mutex<Option<ClientId>>>,
 }
 
 impl AppState {
@@ -32,6 +37,7 @@ impl AppState {
             waterfall_tx,
             udp_audio_target: Arc::new(RwLock::new(None)),
             radio_manager,
+            active_client: Arc::new(Mutex::new(None)),
         }
     }
 }

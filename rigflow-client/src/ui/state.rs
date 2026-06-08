@@ -575,7 +575,10 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
     // "connected"/"radio acquired" states are not problems — only status text
     // that reports a failure counts, so this is silent until a real failure.
     let server = s.server_status.to_ascii_lowercase();
-    if server.contains("fail") || server.contains("error") {
+    if server.contains("fail")
+        || server.contains("error")
+        || server.contains("already has a client")
+    {
         errors.push(Problem {
             severity: ProblemSeverity::Error,
             source: "Server",
@@ -778,5 +781,16 @@ mod problem_tests {
         assert!(collect_problems(&s).is_empty());
         s.source_status.device_responding = None;
         assert!(collect_problems(&s).is_empty());
+    }
+
+    #[test]
+    fn server_already_has_a_client_is_an_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "server already has a client".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[0].source, "Server");
     }
 }

@@ -25,6 +25,12 @@ use crate::{
 
 type WsSender = futures::stream::SplitSink<WebSocket, Message>;
 
+/// Single-client heartbeat: ping this often …
+const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+/// … and treat a connection with no inbound frame for this long as dead, so its
+/// single-client slot (and any lease) is freed for a legitimate reconnect.
+const HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+
 /// Axum entry point for `/ws`.
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| client_socket(socket, state))
@@ -45,35 +51,98 @@ async fn client_socket(socket: WebSocket, state: AppState) {
     // Per-connection local channel for targeted responses and worker status updates.
     let (local_tx, mut local_rx) = mpsc::unbounded_channel::<ServerRadioMessage>();
 
+    // Single-client policy: claim the active-client slot, or reject this
+    // connection if another client already holds it.
+    if !try_claim_active_client(&state.active_client, &session.client_id).await {
+        let reject = ServerRadioMessage::RadioError {
+            code: "server_busy".to_string(),
+            message: "this server already has a connected client".to_string(),
+        };
+        let _ = send_connection_message(&mut sender, &reject).await;
+        let _ = sender.close().await;
+        info!("CLIENT rejected (single-client policy): server already has a client");
+        return; // never claimed the slot or a lease — no cleanup to do.
+    }
+    info!("CLIENT connected: {}", session.client_id.0);
+
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = local_rx.recv().await {
-            if send_connection_message(&mut sender, &msg).await.is_err() {
-                break;
+        let mut ping = tokio::time::interval(HEARTBEAT_INTERVAL);
+        // Skip the immediate first tick so we don't ping before anything happens.
+        ping.tick().await;
+        loop {
+            tokio::select! {
+                msg = local_rx.recv() => match msg {
+                    Some(msg) => {
+                        if send_connection_message(&mut sender, &msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                _ = ping.tick() => {
+                    if sender.send(Message::Ping(Vec::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
 
     let state_for_recv = state.clone();
     let recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            match msg {
-                Message::Text(text) => {
+        loop {
+            // A connection with no inbound frame for HEARTBEAT_TIMEOUT is treated
+            // as dead and evicted (the 15 s ping keeps a live-but-idle client
+            // emitting Pongs well inside the window).
+            match tokio::time::timeout(HEARTBEAT_TIMEOUT, receiver.next()).await {
+                Ok(Some(Ok(Message::Text(text)))) => {
                     handle_incoming_text(&text, &state_for_recv, &mut session, &local_tx).await;
                 }
-                Message::Close(_) => break,
-
+                Ok(Some(Ok(Message::Close(_)))) => break,
                 // No client-originated binary/media traffic over websocket.
-                Message::Ping(_) | Message::Pong(_) | Message::Binary(_) => {}
+                Ok(Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_)))) => {}
+                Ok(Some(Err(_))) | Ok(None) => break,
+                Err(_) => {
+                    info!("CLIENT heartbeat timeout; evicting {}", session.client_id.0);
+                    break;
+                }
             }
         }
 
-        // Best-effort cleanup: release any leased radio if the client disconnects.
+        // Best-effort cleanup: release any leased radio …
         release_session_radio_on_disconnect(&state_for_recv, &mut session).await;
+        // … and free the single-client slot (guarded, so a late-closing old
+        // connection can't clobber a newer owner).
+        release_active_client(&state_for_recv.active_client, &session.client_id).await;
     });
 
     tokio::select! {
         _ = send_task => {}
         _ = recv_task => {}
+    }
+}
+
+/// Try to claim the single-client slot for `client_id`.  Returns `true` if it
+/// was free (claimed), `false` if another client already holds it (reject).
+async fn try_claim_active_client(
+    slot: &tokio::sync::Mutex<Option<ClientId>>,
+    client_id: &ClientId,
+) -> bool {
+    let mut guard = slot.lock().await;
+    if guard.is_some() {
+        false
+    } else {
+        *guard = Some(client_id.clone());
+        true
+    }
+}
+
+/// Release the single-client slot, but only if `client_id` still owns it (so a
+/// late-closing old/rejected connection can't clear a newer owner's slot).
+async fn release_active_client(slot: &tokio::sync::Mutex<Option<ClientId>>, client_id: &ClientId) {
+    let mut guard = slot.lock().await;
+    if guard.as_ref() == Some(client_id) {
+        *guard = None;
     }
 }
 
@@ -1382,5 +1451,33 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
 	    deemphasis_mode,
 	    source_control,
         );
+    }
+}
+
+#[cfg(test)]
+mod single_client_tests {
+    use super::*;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn second_client_rejected_until_first_releases() {
+        let slot: Mutex<Option<ClientId>> = Mutex::new(None);
+        let a = ClientId("a".to_string());
+        let b = ClientId("b".to_string());
+
+        // First client claims the slot; a second is rejected.
+        assert!(try_claim_active_client(&slot, &a).await);
+        assert!(!try_claim_active_client(&slot, &b).await);
+        assert_eq!(*slot.lock().await, Some(a.clone()));
+
+        // A non-owner release is a no-op (guards against clobbering).
+        release_active_client(&slot, &b).await;
+        assert_eq!(*slot.lock().await, Some(a.clone()));
+
+        // The owner releases; now the second client can claim.
+        release_active_client(&slot, &a).await;
+        assert_eq!(*slot.lock().await, None);
+        assert!(try_claim_active_client(&slot, &b).await);
+        assert_eq!(*slot.lock().await, Some(b));
     }
 }

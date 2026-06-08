@@ -26,6 +26,12 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
 
+/// How long to keep retrying a `server_busy` rejection before giving up.  Longer
+/// than the server's heartbeat-eviction window (40 s), so our own reconnect
+/// recovers once the server frees its stale slot, but a genuinely-occupied
+/// server stops the retries.
+const SERVER_BUSY_GIVE_UP: Duration = Duration::from_secs(45);
+
 /// Main WebSocket control task.
 ///
 /// Responsibilities:
@@ -60,6 +66,9 @@ pub async fn websocket_control_task(
     let mut last_radio_id: Option<String> = None;
     let mut reacquire_at: Option<Instant> = None;
     let mut reacquire_deadline: Option<Instant> = None;
+    // Single-client policy: when the server keeps rejecting us with `server_busy`,
+    // retry through the server's heartbeat-eviction window, then give up.
+    let mut rejected_since: Option<Instant> = None;
 
     // Renew radio lease periodically while a radio is acquired.
     let mut renew_interval = tokio::time::interval(Duration::from_secs(10));
@@ -149,6 +158,7 @@ pub async fn websocket_control_task(
                                 reconnect_target_ip = Some(server_ip);
                                 reconnect_backoff = Duration::from_secs(1);
                                 reconnect_attempt = 0;
+                                rejected_since = None;
                             }
 
                             Err(err) => {
@@ -216,6 +226,27 @@ pub async fn websocket_control_task(
                         {
                             info!("CLIENT got radio message: {:?}", radio_msg);
 
+                            // Single-client policy: the server already has a
+                            // client.  Keep retrying through its heartbeat-eviction
+                            // window (our own reconnect may just need the server to
+                            // drop our stale connection), then give up so we don't
+                            // storm a genuinely-occupied server.
+                            if let ServerRadioMessage::RadioError { code, .. } = &radio_msg {
+                                if code == "server_busy" {
+                                    let since =
+                                        *rejected_since.get_or_insert_with(Instant::now);
+                                    if auto_reconnect_enabled
+                                        && since.elapsed() >= SERVER_BUSY_GIVE_UP
+                                    {
+                                        auto_reconnect_enabled = false;
+                                        reconnect_at = None;
+                                        reconnect_target_ip = None;
+                                        ui_state.lock().unwrap().server_status =
+                                            "server already has a client".to_string();
+                                    }
+                                }
+                            }
+
                             if let Some(outgoing) = apply_radio_server_message(
                                 radio_msg,
                                 &ui_state,
@@ -236,6 +267,13 @@ pub async fn websocket_control_task(
                             state.runtime_error = format!("error: {}", message);
                         } else {
                             info!("CLIENT unknown message: {}", text);
+                        }
+                    }
+
+                    // Respond to the server heartbeat so it doesn't evict us.
+                    Some(Ok(Message::Ping(payload))) => {
+                        if let Some(write) = write_opt.as_mut() {
+                            write.send(Message::Pong(payload)).await?;
                         }
                     }
 
@@ -305,6 +343,7 @@ pub async fn websocket_control_task(
                         reconnect_at = None;
                         reconnect_backoff = Duration::from_secs(1);
                         reconnect_attempt = 0;
+                        rejected_since = None;
 
                         let mut state = ui_state.lock().unwrap();
                         state.server_connected = true;
@@ -706,10 +745,10 @@ pub fn apply_radio_server_message(
         }
 
         ServerRadioMessage::RadioError { code, message } => {
-            // During auto-re-acquire the old lease may still be held; the
-            // re-acquire timer owns the status and retries, so don't surface a
-            // spurious per-retry error for `radio_busy`.
-            if code != "radio_busy" {
+            // `radio_busy` is owned by the re-acquire timer and `server_busy` by
+            // the single-client reject handler (both in the control loop); don't
+            // surface a spurious per-retry error for either.
+            if code != "radio_busy" && code != "server_busy" {
                 state.runtime_error = format!("radio error: {}", message);
             }
         }
