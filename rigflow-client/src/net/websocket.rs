@@ -9,6 +9,7 @@ use futures_util::{SinkExt, StreamExt};
 
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::time::{Instant, sleep_until};
 
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 
@@ -45,6 +46,21 @@ pub async fn websocket_control_task(
     let mut read_opt: Option<WsRead> = None;
     let mut connected_server_ip: Option<String> = None;
 
+    // Auto-reconnect state.  Armed on a successful manual Connect, disarmed on a
+    // user Disconnect — so a network drop reconnects but an intentional
+    // disconnect does not.  `reconnect_at`/`reacquire_at` are deadlines that gate
+    // the two timer arms in the select! below.
+    let mut auto_reconnect_enabled = false;
+    let mut reconnect_target_ip: Option<String> = None;
+    let mut reconnect_at: Option<Instant> = None;
+    let mut reconnect_backoff = Duration::from_secs(1);
+    let mut reconnect_attempt: u32 = 0;
+    // Radio to re-acquire after a reconnect; captured when an AcquireRadio is
+    // sent, cleared on user ReleaseRadio/Disconnect.
+    let mut last_radio_id: Option<String> = None;
+    let mut reacquire_at: Option<Instant> = None;
+    let mut reacquire_deadline: Option<Instant> = None;
+
     // Renew radio lease periodically while a radio is acquired.
     let mut renew_interval = tokio::time::interval(Duration::from_secs(10));
 
@@ -80,46 +96,24 @@ pub async fn websocket_control_task(
                             continue;
                         };
 
-                        let (udp_listen_port, ws_port, center_freq_hz, target_freq_hz) = {
-                            let state = ui_state.lock().unwrap();
-                            (
-                                state.udp_listen_port,
-                                state.rigflow_server_ws_port,
-                                state.center_freq_hz as u64,
-                                state.target_freq_hz as u64,
-                            )
-                        };
-
-                        let udp_peer_addr = match build_udp_peer_addr(
-                            &server_ip,
-                            ws_port,
-                            udp_listen_port,
-                        ) {
-                            Ok(addr) => addr,
-                            Err(err) => {
-                                let mut state = ui_state.lock().unwrap();
-                                state.server_status = format!("acquire failed: {}", err);
-                                continue;
-                            }
-                        };
-
                         if let Some(write) = write_opt.as_mut() {
-                            let acquire = ClientRadioMessage::AcquireRadio {
-                                radio_id: rigflow_core::radio::RadioId(radio_id),
-                                center_freq_hz,
-                                target_freq_hz,
-                                audio_udp_peer: udp_peer_addr.clone(),
-                                waterfall_udp_peer: udp_peer_addr,
-                            };
-
-                            let text = serde_json::to_string(&acquire)?;
-                            info!("CLIENT sending AcquireRadio: {}", text);
-
-                            write.send(Message::Text(text.into())).await?;
+                            match send_acquire(&radio_id, &server_ip, write, &ui_state).await {
+                                // Remember it so a later drop is auto-recoverable.
+                                Ok(()) => last_radio_id = Some(radio_id),
+                                Err(err) => {
+                                    let mut state = ui_state.lock().unwrap();
+                                    state.server_status = format!("acquire failed: {}", err);
+                                }
+                            }
                         }
                     }
 
                     Some(ControlCommand::ReleaseRadio) => {
+                        // A user release must not be auto-re-acquired.
+                        last_radio_id = None;
+                        reacquire_at = None;
+                        reacquire_deadline = None;
+
                         if let Some(write) = write_opt.as_mut() {
                             let msg = ClientRadioMessage::ReleaseRadio;
                             let text = serde_json::to_string(&msg)?;
@@ -134,19 +128,11 @@ pub async fn websocket_control_task(
                         if write_opt.is_some() {
                             continue;
                         }
+                        // A manual Connect mid-reconnect short-circuits the backoff.
+                        reconnect_at = None;
 
-                        let ws_port = {
-                            let state = ui_state.lock().unwrap();
-                            state.rigflow_server_ws_port
-                        };
-
-                        let ws_url = format!("ws://{}:{}/ws", server_ip, ws_port);
-                        info!("CLIENT connecting to {}", ws_url);
-
-                        match tokio_tungstenite::connect_async(&ws_url).await {
-                            Ok((ws_stream, _)) => {
-                                let (write, read) = ws_stream.split();
-
+                        match try_connect(&server_ip, &ui_state, &media_cmd_tx).await {
+                            Ok((write, read)) => {
                                 write_opt = Some(write);
                                 read_opt = Some(read);
                                 connected_server_ip = Some(server_ip.clone());
@@ -158,27 +144,11 @@ pub async fn websocket_control_task(
                                         format!("connected to server {}", server_ip);
                                 }
 
-                                // Register the UDP media plane immediately after
-                                // WebSocket connect succeeds.
-                                let server_udp_port = {
-                                    let state = ui_state.lock().unwrap();
-                                    state.rigflow_server_udp_port
-                                };
-
-                                let _ = media_cmd_tx.send(MediaCommand::RegisterUdp {
-                                    server_ip: server_ip.clone(),
-                                    server_udp_port,
-                                });
-
-                                // Ask the server for the current radio list.
-                                if let Some(write) = write_opt.as_mut() {
-                                    let list_msg = ClientRadioMessage::ListRadios;
-                                    let text = serde_json::to_string(&list_msg)?;
-
-                                    debug!("CLIENT sending: {}", text);
-
-                                    write.send(Message::Text(text.into())).await?;
-                                }
+                                // Arm auto-reconnect for this server.
+                                auto_reconnect_enabled = true;
+                                reconnect_target_ip = Some(server_ip);
+                                reconnect_backoff = Duration::from_secs(1);
+                                reconnect_attempt = 0;
                             }
 
                             Err(err) => {
@@ -198,6 +168,15 @@ pub async fn websocket_control_task(
 
                         read_opt = None;
                         connected_server_ip = None;
+
+                        // User intent: do NOT auto-reconnect. Disarm everything.
+                        auto_reconnect_enabled = false;
+                        reconnect_target_ip = None;
+                        reconnect_at = None;
+                        reconnect_attempt = 0;
+                        last_radio_id = None;
+                        reacquire_at = None;
+                        reacquire_deadline = None;
 
                         let mut state = ui_state.lock().unwrap();
                         state.server_connected = false;
@@ -269,10 +248,22 @@ pub async fn websocket_control_task(
                         read_opt = None;
                         connected_server_ip = None;
 
+                        // Arm auto-reconnect on an unexpected drop (vs the user's
+                        // Disconnect, which disarms it). `last_radio_id` is kept so
+                        // the radio is re-acquired once reconnected.
+                        let status = if auto_reconnect_enabled {
+                            reconnect_attempt = 1;
+                            reconnect_backoff = Duration::from_secs(1);
+                            reconnect_at = Some(Instant::now() + reconnect_backoff);
+                            "reconnecting (attempt 1)…".to_string()
+                        } else {
+                            format!("connection error: {}", error)
+                        };
+
                         let mut state = ui_state.lock().unwrap();
                         state.server_connected = false;
-                        state.server_status = format!("connection error: {}", error);
                         state.radio_acquired = false;
+                        state.server_status = status;
 
                         continue;
                     }
@@ -284,17 +275,176 @@ pub async fn websocket_control_task(
                         read_opt = None;
                         connected_server_ip = None;
 
+                        let status = if auto_reconnect_enabled {
+                            reconnect_attempt = 1;
+                            reconnect_backoff = Duration::from_secs(1);
+                            reconnect_at = Some(Instant::now() + reconnect_backoff);
+                            "reconnecting (attempt 1)…".to_string()
+                        } else {
+                            "no server".to_string()
+                        };
+
                         let mut state = ui_state.lock().unwrap();
                         state.server_connected = false;
-                        state.server_status = "no server".to_string();
                         state.radio_acquired = false;
+                        state.server_status = status;
 
                         continue;
                     }
                 }
             }
+
+            // --- Auto-reconnect: reopen the WS after an unexpected drop ----
+            _ = async { sleep_until(reconnect_at.unwrap()).await }, if reconnect_at.is_some() => {
+                let ip = reconnect_target_ip.clone().unwrap_or_default();
+                match try_connect(&ip, &ui_state, &media_cmd_tx).await {
+                    Ok((write, read)) => {
+                        write_opt = Some(write);
+                        read_opt = Some(read);
+                        connected_server_ip = Some(ip.clone());
+                        reconnect_at = None;
+                        reconnect_backoff = Duration::from_secs(1);
+                        reconnect_attempt = 0;
+
+                        let mut state = ui_state.lock().unwrap();
+                        state.server_connected = true;
+                        if last_radio_id.is_some() {
+                            // Re-acquire the radio we held; fire immediately.
+                            reacquire_at = Some(Instant::now());
+                            reacquire_deadline = Some(Instant::now() + REACQUIRE_GIVE_UP);
+                            state.server_status = "re-acquiring radio…".to_string();
+                        } else {
+                            state.server_status = format!("connected to server {}", ip);
+                        }
+                    }
+                    Err(err) => {
+                        reconnect_attempt += 1;
+                        reconnect_backoff = (reconnect_backoff * 2).min(RECONNECT_BACKOFF_MAX);
+                        reconnect_at = Some(Instant::now() + reconnect_backoff);
+                        debug!("CLIENT reconnect attempt {reconnect_attempt} failed: {err}");
+                        ui_state.lock().unwrap().server_status =
+                            format!("reconnecting (attempt {reconnect_attempt})…");
+                    }
+                }
+            }
+
+            // --- Auto-re-acquire: restore the radio after a reconnect ------
+            _ = async { sleep_until(reacquire_at.unwrap()).await }, if reacquire_at.is_some() => {
+                let acquired = ui_state.lock().unwrap().radio_acquired;
+                if acquired {
+                    // Success (RadioAcquired set the status) — stop retrying.
+                    reacquire_at = None;
+                    reacquire_deadline = None;
+                } else if reacquire_deadline.is_some_and(|d| Instant::now() >= d) {
+                    // Gave up: the old lease never freed within the window.
+                    reacquire_at = None;
+                    reacquire_deadline = None;
+                    last_radio_id = None;
+                    ui_state.lock().unwrap().server_status =
+                        "re-acquire failed: radio still busy".to_string();
+                } else if let (Some(rid), Some(ip), Some(write)) = (
+                    last_radio_id.clone(),
+                    connected_server_ip.clone(),
+                    write_opt.as_mut(),
+                ) {
+                    // Re-send AcquireRadio; a `radio_busy` reply is tolerated and
+                    // the timer fires again until the old lease frees.
+                    let _ = send_acquire(&rid, &ip, write, &ui_state).await;
+                    reacquire_at = Some(Instant::now() + REACQUIRE_RETRY);
+                    ui_state.lock().unwrap().server_status = "re-acquiring radio…".to_string();
+                } else {
+                    // Lost the connection again mid-re-acquire; the reconnect arm
+                    // will take over.
+                    reacquire_at = None;
+                }
+            }
         }
     }
+
+    Ok(())
+}
+
+/// Reconnect backoff cap.  Backoff grows 1→2→4→8→16→30 s and stays at 30 s.
+const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(30);
+/// How long to keep retrying re-acquire (slightly over the server's 30 s lease
+/// TTL) before giving up, so an ungraceful drop's stale lease has time to expire.
+const REACQUIRE_GIVE_UP: Duration = Duration::from_secs(35);
+/// Cadence of re-acquire retries while waiting for the old lease to free.
+const REACQUIRE_RETRY: Duration = Duration::from_secs(4);
+
+/// Open a WebSocket to `server_ip`, register the UDP media plane, and request
+/// the radio list.  Shared by the manual `Connect` path and the auto-reconnect
+/// timer.  Does not touch `server_status` — callers word it (manual vs attempt
+/// N) — and returns the underlying error string on failure.
+async fn try_connect(
+    server_ip: &str,
+    ui_state: &Arc<Mutex<UiState>>,
+    media_cmd_tx: &mpsc::UnboundedSender<MediaCommand>,
+) -> Result<(WsWrite, WsRead), String> {
+    let (ws_port, server_udp_port) = {
+        let state = ui_state.lock().unwrap();
+        (state.rigflow_server_ws_port, state.rigflow_server_udp_port)
+    };
+
+    let ws_url = format!("ws://{}:{}/ws", server_ip, ws_port);
+    info!("CLIENT connecting to {}", ws_url);
+
+    let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (mut write, read) = ws_stream.split();
+
+    // Register the UDP media plane immediately (stateless, repeatable).
+    let _ = media_cmd_tx.send(MediaCommand::RegisterUdp {
+        server_ip: server_ip.to_string(),
+        server_udp_port,
+    });
+
+    // Ask the server for the current radio list.
+    let list_msg = ClientRadioMessage::ListRadios;
+    let text = serde_json::to_string(&list_msg).map_err(|e| e.to_string())?;
+    write
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok((write, read))
+}
+
+/// Build and send an `AcquireRadio` for `radio_id`.  Shared by the manual
+/// `AcquireRadio` path and the auto-re-acquire timer.
+async fn send_acquire(
+    radio_id: &str,
+    server_ip: &str,
+    write: &mut WsWrite,
+    ui_state: &Arc<Mutex<UiState>>,
+) -> Result<(), String> {
+    let (udp_listen_port, ws_port, center_freq_hz, target_freq_hz) = {
+        let state = ui_state.lock().unwrap();
+        (
+            state.udp_listen_port,
+            state.rigflow_server_ws_port,
+            state.center_freq_hz as u64,
+            state.target_freq_hz as u64,
+        )
+    };
+
+    let udp_peer_addr = build_udp_peer_addr(server_ip, ws_port, udp_listen_port)?;
+
+    let acquire = ClientRadioMessage::AcquireRadio {
+        radio_id: rigflow_core::radio::RadioId(radio_id.to_string()),
+        center_freq_hz,
+        target_freq_hz,
+        audio_udp_peer: udp_peer_addr.clone(),
+        waterfall_udp_peer: udp_peer_addr,
+    };
+
+    let text = serde_json::to_string(&acquire).map_err(|e| e.to_string())?;
+    info!("CLIENT sending AcquireRadio: {}", text);
+    write
+        .send(Message::Text(text.into()))
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -555,8 +705,13 @@ pub fn apply_radio_server_message(
             }
         }
 
-        ServerRadioMessage::RadioError { message, .. } => {
-            state.runtime_error = format!("radio error: {}", message);
+        ServerRadioMessage::RadioError { code, message } => {
+            // During auto-re-acquire the old lease may still be held; the
+            // re-acquire timer owns the status and retries, so don't surface a
+            // spurious per-retry error for `radio_busy`.
+            if code != "radio_busy" {
+                state.runtime_error = format!("radio error: {}", message);
+            }
         }
     }
 

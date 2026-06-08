@@ -581,6 +581,14 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
             source: "Server",
             detail: s.server_status.clone(),
         });
+    } else if server.contains("reconnecting") || server.contains("re-acquiring") {
+        // Transient: the client lost the link and is recovering on its own.
+        // Surface as a non-alarming Warning (escalates to Error if it gives up).
+        warnings.push(Problem {
+            severity: ProblemSeverity::Warning,
+            source: "Server",
+            detail: s.server_status.clone(),
+        });
     }
     // Amplifier serial open failure, or a previously-detected amp that stopped
     // responding.  (Auto-detect finding no amp is log-only, never set here, so
@@ -705,5 +713,43 @@ mod problem_tests {
         s.digital_input_available = true;
         s.server_status = "no server".to_string();
         assert!(collect_problems(&s).is_empty());
+    }
+
+    fn healthy_digital(s: &mut UiState) {
+        s.digital_output_available = true;
+        s.digital_rx_available = true;
+        s.digital_input_available = true;
+    }
+
+    #[test]
+    fn reconnecting_is_a_warning_not_an_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "reconnecting (attempt 3)…".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Warning);
+        assert_eq!(problems[0].source, "Server");
+    }
+
+    #[test]
+    fn re_acquiring_is_a_warning() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "re-acquiring radio…".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Warning);
+    }
+
+    #[test]
+    fn re_acquire_give_up_is_an_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "re-acquire failed: radio still busy".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[0].source, "Server");
     }
 }

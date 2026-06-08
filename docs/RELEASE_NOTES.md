@@ -9,6 +9,23 @@
 
 ### Changes
 
+- **The client now auto-reconnects after a network drop.** A transient blip
+  (WiFi hiccup, brief server restart) no longer ends the session: the control
+  plane reconnects with exponential backoff (1→2→4→8→16→30 s cap) and
+  **automatically re-acquires the radio you had**, restoring full state (the
+  server resends a runtime snapshot — no settings are lost) and resuming audio.
+  Details:
+  - Only an *unexpected* drop reconnects; an explicit **Disconnect** does not.
+  - If you reconnect faster than the server releases your old lease, re-acquire
+    retries for ~35 s until the radio frees, then reports an error if it can't.
+  - Status shows "reconnecting (attempt N)…" / "re-acquiring radio…" as a
+    transient Warning in the Status / Problems area, escalating to an Error only
+    if re-acquire ultimately gives up.
+  - Known limitation (this release): while reconnecting there is no dedicated
+    "stop reconnecting" button — the Server button reads "Connect" and
+    re-triggers an immediate attempt. Auto-reconnecting the *last* radio across a
+    full app restart is not yet implemented.
+
 - **Subsystem failures are now shown on screen, not just in the log.** A new
   always-open **Status / Problems** section at the top of the left panel — plus a
   `⚠ N` badge in the top status bar (green "● OK" when clear) — lists active
