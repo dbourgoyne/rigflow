@@ -4,7 +4,9 @@ use num_complex::Complex32;
 ///
 /// This implements the standard quadrature demodulation technique:
 ///
-///     y[n] = angle(x[n] * conj(x[n-1]))
+/// ```text
+/// y[n] = angle(x[n] * conj(x[n-1]))
+/// ```
 ///
 /// Where:
 /// - x[n] is the current complex sample
