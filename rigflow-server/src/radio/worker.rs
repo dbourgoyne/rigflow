@@ -668,10 +668,14 @@ fn run_iq_worker_threads(
 
 /// Spawn the amplifier status poller for an HL2 worker (Phase 1).
 ///
-/// Returns `None` (no thread) when no `--hr50-serial` is configured or the port
-/// can't be opened — in which case `amplifier_status` stays at its default
-/// (`model: None`) and the UI shows "Amplifier: None".  The poller writes
-/// `control.amplifier_status` on change; the existing status path publishes it.
+/// Returns `None` (no thread) when amplifier polling is disabled
+/// (`--hr50-serial none`).  With the default `auto`, the thread runs VID/PID
+/// narrowed probing ([`crate::amplifier::autodetect_serial`]) to find an HR50
+/// and its baud; with an explicit path it opens that device directly.  If
+/// nothing is found / can't be opened the thread exits and `amplifier_status`
+/// stays at its default (`model: None`) so the UI shows "Amplifier: None".  The
+/// poller writes `control.amplifier_status` on change; the existing status path
+/// publishes it.
 fn spawn_amplifier_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -680,11 +684,29 @@ fn spawn_amplifier_thread(
     amp_cmd_rx: std_mpsc::Receiver<crate::amplifier::AmpCommand>,
     amp_freq: Arc<AtomicU64>,
 ) -> Option<thread::JoinHandle<()>> {
-    let path = server_cfg.hr50_serial.clone()?;
-    let baud = server_cfg.hr50_baud;
+    let configured = server_cfg.hr50_serial.clone()?;
+    let configured_baud = server_cfg.hr50_baud;
     let radio_id = descriptor.id.0;
 
     Some(thread::spawn(move || {
+        // Resolve the serial port. "auto" runs VID/PID-narrowed probing and also
+        // discovers the baud; an explicit path opens directly at the configured
+        // baud (the user has taken responsibility for that device).
+        let (path, baud) = if configured.eq_ignore_ascii_case("auto") {
+            match crate::amplifier::autodetect_serial(configured_baud) {
+                Some(found) => found,
+                None => {
+                    info!(
+                        "[radio-worker {radio_id}] HR50 auto-detect: no amplifier responded on any \
+                         USB-serial port; amplifier polling disabled"
+                    );
+                    return;
+                }
+            }
+        } else {
+            (configured, configured_baud)
+        };
+
         let transport = match crate::amplifier::serial::SerialTransport::open(&path, baud) {
             Ok(t) => t,
             Err(e) => {

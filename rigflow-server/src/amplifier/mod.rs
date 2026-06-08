@@ -31,6 +31,25 @@ use transport::AmplifierTransport;
 
 /// Response read timeout for a single command.
 const READ_TIMEOUT: Duration = Duration::from_millis(700);
+/// Per-attempt budget while probing a candidate port/baud during auto-detect.
+/// Shorter than `READ_TIMEOUT` so a full no-amp scan stays a couple of seconds.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
+/// USB vendor ids of common USB-serial converter chips. A port whose owning
+/// device matches one of these is a *candidate* worth probing for an HR50:
+/// `0x04D8` is the Microchip MCP2200 inside the HR50's own USB-B port; the rest
+/// cover generic USB-serial cables on the amp's ACC port. This list only decides
+/// which ports get a read-only probe — a port is *adopted* solely when it
+/// answers a real `HRRX;` query, so casting a wide net here is safe.
+const CONVERTER_VENDOR_IDS: &[u16] = &[
+    0x0403, // FTDI (FT232R/FT-X/FT232H/FT2232 …)
+    0x04D8, // Microchip (MCP2200 — HR50 built-in USB port)
+    0x10C4, // Silicon Labs (CP210x)
+    0x067B, // Prolific (PL2303)
+    0x1A86, // QinHeng (CH340/CH341)
+];
+/// Baud rates probed during auto-detect, after the caller's preferred value.
+/// Limited to the rates the HR50 menus offer (and `SerialTransport` supports).
+const PROBE_BAUDS: &[u32] = &[19200, 9600, 38400, 57600, 115200, 4800];
 /// Best-effort discard window after a fire-and-forget SET command.
 const SET_DRAIN: Duration = Duration::from_millis(120);
 /// Poll cadence once an amplifier is detected (~1 Hz).
@@ -49,6 +68,96 @@ pub enum AmpCommand {
     SetKeyingMode(AmplifierKeyingMode),
     SetAtuMode(AmplifierAtuMode),
     TuneAtu,
+}
+
+/// Auto-detect the HR50 serial port and its baud rate.
+///
+/// Two stages, so a wrong guess can never *continuously* talk to a non-HR50
+/// device (the safety property the old hard-coded `/dev/ttyUSB0` default lacked):
+/// 1. **Narrow** — enumerate USB-serial ports and keep only those whose owning
+///    device is a known serial-converter chip ([`CONVERTER_VENDOR_IDS`]).
+/// 2. **Confirm** — open each candidate and send a read-only `HRRX;`; adopt the
+///    first port/baud that returns a valid HR50 status.
+///
+/// Bauds are tried `preferred_baud` first (the configured/`--hr50-baud` value),
+/// then [`PROBE_BAUDS`], so the amp is found regardless of how its baud menu is
+/// set. Returns the matched `(path, baud)`, or `None` if nothing answers.
+/// Linux-only (reads sysfs); returns `None` on other hosts.
+pub fn autodetect_serial(preferred_baud: u32) -> Option<(String, u32)> {
+    let candidates: Vec<_> = serial::enumerate_ports()
+        .into_iter()
+        .filter(|p| CONVERTER_VENDOR_IDS.contains(&p.vid))
+        .collect();
+    if candidates.is_empty() {
+        log::debug!("[hr50] auto-detect: no USB-serial converter ports present");
+        return None;
+    }
+
+    // preferred_baud first, then the rest (skipping the duplicate).
+    let bauds = std::iter::once(preferred_baud)
+        .chain(PROBE_BAUDS.iter().copied().filter(|&b| b != preferred_baud));
+
+    for baud in bauds {
+        for p in &candidates {
+            log::debug!(
+                "[hr50] probing {} ({:04x}:{:04x} {}) @ {baud}",
+                p.path,
+                p.vid,
+                p.pid,
+                p.product.as_deref().unwrap_or("?"),
+            );
+            match serial::SerialTransport::open(&p.path, baud) {
+                Ok(mut t) => {
+                    if probe_is_hr50(&mut t) {
+                        log::info!(
+                            "[hr50] auto-detected amplifier on {} ({:04x}:{:04x} {}) @ {baud} 8N1",
+                            p.path,
+                            p.vid,
+                            p.pid,
+                            p.product.as_deref().unwrap_or("?"),
+                        );
+                        return Some((p.path.clone(), baud));
+                    }
+                }
+                Err(e) => log::debug!("[hr50] probe open {} @ {baud} failed: {e}", p.path),
+            }
+        }
+    }
+
+    log::debug!(
+        "[hr50] auto-detect: {} converter port(s) present, none answered an HR50 probe",
+        candidates.len()
+    );
+    None
+}
+
+/// Send one read-only `HRRX;` and report whether a valid HR50 RX status came
+/// back within [`PROBE_TIMEOUT`]. Used only during auto-detect.
+fn probe_is_hr50(t: &mut dyn AmplifierTransport) -> bool {
+    if t.write_cmd(CMD_HRRX).is_err() {
+        return false;
+    }
+    let deadline = Instant::now() + PROBE_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        match t.read_response(remaining) {
+            // A real RX status has both mode and band; anything else is skipped
+            // (the amp can interleave auto-reports) until the deadline.
+            Ok(Some(seg)) => {
+                if seg.contains("RX,") {
+                    if let Some(rx) = parse_hrrx(&seg) {
+                        if rx.mode.is_some() && rx.band.is_some() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            Ok(None) | Err(_) => return false,
+        }
+    }
 }
 
 /// Run the detect + poll + control loop until `stop` is set.

@@ -44,13 +44,18 @@ pub struct ServerConfig {
 
     pub hl2_sample_rate_hz: u32,
 
-    /// Serial device for the Hardrock-50 amplifier (Phase 1, read-only status).
-    /// Defaults to `/dev/ttyUSB0` (the FTDI ACC link on the rack Pi); override
-    /// with `--hr50-serial`. If the device is absent the poller fails to open it
-    /// and the UI shows "Amplifier: None". `None` disables amplifier polling.
+    /// Serial device for the Hardrock-50 amplifier.
+    ///
+    /// `Some("auto")` (the default) auto-detects: USB-serial ports are narrowed
+    /// by USB VID/PID to known converter chips, then each is probed with a
+    /// read-only `HRRX;` and only a port that answers as an HR50 is used — so
+    /// Rigflow never continuously talks to an unrelated serial device. An
+    /// explicit path (e.g. `--hr50-serial /dev/ttyUSB0`) opens that device
+    /// directly. `None` (`--hr50-serial none`) disables amplifier polling.
     pub hr50_serial: Option<String>,
-    /// Baud rate for the HR50 serial link. Defaults to 19200 (the amp's ACC Baud
-    /// Rate in this rig); override with `--hr50-baud`.
+    /// Baud rate for the HR50 serial link. In `auto` mode this is the baud tried
+    /// first before the rest of the probe list; with an explicit path it is the
+    /// baud used. Defaults to 19200 (the amp's ACC baud); override `--hr50-baud`.
     pub hr50_baud: u32,
 
     pub center_freq_hz: f32,
@@ -84,7 +89,7 @@ impl Default for ServerConfig {
 
             hl2_sample_rate_hz: 384_000,
 
-            hr50_serial: Some("/dev/ttyUSB0".to_string()),
+            hr50_serial: Some("auto".to_string()),
             hr50_baud: 19200,
 
             center_freq_hz: 101_100_000.0,
@@ -247,10 +252,11 @@ RTL-SDR source:
 Hermes Lite 2 source:
   --hl2-sample-rate HZ   (default: 384000)
 
-Amplifier (Phase 1, read-only status):
-  --hr50-serial PATH     serial device for the Hardrock-50 (default: /dev/ttyUSB0;
-                         "none" to disable amplifier polling)
-  --hr50-baud RATE       (default: 19200)
+Amplifier (Hardrock-50):
+  --hr50-serial PATH     serial device, or "auto" to detect by USB VID/PID +
+                         HR50 probe, or "none" to disable (default: auto)
+  --hr50-baud RATE       baud tried first in auto mode / used with an explicit
+                         path (default: 19200)
 "#
         .to_string()
     }

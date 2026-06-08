@@ -10,11 +10,99 @@
 //! upper case), so a response is the bytes up to the first `;`.
 
 use std::ffi::CString;
+use std::fs;
 use std::io;
 use std::os::unix::io::RawFd;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::transport::AmplifierTransport;
+
+/// USB identity + device path of an enumerated serial port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialPortInfo {
+    /// Device node, e.g. `/dev/ttyUSB0`.
+    pub path: String,
+    /// USB vendor id of the owning device.
+    pub vid: u16,
+    /// USB product id of the owning device.
+    pub pid: u16,
+    /// USB product string, when the device exposes one.
+    pub product: Option<String>,
+}
+
+/// Enumerate USB serial ports (`ttyUSB*` / `ttyACM*`) with the USB VID/PID of
+/// the device that owns each one.
+///
+/// Reads sysfs directly (`/sys/class/tty/<name>/device` → walk up to the USB
+/// node's `idVendor`/`idProduct`) so we keep the no-`libudev` policy the
+/// hand-rolled termios transport exists to satisfy. This is identical on the
+/// Raspberry Pi and x86_64 Linux. Ports with no USB parent (real UARTs) are
+/// skipped; on non-Linux hosts `/sys/class/tty` is absent and the result is
+/// empty.
+pub fn enumerate_ports() -> Vec<SerialPortInfo> {
+    let mut out = Vec::new();
+    let Ok(dir) = fs::read_dir("/sys/class/tty") else {
+        return out;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with("ttyUSB") || name.starts_with("ttyACM")) {
+            continue;
+        }
+        // `/sys/class/tty/<name>/device` symlinks into the USB device tree.
+        let Ok(start) = fs::canonicalize(entry.path().join("device")) else {
+            continue;
+        };
+        if let Some((vid, pid, product)) = read_usb_ids(&start) {
+            out.push(SerialPortInfo {
+                path: format!("/dev/{name}"),
+                vid,
+                pid,
+                product,
+            });
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+/// Walk up from a tty device node to the USB device that owns it and read its
+/// `idVendor` / `idProduct` (and `product` string, when present). The interface
+/// node nearest the tty doesn't carry the ids — they live a couple of levels up
+/// on the USB device — so ascend until both files are found or we leave the USB
+/// tree.
+fn read_usb_ids(start: &Path) -> Option<(u16, u16, Option<String>)> {
+    let mut cur = Some(start.to_path_buf());
+    while let Some(dir) = cur {
+        let vid_path = dir.join("idVendor");
+        let pid_path = dir.join("idProduct");
+        if vid_path.is_file() && pid_path.is_file() {
+            let vid = read_hex_u16(&vid_path)?;
+            let pid = read_hex_u16(&pid_path)?;
+            let product = fs::read_to_string(dir.join("product"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            return Some((vid, pid, product));
+        }
+        // Stop at the sysfs root rather than scanning the whole filesystem.
+        match dir.parent() {
+            Some(p) if p != Path::new("/sys/devices") && p != Path::new("/") => {
+                cur = Some(p.to_path_buf());
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Parse a 4-hex-digit sysfs id file (e.g. `0403`) into a `u16`.
+fn read_hex_u16(path: &Path) -> Option<u16> {
+    let s = fs::read_to_string(path).ok()?;
+    u16::from_str_radix(s.trim(), 16).ok()
+}
 
 /// A serial port opened read/write in non-blocking mode.
 pub struct SerialTransport {
@@ -155,5 +243,49 @@ impl Drop for SerialTransport {
         unsafe {
             libc::close(self.fd);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_hex_u16_parses_4_digit_ids() {
+        let dir = std::env::temp_dir().join(format!("rigflow-hex-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("idVendor");
+        fs::write(&f, "0403\n").unwrap();
+        assert_eq!(read_hex_u16(&f), Some(0x0403));
+        fs::write(&f, "04d8").unwrap();
+        assert_eq!(read_hex_u16(&f), Some(0x04d8));
+        fs::write(&f, "nothex").unwrap();
+        assert_eq!(read_hex_u16(&f), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_usb_ids_walks_up_to_the_owning_device() {
+        // Mimic sysfs: ids live a couple of levels above the tty interface node.
+        let root = std::env::temp_dir().join(format!("rigflow-usb-{}", std::process::id()));
+        let usb_dev = root.join("usb1/1-1");
+        let interface = usb_dev.join("1-1:1.0/ttyUSB0");
+        fs::create_dir_all(&interface).unwrap();
+        fs::write(usb_dev.join("idVendor"), "0403\n").unwrap();
+        fs::write(usb_dev.join("idProduct"), "6015\n").unwrap();
+        fs::write(usb_dev.join("product"), "HR50 ACC cable\n").unwrap();
+
+        let got = read_usb_ids(&interface);
+        assert_eq!(
+            got,
+            Some((0x0403, 0x6015, Some("HR50 ACC cable".to_string())))
+        );
+
+        // A node with no USB ancestor yields nothing.
+        let bare = root.join("bare/leaf");
+        fs::create_dir_all(&bare).unwrap();
+        assert_eq!(read_usb_ids(&bare), None);
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
