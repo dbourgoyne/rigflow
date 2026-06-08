@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **The radio list now reflects real hardware (no phantom / stale entries).**
+  RTL-SDR devices are **really enumerated** over USB — the server lists the
+  actual dongles present (none when unplugged) instead of always advertising one
+  phantom RTL that failed on acquire. A **Rescan** now also prunes a discovered
+  radio that's genuinely gone *and* idle — a removed RTL, a deleted WAV, or a
+  powered-off HL2 disappears from the list (a radio you're actively using is
+  never removed). HL2 discovery was hardened to re-broadcast within each scan and
+  dedupe replies, so a single dropped packet can't make a present HL2 flicker out.
+
 - **One client per server, one server per host (enforced).** A server now serves a
   single client: a second client connecting to a busy server is cleanly rejected
   ("server already has a client") instead of causing undefined contention — so run
