@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **The client now exits cleanly — it releases the radio and disconnects first.**
+  Closing the window (the **[X]**) — or a terminal `kill` / Ctrl-C (SIGTERM /
+  SIGINT) — no longer abruptly kills the process. The client first releases the
+  radio (which un-keys the rig) and disconnects from the server, then quits. This
+  means closing the app while transmitting leaves the rig safely un-keyed and frees
+  the radio immediately instead of waiting for the server to time out the dropped
+  connection. (A hard `kill -9` is still abrupt; the server's connection heartbeat
+  and the radio's own TX watchdog remain the backstop there.)
+
 - **First-run is no longer a dead end.** On a fresh install the client now opens
   the **Radio Operator** and **Rigflow Server** sections by default while you're
   disconnected (instead of leaving the only **Add Operator** and **Connect**

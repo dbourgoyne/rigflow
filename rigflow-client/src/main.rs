@@ -206,6 +206,43 @@ fn main() -> Result<(), eframe::Error> {
         });
     }
 
+    // Catch SIGINT (Ctrl-C) and SIGTERM (kill) so a terminal kill still releases
+    // the radio and disconnects cleanly before the process exits, mirroring the
+    // window-[X] path.  (SIGKILL is uncatchable; the server's heartbeat and the
+    // rig's TX watchdog are the backstop for that.)
+    {
+        let sig_cmd_tx = ws_cmd_tx.clone();
+        rt.spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut term = signal(SignalKind::terminate()).ok();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = async {
+                        match term.as_mut() {
+                            Some(t) => {
+                                t.recv().await;
+                            }
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+
+            log::info!("shutdown signal received: releasing radio and disconnecting");
+            let _ = sig_cmd_tx.send(ControlCommand::ReleaseRadio);
+            let _ = sig_cmd_tx.send(ControlCommand::Disconnect);
+            // Give the WebSocket task a moment to flush both before we exit.
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            std::process::exit(0);
+        });
+    }
+
     let options = NativeOptions::default();
 
     eframe::run_native(

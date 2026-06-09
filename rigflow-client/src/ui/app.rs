@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 use tokio::sync::mpsc;
@@ -11,6 +12,15 @@ use crate::persistence::PersistenceStore;
 use crate::sidetone::SidetoneShared;
 
 use crate::ui::state::UiState;
+
+/// Graceful-exit state for the window-[X] path: release the radio + disconnect,
+/// hold the window open briefly so those flush over the WebSocket, then close.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExitPhase {
+    Running,
+    ShuttingDown,
+    Closing,
+}
 
 pub struct RigflowApp {
     pub state: Arc<Mutex<UiState>>,
@@ -37,6 +47,10 @@ pub struct RigflowApp {
     /// field is never read directly.
     #[allow(dead_code)]
     pub digital_audio: crate::digital_audio::DigitalAudio,
+
+    /// Graceful-exit state machine (window-[X] path).  See `handle_exit`.
+    exit_phase: ExitPhase,
+    shutdown_started_at: Option<Instant>,
 }
 
 impl RigflowApp {
@@ -68,6 +82,8 @@ impl RigflowApp {
             mic: None,
             mic_requested: None,
             digital_audio,
+            exit_phase: ExitPhase::Running,
+            shutdown_started_at: None,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -359,6 +375,48 @@ impl RigflowApp {
             }
         }
     }
+
+    /// Window-close ([X]) graceful exit: release the radio (which un-keys it
+    /// server-side) and disconnect, holding the window open just long enough for
+    /// those to flush over the WebSocket, then close.  A returning user who is
+    /// already disconnected exits immediately.  Kill signals (SIGINT/SIGTERM) are
+    /// handled separately in `main` and do the same release-then-disconnect.
+    fn handle_exit(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+
+        match self.exit_phase {
+            ExitPhase::Running => {
+                if close_requested && snapshot.server_connected {
+                    if snapshot.radio_acquired {
+                        let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
+                    }
+                    let _ = self.ws_cmd_tx.send(ControlCommand::Disconnect);
+                    self.exit_phase = ExitPhase::ShuttingDown;
+                    self.shutdown_started_at = Some(Instant::now());
+                    // Hold the window open until the cleanup flushes (or times out).
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+                // Not connected: nothing to clean up — let the close proceed.
+            }
+            ExitPhase::ShuttingDown => {
+                if close_requested {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                }
+                let timed_out = self
+                    .shutdown_started_at
+                    .map(|t| t.elapsed() >= Duration::from_millis(1500))
+                    .unwrap_or(true);
+                if !snapshot.server_connected || timed_out {
+                    self.exit_phase = ExitPhase::Closing;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                // `request_repaint` at the end of `update` keeps us ticking until done.
+            }
+            ExitPhase::Closing => {
+                // Final close is in flight — let it through.
+            }
+        }
+    }
 }
 
 impl eframe::App for RigflowApp {
@@ -377,6 +435,8 @@ impl eframe::App for RigflowApp {
         self.draw_add_bookmark_dialog(ctx);
         self.draw_delete_operator_dialog(ctx);
         self.draw_swr_sweep_window(ctx);
+
+        self.handle_exit(ctx, &snapshot);
 
         ctx.request_repaint();
     }
