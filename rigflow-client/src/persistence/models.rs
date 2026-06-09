@@ -142,6 +142,11 @@ pub struct OperatorSettingsFile {
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
 
+    /// Show the Advanced & Diagnostics controls in Radio Control.  Serde default
+    /// (false) so older settings files load without migration.
+    #[serde(default)]
+    pub show_advanced: bool,
+
     /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
     #[serde(default)]
     pub cw_message: String,
@@ -210,6 +215,7 @@ impl OperatorSettingsFile {
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
             volume_percent: default_volume_percent(),
+            show_advanced: false,
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
             cw_macros: default_cw_macros(),

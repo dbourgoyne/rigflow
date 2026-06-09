@@ -166,6 +166,44 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the "Show advanced & diagnostics" toggle to the current operator.
+    pub(crate) fn save_show_advanced_to_current_operator(&mut self) {
+        let (operator_id, show_advanced) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.show_advanced)
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(mut operator_settings) => {
+                operator_settings.show_advanced = show_advanced;
+
+                if let Err(err) = self
+                    .persistence_store
+                    .save_operator_settings(&operator_settings)
+                {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.persistence_status = format!("failed to save advanced toggle: {err}");
+                    }
+                } else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+                }
+            }
+
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator settings: {err}");
+                }
+            }
+        }
+    }
+
     /// Persist the Text-to-CW message, speed, and memory macros for the current
     /// operator.
     pub(crate) fn save_cw_message_to_current_operator(&mut self) {

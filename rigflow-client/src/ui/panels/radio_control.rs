@@ -95,37 +95,44 @@ impl RigflowApp {
                         }
                     });
 
-                // ── Transmit (default collapsed): TX setup ───────────────────
+                // ── Transmit (default collapsed): everyday TX setup ──────────
                 egui::CollapsingHeader::new("Transmit")
                     .id_salt("rc_transmit")
                     .default_open(false)
                     .show(ui, |ui| {
                         if let Ok(mut state) = self.state.lock() {
-                            self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                             save_cw |=
                                 self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                             save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
                         }
                     });
 
-                // ── Diagnostics (default collapsed) ──────────────────────────
-                egui::CollapsingHeader::new("Diagnostics")
-                    .id_salt("rc_diagnostics")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
-                            self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
+                // ── Diagnostics + Advanced: gated behind the operator toggle ──
+                // Hidden by default to keep the everyday view uncluttered; the
+                // "Show advanced & diagnostics" checkbox below reveals them
+                // (two-tone test, TX-audio diagnostics, limiter/compressor,
+                // digital interface).
+                if snapshot.show_advanced {
+                    egui::CollapsingHeader::new("Diagnostics")
+                        .id_salt("rc_diagnostics")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if let Ok(mut state) = self.state.lock() {
+                                self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                                self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
+                            }
+                        });
 
-                // ── Advanced (default collapsed) ─────────────────────────────
-                egui::CollapsingHeader::new("Advanced")
-                    .id_salt("rc_advanced")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        self.draw_digital_interface_row(ui, snapshot);
-                    });
+                    egui::CollapsingHeader::new("Advanced")
+                        .id_salt("rc_advanced")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if let Ok(mut state) = self.state.lock() {
+                                self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
+                            }
+                            self.draw_digital_interface_row(ui, snapshot);
+                        });
+                }
 
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
@@ -138,6 +145,20 @@ impl RigflowApp {
                 }
                 if save_mic {
                     self.save_mic_settings_to_current_operator();
+                }
+
+                // Reveal/hide the Diagnostics + Advanced sections above.
+                // Persisted per-operator so a power user keeps them on.
+                ui.separator();
+                let mut show_advanced = snapshot.show_advanced;
+                if ui
+                    .checkbox(&mut show_advanced, "Show advanced & diagnostics controls")
+                    .changed()
+                {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_advanced = show_advanced;
+                    }
+                    self.save_show_advanced_to_current_operator();
                 }
             });
     }

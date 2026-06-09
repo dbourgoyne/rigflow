@@ -92,6 +92,11 @@ pub struct UiState {
     /// Receive-audio volume in percent (0–100).  Persisted per-operator.
     pub volume_percent: u8,
 
+    /// Show the Advanced & Diagnostics controls (two-tone test, TX-audio
+    /// diagnostics, limiter/compressor, digital interface).  Off by default for
+    /// an uncluttered view; persisted per-operator.
+    pub show_advanced: bool,
+
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
 
@@ -387,6 +392,7 @@ impl Default for UiState {
             signal_dbm: -140.0,
             signal_s_units: 0,
             volume_percent: 50,
+            show_advanced: false,
             input_sample_rate_hz: 0.0,
 
             // =================================================================

@@ -9,6 +9,13 @@
 
 ### Changes
 
+- **The default view is decluttered; bench/debug controls are behind a toggle.**
+  Radio Control now shows only the everyday **Receive / Audio / Transmit** controls
+  by default. A **"Show advanced & diagnostics controls"** checkbox (remembered per
+  operator) reveals the two-tone test generator, TX-audio diagnostics, the speech
+  limiter/compressor, and the digital interface when you want them. Also, the cryptic
+  TX status **"TX FIFO idle"** is now the clearer **"TX underrun (recovered)"**.
+
 - **The client now exits cleanly — it releases the radio and disconnects first.**
   Closing the window (the **[X]**) — or a terminal `kill` / Ctrl-C (SIGTERM /
   SIGINT) — no longer abruptly kills the process. The client first releases the
@@ -127,6 +134,15 @@
 ---
 
 ## Known Issues & Workarounds
+
+### Signal-strength, TX power, and SWR readings are approximate
+
+The S-meter / dBm, TX forward/reverse power (watts), and SWR are **approximate
+indications**, not lab-calibrated measurements. They use sensible default scaling
+(like Quisk's defaults) and are good for *relative* judgements — comparing signals,
+spotting a high-SWR condition, peaking a tune — but should not be treated as
+absolute, instrument-grade values. No user calibration is required (or currently
+offered); a per-rig calibration option may come in a future release.
 
 ### HL2 not discovered after a simultaneous cold boot (direct Pi↔HL2 link)
 
