@@ -435,6 +435,7 @@ impl eframe::App for RigflowApp {
         self.draw_add_bookmark_dialog(ctx);
         self.draw_delete_operator_dialog(ctx);
         self.draw_swr_sweep_window(ctx);
+        self.draw_wsjtx_setup_window(ctx);
 
         self.handle_exit(ctx, &snapshot);
 

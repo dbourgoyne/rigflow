@@ -147,6 +147,15 @@ impl RigflowApp {
                     self.save_mic_settings_to_current_operator();
                 }
 
+                // WSJT-X / FT8 setup helper — always visible (digital is a
+                // headline feature; don't bury its setup behind Advanced).
+                ui.separator();
+                if ui.button("WSJT-X / FT8 Setup…").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_wsjtx_setup_window = true;
+                    }
+                }
+
                 // Reveal/hide the Diagnostics + Advanced sections above.
                 // Persisted per-operator so a power user keeps them on.
                 ui.separator();

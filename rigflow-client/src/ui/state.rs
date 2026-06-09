@@ -303,6 +303,9 @@ pub struct UiState {
     pub show_swr_sweep_window: bool,
     pub swr_sweep_csv_status: Option<String>,
 
+    /// Whether the WSJT-X / FT8 setup helper window is open (transient).
+    pub show_wsjtx_setup_window: bool,
+
     // ── TX Test Tone (FDX Phase 2; client-local, not persisted) ─────────
     /// Master enable for the TX Test Tone section (shows the controls).
     pub tx_tone_enabled: bool,
@@ -511,6 +514,7 @@ impl Default for UiState {
             swr_sweep_progress: None,
             show_swr_sweep_window: false,
             swr_sweep_csv_status: None,
+            show_wsjtx_setup_window: false,
             tx_tone_enabled: false,
             tx_tone_usb: true,
             tx_tone_freq_hz: 1000.0,

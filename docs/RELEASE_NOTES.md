@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **New WSJT-X / FT8 setup helper.** A **"WSJT-X / FT8 Setup…"** button in Radio
+  Control opens a window that shows the exact values to enter in WSJT-X — the audio
+  **Input** (`RigflowDigitalRX`) and **Output** (`RigflowDigitalInput`) device names,
+  and the CAT **Network Server** (`127.0.0.1:4532`, Rig = "Hamlib NET rigctl", PTT =
+  CAT) — each with a **Copy** button and a live status indicator (green when the
+  virtual audio device / rigctl port is available, red with the reason when not, e.g.
+  PipeWire down or the port already in use). It also has the **RX Digital Output**
+  decode-routing toggle, so you can finish setup without hunting through panels.
+
 - **The default view is decluttered; bench/debug controls are behind a toggle.**
   Radio Control now shows only the everyday **Receive / Audio / Transmit** controls
   by default. A **"Show advanced & diagnostics controls"** checkbox (remembered per
