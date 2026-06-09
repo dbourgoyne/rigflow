@@ -11,7 +11,9 @@ impl RigflowApp {
         config_mode: bool,
     ) {
         egui::CollapsingHeader::new("Rigflow Server")
-            .default_open(false)
+            // Open by default while not connected so a first-run user sees the
+            // Connect button without having to expand a collapsed header.
+            .default_open(config_mode)
             .show(ui, |ui| {
                 ui.label("rigflow server IP:");
 

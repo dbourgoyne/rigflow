@@ -42,6 +42,19 @@ impl RigflowApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // First-run / not-connected cue: point a new user at the
+                        // two steps to get on the air (the panels below are open
+                        // pre-connect).  Hidden once connected.
+                        if !snapshot.server_connected {
+                            let cue = if snapshot.known_operator_ids.is_empty() {
+                                "Getting started: add an operator below, then enter your server IP and Connect."
+                            } else {
+                                "Not connected — enter your server IP and click Connect."
+                            };
+                            ui.colored_label(egui::Color32::from_rgb(255, 190, 70), cue);
+                            ui.separator();
+                        }
+
                         self.draw_operator_panel(ui, snapshot, config_mode);
                         ui.separator();
                         self.draw_server_panel(ui, snapshot, config_mode);

@@ -405,7 +405,7 @@ impl Default for UiState {
             // =================================================================
             // CONNECTION / SERVER STATE
             // =================================================================
-            rigflow_server_ip: "192.168.0.225".to_string(),
+            rigflow_server_ip: "127.0.0.1".to_string(),
             rigflow_server_ws_port: 9000,
             rigflow_server_udp_port: 9001,
             udp_listen_port: 0,

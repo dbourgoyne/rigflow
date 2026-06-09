@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **First-run is no longer a dead end.** On a fresh install the client now opens
+  the **Radio Operator** and **Rigflow Server** sections by default while you're
+  disconnected (instead of leaving the only **Add Operator** and **Connect**
+  buttons behind collapsed headers), shows a one-line cue pointing you at the two
+  steps to get on the air, and seeds the server IP with **`127.0.0.1`** instead of
+  a hardcoded LAN address — so a client and server on the same machine Connect with
+  no typing, and a remote/Pi server is one edit away. Your per-operator server IP
+  is still remembered, so this only affects the first run / newly created operators.
+
 - **The server command line is simplified to three flags.** Everything else
   (frequency, mode, gain, ppm, sample rate, which source) is driven live by the
   client and discovery now finds every source automatically, so the old per-source

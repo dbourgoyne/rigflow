@@ -199,7 +199,10 @@ impl OperatorSettingsFile {
             version: OPERATOR_SETTINGS_FILE_VERSION,
             operator_id,
             selected_license: None,
-            server_ip: String::new(),
+            // Seed new operators with localhost so a single-box (client+server on
+            // one machine) setup can Connect with no typing; the user edits it for
+            // a remote/Pi server.  Persisted per-operator thereafter.
+            server_ip: "127.0.0.1".to_string(),
             demod_preferences: DemodPreferenceSetFile::default(),
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
