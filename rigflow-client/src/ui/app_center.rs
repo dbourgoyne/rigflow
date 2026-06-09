@@ -250,6 +250,40 @@ impl RigflowApp {
     /// future items (TX power, ALC, network status, …) just append more cells.
     fn draw_status_bar(&self, ui: &mut egui::Ui, snapshot: &UiState) {
         use crate::ui::panels::s_meter_label;
+        use crate::ui::state::{ProblemSeverity, collect_problems};
+
+        // Status indicator light — always visible (before the no-radio
+        // early-return) so a failure is never hidden.  A filled circle: green =
+        // all OK, amber = warnings only, red = an error.  Hover lists the
+        // details (same source as the "Status / Problems" panel).
+        let problems = collect_problems(snapshot);
+        let has_error = problems
+            .iter()
+            .any(|p| p.severity == ProblemSeverity::Error);
+        let color = if problems.is_empty() {
+            egui::Color32::from_rgb(40, 200, 80) // green: all subsystems OK
+        } else if has_error {
+            egui::Color32::from_rgb(230, 60, 60) // red: error
+        } else {
+            egui::Color32::from_rgb(255, 170, 40) // amber: warnings only
+        };
+        let hover = if problems.is_empty() {
+            "All subsystems OK".to_string()
+        } else {
+            problems
+                .iter()
+                .map(|p| format!("{}: {}", p.source, p.detail))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // LED-style status light: a solid, color-filled circle.
+        let diameter = 20.0;
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(diameter, diameter), egui::Sense::hover());
+        ui.painter()
+            .circle_filled(rect.center(), diameter * 0.45, color);
+        response.on_hover_text(hover);
+        ui.separator();
 
         // Operator + license first (shown whenever an operator is selected,
         // even before a radio is acquired).  Operator is coloured to stand out;

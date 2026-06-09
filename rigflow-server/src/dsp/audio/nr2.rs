@@ -147,9 +147,8 @@ impl Nr2 {
                 let mag2 = self.scratch[k].norm_sqr();
 
                 // Noise-floor estimate: minima tracking with slow upward leak.
-                if !self.seeded {
-                    self.noise[k] = mag2;
-                } else if mag2 < self.noise[k] {
+                // Seed and new-minimum both snap straight to mag2.
+                if !self.seeded || mag2 < self.noise[k] {
                     self.noise[k] = mag2;
                 } else {
                     self.noise[k] = (1.0 - NOISE_LEAK_UP) * self.noise[k] + NOISE_LEAK_UP * mag2;

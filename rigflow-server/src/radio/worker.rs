@@ -45,6 +45,16 @@ use rigflow_core::radio::tx_tune::TxTuneResult;
 /// Observed watchdog timeout is ~15 s; 1 s gives a large safety margin.
 const HL2_CC_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Sustained RX-loss window on a realtime source before the worker gives up.
+/// Below this a transient gap is tolerated in place (worker stays alive,
+/// surfacing "not responding"); beyond it the worker fails so the client
+/// re-acquires and re-initializes a power-cycled device.
+const RX_STALL_GIVE_UP: Duration = Duration::from_secs(10);
+
+/// Baud used for an explicit `--hr50-serial <path>` with no `:baud` suffix, and
+/// the baud tried first when auto-detecting.  (The amp's ACC default.)
+const HR50_DEFAULT_BAUD: u32 = 19200;
+
 /// Spot/SWR pulse duration used for each SWR-sweep point (same as a single Spot).
 const SWR_SWEEP_SPOT_MS: u32 = 250;
 
@@ -275,7 +285,9 @@ fn create_worker_source(
         }
     } else if descriptor.id.0.starts_with("rtl:") {
         SourceConfig::RtlSdr {
-            device_index: server_cfg.rtlsdr_device_index,
+            // Open the device this radio was enumerated as (so rtl:N → device N),
+            // not a single global default.
+            device_index: descriptor.index as usize,
             sample_rate_hz: server_cfg.rtlsdr_sample_rate_hz,
             center_freq_hz: initial_center_freq_hz as u32,
             gain_tenths_db: server_cfg.rtlsdr_gain_tenths_db,
@@ -666,12 +678,40 @@ fn run_iq_worker_threads(
     exit
 }
 
+/// Parse an explicit `--hr50-serial` value of the form `<path>` or `<path>:baud`
+/// into `(path, baud)`.  A missing/unparseable baud suffix falls back to
+/// [`HR50_DEFAULT_BAUD`]; Linux device paths contain no colons.
+fn parse_hr50_path_baud(value: &str) -> (String, u32) {
+    if let Some((path, baud_str)) = value.rsplit_once(':') {
+        if let Ok(baud) = baud_str.parse::<u32>() {
+            return (path.to_string(), baud);
+        }
+    }
+    (value.to_string(), HR50_DEFAULT_BAUD)
+}
+
+/// Publish an amplifier serial-open failure to the client.
+///
+/// Writes the reason into `amplifier_status.last_error` (and clears `model`) so
+/// the existing runtime pipeline carries it to the client's on-screen Problems
+/// area, instead of the failure being log-only.
+fn publish_amplifier_open_error(control: &Arc<Mutex<SharedControlState>>, message: String) {
+    if let Ok(mut cs) = control.lock() {
+        cs.amplifier_status.model = None;
+        cs.amplifier_status.last_error = Some(message);
+    }
+}
+
 /// Spawn the amplifier status poller for an HL2 worker (Phase 1).
 ///
-/// Returns `None` (no thread) when no `--hr50-serial` is configured or the port
-/// can't be opened — in which case `amplifier_status` stays at its default
-/// (`model: None`) and the UI shows "Amplifier: None".  The poller writes
-/// `control.amplifier_status` on change; the existing status path publishes it.
+/// Returns `None` (no thread) when amplifier polling is disabled
+/// (`--hr50-serial none`).  With the default `auto`, the thread runs VID/PID
+/// narrowed probing ([`crate::amplifier::autodetect_serial`]) to find an HR50
+/// and its baud; with an explicit path it opens that device directly.  If
+/// nothing is found / can't be opened the thread exits and `amplifier_status`
+/// stays at its default (`model: None`) so the UI shows "Amplifier: None".  The
+/// poller writes `control.amplifier_status` on change; the existing status path
+/// publishes it.
 fn spawn_amplifier_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -680,15 +720,37 @@ fn spawn_amplifier_thread(
     amp_cmd_rx: std_mpsc::Receiver<crate::amplifier::AmpCommand>,
     amp_freq: Arc<AtomicU64>,
 ) -> Option<thread::JoinHandle<()>> {
-    let path = server_cfg.hr50_serial.clone()?;
-    let baud = server_cfg.hr50_baud;
+    let configured = server_cfg.hr50_serial.clone()?;
     let radio_id = descriptor.id.0;
 
     Some(thread::spawn(move || {
+        // Resolve the serial port. "auto" runs VID/PID-narrowed probing and also
+        // discovers the baud; an explicit "<path>[:baud]" opens that device
+        // directly at the given (or default 19200) baud — the user has taken
+        // responsibility for it.
+        let (path, baud) = if configured.eq_ignore_ascii_case("auto") {
+            match crate::amplifier::autodetect_serial(HR50_DEFAULT_BAUD) {
+                Some(found) => found,
+                None => {
+                    // Expected for any station without an HR50 (auto is the
+                    // default), so this is log-only — not surfaced as a problem.
+                    info!(
+                        "[radio-worker {radio_id}] HR50 auto-detect: no amplifier responded on any \
+                         USB-serial port; amplifier polling disabled"
+                    );
+                    return;
+                }
+            }
+        } else {
+            parse_hr50_path_baud(&configured)
+        };
+
         let transport = match crate::amplifier::serial::SerialTransport::open(&path, baud) {
             Ok(t) => t,
             Err(e) => {
-                warn!("[radio-worker {radio_id}] HR50 serial '{path}' open failed: {e}");
+                let msg = format!("HR50 serial '{path}' open failed: {e}");
+                warn!("[radio-worker {radio_id}] {msg}");
+                publish_amplifier_open_error(&control, msg);
                 return;
             }
         };
@@ -1224,6 +1286,10 @@ fn spawn_capture_thread(
         let mut next_source_tick = Instant::now();
         let mut last_center_freq_hz = initial_center_freq_hz;
         let mut blocks_read: u64 = 0;
+        // Tracks a sustained RX gap on a realtime source so a brief link blip is
+        // tolerated (worker stays up, surfaces "not responding") while a long
+        // outage still fails the worker for a clean re-acquire.
+        let mut rx_stall_start: Option<Instant> = None;
         let mut last_cc_sent = Instant::now();
         // N2ADR HF filter board (HL2): track the last band we programmed and the
         // enable state so we only reprogram on band change or (re)enable.
@@ -1470,9 +1536,9 @@ fn spawn_capture_thread(
                         ppm: control_snapshot.source_control.ppm_correction as f32,
                         source: format!("{:?}", descriptor.hardware_kind),
                     };
-                    // Record into the server's wav directory so the file is
-                    // auto-discovered as a `wav:N` radio for playback.
-                    let rec_dir = std::path::Path::new(&server_cfg.wav_dir);
+                    // Record into the server's recordings directory so the file
+                    // is auto-discovered as a `wav:N` radio for playback.
+                    let rec_dir = std::path::Path::new(&server_cfg.recordings_dir);
                     match crate::recording::iq_recorder::IqRecorder::start(rec_dir, params) {
                         Ok(rec) => iq_rec = Some(rec),
                         Err(e) => warn!(
@@ -1487,7 +1553,14 @@ fn spawn_capture_thread(
             // so the DSP thread can include it in WorkerStatus updates.  The IQ
             // recording status is refreshed on the same cadence.
             if last_status_poll.elapsed() >= status_poll_interval {
-                let new_status = source.source_status();
+                let mut new_status = source.source_status();
+                // Generic "device not responding": while a realtime source is in
+                // a sustained RX stall (e.g. an RTL dongle pulled mid-stream, or
+                // an HL2 link drop), surface it on screen regardless of whether
+                // the source reports its own telemetry.
+                if rx_stall_start.is_some() {
+                    new_status.device_responding = Some(false);
+                }
                 let rec_status = match &iq_rec {
                     Some(rec) => IqRecordingStatus {
                         recording: true,
@@ -1872,7 +1945,38 @@ fn spawn_capture_thread(
             }
 
             let iq = match source.read_block(block_size) {
-                Ok(samples) => samples,
+                Ok(samples) => {
+                    if let Some(since) = rx_stall_start.take() {
+                        info!(
+                            "[radio-worker {}] RX recovered after {:?}",
+                            descriptor.id.0,
+                            since.elapsed()
+                        );
+                    }
+                    samples
+                }
+                // Realtime sources (HL2): tolerate a transient RX gap. Keep the
+                // worker alive so the ~4 Hz status poll surfaces "not responding"
+                // and RX can resume in place; fail only after a sustained outage
+                // so the client's re-acquire re-initializes a power-cycled device.
+                Err(reason) if realtime => {
+                    let since = *rx_stall_start.get_or_insert_with(|| {
+                        warn!(
+                            "[radio-worker {}] {reason}; tolerating up to {:?}",
+                            descriptor.id.0, RX_STALL_GIVE_UP
+                        );
+                        Instant::now()
+                    });
+                    if since.elapsed() >= RX_STALL_GIVE_UP {
+                        stop_flag.store(true, Ordering::Relaxed);
+                        let _ = fatal_tx.send(WorkerExit::Failed { reason });
+                        break;
+                    }
+                    // Bound the spin if a realtime source errors instantly rather
+                    // than blocking out its receive timeout.
+                    thread::sleep(Duration::from_millis(200));
+                    continue;
+                }
                 Err(reason) => {
                     stop_flag.store(true, Ordering::Relaxed);
                     let _ = fatal_tx.send(WorkerExit::Failed { reason });
@@ -2423,6 +2527,28 @@ fn normalize_initial_frequencies(
     );
 
     (initial_center_freq_hz as u64, initial_target_freq_hz as u64)
+}
+
+#[cfg(test)]
+mod hr50_path_tests {
+    use super::*;
+
+    #[test]
+    fn parses_path_and_optional_baud() {
+        assert_eq!(
+            parse_hr50_path_baud("/dev/ttyUSB0"),
+            ("/dev/ttyUSB0".to_string(), HR50_DEFAULT_BAUD)
+        );
+        assert_eq!(
+            parse_hr50_path_baud("/dev/ttyUSB0:9600"),
+            ("/dev/ttyUSB0".to_string(), 9600)
+        );
+        // A non-numeric suffix is part of the path, not a baud.
+        assert_eq!(
+            parse_hr50_path_baud("/dev/serial/by-id/usb-FTDI"),
+            ("/dev/serial/by-id/usb-FTDI".to_string(), HR50_DEFAULT_BAUD)
+        );
+    }
 }
 
 #[cfg(test)]

@@ -81,10 +81,10 @@
 //!
 //! ## Example Usage
 //!
-//! Start the server first:
+//! Start the server first (all sources are auto-discovered):
 //!
 //! ```bash
-//! cargo run -p rigflow-server -- --source rtlsdr
+//! cargo run -p rigflow-server
 //! ```
 //!
 //! Then run the client:

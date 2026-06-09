@@ -20,7 +20,7 @@ pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     let mut radios = Vec::new();
 
     radios.extend(discover_rtl_radios());
-    radios.extend(discover_wav_radios(Path::new(&config.wav_dir)));
+    radios.extend(discover_wav_radios(Path::new(&config.recordings_dir)));
     radios.push(build_fake_tone_radio());
     radios.extend(discover_hl2_radios());
 
@@ -34,36 +34,47 @@ pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
 //
 
 fn discover_rtl_radios() -> Vec<RadioDescriptor> {
-    let mut radios = Vec::new();
-
-    match try_discover_rtl_count() {
-        Ok(count) => {
-            for idx in 0..count {
-                radios.push(RadioDescriptor {
-                    id: RadioId(format!("rtl:{idx}")),
-                    display_name: format!("RTL-SDR #{idx}"),
-                    hardware_kind: HardwareKind::RtlSdr,
-                    index: idx as u32,
-                    serial: None,
-                    radio_capabilities: default_radio_capabilities(),
-                    source_capabilities: rtl_source_capabilities(),
-                });
-            }
-        }
+    // Real enumeration: list only the RTL-SDR devices actually present (none
+    // when unplugged) so the UI never offers a phantom radio that fails on
+    // acquire.  Any enumeration error is logged and yields no RTL radios.
+    let devices = match crate::source::rtlsdr::list_rtl_devices() {
+        Ok(devices) => devices,
         Err(err) => {
             error!("RTL discovery failed: {err}");
+            return Vec::new();
         }
-    }
+    };
 
-    radios
-}
+    info!("RTL-SDR discovery: {} device(s)", devices.len());
 
-/// Placeholder RTL enumeration.
-///
-/// Replace this with actual hardware enumeration logic.
-fn try_discover_rtl_count() -> Result<usize, String> {
-    // TODO: hook into real RTL-SDR enumeration
-    Ok(1)
+    devices
+        .into_iter()
+        .map(|d| {
+            let serial = (!d.serial.trim().is_empty()).then(|| d.serial.trim().to_string());
+            let product = d.product.trim();
+
+            // `RTL-SDR #<idx>` [ `(<product>)` ] [ `, SN <serial>` ]
+            let mut display_name = format!("RTL-SDR #{}", d.index);
+            if !product.is_empty() {
+                display_name.push_str(&format!(" ({product})"));
+            }
+            if let Some(sn) = &serial {
+                display_name.push_str(&format!(", SN {sn}"));
+            }
+
+            RadioDescriptor {
+                // Index-based id is guaranteed unique; cheap dongles often share
+                // a serial (e.g. "00000000"), which would collide in the manager.
+                id: RadioId(format!("rtl:{}", d.index)),
+                display_name,
+                hardware_kind: HardwareKind::RtlSdr,
+                index: d.index as u32,
+                serial,
+                radio_capabilities: default_radio_capabilities(),
+                source_capabilities: rtl_source_capabilities(),
+            }
+        })
+        .collect()
 }
 
 //
@@ -245,5 +256,25 @@ pub fn debug_print_discovered_radios(radios: &[RadioDescriptor]) {
             "  id={} kind={:?} name='{}' serial={:?}",
             radio.id.0, radio.hardware_kind, radio.display_name, radio.serial
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::rtlsdr::list_rtl_devices;
+
+    #[test]
+    fn rtl_discovery_mirrors_real_enumeration_no_phantom() {
+        // The number of RTL radios must equal the real enumerated device count
+        // (0 when none are present) — not a hardcoded phantom of 1.
+        let real_count = list_rtl_devices().map(|v| v.len()).unwrap_or(0);
+        let radios = discover_rtl_radios();
+        assert_eq!(radios.len(), real_count);
+
+        for r in &radios {
+            assert!(matches!(r.hardware_kind, HardwareKind::RtlSdr));
+            assert!(r.id.0.starts_with("rtl:"));
+        }
     }
 }

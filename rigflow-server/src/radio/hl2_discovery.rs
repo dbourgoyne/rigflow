@@ -6,6 +6,10 @@ use log::{error, info, warn};
 const HPSDR_PORT: u16 = 1024;
 const PACKET_LEN: usize = 63;
 const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(1000);
+/// Re-send the discovery broadcast this often during the listen window, so a
+/// single dropped request/reply doesn't make a present HL2 look absent (which
+/// would otherwise let `rescan_radios` prune a powered-on device).
+const REBROADCAST_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone)]
 pub struct Hl2Device {
@@ -60,16 +64,29 @@ pub fn discover_hl2_devices() -> Vec<Hl2Device> {
     send_on_all_interfaces(&socket, &request);
 
     let deadline = Instant::now() + DISCOVERY_TIMEOUT;
-    let mut devices = Vec::new();
+    let mut next_broadcast = Instant::now() + REBROADCAST_INTERVAL;
+    let mut devices: Vec<Hl2Device> = Vec::new();
     let mut buf = [0u8; PACKET_LEN];
 
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        let now = Instant::now();
+        if now >= deadline {
             break;
         }
 
-        socket.set_read_timeout(Some(remaining)).ok();
+        // Re-broadcast periodically through the window for robustness.
+        if now >= next_broadcast {
+            send_on_all_interfaces(&socket, &request);
+            next_broadcast = now + REBROADCAST_INTERVAL;
+        }
+
+        // Short read window so we can re-broadcast and re-check the deadline,
+        // rather than blocking for the whole timeout on the first recv.
+        let recv_timeout = next_broadcast
+            .min(deadline)
+            .saturating_duration_since(now)
+            .max(Duration::from_millis(1));
+        socket.set_read_timeout(Some(recv_timeout)).ok();
 
         match socket.recv_from(&mut buf) {
             Ok((len, src)) => {
@@ -81,6 +98,11 @@ pub fn discover_hl2_devices() -> Vec<Hl2Device> {
                 let mut mac = [0u8; 6];
                 mac.copy_from_slice(&buf[4..10]);
                 let fw_version = buf[10];
+
+                // A device replies to every broadcast in the burst — keep one.
+                if devices.iter().any(|d| d.mac == mac) {
+                    continue;
+                }
 
                 info!(
                     "HL2 discovery: found {} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} fw={} {}",
@@ -107,11 +129,13 @@ pub fn discover_hl2_devices() -> Vec<Hl2Device> {
                 });
             }
 
+            // Short read window elapsed — keep listening / re-broadcasting until
+            // the overall deadline (don't stop at the first quiet period).
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                break;
+                continue;
             }
 
             Err(e) => {

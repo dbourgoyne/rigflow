@@ -59,6 +59,12 @@ pub struct DigitalAudio {
     output_available: bool,
     rx_available: bool,
     input_available: bool,
+    /// Failure reason captured when an endpoint could not be created (pactl
+    /// missing, PipeWire down, stderr from `load-module`).  `None` when created
+    /// or reused successfully.  Surfaced in the client's Problems area.
+    output_reason: Option<String>,
+    rx_reason: Option<String>,
+    input_reason: Option<String>,
 }
 
 impl DigitalAudio {
@@ -67,9 +73,9 @@ impl DigitalAudio {
     /// the client keeps running.  Order matters: the output sink (and its
     /// monitor) must exist before the RX remap source that masters off it.
     pub fn start() -> Self {
-        let (output_available, output_module) = ensure_output_sink();
-        let (rx_available, rx_module) = ensure_rx_remap_source();
-        let (input_available, input_module) = ensure_input_sink();
+        let (output_available, output_module, output_reason) = ensure_output_sink();
+        let (rx_available, rx_module, rx_reason) = ensure_rx_remap_source();
+        let (input_available, input_module, input_reason) = ensure_input_sink();
 
         // Hold the input sink permanently active with a silent playback stream so
         // PipeWire/Pulse never suspends it on idle.  A monitor capture alone does
@@ -101,6 +107,9 @@ impl DigitalAudio {
             output_available,
             rx_available,
             input_available,
+            output_reason,
+            rx_reason,
+            input_reason,
         }
     }
 
@@ -117,6 +126,20 @@ impl DigitalAudio {
     /// `RigflowDigitalOutput` sink (internal RX target) is available.
     pub fn output_available(&self) -> bool {
         self.output_available
+    }
+
+    /// Failure reason for each endpoint (`None` when available).  Mirrors the
+    /// `*_available()` accessors so the UI can show *why* a device is missing.
+    pub fn output_reason(&self) -> Option<String> {
+        self.output_reason.clone()
+    }
+
+    pub fn rx_reason(&self) -> Option<String> {
+        self.rx_reason.clone()
+    }
+
+    pub fn input_reason(&self) -> Option<String> {
+        self.input_reason.clone()
     }
 }
 
@@ -152,7 +175,7 @@ impl Drop for DigitalAudio {
 
 /// Ensure the `RigflowDigitalOutput` **sink** exists, then force it to unity /
 /// unmuted so the digital RX level is fixed regardless of the speaker volume.
-fn ensure_output_sink() -> (bool, Option<u32>) {
+fn ensure_output_sink() -> (bool, Option<u32>, Option<String>) {
     let module = if device_exists("sinks", DIGITAL_OUTPUT_NAME) {
         log::info!("[digital-audio] reusing existing sink {DIGITAL_OUTPUT_NAME}");
         None
@@ -168,13 +191,13 @@ fn ensure_output_sink() -> (bool, Option<u32>) {
             format!("sink_properties=device.description={DIGITAL_OUTPUT_NAME}"),
         ];
         match load_module(&args) {
-            Some(id) => {
+            Ok(id) => {
                 log::info!("[digital-audio] created sink {DIGITAL_OUTPUT_NAME} (module {id})");
                 Some(id)
             }
-            None => {
-                log::warn!("[digital-audio] failed to create sink {DIGITAL_OUTPUT_NAME}");
-                return (false, None);
+            Err(reason) => {
+                log::warn!("[digital-audio] failed to create sink {DIGITAL_OUTPUT_NAME}: {reason}");
+                return (false, None, Some(reason));
             }
         }
     };
@@ -188,16 +211,16 @@ fn ensure_output_sink() -> (bool, Option<u32>) {
         .args(["set-sink-mute", DIGITAL_OUTPUT_NAME, "0"])
         .status();
 
-    (true, module)
+    (true, module, None)
 }
 
 /// Ensure the `RigflowDigitalRX` **remap source** (master =
 /// `RigflowDigitalOutput.monitor`) exists.  This is what apps record from,
 /// because most apps won't list monitor sources directly.
-fn ensure_rx_remap_source() -> (bool, Option<u32>) {
+fn ensure_rx_remap_source() -> (bool, Option<u32>, Option<String>) {
     if device_exists("sources", DIGITAL_RX_NAME) {
         log::info!("[digital-audio] reusing existing source {DIGITAL_RX_NAME}");
-        return (true, None);
+        return (true, None, None);
     }
 
     let args = [
@@ -210,13 +233,13 @@ fn ensure_rx_remap_source() -> (bool, Option<u32>) {
         format!("channel_map={CHANNEL_MAP}"),
     ];
     match load_module(&args) {
-        Some(id) => {
+        Ok(id) => {
             log::info!("[digital-audio] created source {DIGITAL_RX_NAME} (module {id})");
-            (true, Some(id))
+            (true, Some(id), None)
         }
-        None => {
-            log::warn!("[digital-audio] failed to create source {DIGITAL_RX_NAME}");
-            (false, None)
+        Err(reason) => {
+            log::warn!("[digital-audio] failed to create source {DIGITAL_RX_NAME}: {reason}");
+            (false, None, Some(reason))
         }
     }
 }
@@ -224,10 +247,10 @@ fn ensure_rx_remap_source() -> (bool, Option<u32>) {
 /// Ensure the `RigflowDigitalInput` **sink** exists.  Apps play TX audio into
 /// it; Rigflow reads `RigflowDigitalInput.monitor` (TX routing is a later
 /// phase).  A null sink auto-creates the matching monitor source.
-fn ensure_input_sink() -> (bool, Option<u32>) {
+fn ensure_input_sink() -> (bool, Option<u32>, Option<String>) {
     if device_exists("sinks", DIGITAL_INPUT_NAME) {
         log::info!("[digital-audio] reusing existing sink {DIGITAL_INPUT_NAME}");
-        return (true, None);
+        return (true, None, None);
     }
 
     let args = [
@@ -241,13 +264,13 @@ fn ensure_input_sink() -> (bool, Option<u32>) {
         format!("sink_properties=device.description={DIGITAL_INPUT_NAME}"),
     ];
     match load_module(&args) {
-        Some(id) => {
+        Ok(id) => {
             log::info!("[digital-audio] created sink {DIGITAL_INPUT_NAME} (module {id})");
-            (true, Some(id))
+            (true, Some(id), None)
         }
-        None => {
-            log::warn!("[digital-audio] failed to create sink {DIGITAL_INPUT_NAME}");
-            (false, None)
+        Err(reason) => {
+            log::warn!("[digital-audio] failed to create sink {DIGITAL_INPUT_NAME}: {reason}");
+            (false, None, Some(reason))
         }
     }
 }
@@ -312,20 +335,26 @@ fn device_exists(kind: &str, name: &str) -> bool {
 }
 
 /// Run `pactl load-module …`; on success return the new module index that
-/// `pactl` prints on stdout.
-fn load_module(args: &[String]) -> Option<u32> {
-    let out = Command::new("pactl").args(args).output().ok()?;
+/// `pactl` prints on stdout, otherwise the failure reason (so callers can
+/// surface *why* the endpoint is unavailable rather than just a red dot).
+fn load_module(args: &[String]) -> Result<u32, String> {
+    let out = Command::new("pactl")
+        .args(args)
+        .output()
+        .map_err(|e| format!("pactl not available: {e}"))?;
     if !out.status.success() {
-        log::debug!(
-            "[digital-audio] pactl load-module failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-        return None;
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        log::debug!("[digital-audio] pactl load-module failed: {stderr}");
+        return Err(if stderr.is_empty() {
+            "pactl load-module failed".to_string()
+        } else {
+            stderr
+        });
     }
     String::from_utf8_lossy(&out.stdout)
         .trim()
         .parse::<u32>()
-        .ok()
+        .map_err(|_| "pactl returned no module id".to_string())
 }
 
 /// Best-effort `pactl unload-module <id>`; returns a short status for logging.

@@ -4,7 +4,9 @@ use num_complex::Complex32;
 ///
 /// This computes:
 ///
-///     y[n] = |x[n]|
+/// ```text
+/// y[n] = |x[n]|
+/// ```
 ///
 /// Where:
 /// - x[n] is the current complex IQ sample

@@ -2,13 +2,19 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rigflow_core::radio::{RadioId};
-use rigflow_server::server::discovery::discover_radios;
-use rigflow_server::server::radio_manager::{lease_expiry_loop, RadioManager};
-use rigflow_server::server::radio_types::{
-    AcquireRequest, ClientId, RadioManagerConfig, RadioManagerError,
+use rigflow_core::radio::RadioId;
+use rigflow_server::config::ServerConfig;
+use rigflow_server::radio::discovery::discover_radios;
+use rigflow_server::radio::manager::RadioManager;
+use rigflow_server::radio::types::{
+    AcquireRequest, ClientId, RadioManagerConfig, RadioManagerError, StopReason,
 };
-use rigflow_server::server::config::ServerConfig;
+
+/// The fake tone radio is always discovered and opens without any hardware, so
+/// it is the radio these integration tests acquire (they spawn a real worker).
+fn fake_tone_id() -> RadioId {
+    RadioId("fake:tone".to_string())
+}
 
 fn acquire_request() -> AcquireRequest {
     AcquireRequest {
@@ -19,74 +25,40 @@ fn acquire_request() -> AcquireRequest {
     }
 }
 
-/*
-#[tokio::test]
-async fn acquire_and_release_radio_starts_and_stops_worker() {
+fn build_manager(lease_ttl: Duration) -> Arc<RadioManager> {
     let cfg = ServerConfig::default();
-    let manager = Arc::new(RadioManager::new(
+    Arc::new(RadioManager::new(
         discover_radios(&cfg),
         RadioManagerConfig {
-            lease_ttl: Duration::from_secs(10),
+            lease_ttl,
             startup_timeout: Duration::from_secs(2),
             shutdown_timeout: Duration::from_secs(2),
         },
-    ));
-
-    let radio_id = RadioId("rtl:0".to_string());
-    let client_id = ClientId("client-1".to_string());
-
-    let acquired = manager
-        .acquire_radio(client_id.clone(), &radio_id, acquire_request())
-        .await
-        .unwrap();
-
-    let radios = manager.list_radios().await;
-    assert_eq!(radios.len(), 1);
-    assert!(radios[0].is_leased);
-
-    manager
-        .send_command(
-            &client_id,
-            &radio_id,
-            &acquired.lease_id,
-            WorkerCommand::SetTargetFrequency { hz: 101_700_000 },
-        )
-        .await
-        .unwrap();
-
-    manager
-        .release_radio(
-            &client_id,
-            &radio_id,
-            &acquired.lease_id,
-            StopReason::ClientRelease,
-        )
-        .await
-        .unwrap();
-
-    let radios = manager.list_radios().await;
-    assert!(!radios[0].is_leased);
+        cfg,
+    ))
 }
- */
+
+/// Look up the fake-tone radio's `is_leased` flag by id (not by position — a
+/// stray WAV in the test's working directory would otherwise shift indices).
+async fn fake_tone_is_leased(manager: &RadioManager) -> bool {
+    manager
+        .list_radios()
+        .await
+        .into_iter()
+        .find(|r| r.descriptor.id == fake_tone_id())
+        .expect("fake:tone radio should always be discovered")
+        .is_leased
+}
 
 #[tokio::test]
 async fn second_acquire_fails_while_radio_is_leased() {
-    let cfg = ServerConfig::default();
-    let manager = Arc::new(RadioManager::new(
-        discover_radios(&cfg),
-        RadioManagerConfig {
-            lease_ttl: Duration::from_secs(10),
-            startup_timeout: Duration::from_secs(2),
-            shutdown_timeout: Duration::from_secs(2),
-        },
-    ));
-
-    let radio_id = RadioId("rtl:0".to_string());
+    let manager = build_manager(Duration::from_secs(10));
+    let radio_id = fake_tone_id();
 
     let client1 = ClientId("client-1".to_string());
     let client2 = ClientId("client-2".to_string());
 
-    let _acquired = manager
+    let acquired = manager
         .acquire_radio(client1.clone(), &radio_id, acquire_request())
         .await
         .unwrap();
@@ -97,23 +69,26 @@ async fn second_acquire_fails_while_radio_is_leased() {
         .unwrap_err();
 
     assert!(matches!(err, RadioManagerError::RadioBusy));
+
+    // Release the first lease so the worker shuts down cleanly.
+    manager
+        .release_radio(
+            &client1,
+            &radio_id,
+            &acquired.lease_id,
+            StopReason::ClientRelease,
+        )
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
 async fn lease_expiry_releases_radio() {
-    let cfg = ServerConfig::default();
-    let manager = Arc::new(RadioManager::new(
-        discover_radios(&cfg),
-        RadioManagerConfig {
-            lease_ttl: Duration::from_millis(300),
-            startup_timeout: Duration::from_secs(2),
-            shutdown_timeout: Duration::from_secs(2),
-        },
-    ));
+    let manager = build_manager(Duration::from_millis(300));
 
-    tokio::spawn(lease_expiry_loop(manager.clone()));
+    tokio::spawn(RadioManager::lease_expiry_loop(manager.clone()));
 
-    let radio_id = RadioId("rtl:0".to_string());
+    let radio_id = fake_tone_id();
     let client_id = ClientId("client-1".to_string());
 
     let _acquired = manager
@@ -121,8 +96,10 @@ async fn lease_expiry_releases_radio() {
         .await
         .unwrap();
 
+    assert!(fake_tone_is_leased(&manager).await);
+
+    // Wait well past the 300 ms lease TTL for the expiry loop to reclaim it.
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    let radios = manager.list_radios().await;
-    assert!(!radios[0].is_leased);
+    assert!(!fake_tone_is_leased(&manager).await);
 }

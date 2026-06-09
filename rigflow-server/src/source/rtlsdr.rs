@@ -127,6 +127,33 @@ impl RtlSdrSource {
     }
 }
 
+/// Minimal per-device info from RTL-SDR enumeration, used by radio discovery.
+pub struct RtlDeviceInfo {
+    /// Enumeration index — the value to pass to [`RtlSdrSource::open`] /
+    /// `RtlSdr::open_with_index`.
+    pub index: usize,
+    /// USB serial string (may be empty / non-unique on cheap dongles).
+    pub serial: String,
+    /// USB product string (may be empty).
+    pub product: String,
+}
+
+/// Enumerate the RTL-SDR devices currently present (empty when none).
+///
+/// Wraps `rtl_sdr_rs::RtlSdr::list_devices` so the `rtl_sdr_rs` dependency stays
+/// contained in this source module; discovery builds `RadioDescriptor`s from it.
+pub fn list_rtl_devices() -> Result<Vec<RtlDeviceInfo>, String> {
+    let devices = RtlSdr::list_devices().map_err(|e| format!("RTL-SDR enumeration failed: {e}"))?;
+    Ok(devices
+        .into_iter()
+        .map(|d| RtlDeviceInfo {
+            index: d.index,
+            serial: d.serial,
+            product: d.product,
+        })
+        .collect())
+}
+
 impl IqSource for RtlSdrSource {
     fn sample_rate(&self) -> f32 {
         self.sample_rate_hz

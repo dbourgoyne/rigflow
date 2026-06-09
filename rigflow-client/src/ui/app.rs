@@ -52,6 +52,9 @@ impl RigflowApp {
         let digital_output_available = digital_audio.output_available();
         let digital_rx_available = digital_audio.rx_available();
         let digital_input_available = digital_audio.input_available();
+        let digital_output_reason = digital_audio.output_reason();
+        let digital_rx_reason = digital_audio.rx_reason();
+        let digital_input_reason = digital_audio.input_reason();
 
         let app = Self {
             state,
@@ -75,6 +78,9 @@ impl RigflowApp {
             state.digital_output_available = digital_output_available;
             state.digital_rx_available = digital_rx_available;
             state.digital_input_available = digital_input_available;
+            state.digital_output_reason = digital_output_reason;
+            state.digital_rx_reason = digital_rx_reason;
+            state.digital_input_reason = digital_input_reason;
         }
 
         app

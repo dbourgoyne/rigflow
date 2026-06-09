@@ -4,7 +4,9 @@ use log::info;
 ///
 /// This implements a simple RC low-pass filter:
 ///
-///     y[n] = y[n-1] + alpha * (x[n] - y[n-1])
+/// ```text
+/// y[n] = y[n-1] + alpha * (x[n] - y[n-1])
+/// ```
 ///
 /// Where:
 /// - `tau` is the time constant (e.g. 75 µs in North America)

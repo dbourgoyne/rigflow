@@ -79,7 +79,7 @@ impl RigflowApp {
                     .as_deref()
                     .and_then(AmplifierKeyingMode::from_label);
                 let mut selected = current.unwrap_or(AmplifierKeyingMode::Off);
-                egui::ComboBox::from_id_source("amp_keying_mode")
+                egui::ComboBox::from_id_salt("amp_keying_mode")
                     .selected_text(amp.mode.as_deref().unwrap_or("—"))
                     .show_ui(ui, |ui| {
                         for m in AmplifierKeyingMode::ALL {
@@ -174,6 +174,20 @@ fn draw_health_group(ui: &mut egui::Ui, status: &SourceStatus) {
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
+            if let Some(responding) = status.device_responding {
+                ui.label("Device");
+                if responding {
+                    ui.label(egui::RichText::new("OK").color(egui::Color32::from_rgb(80, 200, 80)));
+                } else {
+                    ui.label(
+                        egui::RichText::new("⚠ NOT RESPONDING")
+                            .color(egui::Color32::from_rgb(255, 80, 40))
+                            .strong(),
+                    );
+                }
+                ui.end_row();
+            }
+
             if let Some(ref ver) = status.firmware_version {
                 ui.label("Firmware");
                 ui.label(ver);

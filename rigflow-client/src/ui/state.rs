@@ -228,6 +228,17 @@ pub struct UiState {
     pub digital_rx_available: bool,
     pub digital_input_available: bool,
 
+    /// Failure reason paired with each `digital_*_available` flag (set at startup
+    /// when the endpoint could not be created — e.g. pactl missing / PipeWire
+    /// down).  `None` when the endpoint is available or no reason was captured.
+    pub digital_output_reason: Option<String>,
+    pub digital_rx_reason: Option<String>,
+    pub digital_input_reason: Option<String>,
+
+    /// Hamlib NET rigctl (CAT) server status.  `Some(reason)` when the server
+    /// could not bind its port (e.g. 4532 already in use); `None` when bound OK.
+    pub rigctl_status: Option<String>,
+
     /// Digital Audio Interface (Phase 2): RX audio router to
     /// `RigflowDigitalOutput`.  Shared with the media thread; the UI toggles it.
     pub digital_rx: Arc<crate::digital_rx::DigitalRxOutput>,
@@ -468,6 +479,10 @@ impl Default for UiState {
             digital_output_available: false,
             digital_rx_available: false,
             digital_input_available: false,
+            digital_output_reason: None,
+            digital_rx_reason: None,
+            digital_input_reason: None,
+            rigctl_status: None,
             digital_rx: crate::digital_rx::DigitalRxOutput::new(),
             tx_audio_diag: TxAudioDiag::default(),
             two_tone_enabled: false,
@@ -522,5 +537,267 @@ impl Default for UiState {
         state.pitch_debounce = DebounceState::new(state.pitch_hz);
 
         state
+    }
+}
+
+/// Severity of a surfaced [`Problem`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProblemSeverity {
+    /// A subsystem the operator is relying on is broken (rendered red).
+    Error,
+    /// A subsystem that may not be in use is degraded/unavailable (orange).
+    Warning,
+}
+
+/// A single user-facing problem surfaced in the status-bar badge and the
+/// "Status / Problems" panel.  Built at render time by [`collect_problems`].
+#[derive(Debug, Clone)]
+pub struct Problem {
+    pub severity: ProblemSeverity,
+    /// Short subsystem label, e.g. "Server", "Amplifier", "rigctl".
+    pub source: &'static str,
+    /// Human-readable reason, including the underlying error where available.
+    pub detail: String,
+}
+
+/// Translate the current [`UiState`] snapshot into the list of active problems.
+///
+/// Pure (no I/O, no locking): subsystems write their raw status into `UiState`,
+/// and this is the single place that decides what counts as a problem, so the
+/// status-bar badge count and the panel list always agree.  Errors are ordered
+/// before warnings.
+pub fn collect_problems(s: &UiState) -> Vec<Problem> {
+    let mut errors: Vec<Problem> = Vec::new();
+    let mut warnings: Vec<Problem> = Vec::new();
+
+    // --- Errors -------------------------------------------------------------
+    // Server connect/acquire/connection failures.  The idle "no server" and the
+    // "connected"/"radio acquired" states are not problems — only status text
+    // that reports a failure counts, so this is silent until a real failure.
+    let server = s.server_status.to_ascii_lowercase();
+    if server.contains("fail")
+        || server.contains("error")
+        || server.contains("already has a client")
+    {
+        errors.push(Problem {
+            severity: ProblemSeverity::Error,
+            source: "Server",
+            detail: s.server_status.clone(),
+        });
+    } else if server.contains("reconnecting") || server.contains("re-acquiring") {
+        // Transient: the client lost the link and is recovering on its own.
+        // Surface as a non-alarming Warning (escalates to Error if it gives up).
+        warnings.push(Problem {
+            severity: ProblemSeverity::Warning,
+            source: "Server",
+            detail: s.server_status.clone(),
+        });
+    }
+    // Amplifier serial open failure, or a previously-detected amp that stopped
+    // responding.  (Auto-detect finding no amp is log-only, never set here, so
+    // stations without an HR50 see nothing.)
+    if let Some(err) = &s.amplifier_status.last_error {
+        errors.push(Problem {
+            severity: ProblemSeverity::Error,
+            source: "Amplifier",
+            detail: err.clone(),
+        });
+    }
+    // The SDR stopped sending IQ (HL2 link blip, RTL dongle pulled, device
+    // powered off, …).  Only while a radio is held (so stale status after a
+    // drop doesn't linger); cleared automatically when RX resumes.
+    if s.radio_acquired && s.source_status.device_responding == Some(false) {
+        errors.push(Problem {
+            severity: ProblemSeverity::Error,
+            source: "Radio",
+            detail: "not responding (no data from device)".to_string(),
+        });
+    }
+
+    // --- Warnings -----------------------------------------------------------
+    // rigctl (CAT) server bind failure — affects WSJT-X/digital users only.
+    if let Some(reason) = &s.rigctl_status {
+        warnings.push(Problem {
+            severity: ProblemSeverity::Warning,
+            source: "rigctl",
+            detail: reason.clone(),
+        });
+    }
+    // Digital audio interface (PipeWire/pactl) — collapse the endpoints into one
+    // line with the first captured reason (they usually share a root cause).
+    let mut digital_down: Vec<&str> = Vec::new();
+    let mut digital_reason: Option<&String> = None;
+    for (available, reason, name) in [
+        (
+            s.digital_output_available,
+            &s.digital_output_reason,
+            "RigflowDigitalOutput",
+        ),
+        (
+            s.digital_rx_available,
+            &s.digital_rx_reason,
+            "RigflowDigitalRX",
+        ),
+        (
+            s.digital_input_available,
+            &s.digital_input_reason,
+            "RigflowDigitalInput",
+        ),
+    ] {
+        if !available {
+            digital_down.push(name);
+            if digital_reason.is_none() {
+                digital_reason = reason.as_ref();
+            }
+        }
+    }
+    if !digital_down.is_empty() {
+        let reason = digital_reason
+            .map(String::as_str)
+            .unwrap_or("unavailable (PipeWire/pactl not running?)");
+        warnings.push(Problem {
+            severity: ProblemSeverity::Warning,
+            source: "Digital Audio",
+            detail: format!("{} unavailable: {reason}", digital_down.join(", ")),
+        });
+    }
+    // Microphone fallback / unavailable (already shown in Radio Control; also
+    // aggregated here).
+    if !s.mic_status.is_empty() {
+        warnings.push(Problem {
+            severity: ProblemSeverity::Warning,
+            source: "Microphone",
+            detail: s.mic_status.clone(),
+        });
+    }
+    // Operator/bookmark persistence save/load issues.
+    if !s.persistence_status.is_empty() {
+        warnings.push(Problem {
+            severity: ProblemSeverity::Warning,
+            source: "Persistence",
+            detail: s.persistence_status.clone(),
+        });
+    }
+
+    errors.append(&mut warnings);
+    errors
+}
+
+#[cfg(test)]
+mod problem_tests {
+    use super::*;
+
+    #[test]
+    fn healthy_state_has_no_problems() {
+        let mut s = UiState::default();
+        // Default has all three digital endpoints unavailable; mark them up so a
+        // freshly-connected, healthy station reports clean.
+        s.digital_output_available = true;
+        s.digital_rx_available = true;
+        s.digital_input_available = true;
+        s.server_status = "connected, 1 radios available".to_string();
+        assert!(collect_problems(&s).is_empty());
+    }
+
+    #[test]
+    fn failures_surface_with_errors_before_warnings() {
+        let mut s = UiState::default();
+        s.digital_output_available = true;
+        s.digital_rx_available = true;
+        s.digital_input_available = true;
+        s.server_status = "connect failed: connection refused".to_string();
+        s.rigctl_status = Some("rigctl: cannot bind 127.0.0.1:4532 — in use".to_string());
+        s.amplifier_status.last_error = Some("HR50 serial open failed".to_string());
+
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 3);
+        // Errors (Server, Amplifier) come before the rigctl warning.
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[1].severity, ProblemSeverity::Error);
+        assert_eq!(problems.last().unwrap().severity, ProblemSeverity::Warning);
+        assert_eq!(problems.last().unwrap().source, "rigctl");
+    }
+
+    #[test]
+    fn idle_not_connected_is_not_a_problem() {
+        let mut s = UiState::default();
+        s.digital_output_available = true;
+        s.digital_rx_available = true;
+        s.digital_input_available = true;
+        s.server_status = "no server".to_string();
+        assert!(collect_problems(&s).is_empty());
+    }
+
+    fn healthy_digital(s: &mut UiState) {
+        s.digital_output_available = true;
+        s.digital_rx_available = true;
+        s.digital_input_available = true;
+    }
+
+    #[test]
+    fn reconnecting_is_a_warning_not_an_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "reconnecting (attempt 3)…".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Warning);
+        assert_eq!(problems[0].source, "Server");
+    }
+
+    #[test]
+    fn re_acquiring_is_a_warning() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "re-acquiring radio…".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Warning);
+    }
+
+    #[test]
+    fn re_acquire_give_up_is_an_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "re-acquire failed: radio still busy".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[0].source, "Server");
+    }
+
+    #[test]
+    fn device_not_responding_is_a_radio_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.radio_acquired = true;
+
+        s.source_status.device_responding = Some(false);
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[0].source, "Radio");
+
+        // Responding / unknown is not a problem.
+        s.source_status.device_responding = Some(true);
+        assert!(collect_problems(&s).is_empty());
+        s.source_status.device_responding = None;
+        assert!(collect_problems(&s).is_empty());
+
+        // Not held → not surfaced even if the last status said not-responding.
+        s.radio_acquired = false;
+        s.source_status.device_responding = Some(false);
+        assert!(collect_problems(&s).is_empty());
+    }
+
+    #[test]
+    fn server_already_has_a_client_is_an_error() {
+        let mut s = UiState::default();
+        healthy_digital(&mut s);
+        s.server_status = "server already has a client".to_string();
+        let problems = collect_problems(&s);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].severity, ProblemSeverity::Error);
+        assert_eq!(problems[0].source, "Server");
     }
 }

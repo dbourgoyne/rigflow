@@ -4,32 +4,28 @@
 /// messages or persisted to disk. The server communicates TX support through
 /// `SourceCapabilities::supports_tx_tune_test`; the client derives its local
 /// state from that flag plus the user's arm checkbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TxTuneState {
     /// Hardware does not advertise TX tune test support.
     Unavailable,
 
     /// Supported but not yet armed by the operator.
+    #[default]
     Disarmed,
 
     /// Armed: operator has enabled the arm checkbox.
     Armed,
 }
 
-impl Default for TxTuneState {
-    fn default() -> Self {
-        Self::Disarmed
-    }
-}
-
 /// Machine-readable outcome of a TX tune test.
 ///
 /// Carried in `TxTuneResult::status`. Variants are ordered from "no test"
 /// through "success" to "fault" so comparisons are meaningful.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TxTuneStatus {
     /// No test has been run yet (initial state).
+    #[default]
     NotRun,
     /// Test completed normally; check power readings for detail.
     Ok,
@@ -50,12 +46,6 @@ pub enum TxTuneStatus {
     Overflow,
     /// Unexpected socket or hardware fault.
     Fault,
-}
-
-impl Default for TxTuneStatus {
-    fn default() -> Self {
-        Self::NotRun
-    }
 }
 
 /// Result of a TX tune test measurement.
@@ -161,8 +151,10 @@ pub fn compute_swr_from_raw(max_fwd_raw: u16, max_rev_raw: u16) -> Option<f32> {
     }
 
     let gamma = (max_rev_raw as f32 / max_fwd_raw as f32).sqrt();
+    // `!(gamma < 1.0)` (not `gamma >= 1.0`) is deliberate: it also rejects NaN,
+    // which a `>=` comparison would let through.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     if !(gamma < 1.0) {
-        // catches gamma >= 1.0 and NaN
         return None;
     }
 

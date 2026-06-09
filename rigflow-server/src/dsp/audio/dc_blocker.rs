@@ -2,7 +2,9 @@
 ///
 /// Implements the difference equation:
 ///
-///     y[n] = x[n] - x[n-1] + r * y[n-1]
+/// ```text
+/// y[n] = x[n] - x[n-1] + r * y[n-1]
+/// ```
 ///
 /// Where:
 /// - `r` controls the cutoff frequency (closer to 1.0 = lower cutoff)

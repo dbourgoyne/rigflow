@@ -37,6 +37,13 @@ pub fn load_initial_ui_state(
         apply_operator_settings_to_ui_state(&mut ui_state, &operator_settings, &app_state);
     }
 
+    // Surface any corrupt-config recovery that happened during the loads above,
+    // so the user sees it in the Problems area instead of a silent reset.
+    let notices = store.take_recovery_notices();
+    if !notices.is_empty() {
+        ui_state.persistence_status = notices.join("; ");
+    }
+
     Ok((ui_state, store))
 }
 

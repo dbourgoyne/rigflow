@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::{mpsc, oneshot, watch, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
@@ -50,6 +50,24 @@ pub struct RadioManager {
     radios: RwLock<HashMap<RadioId, ManagedRadio>>,
     config: RadioManagerConfig,
     server_cfg: ServerConfig,
+}
+
+/// Decide whether a radio should be dropped on a rescan.
+///
+/// A **discovered** radio (WAV file on disk, RTL-SDR over USB, or HL2 over the
+/// network) is pruned when a fresh scan no longer sees it AND it is `idle` (no
+/// lease, `Available`) — so a leased/running radio is never disturbed.  HL2
+/// discovery re-broadcasts within each scan, so a single dropped packet won't
+/// falsely remove a powered-on unit.  The built-in `fake:` source is always
+/// re-discovered and is never pruned.
+fn should_prune_on_rescan(
+    id: &RadioId,
+    idle: bool,
+    fresh_ids: &std::collections::HashSet<RadioId>,
+) -> bool {
+    let discoverable =
+        id.0.starts_with("wav:") || id.0.starts_with("rtl:") || id.0.starts_with("hl2:");
+    discoverable && idle && !fresh_ids.contains(id)
 }
 
 impl RadioManager {
@@ -176,11 +194,11 @@ impl RadioManager {
             .collect()
     }
 
-    /// Re-scan for radios so changes on disk (e.g. a freshly recorded WAV file)
-    /// appear without a server restart.  Newly discovered radios are added as
-    /// `Available`; WAV radios whose file disappeared are pruned — but only when
-    /// idle, so a leased/running radio is never disturbed.  Hardware radios that
-    /// remain in the map are left untouched (their live state is preserved).
+    /// Re-scan for radios so changes (a freshly recorded WAV file, an RTL dongle
+    /// or HL2 powered on/off) appear without a server restart.  Newly discovered
+    /// radios are added as `Available`; a discovered radio no longer present in
+    /// a fresh scan is pruned — but only when idle, so a leased/running radio is
+    /// never disturbed.  See [`should_prune_on_rescan`].
     pub async fn rescan_radios(&self) -> Vec<RadioSummary> {
         let fresh = crate::radio::discovery::discover_radios(&self.server_cfg);
         let fresh_ids: std::collections::HashSet<RadioId> =
@@ -200,11 +218,11 @@ impl RadioManager {
                 });
             }
 
-            // Prune WAV radios whose file vanished, but only if idle.
+            // Prune radios that a fresh scan no longer sees (see
+            // [`should_prune_on_rescan`] for the policy).
             radios.retain(|id, radio| {
-                let stale_wav = id.0.starts_with("wav:") && !fresh_ids.contains(id);
                 let idle = radio.lease.is_none() && matches!(radio.state, RadioState::Available);
-                !(stale_wav && idle)
+                !should_prune_on_rescan(id, idle, &fresh_ids)
             });
         }
 
@@ -349,6 +367,13 @@ impl RadioManager {
             .get_mut(radio_id)
             .ok_or(RadioManagerError::RadioNotFound)?;
 
+        // Has the worker exited on its own (e.g. faulted on sustained RX loss)?
+        // Computed before the mutable lease borrow below.
+        let worker_dead = radio
+            .runtime
+            .as_ref()
+            .map_or(true, |rt| rt.join_handle.is_finished());
+
         let lease = radio
             .lease
             .as_mut()
@@ -360,6 +385,14 @@ impl RadioManager {
 
         if &lease.lease_id != lease_id {
             return Err(RadioManagerError::InvalidLease);
+        }
+
+        // Don't keep renewing a lease whose worker is gone — report it so the
+        // caller releases the radio and the client can re-acquire.
+        if worker_dead {
+            return Err(RadioManagerError::Internal(
+                "worker has exited; lease no longer serviceable".to_string(),
+            ));
         }
 
         lease.last_renewed_at = now;
@@ -454,17 +487,62 @@ impl RadioManager {
                 .ok_or(RadioManagerError::RadioNotRunning)?
         };
 
-        Self::stop_runtime(runtime, reason, self.config.shutdown_timeout).await?;
+        // Clear the lease/state regardless of how the worker stopped.  A worker
+        // that already exited on its own (e.g. faulted on sustained RX loss)
+        // makes `stop_runtime` report an error, but the radio MUST still return
+        // to Available so it can be re-acquired — otherwise it gets stuck leased
+        // with a dead worker and can be neither released nor re-acquired.
+        let stop_result = Self::stop_runtime(runtime, reason, self.config.shutdown_timeout).await;
 
-        let mut radios = self.radios.write().await;
-        let radio = radios
-            .get_mut(radio_id)
-            .ok_or(RadioManagerError::RadioNotFound)?;
+        {
+            let mut radios = self.radios.write().await;
+            let radio = radios
+                .get_mut(radio_id)
+                .ok_or(RadioManagerError::RadioNotFound)?;
+            radio.lease = None;
+            radio.state = RadioState::Available;
+        }
 
-        radio.lease = None;
-        radio.state = RadioState::Available;
+        if let Err(err) = stop_result {
+            log::warn!(
+                "[radio-manager] worker stop for {} reported an error \
+                 (radio still released): {err:?}",
+                radio_id.0
+            );
+        }
 
         Ok(())
+    }
+
+    /// Stop every running worker (process shutdown).  Ignores lease ownership —
+    /// this is a whole-server teardown so the hardware is left safe: stopping an
+    /// HL2 worker un-keys PTT (via the TX stop path) and stops the stream.
+    pub async fn shutdown_all(&self) {
+        // Take every running runtime out under the lock, then stop them.
+        let runtimes: Vec<(RadioId, RadioRuntime)> = {
+            let mut radios = self.radios.write().await;
+            radios
+                .iter_mut()
+                .filter_map(|(id, radio)| {
+                    radio.runtime.take().map(|rt| {
+                        radio.state = RadioState::Stopping;
+                        (id.clone(), rt)
+                    })
+                })
+                .collect()
+        };
+
+        for (id, runtime) in runtimes {
+            if let Err(err) = Self::stop_runtime(
+                runtime,
+                StopReason::ServerShutdown,
+                self.config.shutdown_timeout,
+            )
+            .await
+            {
+                log::warn!("shutdown: failed to stop worker for {}: {err:?}", id.0);
+            }
+        }
     }
 
     /// Handles startup failure by stopping any partially started runtime and
@@ -540,5 +618,43 @@ impl RadioManager {
             ))),
             Err(_) => Err(RadioManagerError::ShutdownTimedOut),
         }
+    }
+}
+
+#[cfg(test)]
+mod rescan_prune_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn ids(items: &[&str]) -> HashSet<RadioId> {
+        items.iter().map(|s| RadioId(s.to_string())).collect()
+    }
+
+    #[test]
+    fn prunes_idle_removed_discovered_radios_except_fake() {
+        // A fresh scan that still sees the fake source but none of the others.
+        let fresh = ids(&["fake:tone"]);
+        let prune =
+            |id: &str, idle: bool| should_prune_on_rescan(&RadioId(id.into()), idle, &fresh);
+
+        // Removed + idle discovered radios (WAV, RTL, HL2) → pruned.
+        assert!(prune("rtl:0", true));
+        assert!(prune("wav:a.wav", true));
+        assert!(prune("hl2:1cc0a213dd4a", true));
+
+        // Removed but in use (not idle) → kept.
+        assert!(!prune("rtl:0", false));
+        assert!(!prune("hl2:1cc0a213dd4a", false));
+
+        // The built-in fake source is never pruned, even when idle+absent.
+        assert!(!prune("fake:tone", true));
+
+        // Still present → kept.
+        let fresh2 = ids(&["rtl:0", "fake:tone"]);
+        assert!(!should_prune_on_rescan(
+            &RadioId("rtl:0".into()),
+            true,
+            &fresh2
+        ));
     }
 }
