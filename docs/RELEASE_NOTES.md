@@ -9,6 +9,12 @@
 
 ### Changes
 
+- **Radio Control layout tidy-up.** The **Audio** section (volume, CW sidetone) now
+  sits at the top of Radio Control since it's used constantly, and the **Microphone**
+  controls moved out of Audio into **Transmit** — so Audio is purely listening and
+  Transmit holds how you transmit (mic for SSB, message/macros for CW). Section order
+  is now Audio · Receive · Transmit.
+
 - **New WSJT-X / FT8 setup helper.** A **"WSJT-X / FT8 Setup…"** button in Radio
   Control opens a window that shows the exact values to enter in WSJT-X — the audio
   **Input** (`RigflowDigitalRX`) and **Output** (`RigflowDigitalInput`) device names,

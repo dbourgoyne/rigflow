@@ -62,6 +62,17 @@ impl RigflowApp {
                     }
                 }
 
+                // ── Audio (default expanded): volume + sidetone, used often ──
+                egui::CollapsingHeader::new("Audio")
+                    .id_salt("rc_audio")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if let Ok(mut state) = self.state.lock() {
+                            save_volume = self.draw_volume_row(ui, &mut state);
+                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
+                        }
+                    });
+
                 // ── Receive (default expanded): frequently-used RX controls ──
                 egui::CollapsingHeader::new("Receive")
                     .id_salt("rc_receive")
@@ -83,24 +94,14 @@ impl RigflowApp {
                         save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
                     });
 
-                // ── Audio (default expanded) ─────────────────────────────────
-                egui::CollapsingHeader::new("Audio")
-                    .id_salt("rc_audio")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            save_volume = self.draw_volume_row(ui, &mut state);
-                            save_mic = self.draw_microphone_row(ui, &mut state);
-                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
-
-                // ── Transmit (default collapsed): everyday TX setup ──────────
+                // ── Transmit (default collapsed): how you transmit ───────────
+                // Microphone (SSB voice input) + CW message/macros.
                 egui::CollapsingHeader::new("Transmit")
                     .id_salt("rc_transmit")
                     .default_open(false)
                     .show(ui, |ui| {
                         if let Ok(mut state) = self.state.lock() {
+                            save_mic = self.draw_microphone_row(ui, &mut state);
                             save_cw |=
                                 self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                             save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
