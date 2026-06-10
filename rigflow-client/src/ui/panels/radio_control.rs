@@ -69,7 +69,6 @@ impl RigflowApp {
                     .show(ui, |ui| {
                         if let Ok(mut state) = self.state.lock() {
                             save_volume = self.draw_volume_row(ui, &mut state);
-                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                         }
                     });
 
@@ -96,7 +95,7 @@ impl RigflowApp {
                     });
 
                 // ── Transmit (default collapsed): how you transmit ───────────
-                // Microphone (SSB voice input) + CW message/macros.
+                // Microphone (SSB voice input) + CW message/macros + CW sidetone/hang.
                 egui::CollapsingHeader::new("Transmit")
                     .id_salt("rc_transmit")
                     .default_open(false)
@@ -106,6 +105,7 @@ impl RigflowApp {
                             save_cw |=
                                 self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                             save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
+                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                         }
                     });
 
