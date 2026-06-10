@@ -78,6 +78,9 @@ impl RigflowApp {
                     .id_salt("rc_receive")
                     .default_open(true)
                     .show(ui, |ui| {
+                        // Demod mode buttons first (locks state internally → must be
+                        // outside the lock below to avoid a deadlock).
+                        save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
                         if let Ok(mut state) = self.state.lock() {
                             save_demod_prefs |=
                                 self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
@@ -90,8 +93,6 @@ impl RigflowApp {
                             self.draw_agc_row(ui, &mut state);
                             self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
                         }
-                        // Demod mode buttons (locks state internally → outside).
-                        save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
                     });
 
                 // ── Transmit (default collapsed): how you transmit ───────────
@@ -1065,19 +1066,19 @@ impl RigflowApp {
     }
 
     fn draw_demod_selector(&self, ui: &mut egui::Ui, snapshot: &UiState) -> bool {
-        ui.label("Demod");
+        ui.label(RichText::new("Demod").size(15.0).strong());
 
         let mut selected = snapshot.demod_mode.clone();
 
         ui.horizontal(|ui| {
-            ui.radio_value(&mut selected, DemodMode::Wfm, "wfm");
-            ui.radio_value(&mut selected, DemodMode::Nfm, "nfm");
-            ui.radio_value(&mut selected, DemodMode::Am, "am");
-            ui.radio_value(&mut selected, DemodMode::Lsb, "lsb");
-            ui.radio_value(&mut selected, DemodMode::Usb, "usb");
-            ui.radio_value(&mut selected, DemodMode::DgtU, "data");
-            ui.radio_value(&mut selected, DemodMode::Cwu, "cwu");
-            ui.radio_value(&mut selected, DemodMode::Cwl, "cwl");
+            ui.radio_value(&mut selected, DemodMode::Wfm, "WFM");
+            ui.radio_value(&mut selected, DemodMode::Nfm, "NFM");
+            ui.radio_value(&mut selected, DemodMode::Am, "AM");
+            ui.radio_value(&mut selected, DemodMode::Lsb, "LSB");
+            ui.radio_value(&mut selected, DemodMode::Usb, "USB");
+            ui.radio_value(&mut selected, DemodMode::DgtU, "DATA");
+            ui.radio_value(&mut selected, DemodMode::Cwu, "CWU");
+            ui.radio_value(&mut selected, DemodMode::Cwl, "CWL");
         });
 
         if selected == snapshot.demod_mode {
