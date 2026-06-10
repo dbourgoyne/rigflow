@@ -2,6 +2,16 @@ use crate::UiState;
 use crate::ui::app::RigflowApp;
 use eframe::egui;
 
+/// Styling for a **top-level** left-panel section header (Radio Operator,
+/// Radios, Radio Control, …).  Larger + the operator-name accent colour so the
+/// main menus stand out from their sub-sections (which keep the default style).
+pub(crate) fn panel_header(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(16.0)
+        .strong()
+        .color(egui::Color32::from_rgb(90, 200, 255))
+}
+
 mod bookmarks;
 mod operator;
 mod problems;

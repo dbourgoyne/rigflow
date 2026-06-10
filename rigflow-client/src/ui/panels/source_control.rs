@@ -12,7 +12,7 @@ use rigflow_protocol::radio_control::ClientRadioMessage;
 impl RigflowApp {
     pub(crate) fn draw_source_control_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
         if snapshot.radio_acquired {
-            egui::CollapsingHeader::new("Source Control")
+            egui::CollapsingHeader::new(super::panel_header("Source Control"))
                 .default_open(true)
                 .show(ui, |ui| {
                     let mut save_source_control = false;

@@ -14,7 +14,7 @@ impl RigflowApp {
         // Auto-expand only on first run — no operator yet, while disconnected —
         // to match the "add an operator" cue.  A returning operator stays
         // collapsed (don't distract them just because they're disconnected).
-        egui::CollapsingHeader::new("Radio Operator")
+        egui::CollapsingHeader::new(super::panel_header("Radio Operator"))
             .default_open(config_mode && snapshot.known_operator_ids.is_empty())
             .show(ui, |ui| {
                 if !config_mode {

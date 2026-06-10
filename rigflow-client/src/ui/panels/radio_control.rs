@@ -23,7 +23,7 @@ impl RigflowApp {
         // Live telemetry (S-meter, etc.) now lives in the top status bar; the
         // left panel holds configuration and controls only.
 
-        egui::CollapsingHeader::new("Radio Control")
+        egui::CollapsingHeader::new(super::panel_header("Radio Control"))
             .default_open(true)
             .show(ui, |ui| {
                 let mut save_demod_prefs = false;

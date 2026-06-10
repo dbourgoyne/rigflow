@@ -10,7 +10,7 @@ impl RigflowApp {
         snapshot: &UiState,
         config_mode: bool,
     ) {
-        egui::CollapsingHeader::new("Rigflow Server")
+        egui::CollapsingHeader::new(super::panel_header("Rigflow Server"))
             // Open by default while not connected so a first-run user sees the
             // Connect button without having to expand a collapsed header.
             .default_open(config_mode)
