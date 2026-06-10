@@ -298,7 +298,7 @@ impl DspPipeline {
         };
 
         match self.mode {
-            DemodMode::Usb | DemodMode::Lsb => {
+            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU => {
                 self.rebuild_ssb_filters(bandwidth_hz, self.ssb_fir_taps);
                 self.ssb_demod = SsbDemodulator::new(self.sideband);
             }
@@ -313,7 +313,7 @@ impl DspPipeline {
         self.mode = mode;
 
         match mode {
-            DemodMode::Usb => self.sideband = Sideband::Usb,
+            DemodMode::Usb | DemodMode::DgtU => self.sideband = Sideband::Usb,
             DemodMode::Lsb => self.sideband = Sideband::Lsb,
             _ => {}
         }
@@ -429,7 +429,7 @@ impl DspPipeline {
         }
 
         let mut audio = match self.mode {
-            DemodMode::Usb => self.demod_ssb(&iq, Sideband::Usb),
+            DemodMode::Usb | DemodMode::DgtU => self.demod_ssb(&iq, Sideband::Usb),
             DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
             DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
             DemodMode::Am => self.am_demod.process(&iq),
@@ -458,7 +458,7 @@ impl DspPipeline {
                     fir.process_in_place(&mut audio);
                 }
             }
-            DemodMode::Usb | DemodMode::Lsb => {
+            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU => {
                 self.agc.process_in_place(&mut audio);
 
                 if let Some(fir) = &mut self.audio_fir {

@@ -559,5 +559,6 @@ fn mode_label(mode: rigflow_core::dsp::modes::DemodMode) -> &'static str {
         DemodMode::Am => "AM",
         DemodMode::Cwu => "CWU",
         DemodMode::Cwl => "CWL",
+        DemodMode::DgtU => "DATA-U",
     }
 }

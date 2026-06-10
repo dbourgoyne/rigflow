@@ -32,6 +32,11 @@ pub enum DemodMode {
 
     /// CW, lower sideband (tone below the dial: RF = dial − pitch).
     Cwl,
+
+    /// Data / digital USB (FT8, JS8, fldigi, …).  Identical to `Usb` at the
+    /// RF/DSP level; distinct so it carries its own filter preset + label,
+    /// reports the data mode over CAT (`PKTUSB`), and auto-routes RX audio.
+    DgtU,
 }
 
 impl fmt::Display for DemodMode {
@@ -44,6 +49,7 @@ impl fmt::Display for DemodMode {
             DemodMode::Am => "am",
             DemodMode::Cwu => "cwu",
             DemodMode::Cwl => "cwl",
+            DemodMode::DgtU => "dgt_u",
         };
         write!(f, "{}", s)
     }
@@ -63,6 +69,7 @@ impl FromStr for DemodMode {
             "am" => Ok(DemodMode::Am),
             "cwu" => Ok(DemodMode::Cwu),
             "cwl" => Ok(DemodMode::Cwl),
+            "dgt_u" => Ok(DemodMode::DgtU),
             // Legacy single CW maps to CWU.
             "cw" => Ok(DemodMode::Cwu),
             _ => Err(format!("invalid demod mode: {}", s)),
@@ -147,6 +154,12 @@ pub fn filter_bandwidth_limits(mode: DemodMode) -> BandwidthLimits {
             min_hz: 300.0,
             max_hz: 4000.0,
             default_hz: 2700.0,
+        },
+        // Data/digital USB: wider default suited to FT8 & friends.
+        DemodMode::DgtU => BandwidthLimits {
+            min_hz: 300.0,
+            max_hz: 4000.0,
+            default_hz: 3000.0,
         },
         DemodMode::Cwu | DemodMode::Cwl => BandwidthLimits {
             min_hz: 100.0,

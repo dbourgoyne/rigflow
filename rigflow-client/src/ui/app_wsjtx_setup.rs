@@ -28,7 +28,7 @@ impl RigflowApp {
         }
 
         // Snapshot what we need so the window closure never touches `self`.
-        let (rx_avail, rx_reason, in_avail, in_reason, rigctl_status, rx_active, rx_routing) = {
+        let (rx_avail, rx_reason, in_avail, in_reason, rigctl_status, rx_active) = {
             let state = self.state.lock().unwrap();
             (
                 state.digital_rx_available,
@@ -37,12 +37,10 @@ impl RigflowApp {
                 state.digital_input_reason.clone(),
                 state.rigctl_status.clone(),
                 state.digital_rx.is_active(),
-                state.digital_rx.is_enabled(),
             )
         };
 
         let network_server = format!("{RIGCTL_HOST}:{DEFAULT_RIGCTL_PORT}");
-        let mut set_rx_routing: Option<bool> = None;
 
         egui::Window::new("WSJT-X / FT8 Setup")
             .open(&mut open)
@@ -86,20 +84,13 @@ impl RigflowApp {
                 ui.add_space(8.0);
                 ui.separator();
 
-                // The one operational control a digital user needs here.
-                let mut rx_on = rx_routing;
-                if ui
-                    .checkbox(
-                        &mut rx_on,
-                        "RX Digital Output (route received audio to WSJT-X)",
-                    )
-                    .changed()
-                {
-                    set_rx_routing = Some(rx_on);
-                }
+                // RX routing is automatic (enabled in Data mode); show its status.
                 ui.horizontal(|ui| {
-                    ui.label("Routing:");
-                    if rx_active {
+                    ui.label("RX routing:");
+                    if !rx_avail {
+                        let reason = rx_reason.as_deref().unwrap_or("unavailable");
+                        ui.colored_label(BAD_RED, format!("Failed: {reason}"));
+                    } else if rx_active {
                         ui.colored_label(OK_GREEN, "Active");
                     } else {
                         ui.colored_label(egui::Color32::GRAY, "Inactive");
@@ -109,18 +100,13 @@ impl RigflowApp {
                 ui.add_space(6.0);
                 ui.label(
                     egui::RichText::new(
-                        "Acquire a radio, set its mode to USB/Data, and enable RX Digital \
-                         Output for decoding.",
+                        "Acquire a radio and select the Data mode — RX routing turns on \
+                         automatically for decoding.",
                     )
                     .small()
                     .weak(),
                 );
             });
-
-        if let Some(on) = set_rx_routing {
-            let state = self.state.lock().unwrap();
-            state.digital_rx.set_enabled(on);
-        }
 
         // Reflect the window's close affordance back into state.
         if let Ok(mut state) = self.state.lock() {

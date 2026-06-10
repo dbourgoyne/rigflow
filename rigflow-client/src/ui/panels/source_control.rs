@@ -505,7 +505,7 @@ impl RigflowApp {
                 state.swr_sweep_start_mhz = lo as f64 / 1_000_000.0;
                 state.swr_sweep_stop_mhz = hi as f64 / 1_000_000.0;
                 state.sideband = match mode {
-                    DemodMode::Usb => Sideband::Usb,
+                    DemodMode::Usb | DemodMode::DgtU => Sideband::Usb,
                     DemodMode::Lsb => Sideband::Lsb,
                     _ => state.sideband,
                 };
@@ -517,7 +517,7 @@ impl RigflowApp {
                     target_freq_hz: new_target as u64,
                 });
                 self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode });
-                if matches!(mode, DemodMode::Usb | DemodMode::Lsb) {
+                if matches!(mode, DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU) {
                     self.send_radio_msg(ClientRadioMessage::SetSideband {
                         sideband: state.sideband,
                     });

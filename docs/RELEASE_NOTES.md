@@ -9,6 +9,17 @@
 
 ### Changes
 
+- **New "Data" (Data-USB) mode for FT8 and other digital programs.** Selecting
+  **data** in the Demod row is USB on the air, but it carries its own filter setting
+  (a wider 3 kHz default, remembered separately from voice USB), shows as **DATA-U**,
+  reports the data mode (`PKTUSB`) over CAT, and **automatically enables RX audio
+  routing** to WSJT-X/fldigi/etc. — entering Data turns routing on, leaving turns it
+  off. So digital operating is now one click: pick **data**. As part of this, voice
+  **USB now reports `USB`** over CAT (it previously always reported `PKTUSB`), and
+  setting Data/Pkt in WSJT-X drives Rigflow straight into Data mode. The redundant
+  "Digital Interface" panel under Advanced is gone (the WSJT-X / FT8 Setup window
+  already shows the device names, and now shows a read-only RX-routing status too).
+
 - **Radio Control layout tidy-up.** The **Audio** section (volume, CW sidetone) now
   sits at the top of Radio Control since it's used constantly, and the **Microphone**
   controls moved out of Audio into **Transmit** — so Audio is purely listening and

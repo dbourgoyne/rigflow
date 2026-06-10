@@ -81,10 +81,6 @@ impl DigitalRxOutput {
         }
     }
 
-    pub fn is_enabled(&self) -> bool {
-        self.enabled.load(Ordering::Relaxed)
-    }
-
     /// True when enabled AND the sink player is actually running.
     pub fn is_active(&self) -> bool {
         self.enabled.load(Ordering::Relaxed) && self.available.load(Ordering::Relaxed)

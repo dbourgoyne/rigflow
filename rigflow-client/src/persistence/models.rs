@@ -70,6 +70,14 @@ pub struct DemodPreferenceSetFile {
     pub usb: DemodPreferencesFile,
     pub lsb: DemodPreferencesFile,
     pub cw: DemodPreferencesFile,
+    /// Data/digital USB (FT8 etc.).  Serde default (3 kHz) so older operator
+    /// files — which predate this mode — load unchanged.
+    #[serde(default = "default_dgt_u_prefs")]
+    pub dgt_u: DemodPreferencesFile,
+}
+
+fn default_dgt_u_prefs() -> DemodPreferencesFile {
+    DemodPreferencesFile::new(3_000.0, 0.0, DeemphasisMode::Off)
 }
 
 impl Default for DemodPreferenceSetFile {
@@ -81,6 +89,7 @@ impl Default for DemodPreferenceSetFile {
             usb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
             lsb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
             cw: DemodPreferencesFile::new(500.0, 600.0, DeemphasisMode::Off),
+            dgt_u: default_dgt_u_prefs(),
         }
     }
 }
@@ -95,6 +104,7 @@ impl DemodPreferenceSetFile {
             DemodMode::Lsb => self.lsb,
             // CWU and CWL share one CW preference set (filter bw, pitch).
             DemodMode::Cwu | DemodMode::Cwl => self.cw,
+            DemodMode::DgtU => self.dgt_u,
         }
     }
 
@@ -106,6 +116,7 @@ impl DemodPreferenceSetFile {
             DemodMode::Usb => &mut self.usb,
             DemodMode::Lsb => &mut self.lsb,
             DemodMode::Cwu | DemodMode::Cwl => &mut self.cw,
+            DemodMode::DgtU => &mut self.dgt_u,
         }
     }
 }

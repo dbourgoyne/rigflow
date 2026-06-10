@@ -271,7 +271,10 @@ impl RigflowApp {
 
         let ssb_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
-            && matches!(snapshot.demod_mode, DemodMode::Usb | DemodMode::Lsb);
+            && matches!(
+                snapshot.demod_mode,
+                DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
+            );
         let want_tx = space_held && ssb_ready;
 
         if want_tx != snapshot.ssb_ptt_down {

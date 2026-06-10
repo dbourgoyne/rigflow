@@ -377,7 +377,7 @@ fn draw_passband_overlay(
     let (pb_left_hz, pb_right_hz) = match state.demod_mode {
         DemodMode::Wfm => (target_freq_hz - 75_000.0, target_freq_hz + 75_000.0),
         DemodMode::Nfm => (target_freq_hz - 6_000.0, target_freq_hz + 6_000.0),
-        DemodMode::Usb => (target_freq_hz, target_freq_hz + 3_000.0),
+        DemodMode::Usb | DemodMode::DgtU => (target_freq_hz, target_freq_hz + 3_000.0),
         DemodMode::Lsb => (target_freq_hz - 3_000.0, target_freq_hz),
         DemodMode::Am => (target_freq_hz - 5_000.0, target_freq_hz + 5_000.0),
         DemodMode::Cwu => {

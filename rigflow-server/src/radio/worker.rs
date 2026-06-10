@@ -330,7 +330,7 @@ fn pipeline_cfg_for_source(
     let (channel_cutoff_hz, audio_cutoff_hz) = match server_cfg.demod {
         DemodMode::Wfm => (100_000.0, 15_000.0),
         DemodMode::Nfm => (12_500.0, 5_000.0),
-        DemodMode::Usb => (4_000.0, 3_000.0),
+        DemodMode::Usb | DemodMode::DgtU => (4_000.0, 3_000.0),
         DemodMode::Lsb => (4_000.0, 3_000.0),
         DemodMode::Am => (6_000.0, 5_000.0),
         DemodMode::Cwu | DemodMode::Cwl => (1_200.0, 900.0),

@@ -131,7 +131,6 @@ impl RigflowApp {
                             if let Ok(mut state) = self.state.lock() {
                                 self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                             }
-                            self.draw_digital_interface_row(ui, snapshot);
                         });
                 }
 
@@ -660,65 +659,6 @@ impl RigflowApp {
         }
     }
 
-    /// Digital Interface (informational): the virtual audio endpoints to set in
-    /// a digital app (WSJT-X etc.), named from the app's point of view, plus the
-    /// RX routing toggle.  No CAT/PTT yet.
-    fn draw_digital_interface_row(&self, ui: &mut egui::Ui, snapshot: &UiState) {
-        use crate::digital_audio::{DIGITAL_INPUT_NAME, DIGITAL_RX_NAME};
-
-        ui.separator();
-        ui.label(RichText::new("Digital Interface").strong());
-
-        let status = |ui: &mut egui::Ui, available: bool| {
-            if available {
-                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Available");
-            } else {
-                ui.colored_label(egui::Color32::from_rgb(210, 130, 130), "Unavailable");
-            }
-        };
-
-        // App-facing devices: WSJT-X Input = RigflowDigitalRX (records),
-        // Output = RigflowDigitalInput (plays TX into).
-        egui::Grid::new("digital_interface_grid")
-            .num_columns(2)
-            .spacing([8.0, 2.0])
-            .show(ui, |ui| {
-                ui.label("App Input (record)");
-                ui.label(RichText::new(DIGITAL_RX_NAME).monospace());
-                ui.end_row();
-                ui.label("");
-                status(ui, snapshot.digital_rx_available);
-                ui.end_row();
-
-                ui.label("App Output (TX in)");
-                ui.label(RichText::new(DIGITAL_INPUT_NAME).monospace());
-                ui.end_row();
-                ui.label("");
-                status(ui, snapshot.digital_input_available);
-                ui.end_row();
-            });
-
-        // RX audio routing: mirror received audio into RigflowDigitalOutput;
-        // apps record it from RigflowDigitalRX.
-        ui.add_space(4.0);
-        let mut rx_enabled = snapshot.digital_rx.is_enabled();
-        if ui
-            .checkbox(&mut rx_enabled, "RX Digital Output")
-            .on_hover_text("Send received audio to RigflowDigitalOutput")
-            .changed()
-        {
-            snapshot.digital_rx.set_enabled(rx_enabled);
-        }
-        ui.horizontal(|ui| {
-            ui.label("RX Digital Output:");
-            if snapshot.digital_rx.is_active() {
-                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Active");
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "Inactive");
-            }
-        });
-    }
-
     /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
     /// Enable + threshold are operator controls (sent via `SetTxLimiter`); the
     /// gain-reduction meter is read from server telemetry (`tx_audio_diag`).
@@ -1135,6 +1075,7 @@ impl RigflowApp {
             ui.radio_value(&mut selected, DemodMode::Am, "am");
             ui.radio_value(&mut selected, DemodMode::Lsb, "lsb");
             ui.radio_value(&mut selected, DemodMode::Usb, "usb");
+            ui.radio_value(&mut selected, DemodMode::DgtU, "data");
             ui.radio_value(&mut selected, DemodMode::Cwu, "cwu");
             ui.radio_value(&mut selected, DemodMode::Cwl, "cwl");
         });
@@ -1147,19 +1088,18 @@ impl RigflowApp {
             state.demod_mode = selected.clone();
             state.sideband = match selected {
                 DemodMode::Lsb => Sideband::Lsb,
-                DemodMode::Usb => Sideband::Usb,
+                DemodMode::Usb | DemodMode::DgtU => Sideband::Usb,
                 _ => state.sideband,
             };
         }
 
         self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode: selected });
 
-        if selected == DemodMode::Lsb || selected == DemodMode::Usb {
+        if matches!(selected, DemodMode::Lsb | DemodMode::Usb | DemodMode::DgtU) {
             self.send_radio_msg(ClientRadioMessage::SetSideband {
                 sideband: match selected {
                     DemodMode::Lsb => Sideband::Lsb,
-                    DemodMode::Usb => Sideband::Usb,
-                    _ => unreachable!("sideband only sent for USB/LSB"),
+                    _ => Sideband::Usb, // USB and Data-USB
                 },
             });
         }
@@ -1177,6 +1117,18 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
 
     state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
     state.pitch_debounce = DebounceState::new(state.pitch_hz);
+
+    // RX-routing tie: entering Data-USB enables RX Digital Output (so external
+    // digital apps like WSJT-X can record); leaving it disables routing.  Only
+    // the transition into/out of Data-USB touches routing — switching among
+    // voice modes leaves it exactly as the user set it.
+    let was_dgt = state.last_demod_mode_for_controls == Some(DemodMode::DgtU);
+    let is_dgt = mode == DemodMode::DgtU;
+    if is_dgt && !was_dgt {
+        state.digital_rx.set_enabled(true);
+    } else if was_dgt && !is_dgt {
+        state.digital_rx.set_enabled(false);
+    }
 
     state.last_demod_mode_for_controls = Some(mode);
 }
