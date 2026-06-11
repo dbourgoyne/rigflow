@@ -35,6 +35,11 @@ pub(crate) fn radio_settings_from_ui(state: &UiState) -> RadioSettingsFile {
         nr2_strength: state.nr2_strength,
         agc_enabled: state.agc_enabled,
         agc_strength: state.agc_strength,
+        tx_limiter_enabled: state.tx_limiter_enabled,
+        tx_limiter_threshold_percent: state.tx_limiter_threshold_percent,
+        compressor_enabled: state.compressor_enabled,
+        compressor_level: state.compressor_level,
+        cw_decode_enabled: state.cw_decode.enabled(),
     }
 }
 

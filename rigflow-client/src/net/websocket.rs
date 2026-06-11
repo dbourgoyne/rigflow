@@ -650,6 +650,11 @@ pub fn apply_radio_server_message(
                 state.nr2_strength = rs.nr2_strength;
                 state.agc_enabled = rs.agc_enabled;
                 state.agc_strength = rs.agc_strength;
+                state.tx_limiter_enabled = rs.tx_limiter_enabled;
+                state.tx_limiter_threshold_percent = rs.tx_limiter_threshold_percent;
+                state.compressor_enabled = rs.compressor_enabled;
+                state.compressor_level = rs.compressor_level;
+                state.cw_decode.set_enabled(rs.cw_decode_enabled);
                 // Force the Radio Control replay block to reload this mode's
                 // per-demod controls and re-send the operating state.
                 state.last_demod_mode_for_controls = None;

@@ -143,6 +143,30 @@ pub struct RadioSettingsFile {
     pub nr2_strength: f32,
     pub agc_enabled: bool,
     pub agc_strength: f32,
+
+    // TX processing + CW decode — added after the first release of
+    // `radio_settings`, so each carries a serde default to keep already-saved
+    // buckets (which lack these fields) loading cleanly.
+    #[serde(default = "default_tx_limiter_enabled")]
+    pub tx_limiter_enabled: bool,
+    #[serde(default = "default_tx_limiter_threshold_percent")]
+    pub tx_limiter_threshold_percent: u16,
+    #[serde(default)]
+    pub compressor_enabled: bool,
+    #[serde(default = "default_compressor_level")]
+    pub compressor_level: u8,
+    #[serde(default)]
+    pub cw_decode_enabled: bool,
+}
+
+fn default_tx_limiter_enabled() -> bool {
+    true
+}
+fn default_tx_limiter_threshold_percent() -> u16 {
+    90
+}
+fn default_compressor_level() -> u8 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

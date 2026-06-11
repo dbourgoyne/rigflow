@@ -10,9 +10,10 @@
 ### Changes
 
 - **Each radio now remembers its own settings — resume exactly where you left
-  off.** When you re-acquire a radio, its **Radio Control** (mode, filters, pitch,
-  squelch, NR2, AGC, volume, CW sidetone/hang), **Source Control**, and **Waterfall**
-  settings are restored — and they're saved automatically whenever you change them.
+  off.** When you re-acquire a radio, its **Radio Control** (frequency, mode, filters,
+  pitch, squelch, NR2, AGC, volume, CW sidetone/hang, CW decode, TX limiter/compressor),
+  **Source Control**, and **Waterfall** settings are restored — and they're saved
+  automatically whenever you change them.
   Settings are scoped per **operator *and* radio**, so two operators sharing one rig
   each keep their own setup, and switching between rigs no longer resets everything.
   (CW macros, mic device, bookmarks, license and server IP remain operator-wide, as

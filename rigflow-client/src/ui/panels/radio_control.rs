@@ -101,6 +101,16 @@ impl RigflowApp {
                         self.send_radio_msg(ClientRadioMessage::SetAgcStrength {
                             strength: state.agc_strength,
                         });
+                        // TX processing is server-side — replay it too (CW decode
+                        // is client-side, already restored on acquire).
+                        self.send_radio_msg(ClientRadioMessage::SetTxLimiter {
+                            enabled: state.tx_limiter_enabled,
+                            threshold_percent: state.tx_limiter_threshold_percent as f32,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetCompression {
+                            enabled: state.compressor_enabled,
+                            level: state.compressor_level,
+                        });
                     }
                 }
 
