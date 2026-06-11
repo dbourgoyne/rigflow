@@ -8,6 +8,7 @@ pub mod spectrum_utils;
 pub mod spectrum_view;
 pub mod state;
 pub mod stats;
+pub mod tuning_steps;
 pub mod utils;
 pub mod view_interaction;
 pub mod waterfall;

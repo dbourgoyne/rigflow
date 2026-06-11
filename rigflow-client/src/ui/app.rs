@@ -302,88 +302,64 @@ impl RigflowApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        let mut center_delta_hz: f32 = 0.0;
+        use crate::ui::tuning_steps::{TuneTier, center_step_hz, target_step_hz};
 
-        ctx.input(|input| {
-            let step = if input.modifiers.shift {
-                1_000_000.0
-            } else {
-                25_000.0
-            };
-
-            if input.key_pressed(egui::Key::ArrowUp) {
-                center_delta_hz += step;
-            }
-
-            if input.key_pressed(egui::Key::ArrowDown) {
-                center_delta_hz -= step;
-            }
+        // Gather arrow presses + modifiers in one input pass.
+        let (up, down, left, right, shift, alt) = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.modifiers.shift,
+                i.modifiers.alt,
+            )
         });
 
-        if center_delta_hz != 0.0 {
-            let mut send_center: Option<u64> = None;
+        if !(up || down || left || right) {
+            return;
+        }
 
+        // Steps are mode-aware and only apply to an acquired radio (matches the
+        // mouse wheel).
+        let snapshot = self.snapshot_state();
+        if !snapshot.radio_acquired {
+            return;
+        }
+        let mode = snapshot.demod_mode;
+
+        // ↑/↓ — center / LO step (mode-aware; Shift = coarse).
+        let center_dir = (up as i32) - (down as i32);
+        if center_dir != 0 {
+            let delta = center_dir as f32 * center_step_hz(mode, shift);
+            let mut send_center: Option<u64> = None;
             if let Ok(mut state) = self.state.lock() {
                 let limits = crate::ui::freq_limits::active_freq_limits(&state);
-                let new_center = crate::ui::freq_limits::clamp_center(
-                    state.center_freq_hz + center_delta_hz,
-                    &limits,
-                );
+                let new_center =
+                    crate::ui::freq_limits::clamp_center(state.center_freq_hz + delta, &limits);
                 state.center_freq_hz = new_center;
-
-                if state.radio_acquired {
-                    send_center = Some(new_center as u64);
-                }
+                send_center = Some(new_center as u64);
             }
-
             if let Some(hz) = send_center {
                 let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                        center_freq_hz: hz as u64,
-                    },
+                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz },
                 ));
             }
         }
 
-        let mut target_delta_hz: f32 = 0.0;
-
-        ctx.input(|input| {
-            let step = if input.modifiers.shift { 1_000.0 } else { 10.0 };
-
-            if input.key_pressed(egui::Key::ArrowRight) {
-                target_delta_hz += step;
-            }
-
-            if input.key_pressed(egui::Key::ArrowLeft) {
-                target_delta_hz -= step;
-            }
-        });
-
-        if target_delta_hz != 0.0 {
-            let mut send_target: Option<u64> = None;
-
-            if let Ok(mut state) = self.state.lock() {
-                let limits = crate::ui::freq_limits::active_freq_limits(&state);
-                let new_target = crate::ui::freq_limits::clamp_target(
-                    state.target_freq_hz + target_delta_hz,
-                    state.center_freq_hz,
-                    state.input_sample_rate_hz,
-                    &limits,
-                );
-                state.target_freq_hz = new_target;
-
-                if state.radio_acquired {
-                    send_target = Some(new_target as u64);
-                }
-            }
-
-            if let Some(hz) = send_target {
-                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                        target_freq_hz: hz as u64,
-                    },
-                ));
-            }
+        // ←/→ — target step, identical to the wheel (mode-aware; Shift = medium,
+        // Alt = coarse) including soft-edge LO panning.
+        let target_dir = (right as i32) - (left as i32);
+        if target_dir != 0 {
+            let tier = if shift {
+                TuneTier::Medium
+            } else if alt {
+                TuneTier::Coarse
+            } else {
+                TuneTier::Fine
+            };
+            let delta = target_dir as f32 * target_step_hz(mode, tier);
+            self.tune_target_relative(&snapshot, delta);
         }
     }
 

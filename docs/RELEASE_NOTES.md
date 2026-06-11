@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **Tuning steps now match across the mouse wheel and arrow keys, and scale with
+  the mode.** The wheel and the **←/→** arrows now move the dial by the *same*
+  amount, and **←/→** gains the same soft-edge LO panning the wheel has, so the
+  two feel identical. The step size adapts to the current mode/band instead of a
+  fixed 50 Hz: SSB/CW step 10 Hz (Shift ×10, Alt ×100), AM 100 Hz, and **WFM
+  (broadcast FM) 10 kHz** so tuning across the FM band is no longer painfully slow.
+  **↑/↓** still moves the LO center and likewise scales by mode (1 kHz on SSB up to
+  200 kHz on WFM; Shift for a bigger jump).
+
 - **Each radio now remembers its own settings — resume exactly where you left
   off.** When you re-acquire a radio, its **Radio Control** (frequency, mode, filters,
   pitch, squelch, NR2, AGC, volume, CW sidetone/hang, CW decode, TX limiter/compressor),

@@ -9,15 +9,15 @@
 
 use eframe::egui;
 
-/// Fine-tune step (Hz) per wheel notch with **no modifier**.
-pub const WHEEL_TUNE_STEP_HZ: f32 = 50.0;
-/// Fine-tune step (Hz) per wheel notch with **Shift**.
-pub const WHEEL_TUNE_STEP_SHIFT_HZ: f32 = 500.0;
-/// Fine-tune step (Hz) per wheel notch with **Alt**.
-pub const WHEEL_TUNE_STEP_ALT_HZ: f32 = 5000.0;
+use crate::ui::tuning_steps::TuneTier;
 
 /// Outcome of one frame of mouse interaction over a Spectrum/Waterfall view.
 /// All fields are inert (None/0/false) when there is nothing to do.
+///
+/// Wheel fine-tune is reported as a *direction* + *tier* rather than a Hz delta:
+/// the actual step is mode-dependent, and this handler doesn't know the mode.
+/// The caller (which has the demod mode) resolves it via
+/// [`crate::ui::tuning_steps::target_step_hz`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ViewMouseResult {
     /// Single click: tune the target frequency to this absolute Hz.
@@ -25,8 +25,10 @@ pub struct ViewMouseResult {
     /// `C` key pressed while the cursor is over the view: recenter the LO on the
     /// current target frequency and zero the LO offset.
     pub center_on_target: bool,
-    /// Wheel fine-tune delta (Hz), modifier-scaled; 0 when none or zooming.
-    pub tune_delta_hz: f32,
+    /// Wheel fine-tune direction: +1 = up, -1 = down, 0 = none/zoom.
+    pub tune_dir: i32,
+    /// Step tier for `tune_dir`, selected by the modifier keys.
+    pub tune_tier: TuneTier,
     /// Ctrl+wheel zoom: +1 = zoom in, -1 = zoom out, 0 = none.
     pub zoom_steps: i32,
 }
@@ -80,12 +82,15 @@ pub fn handle_view_mouse(
         if dir != 0 {
             if mods.ctrl || mods.command {
                 result.zoom_steps = dir;
-            } else if mods.shift {
-                result.tune_delta_hz = dir as f32 * WHEEL_TUNE_STEP_SHIFT_HZ;
-            } else if mods.alt {
-                result.tune_delta_hz = dir as f32 * WHEEL_TUNE_STEP_ALT_HZ;
             } else {
-                result.tune_delta_hz = dir as f32 * WHEEL_TUNE_STEP_HZ;
+                result.tune_dir = dir;
+                result.tune_tier = if mods.shift {
+                    TuneTier::Medium
+                } else if mods.alt {
+                    TuneTier::Coarse
+                } else {
+                    TuneTier::Fine
+                };
             }
         }
     }
