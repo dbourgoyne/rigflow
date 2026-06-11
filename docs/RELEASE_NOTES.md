@@ -9,6 +9,13 @@
 
 ### Changes
 
+- **AGC Strength now actually controls how much the AGC acts.** Previously the
+  strength slider only nudged the AGC's reaction speed — nearly inaudible — while the
+  leveling amount was fixed, so the control felt dead. Strength now scales the amount
+  of gain leveling applied: **strength 0 is identical to AGC off** (raw, unleveled
+  audio) and strength 1 is full AGC, with a smooth, audible sweep in between. The
+  default (0.5) is now moderate leveling.
+
 - **Bigger default window (1280×720), with a `--window-size` option.** The client
   used to open at a cramped 800×600; it now starts at 1280×720. Override it with
   `rigflow-client --window-size 1600x900` (`-w` for short); `--help` lists the flags.
