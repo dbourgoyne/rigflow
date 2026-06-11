@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **Consistent sub-section ordering in Radio Control and Source Control.** Sections
+  now always appear in a fixed order ending with **Status**, then **Advanced**, then
+  **Diagnostics**, then the "Show advanced & diagnostics controls" checkbox (shown only
+  when there's something advanced/diagnostic to reveal). Empty sections no longer appear
+  (e.g. Radio Control's Diagnostics is hidden in CW/AM/FM, where it had nothing to show).
+  As part of this, **Source Control's Diagnostics** (SWR Sweep, FDX, TX Test Tone,
+  Spot/SWR) now sits below Status and is revealed by the same checkbox — matching Radio
+  Control, so one toggle governs the advanced/diagnostic view everywhere.
+
 - **WSJT-X / FT8 Setup moved into Advanced.** It's a one-time configuration step, so
   the button no longer sits on the main Radio Control view — enable "Show advanced &
   diagnostics controls" to reach it. This follows a consistent rule for the panel

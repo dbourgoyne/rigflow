@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::UiState;
 use crate::ui::app::RigflowApp;
+use crate::ui::panels::sections::{Panel, Section};
 use crate::ui::state::DebounceState;
 use crate::ui::utils::should_send_debounced;
 use eframe::egui;
@@ -26,11 +27,6 @@ impl RigflowApp {
         egui::CollapsingHeader::new(super::panel_header("Radio Control"))
             .default_open(true)
             .show(ui, |ui| {
-                let mut save_demod_prefs = false;
-                let mut save_volume = false;
-                let mut save_cw = false;
-                let mut save_mic = false;
-
                 // Preamble (runs every frame, independent of section state):
                 // apply persisted per-demod controls when the mode changes.
                 if let Ok(mut state) = self.state.lock() {
@@ -114,99 +110,67 @@ impl RigflowApp {
                     }
                 }
 
-                // ── Audio (default expanded): volume + sidetone, used often ──
-                egui::CollapsingHeader::new("Audio")
-                    .id_salt("rc_audio")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            save_volume = self.draw_volume_row(ui, &mut state);
-                        }
-                    });
+                // Sub-sections are drawn in weight order by the shared composer:
+                // Audio · Receive · Transmit · [Advanced · Diagnostics] · checkbox.
+                self.render_panel_sections(
+                    ui,
+                    snapshot,
+                    Panel::RadioControl,
+                    snapshot.show_advanced,
+                );
+            });
+    }
 
-                // ── Receive (default expanded): frequently-used RX controls ──
-                egui::CollapsingHeader::new("Receive")
-                    .id_salt("rc_receive")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        // Demod mode buttons first (locks state internally → must be
-                        // outside the lock below to avoid a deadlock).
-                        save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
-                        if let Ok(mut state) = self.state.lock() {
-                            save_demod_prefs |=
-                                self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
-                            save_demod_prefs |=
-                                self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
-                            save_demod_prefs |=
-                                self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
-                            self.draw_squelch_row(ui, &mut state);
-                            self.draw_nr2_row(ui, &mut state);
-                            self.draw_agc_row(ui, &mut state);
-                            self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
-
-                // ── Transmit (default collapsed): how you transmit ───────────
-                // Microphone (SSB voice input) + CW message/macros + CW sidetone/hang.
-                egui::CollapsingHeader::new("Transmit")
-                    .id_salt("rc_transmit")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            save_mic = self.draw_microphone_row(ui, &mut state);
-                            save_cw |=
-                                self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
-                            save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
-                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
-
-                // ── Diagnostics + Advanced: gated behind the operator toggle ──
-                // Hidden by default to keep the everyday view uncluttered; the
-                // "Show advanced & diagnostics" checkbox below reveals them
-                // (two-tone test, TX-audio diagnostics, limiter/compressor,
-                // digital interface).
-                if snapshot.show_advanced {
-                    egui::CollapsingHeader::new("Diagnostics")
-                        .id_salt("rc_diagnostics")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            if let Ok(mut state) = self.state.lock() {
-                                self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
-                                self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
-                            }
-                        });
-
-                    egui::CollapsingHeader::new("Advanced")
-                        .id_salt("rc_advanced")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            if let Ok(mut state) = self.state.lock() {
-                                self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
-                            }
-
-                            // WSJT-X / FT8 setup — a one-time configuration helper, so
-                            // it lives in Advanced (normal-operation control that's
-                            // rarely changed).  Day-to-day digital operating is the
-                            // `data` demod mode's auto-routing, not this button.
-                            ui.separator();
-                            if ui.button("WSJT-X / FT8 Setup…").clicked() {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.show_wsjtx_setup_window = true;
-                                }
-                            }
-                        });
-                }
-
-                // Per-demod prefs + volume persist per-radio via the debounced
-                // autosave; saved to operator-level defaults here too (which seed
-                // a radio's first acquire).  CW message/macros + mic stay
-                // operator-wide.
-                if save_demod_prefs {
-                    self.save_demod_preferences_to_current_operator();
+    /// Draw one Radio Control sub-section body (dispatched by the weighted
+    /// composer in [`super::sections`]).  Each arm does its own per-operator save.
+    pub(crate) fn draw_radio_section_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &UiState,
+        section: Section,
+    ) {
+        match section {
+            // Audio (volume) — used constantly.
+            Section::Audio => {
+                let mut save_volume = false;
+                if let Ok(mut state) = self.state.lock() {
+                    save_volume = self.draw_volume_row(ui, &mut state);
                 }
                 if save_volume {
                     self.save_volume_to_current_operator();
+                }
+            }
+
+            // Receive: frequently-used RX controls.
+            Section::Receive => {
+                // Demod mode buttons first (locks state internally → must be
+                // outside the lock below to avoid a deadlock).
+                let mut save_demod_prefs = self.draw_demod_selector(ui, snapshot);
+                if let Ok(mut state) = self.state.lock() {
+                    save_demod_prefs |=
+                        self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
+                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
+                    save_demod_prefs |=
+                        self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_squelch_row(ui, &mut state);
+                    self.draw_nr2_row(ui, &mut state);
+                    self.draw_agc_row(ui, &mut state);
+                    self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
+                }
+                if save_demod_prefs {
+                    self.save_demod_preferences_to_current_operator();
+                }
+            }
+
+            // Transmit: how you transmit — mic (SSB) + CW message/macros/sidetone.
+            Section::Transmit => {
+                let mut save_mic = false;
+                let mut save_cw = false;
+                if let Ok(mut state) = self.state.lock() {
+                    save_mic = self.draw_microphone_row(ui, &mut state);
+                    save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
+                    save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                 }
                 if save_cw {
                     self.save_cw_message_to_current_operator();
@@ -214,21 +178,33 @@ impl RigflowApp {
                 if save_mic {
                     self.save_mic_settings_to_current_operator();
                 }
+            }
 
-                // Reveal/hide the Diagnostics + Advanced sections above.
-                // Persisted per-operator so a power user keeps them on.
-                ui.separator();
-                let mut show_advanced = snapshot.show_advanced;
-                if ui
-                    .checkbox(&mut show_advanced, "Show advanced & diagnostics controls")
-                    .changed()
-                {
-                    if let Ok(mut state) = self.state.lock() {
-                        state.show_advanced = show_advanced;
-                    }
-                    self.save_show_advanced_to_current_operator();
+            // Advanced: normal-operation controls rarely changed.  TX Processing
+            // (limiter/compressor) + the one-time WSJT-X / FT8 setup helper.
+            Section::Advanced => {
+                if let Ok(mut state) = self.state.lock() {
+                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                 }
-            });
+                ui.separator();
+                if ui.button("WSJT-X / FT8 Setup…").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_wsjtx_setup_window = true;
+                    }
+                }
+            }
+
+            // Diagnostics: system-testing tools + their read-only meters.
+            Section::Diagnostics => {
+                if let Ok(mut state) = self.state.lock() {
+                    self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
+                }
+            }
+
+            // No other section is listed for Radio Control.
+            _ => {}
+        }
     }
 
     /// Receive squelch: enable checkbox, threshold slider, and a live gate

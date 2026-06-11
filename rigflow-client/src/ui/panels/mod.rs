@@ -17,6 +17,7 @@ mod operator;
 mod problems;
 mod radio_control;
 mod radios;
+mod sections;
 
 /// Shared S-meter label formatter (also used by the top status bar).
 pub(crate) use radio_control::s_meter_label;
