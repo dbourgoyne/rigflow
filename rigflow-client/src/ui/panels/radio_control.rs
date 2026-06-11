@@ -184,6 +184,17 @@ impl RigflowApp {
                             if let Ok(mut state) = self.state.lock() {
                                 self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                             }
+
+                            // WSJT-X / FT8 setup — a one-time configuration helper, so
+                            // it lives in Advanced (normal-operation control that's
+                            // rarely changed).  Day-to-day digital operating is the
+                            // `data` demod mode's auto-routing, not this button.
+                            ui.separator();
+                            if ui.button("WSJT-X / FT8 Setup…").clicked() {
+                                if let Ok(mut state) = self.state.lock() {
+                                    state.show_wsjtx_setup_window = true;
+                                }
+                            }
                         });
                 }
 
@@ -202,15 +213,6 @@ impl RigflowApp {
                 }
                 if save_mic {
                     self.save_mic_settings_to_current_operator();
-                }
-
-                // WSJT-X / FT8 setup helper — always visible (digital is a
-                // headline feature; don't bury its setup behind Advanced).
-                ui.separator();
-                if ui.button("WSJT-X / FT8 Setup…").clicked() {
-                    if let Ok(mut state) = self.state.lock() {
-                        state.show_wsjtx_setup_window = true;
-                    }
                 }
 
                 // Reveal/hide the Diagnostics + Advanced sections above.

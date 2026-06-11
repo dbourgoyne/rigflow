@@ -9,6 +9,13 @@
 
 ### Changes
 
+- **WSJT-X / FT8 Setup moved into Advanced.** It's a one-time configuration step, so
+  the button no longer sits on the main Radio Control view — enable "Show advanced &
+  diagnostics controls" to reach it. This follows a consistent rule for the panel
+  sections: **Status** = read-only info, **Diagnostics** = system-testing tools
+  (Spot/SWR, SWR Sweep, Two-Tone, TX Test Tone), **Advanced** = normal-operation
+  controls you rarely change (TX limiter/compressor, WSJT-X setup).
+
 - **AGC Strength now actually controls how much the AGC acts.** Previously the
   strength slider only nudged the AGC's reaction speed — nearly inaudible — while the
   leveling amount was fixed, so the control felt dead. Strength now scales the amount
