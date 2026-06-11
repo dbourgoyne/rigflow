@@ -623,6 +623,39 @@ pub fn apply_radio_server_message(
                 state.last_tx_tune_result = result;
             }
 
+            // Restore this radio's saved operating state (Radio Control +
+            // Waterfall).  Waterfall + volume are client-side (just set state);
+            // mode/sideband/squelch/NR2/AGC are replayed to the server's DSP via
+            // the pending flags below.  Source control is handled above.
+            if let Some(rs) = state.radio_settings.get(&radio_id.0).cloned() {
+                state.center_freq_hz = rs.center_freq_hz;
+                state.target_freq_hz = rs.target_freq_hz;
+                state.demod_mode = rs.demod_mode;
+                state.sideband = rs.sideband;
+                state.demod_preferences = rs.demod_preferences;
+                state.display_zoom = rs.waterfall_display_preferences.display_zoom;
+                state.adaptive_waterfall_normalization = rs
+                    .waterfall_display_preferences
+                    .adaptive_waterfall_normalization;
+                state.manual_waterfall_top_db =
+                    rs.waterfall_display_preferences.manual_waterfall_top_db;
+                state.manual_waterfall_range_db =
+                    rs.waterfall_display_preferences.manual_waterfall_range_db;
+                state.volume_percent = rs.volume_percent;
+                state.cw_sidetone_volume = rs.cw_sidetone_volume;
+                state.cw_hang_ms = rs.cw_hang_ms;
+                state.squelch_enabled = rs.squelch_enabled;
+                state.squelch_threshold_db = rs.squelch_threshold_db;
+                state.nr2_enabled = rs.nr2_enabled;
+                state.nr2_strength = rs.nr2_strength;
+                state.agc_enabled = rs.agc_enabled;
+                state.agc_strength = rs.agc_strength;
+                // Force the Radio Control replay block to reload this mode's
+                // per-demod controls and re-send the operating state.
+                state.last_demod_mode_for_controls = None;
+                state.pending_apply_radio_settings = true;
+            }
+
             // Do NOT overwrite persisted per-demod prefs here.
             state.pending_apply_mode_controls = true;
         }

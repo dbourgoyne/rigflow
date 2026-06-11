@@ -9,6 +9,15 @@
 
 ### Changes
 
+- **Each radio now remembers its own settings — resume exactly where you left
+  off.** When you re-acquire a radio, its **Radio Control** (mode, filters, pitch,
+  squelch, NR2, AGC, volume, CW sidetone/hang), **Source Control**, and **Waterfall**
+  settings are restored — and they're saved automatically whenever you change them.
+  Settings are scoped per **operator *and* radio**, so two operators sharing one rig
+  each keep their own setup, and switching between rigs no longer resets everything.
+  (CW macros, mic device, bookmarks, license and server IP remain operator-wide, as
+  before. A radio you've never used starts from your current settings.)
+
 - **New "Data" (Data-USB) mode for FT8 and other digital programs.** Selecting
   **data** in the Demod row is USB on the air, but it carries its own filter setting
   (a wider 3 kHz default, remembered separately from voice USB), shows as **DATA-U**,

@@ -60,6 +60,48 @@ impl RigflowApp {
                             volume_percent: state.volume_percent,
                         });
                     }
+
+                    // On radio acquire, also replay the restored mode / sideband /
+                    // squelch / NR2 / AGC to the server's DSP (these are not part
+                    // of the per-demod prefs that `apply_mode_preferences` resends).
+                    if state.pending_apply_radio_settings {
+                        state.pending_apply_radio_settings = false;
+                        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
+                            center_freq_hz: state.center_freq_hz as u64,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
+                            target_freq_hz: state.target_freq_hz as u64,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetDemodMode {
+                            mode: snapshot.demod_mode,
+                        });
+                        if matches!(
+                            snapshot.demod_mode,
+                            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
+                        ) {
+                            self.send_radio_msg(ClientRadioMessage::SetSideband {
+                                sideband: state.sideband,
+                            });
+                        }
+                        self.send_radio_msg(ClientRadioMessage::SetSquelchEnabled {
+                            enabled: state.squelch_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetSquelchThreshold {
+                            threshold_db: state.squelch_threshold_db,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetNr2Enabled {
+                            enabled: state.nr2_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
+                            strength: state.nr2_strength,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetAgcEnabled {
+                            enabled: state.agc_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetAgcStrength {
+                            strength: state.agc_strength,
+                        });
+                    }
                 }
 
                 // ── Audio (default expanded): volume + sidetone, used often ──
@@ -135,6 +177,10 @@ impl RigflowApp {
                         });
                 }
 
+                // Per-demod prefs + volume persist per-radio via the debounced
+                // autosave; saved to operator-level defaults here too (which seed
+                // a radio's first acquire).  CW message/macros + mic stay
+                // operator-wide.
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
                 }
@@ -283,8 +329,7 @@ impl RigflowApp {
         );
         if response.changed() {
             let v = vol.clamp(0, 100) as u8;
-            state.cw_sidetone_volume = v;
-            // Reflect immediately into the lock-free audio control.
+            state.cw_sidetone_volume = v; // Reflect immediately into the lock-free audio control.
             state.sidetone.set_volume(v as f32 / 100.0);
         }
 

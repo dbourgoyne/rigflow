@@ -1,11 +1,42 @@
+use std::time::{Duration, Instant};
+
 use super::app::RigflowApp;
 
 use crate::ControlCommand;
 use crate::UiState;
+use crate::persistence::models::{RadioSettingsFile, WaterfallDisplayPreferencesFile};
 use crate::persistence::{
     BookmarkDisplaySettingsFile, BookmarkFile, apply_operator_settings_to_ui_state,
     apply_ui_state_to_operator_settings, normalize_operator_id, operator_file_path,
 };
+
+/// Build a `RadioSettingsFile` snapshot from the current UI state (the per-radio
+/// operating bundle: frequency, mode, filters, squelch/NR2/AGC, volume, CW
+/// sidetone/hang, waterfall).  Shared by the immediate save and the diff autosave.
+pub(crate) fn radio_settings_from_ui(state: &UiState) -> RadioSettingsFile {
+    RadioSettingsFile {
+        center_freq_hz: state.center_freq_hz,
+        target_freq_hz: state.target_freq_hz,
+        demod_mode: state.demod_mode,
+        sideband: state.sideband,
+        demod_preferences: state.demod_preferences.clone(),
+        waterfall_display_preferences: WaterfallDisplayPreferencesFile {
+            display_zoom: state.display_zoom,
+            adaptive_waterfall_normalization: state.adaptive_waterfall_normalization,
+            manual_waterfall_top_db: state.manual_waterfall_top_db,
+            manual_waterfall_range_db: state.manual_waterfall_range_db,
+        },
+        volume_percent: state.volume_percent,
+        cw_sidetone_volume: state.cw_sidetone_volume,
+        cw_hang_ms: state.cw_hang_ms,
+        squelch_enabled: state.squelch_enabled,
+        squelch_threshold_db: state.squelch_threshold_db,
+        nr2_enabled: state.nr2_enabled,
+        nr2_strength: state.nr2_strength,
+        agc_enabled: state.agc_enabled,
+        agc_strength: state.agc_strength,
+    }
+}
 
 impl RigflowApp {
     /// Persist the current `source_control` state for the active radio into the
@@ -59,6 +90,116 @@ impl RigflowApp {
         if let Err(err) = self.persistence_store.save_operator_settings(&settings) {
             if let Ok(mut state) = self.state.lock() {
                 state.persistence_status = format!("failed to save source control prefs: {err}");
+            }
+        }
+    }
+
+    /// Debounced per-radio settings autosave (called every frame).  Diffs the
+    /// live per-radio bundle against the saved one and persists ~600 ms after it
+    /// stops changing — so it captures every change path (frequency/band tuning,
+    /// any control) without slider drags thrashing the file.
+    pub(crate) fn autosave_radio_settings(&mut self) {
+        let id_and_current = {
+            let state = self.state.lock().unwrap();
+            if state.radio_acquired {
+                state
+                    .selected_radio_id
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .map(|id| (id, radio_settings_from_ui(&state)))
+            } else {
+                None
+            }
+        };
+
+        let Some((id, current)) = id_and_current else {
+            self.radio_settings_last = None;
+            self.radio_settings_stable_since = None;
+            return;
+        };
+
+        // Still changing? Reset the debounce window and wait.
+        if self.radio_settings_last.as_ref() != Some(&current) {
+            self.radio_settings_last = Some(current);
+            self.radio_settings_stable_since = Some(Instant::now());
+            return;
+        }
+
+        // Stable — once the window elapses, save if it differs from what's stored.
+        if let Some(since) = self.radio_settings_stable_since {
+            if since.elapsed() >= Duration::from_millis(600) {
+                self.radio_settings_stable_since = None;
+                let differs = {
+                    let state = self.state.lock().unwrap();
+                    state.radio_settings.get(&id) != Some(&current)
+                };
+                if differs {
+                    self.save_radio_settings_for_current_radio();
+                }
+            }
+        }
+    }
+
+    /// Persist the current per-radio operating state (Radio Control + Waterfall)
+    /// into `radio_settings[<acquired radio id>]`, so the operator resumes this
+    /// radio exactly where they left off.  Scoped per (operator, radio) since it
+    /// lives in the per-operator file.  When no radio is acquired, falls back to
+    /// the operator-level defaults (which seed a radio's first acquire).
+    pub(crate) fn save_radio_settings_for_current_radio(&mut self) {
+        let (operator_id, radio_id_opt) = {
+            let state = self.state.lock().unwrap();
+            let id = if state.radio_acquired {
+                state.selected_radio_id.clone().filter(|s| !s.is_empty())
+            } else {
+                None
+            };
+            (state.operator_id.clone(), id)
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        let radio_id = match radio_id_opt {
+            Some(id) => id,
+            None => {
+                // No acquired radio — persist operator-level defaults instead.
+                self.save_demod_preferences_to_current_operator();
+                self.save_volume_to_current_operator();
+                self.save_waterfall_display_preferences_to_current_operator();
+                return;
+            }
+        };
+
+        let bundle = {
+            let state = self.state.lock().unwrap();
+            radio_settings_from_ui(&state)
+        };
+
+        // Update the in-memory mirror so a re-acquire uses the latest value.
+        if let Ok(mut state) = self.state.lock() {
+            state
+                .radio_settings
+                .insert(radio_id.clone(), bundle.clone());
+        }
+
+        // Load-modify-save the operator file's radio_settings entry only.
+        match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(mut settings) => {
+                settings.radio_settings.insert(radio_id, bundle);
+                if let Err(err) = self.persistence_store.save_operator_settings(&settings) {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.persistence_status = format!("failed to save radio settings: {err}");
+                    }
+                }
+            }
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator settings: {err}");
+                }
             }
         }
     }

@@ -49,6 +49,8 @@ impl RigflowApp {
             }
         });
 
+        // Waterfall display persists per-radio via the debounced autosave (and
+        // to operator-level defaults here, which seed a radio's first acquire).
         if save_waterfall_prefs {
             self.save_waterfall_display_preferences_to_current_operator();
         }

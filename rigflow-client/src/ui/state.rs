@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::persistence::models::DemodPreferenceSetFile;
+use crate::persistence::models::{DemodPreferenceSetFile, RadioSettingsFile};
 use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
@@ -278,6 +278,15 @@ pub struct UiState {
     /// on radio acquire).
     pub pending_apply_source_control: bool,
 
+    /// Per-radio operating state (mode, filters, squelch/NR2/AGC, volume, CW
+    /// sidetone/hang, waterfall), keyed by radio ID.  Mirrors
+    /// `OperatorSettingsFile::radio_settings`.
+    pub radio_settings: HashMap<String, RadioSettingsFile>,
+
+    /// When `true`, the Radio Control replay block also re-sends the restored
+    /// mode / sideband / squelch / NR2 / AGC to the server (set on acquire).
+    pub pending_apply_radio_settings: bool,
+
     // =====================================================================
     // TX TUNE TEST (client-local; never persisted; never sent to server)
     // =====================================================================
@@ -504,6 +513,8 @@ impl Default for UiState {
             compressor_level: 3,
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
+            radio_settings: HashMap::new(),
+            pending_apply_radio_settings: false,
 
             tx_tune_running: false,
             last_tx_tune_result: TxTuneResult::default(),

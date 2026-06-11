@@ -51,6 +51,12 @@ pub struct RigflowApp {
     /// Graceful-exit state machine (window-[X] path).  See `handle_exit`.
     exit_phase: ExitPhase,
     shutdown_started_at: Option<Instant>,
+
+    /// Per-radio settings autosave (debounced diff).  `radio_settings_last` is
+    /// the bundle seen last frame; `radio_settings_stable_since` is when it last
+    /// stopped changing.  See `autosave_radio_settings`.
+    pub(crate) radio_settings_last: Option<crate::persistence::models::RadioSettingsFile>,
+    pub(crate) radio_settings_stable_since: Option<Instant>,
 }
 
 impl RigflowApp {
@@ -84,6 +90,8 @@ impl RigflowApp {
             digital_audio,
             exit_phase: ExitPhase::Running,
             shutdown_started_at: None,
+            radio_settings_last: None,
+            radio_settings_stable_since: None,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -439,6 +447,12 @@ impl eframe::App for RigflowApp {
         self.draw_delete_operator_dialog(ctx);
         self.draw_swr_sweep_window(ctx);
         self.draw_wsjtx_setup_window(ctx);
+
+        // Persist per-radio settings: diff the live per-radio state against the
+        // saved bucket and save ~600 ms after it stops changing.  Debounced so a
+        // slider/frequency drag doesn't thrash the file, and catches every change
+        // path (tuning, band, all controls).
+        self.autosave_radio_settings();
 
         self.handle_exit(ctx, &snapshot);
 

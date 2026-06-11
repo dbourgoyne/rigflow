@@ -26,7 +26,7 @@ impl Default for AppStateFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaterfallDisplayPreferencesFile {
     pub display_zoom: f32,
     pub adaptive_waterfall_normalization: bool,
@@ -45,7 +45,7 @@ impl Default for WaterfallDisplayPreferencesFile {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DemodPreferencesFile {
     pub filter_bandwidth_hz: f32,
     pub pitch_hz: f32,
@@ -62,7 +62,7 @@ impl DemodPreferencesFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DemodPreferenceSetFile {
     pub wfm: DemodPreferencesFile,
     pub nfm: DemodPreferencesFile,
@@ -121,6 +121,30 @@ impl DemodPreferenceSetFile {
     }
 }
 
+/// Per-(operator, radio) operating state — restored when the radio is acquired
+/// and saved on change, so an operator resumes each radio exactly where they
+/// left off.  Lives in `OperatorSettingsFile.radio_settings` keyed by radio ID,
+/// so it is inherently scoped per (operator, radio).  Source-control state stays
+/// in the separate `source_control_preferences` map (also per-radio).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RadioSettingsFile {
+    pub center_freq_hz: f32,
+    pub target_freq_hz: f32,
+    pub demod_mode: DemodMode,
+    pub sideband: Sideband,
+    pub demod_preferences: DemodPreferenceSetFile,
+    pub waterfall_display_preferences: WaterfallDisplayPreferencesFile,
+    pub volume_percent: u8,
+    pub cw_sidetone_volume: u8,
+    pub cw_hang_ms: u32,
+    pub squelch_enabled: bool,
+    pub squelch_threshold_db: f32,
+    pub nr2_enabled: bool,
+    pub nr2_strength: f32,
+    pub agc_enabled: bool,
+    pub agc_strength: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperatorSettingsFile {
     pub version: u32,
@@ -147,6 +171,14 @@ pub struct OperatorSettingsFile {
     /// persists per-radio here alongside sample rate / gain.
     #[serde(default)]
     pub source_control_preferences: HashMap<String, SourceControlState>,
+
+    /// Per-radio operating state (Radio Control + Waterfall): mode, filters,
+    /// squelch/NR2/AGC, volume, CW sidetone/hang, waterfall display — keyed by
+    /// radio ID.  Serde default (empty) so older files load; a radio with no
+    /// entry starts from the operator-level defaults below and gets an entry on
+    /// first acquire.
+    #[serde(default)]
+    pub radio_settings: HashMap<String, RadioSettingsFile>,
 
     /// Receive-audio volume in percent (0–100), persisted per operator.
     /// Serde default so older settings files load without migration.
@@ -225,6 +257,7 @@ impl OperatorSettingsFile {
             bookmarks: Vec::new(),
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
+            radio_settings: HashMap::new(),
             volume_percent: default_volume_percent(),
             show_advanced: false,
             cw_message: String::new(),
