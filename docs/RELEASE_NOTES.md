@@ -9,6 +9,10 @@
 
 ### Changes
 
+- **Bigger default window (1280×720), with a `--window-size` option.** The client
+  used to open at a cramped 800×600; it now starts at 1280×720. Override it with
+  `rigflow-client --window-size 1600x900` (`-w` for short); `--help` lists the flags.
+
 - **Tuning steps now match across the mouse wheel and arrow keys, and scale with
   the mode.** The wheel and the **←/→** arrows now move the dial by the *same*
   amount, and **←/→** gains the same soft-edge LO panning the wheel has, so the
