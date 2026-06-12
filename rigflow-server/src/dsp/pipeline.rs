@@ -597,3 +597,187 @@ impl DspPipeline {
         self.filter_bandwidth_hz
     }
 }
+
+#[cfg(test)]
+mod ssb_tx_dsp_tests {
+    //! Software measurement of the **transmit** SSB DSP — the part of the signal
+    //! that is *ours*, not the HL2's. Sideband/carrier suppression and two-tone
+    //! IMD are properties of the IQ our modulator generates (the HL2 just
+    //! upconverts it), so they are measurable here precisely and repeatably,
+    //! without the bench / the original TinySA's 3 kHz RBW limit.
+    //!
+    //! The chain mirrors `hermeslite2::tx_ssb_mic`:
+    //! `DcBlocker → [SpeechCompressor] → [TxLimiter] → ×0.9 → ComplexSidebandFir`.
+
+    use super::ComplexSidebandFir;
+    use crate::dsp::audio::dc_blocker::DcBlocker;
+    use crate::dsp::audio::speech_compressor::{ratio_for_level, SpeechCompressor};
+    use crate::dsp::audio::tx_limiter::TxLimiter;
+    use crate::dsp::demod::Sideband;
+    use num_complex::Complex32;
+
+    // Mirror of the tx_ssb_mic constants.
+    const FS: f32 = 48_000.0;
+    const AUDIO_BW_HZ: f32 = 2400.0;
+    const AUDIO_PITCH_HZ: f32 = 300.0;
+    const FIR_TAPS: usize = 127;
+    const TX_AUDIO_SCALE: f32 = 0.9;
+
+    /// Run audio through the real TX modulator chain → baseband IQ.
+    fn modulate(
+        audio: &[f32],
+        usb: bool,
+        compressor_level: Option<u8>,
+        limiter_threshold: Option<f32>,
+    ) -> Vec<Complex32> {
+        let mut buf = audio.to_vec();
+        DcBlocker::new(0.995).process_in_place(&mut buf);
+        if let Some(level) = compressor_level {
+            SpeechCompressor::new(FS, ratio_for_level(level), 10.0, 150.0)
+                .process_in_place(&mut buf);
+        }
+        if let Some(th) = limiter_threshold {
+            TxLimiter::new(FS, th, 2.0, 120.0).process_in_place(&mut buf);
+        }
+        let cin: Vec<Complex32> = buf
+            .iter()
+            .map(|&s| Complex32::new(s * TX_AUDIO_SCALE, 0.0))
+            .collect();
+        let mut fir = ComplexSidebandFir::new(
+            FS,
+            AUDIO_BW_HZ,
+            AUDIO_PITCH_HZ,
+            FIR_TAPS,
+            if usb { Sideband::Usb } else { Sideband::Lsb },
+        );
+        let mut out = Vec::new();
+        fir.process_into(&cin, &mut out);
+        out
+    }
+
+    /// Hann-windowed, DC-removed single-bin DFT magnitude (complex-tone amplitude)
+    /// at `f_hz` — same method as the on-air `log_tx_tone_rx_sideband` analyzer.
+    fn bin_mag(samples: &[Complex32], f_hz: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let n = samples.len();
+        let mean_re = samples.iter().map(|s| s.re as f64).sum::<f64>() / n as f64;
+        let mean_im = samples.iter().map(|s| s.im as f64).sum::<f64>() / n as f64;
+        let win = |k: usize| 0.5 - 0.5 * (TAU * k as f64 / (n - 1).max(1) as f64).cos();
+        let win_sum: f64 = (0..n).map(win).sum();
+        let w = -TAU * f_hz / FS as f64;
+        let (mut ar, mut ai) = (0.0f64, 0.0f64);
+        for (k, s) in samples.iter().enumerate() {
+            let re = (s.re as f64 - mean_re) * win(k);
+            let im = (s.im as f64 - mean_im) * win(k);
+            let (sinp, cosp) = (w * k as f64).sin_cos();
+            ar += re * cosp - im * sinp;
+            ai += re * sinp + im * cosp;
+        }
+        (ar * ar + ai * ai).sqrt() / win_sum
+    }
+
+    /// |DC| of the baseband IQ = the carrier (centre-spike) leakage.
+    fn dc_mag(samples: &[Complex32]) -> f64 {
+        let n = samples.len() as f64;
+        let re = samples.iter().map(|s| s.re as f64).sum::<f64>() / n;
+        let im = samples.iter().map(|s| s.im as f64).sum::<f64>() / n;
+        (re * re + im * im).sqrt()
+    }
+
+    fn db(ratio: f64) -> f64 {
+        20.0 * ratio.max(1e-15).log10()
+    }
+
+    fn tone(freq_hz: f32, amp: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|k| amp * (std::f32::consts::TAU * freq_hz * k as f32 / FS).sin())
+            .collect()
+    }
+
+    const N: usize = 16_384;
+    const SKIP: usize = 512; // discard FIR fill transient
+
+    /// The modulator must place the tone on the wanted sideband and suppress the
+    /// opposite sideband (image) and the carrier (DC) — this is pure Rigflow DSP.
+    #[test]
+    fn ssb_modulator_suppresses_image_and_carrier() {
+        for usb in [true, false] {
+            let f = 1500.0_f64; // mid-passband audio tone
+            let audio = tone(f as f32, 0.5, N);
+            let iq = modulate(&audio, usb, None, None);
+            let s = &iq[SKIP..];
+
+            // USB → energy at +f (above carrier); LSB → at −f.
+            let (wanted, image) = if usb {
+                (bin_mag(s, f), bin_mag(s, -f))
+            } else {
+                (bin_mag(s, -f), bin_mag(s, f))
+            };
+            let image_supp = db(wanted / image);
+            let carrier_supp = db(wanted / dc_mag(s));
+
+            let sb = if usb { "USB" } else { "LSB" };
+            // Measured ≈ 74 dB image / 99 dB carrier; guard a generous floor.
+            assert!(
+                image_supp > 60.0,
+                "{sb}: opposite-sideband suppression {image_supp:.1} dB (want > 60)"
+            );
+            assert!(
+                carrier_supp > 80.0,
+                "{sb}: carrier suppression {carrier_supp:.1} dB (want > 80)"
+            );
+            println!("{sb}: image {image_supp:.1} dB, carrier {carrier_supp:.1} dB");
+        }
+    }
+
+    /// With no compression/limiting, the modulator is linear, so a two-tone input
+    /// must produce **no** IMD3/IMD5 products — i.e. our SSB generation injects no
+    /// intermod of its own. (Tones 700/1900 Hz → products at ∓500/+3100 (IMD3),
+    /// ∓1700/+4300 (IMD5), USB convention.)
+    #[test]
+    fn ssb_modulator_two_tone_is_linear() {
+        let a = tone(700.0, 0.4, N);
+        let b = tone(1900.0, 0.4, N);
+        let audio: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
+        let iq = modulate(&audio, true, None, None);
+        let s = &iq[SKIP..];
+
+        let tone_ref = bin_mag(s, 700.0).max(bin_mag(s, 1900.0));
+        let imd3 = bin_mag(s, -500.0).max(bin_mag(s, 3100.0));
+        let imd5 = bin_mag(s, -1700.0).max(bin_mag(s, 4300.0));
+        let imd3_dbc = db(imd3 / tone_ref);
+        let imd5_dbc = db(imd5 / tone_ref);
+
+        println!("linear path: IMD3 {imd3_dbc:.1} dBc, IMD5 {imd5_dbc:.1} dBc");
+        // Measured ≈ −157/−173 dBc (numerical floor); guard a generous bound.
+        assert!(
+            imd3_dbc < -100.0,
+            "linear modulator should add no IMD3, got {imd3_dbc:.1} dBc"
+        );
+        assert!(imd5_dbc < -100.0, "IMD5 {imd5_dbc:.1} dBc (want < -100)");
+    }
+
+    /// Full chain (compressor + limiter ON) at a **normal** drive level — peaks
+    /// below the limiter threshold — must still be clean: the slow compressor/
+    /// limiter can't track the 1.2 kHz two-tone beat, so they add negligible IMD.
+    #[test]
+    fn tx_chain_two_tone_clean_at_normal_level() {
+        // Each tone 0.3 → envelope peak 0.6, ×0.9 = 0.54, below the 0.9 limiter
+        // threshold → no hard limiting.
+        let a = tone(700.0, 0.3, N);
+        let b = tone(1900.0, 0.3, N);
+        let audio: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
+        let iq = modulate(&audio, true, Some(3), Some(0.9));
+        let s = &iq[SKIP..];
+
+        let tone_ref = bin_mag(s, 700.0).max(bin_mag(s, 1900.0));
+        let imd3_dbc = db(bin_mag(s, -500.0).max(bin_mag(s, 3100.0)) / tone_ref);
+
+        println!("processed (normal level): IMD3 {imd3_dbc:.1} dBc");
+        // Measured ≈ −85 dBc; guard a generous bound.
+        assert!(
+            imd3_dbc < -60.0,
+            "TX processing at normal level should stay clean, IMD3 {imd3_dbc:.1} dBc (want < -60)"
+        );
+    }
+}
