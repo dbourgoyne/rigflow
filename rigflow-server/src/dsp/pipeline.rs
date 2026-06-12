@@ -780,4 +780,135 @@ mod ssb_tx_dsp_tests {
             "TX processing at normal level should stay clean, IMD3 {imd3_dbc:.1} dBc (want < -60)"
         );
     }
+
+    // ── §E — CW key-click envelope ──────────────────────────────────────────
+
+    /// Rectangular single-bin DFT magnitude (no window) — correct for the
+    /// zero-padded, self-tapering CW element below.
+    fn dft_mag(samples: &[Complex32], f_hz: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let w = -TAU * f_hz / FS as f64;
+        let (mut ar, mut ai) = (0.0f64, 0.0f64);
+        for (k, s) in samples.iter().enumerate() {
+            let (sinp, cosp) = (w * k as f64).sin_cos();
+            ar += s.re as f64 * cosp - s.im as f64 * sinp;
+            ai += s.re as f64 * sinp + s.im as f64 * cosp;
+        }
+        (ar * ar + ai * ai).sqrt() / samples.len() as f64
+    }
+
+    /// One keyed CW element as baseband IQ: raised-cosine rise/fall of `ramp`
+    /// samples around a `sustain`-sample key-down, complex carrier at `pitch` Hz,
+    /// zero-padded (centred) in `n`. `hard=true` skips shaping (instant on/off) to
+    /// model the key-click failure case. Mirrors `hermeslite2::send_tx_cw_packet`
+    /// (env = 0.5·(1−cos(π·level)), ENV_MS = 8 ms).
+    fn cw_element(ramp: usize, sustain: usize, pitch: f64, hard: bool, n: usize) -> Vec<Complex32> {
+        use std::f64::consts::{PI, TAU};
+        let total = ramp * 2 + sustain;
+        let start = (n - total) / 2;
+        let mut out = vec![Complex32::new(0.0, 0.0); n];
+        for i in 0..total {
+            let level = if i < ramp {
+                (i + 1) as f64 / ramp as f64
+            } else if i < ramp + sustain {
+                1.0
+            } else {
+                1.0 - (i - ramp - sustain + 1) as f64 / ramp as f64
+            };
+            let env = if hard {
+                1.0
+            } else {
+                0.5 * (1.0 - (PI * level).cos())
+            };
+            let k = start + i;
+            let phase = TAU * pitch * k as f64 / FS as f64;
+            out[k] = Complex32::new((env * phase.cos()) as f32, (env * phase.sin()) as f32);
+        }
+        out
+    }
+
+    /// CW keying must be band-limited: the 8 ms raised-cosine rise/fall keeps the
+    /// keying sidebands far down (no key clicks), and must clearly beat hard
+    /// (rectangular) keying — a regression toward unshaped keying would splatter.
+    #[test]
+    fn cw_keying_limits_click_bandwidth() {
+        const RAMP: usize = 384; // 8 ms @ 48 kHz (ENV_MS)
+        const SUSTAIN: usize = 1440; // 30 ms key-down
+        const NCW: usize = 32_768;
+        let pitch = 600.0;
+
+        // Worst keying sideband anywhere in the "click region" (≥ ±500 Hz from the
+        // carrier). Swept finely so the result doesn't depend on where the
+        // rectangle's sinc nulls happen to fall.
+        let worst_sideband = |hard: bool| -> f64 {
+            let s = cw_element(RAMP, SUSTAIN, pitch, hard, NCW);
+            let carrier = dft_mag(&s, pitch);
+            let mut worst = 0.0f64;
+            let mut off = 500.0;
+            while off <= 3000.0 {
+                worst = worst.max(dft_mag(&s, pitch + off));
+                worst = worst.max(dft_mag(&s, pitch - off));
+                off += 10.0;
+            }
+            db(worst / carrier)
+        };
+
+        let shaped = worst_sideband(false);
+        let hard = worst_sideband(true);
+        println!("CW key-click sidebands (≥ ±500 Hz): shaped {shaped:.1} dBc, hard {hard:.1} dBc");
+        assert!(
+            shaped < -50.0,
+            "shaped CW keying sidebands {shaped:.1} dBc (want < -50)"
+        );
+        assert!(
+            shaped < hard - 20.0,
+            "raised-cosine should beat hard keying by > 20 dB (shaped {shaped:.1}, hard {hard:.1})"
+        );
+    }
+
+    // ── §F — digital (FT8) occupied bandwidth / splatter ────────────────────
+
+    /// A constant-envelope FSK (FT8-like) through the real modulator must not gain
+    /// far-out-of-band splatter — i.e. our digital TX path is transparent. Close-in
+    /// spectrum is the signal's own (WSJT-X's) business; we check the far offsets
+    /// that only *our* path could fill.
+    #[test]
+    fn digital_fsk_passes_without_splatter() {
+        use std::f64::consts::TAU;
+        const SPACING: f64 = 6.25; // FT8 tone spacing
+        const SYM: usize = (0.16 * FS as f64) as usize; // 0.16 s symbol
+        const BASE: f64 = 1500.0; // mid SSB passband
+        let symbols = [3u32, 6, 1, 7, 0, 4, 2, 5, 1, 6, 3, 0, 7, 2, 5, 4];
+
+        // Continuous-phase 8-FSK audio.
+        let mut audio = Vec::with_capacity(symbols.len() * SYM);
+        let mut phase = 0.0f64;
+        for &sym in &symbols {
+            let dphi = TAU * (BASE + sym as f64 * SPACING) / FS as f64;
+            for _ in 0..SYM {
+                audio.push(0.4 * phase.sin() as f32);
+                phase += dphi;
+            }
+        }
+        // Digital path: real modulator, no compression/limiting.
+        let iq = modulate(&audio, true, None, None);
+        let s = &iq[SKIP..];
+
+        let centre = BASE + 3.5 * SPACING; // ≈ 1522 Hz, middle of the ~50 Hz band
+        let in_band = (0..8)
+            .map(|t| bin_mag(s, BASE + t as f64 * SPACING))
+            .fold(0.0f64, f64::max);
+        // Far offsets only (well beyond the ~50 Hz FT8 band) — added splatter.
+        let mut splatter = 0.0f64;
+        for off in [500.0, 900.0, 1500.0, 2500.0] {
+            splatter = splatter.max(bin_mag(s, centre + off));
+            splatter = splatter.max(bin_mag(s, centre - off));
+        }
+        let dbc = db(splatter / in_band);
+        println!("digital FSK far-offset splatter (≥ ±500 Hz): {dbc:.1} dBc");
+        assert!(
+            dbc < -45.0,
+            "digital path splatter {dbc:.1} dBc (want < -45)"
+        );
+    }
 }
