@@ -83,7 +83,11 @@ fn morse_for(c: char) -> Option<&'static str> {
 pub fn encode_schedule(text: &str, wpm: u32) -> Vec<(Duration, Duration)> {
     let wpm = wpm.clamp(5, 50);
     let unit_ms = 1200.0 / wpm as f32;
-    let units = |u: f32| Duration::from_secs_f32(u * unit_ms / 1000.0);
+    // One "dot" unit as a Duration; every element/gap is an exact *integer*
+    // multiple of it, so timing is precisely proportional (and not re-rounded
+    // per element, which made `unit * 3` ≠ `from_secs_f32(3·unit)` by ~10 ns).
+    let unit = Duration::from_secs_f32(unit_ms / 1000.0);
+    let units = |u: u32| unit * u;
 
     // Words (whitespace-separated), each a list of known-character Morse strings.
     // Unknown characters are filtered out; empty words are dropped.
@@ -98,15 +102,15 @@ pub fn encode_schedule(text: &str, wpm: u32) -> Vec<(Duration, Duration)> {
         for (li, morse) in word.iter().enumerate() {
             let elems: Vec<char> = morse.chars().collect();
             for (ei, sym) in elems.iter().enumerate() {
-                let on = units(if *sym == '-' { 3.0 } else { 1.0 });
-                let off = if ei + 1 < elems.len() {
-                    1.0 // gap between elements of the same character
+                let on = units(if *sym == '-' { 3 } else { 1 });
+                let off: u32 = if ei + 1 < elems.len() {
+                    1 // gap between elements of the same character
                 } else if li + 1 < word.len() {
-                    3.0 // gap between characters in a word
+                    3 // gap between characters in a word
                 } else if wi + 1 < words.len() {
-                    7.0 // gap between words
+                    7 // gap between words
                 } else {
-                    0.0 // end of message
+                    0 // end of message
                 };
                 sched.push((on, units(off)));
             }
