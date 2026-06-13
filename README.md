@@ -1,383 +1,93 @@
-# rigflow
+# Rigflow
 
-**rigflow** is a low-latency, client/server Software Defined Radio (SDR) system written in Rust.
+**Rigflow** is a client/server software-defined-radio (SDR) application for amateur radio,
+written in Rust. It can **receive and transmit on HF**, runs the radio over the network so the
+operator can sit anywhere, and supports multiple radios from one client.
 
-It separates control, DSP, and UI to support remote operation, multi-radio setups, and clean extensibility.
+A lightweight **server** owns the radio hardware and DSP; a desktop **client** provides the
+spectrum/waterfall, tuning, and controls. They talk over a small WebSocket control channel plus
+UDP media, so the server can run on a low-power box at the antenna (e.g. a Raspberry Pi) while you
+operate from your laptop.
 
----
-
-## Crates
-
-### rigflow-client
-Desktop UI (egui)
-
-- Connects via WebSocket
-- Receives audio + waterfall over UDP
-- Spectrum, tuning, demod, bookmarks, persistence
+> ⚠️ Rigflow controls transmitters and amplifiers. You are responsible for the legal and safe
+> operation of your station — please read the **[Disclaimer](DISCLAIMER.md)** before transmitting.
 
 ---
 
-### rigflow-server
-SDR backend
+## What it does
 
-- Discovers radios (RTL-SDR, WAV, fake)
-- Manages radio leasing (multi-client safe)
-- Runs per-radio workers (source → DSP → UDP)
-- Exposes control via WebSocket
+**Receive**
+- Modes: WFM, NFM, AM, USB, LSB, CW (CWU/CWL), and **Data** (USB for FT8/digital)
+- Real-time spectrum + waterfall, click/scroll/keyboard tuning, bookmarks
+- Noise reduction (NR2), AGC, squelch; per-operator settings and presets
+- RX IQ recording and playback
 
----
+**Transmit** (Hermes Lite 2)
+- **SSB** from your microphone (USB/LSB), with a soft limiter + speech compressor
+- **CW** via straight-key (Space bar), or Text-to-CW with F1–F4 memory macros and sidetone
+- **Digital (FT8 / WSJT-X)** — selecting the **Data** mode auto-routes audio; an in-app setup
+  window shows the device names and CAT/PTT settings
+- Built-in two-tone and tune/SWR test aids
 
-### rigflow-core
-Shared runtime + DSP
+**Station**
+- Remote operation over the network; multiple radios, one client
+- Optional **Hardrock-50** amplifier control (band tracking, ATU, SWR/power) over USB serial
 
-- Demodulation, filtering
-- Audio + jitter buffer
-- UDP framing
-- Shared models
+## Supported hardware
 
----
+| Role | Hardware |
+|---|---|
+| HF transceiver (RX + TX) | **Hermes Lite 2** (primary) |
+| Receive-only SDR | **RTL-SDR** (incl. direct-sampling HF) |
+| Amplifier (optional) | **Hardrock-50** |
+| No hardware | WAV IQ playback + a built-in test tone |
 
-### rigflow-protocol
-Wire protocol
+All sources are auto-discovered at server startup; the client picks a radio from the list.
 
-- `ClientRadioMessage`
-- `ServerRadioMessage`
-- Typed, language-agnostic control layer
+## Platforms
 
----
+- **Server:** Linux (x86-64 and Raspberry Pi / ARM)
+- **Client:** Linux and macOS
 
-## Architecture
+## Quick start
 
-**Control Plane (WebSocket)**
-- radio discovery, acquire/release
-- tuning, mode, runtime updates
+Prerequisites and full setup are in the **[Installation guide](docs/installation.md)** (you'll need
+the Rust toolchain and a few system libraries). Once those are in place:
 
-**Media Plane (UDP)**
-- audio (48 kHz i16)
-- waterfall/spectrum (FFT bins)
+```bash
+# Build
+cargo build --release
 
----
+# Run the server (auto-discovers RTL-SDR, Hermes Lite 2, WAV recordings, and a test tone)
+cargo run -p rigflow-server
 
-## Runtime Model
-
-- radios discovered at startup
-- client acquires a radio (lease)
-- worker starts lazily per radio
-- worker owns source + DSP + streaming
-- worker shuts down on release/expiry
-
----
-
-## Features
-
-- multi-radio support
-- low-latency audio
-- real-time spectrum + waterfall
-- demod modes: WFM, NFM, AM, USB, LSB, CW
-- adaptive/manual waterfall control
-- operator persistence + bookmarks
-- extensible source control (sample rate, gain, PPM)
-
----
-
-## Quick Start
-
-```
-cargo run -p rigflow-server -- --source rtlsdr
+# Run the client (in another terminal, or on another machine)
 cargo run -p rigflow-client
 ```
 
-```mermaid
-flowchart LR
+In the client: enter the server's IP (defaults to `127.0.0.1` for a single-box setup), click
+**Connect**, pick a radio, and tune. See the **[Operator guide](docs/operator-guide.md)** for
+day-to-day operation.
 
-    %% CLIENT
-    subgraph Client["rigflow-client"]
-        UI["UI (egui)"]
-        Control["Control Channel"]
-        WSClient["WebSocket Task"]
-        UDPClient["UDP Receiver"]
-        Audio["Audio (CPAL)"]
-        Waterfall["Waterfall / Spectrum"]
+The server and client are driven live from the UI; their command-line options are minimal
+(`--help` on either lists them — server: `--recordings-dir`, `--hr50-serial`; client:
+`--window-size`).
 
-        UI --> Control
-        Control --> WSClient
-        WSClient --> UI
+## Documentation
 
-        UDPClient --> Audio
-        UDPClient --> Waterfall
-    end
+- **[Installation guide](docs/installation.md)** — prerequisites, build, and connecting your radios
+- **[Operator guide](docs/operator-guide.md)** — receiving, transmitting (SSB/CW), and digital (WSJT-X/FT8)
+- **[Troubleshooting](docs/troubleshooting.md)** — common issues and fixes
+- **[Validation](docs/validation.md)** — transmit signal-quality results
+- **[Release notes](docs/RELEASE_NOTES.md)** — what's in this release and known issues
+- **[Disclaimer](DISCLAIMER.md)** — operating responsibilities and warranty
 
-    %% SERVER
-    subgraph Server["rigflow-server"]
-        WSServer["WebSocket API"]
-        RadioManager["Radio Manager"]
-        Worker["Radio Worker"]
-        Source["IQ Source
-	(RTL / WAV / Fake)"]
-        DSP["DSP Pipeline"]
-        UDPServer["UDP Audio + Waterfall"]
+## Status
 
-	WSServer --> RadioManager
-        RadioManager --> Worker
-        Worker --> Source
-        Source --> DSP
-        DSP --> UDPServer
-    end
+Rigflow is **experimental** amateur-radio software for licensed operators and experimenters. It
+works and is actively used on the air, but it may have rough edges. Verify your transmitted signal
+and comply with your local regulations — see the [Disclaimer](DISCLAIMER.md).
 
-```
+## License
 
-## Protocol Flow
-
-```mermaid
-sequenceDiagram
-    participant Client as rigflow-client
-    participant Server as rigflow-server
-    participant Manager as RadioManager
-    participant Worker as RadioWorker
-
-    Client->>Server: ListRadios
-    Server->>Manager: list_radios()
-    Manager-->>Server: radios
-    Server-->>Client: RadiosListed
-
-    Client->>Server: AcquireRadio
-    Server->>Manager: acquire_radio()
-    Manager->>Worker: start worker
-    Worker-->>Manager: ready
-    Manager-->>Server: lease granted
-    Server-->>Client: RadioAcquired
-    Server-->>Client: RuntimeSnapshot
-
-Client->>Server: SetFrequency / SetMode / SetFilter
-    Server->>Worker: WorkerCommand
-    Worker-->>Server: runtime state changed
-    Server-->>Client: RuntimeChanged
-
-    Client->>Server: RenewLease
-    Server->>Manager: renew_lease()
-    Server-->>Client: LeaseRenewed
-
-    Client->>Server: ReleaseRadio
-    Server->>Manager: release_radio()
-    Manager->>Worker: stop worker
-    Server-->>Client: RadioReleased
-```
-## rigflow-client
-
-`rigflow-client` is the desktop UI for the rigflow SDR system.
-
-It connects to a `rigflow-server` instance over WebSocket for control,
-receives audio and waterfall data over UDP, and provides an interactive
-UI for tuning, demodulation, and visualization.
-
-### Responsibilities
-
-- Connect to rigflow-server via WebSocket
-- Acquire and control radios (frequency, mode, filters, etc.)
-- Receive and play audio streams
-- Render spectrum and waterfall displays
-- Manage operator profiles and persistent settings
-
-### Architecture
-
-The client is composed of three main subsystems:
-
-#### 1. UI (egui / eframe)
-
-- Immediate-mode UI built with egui
-- Renders spectrum, waterfall, and control panels
-- Sends control commands via channel to the networking layer
-
-#### 2. Control Plane (WebSocket)
-
-- Runs in a dedicated Tokio runtime
-- Sends `ClientRadioMessage` commands to the server
-- Receives `ServerRadioMessage` updates (radio list, runtime state, etc.)
-
-#### 3. Media Plane (UDP)
-
-- Audio and waterfall data are received via UDP
-- Audio is buffered and played via CPAL
-- Waterfall and spectrum data are rendered in real time
-
-### Runtime Flow
-
-1. Load persisted UI/operator state
-2. Start media runtime (audio + waterfall processing)
-3. Start WebSocket control task (async)
-4. Launch egui UI
-5. UI interacts with server through control channel
-
-### Networking
-
-- WebSocket control:
-
-  ```text
-  ws://<server-ip>:9000/ws
-  ```
-
-- UDP media:
-
-  - Client registers its UDP address with the server
-  - Server streams:
-    - audio (i16 samples)
-    - waterfall/spectrum data (FFT bins)
-
-### Persistence
-
-The client stores per-operator settings, including:
-
-- last server connection
-- demodulation preferences (bandwidth, pitch, etc.)
-- waterfall display settings (zoom, normalization)
-- bookmarks (frequency presets)
-
-Data is stored in a JSON file under the user config directory.
-
-### Key Features
-
-- Click-to-tune spectrum display
-- Zoomable spectrum and waterfall
-- Multiple demod modes (WFM, NFM, AM, USB, LSB, CW)
-- Adaptive or manual waterfall normalization
-- Bookmark system with default auto-apply
-- Low-latency UDP audio streaming
-
-### Example Usage
-
-Start the server first:
-
-```bash
-cargo run -p rigflow-server -- --source rtlsdr
-```
-
-Then run the client:
-
-```bash
-cargo run -p rigflow-client
-```
-
-In the UI:
-
-- Enter server IP
-- Click Connect
-- Select a radio
-- Tune and operate
-
-### Related Crates
-
-- `rigflow-server` — SDR backend and DSP processing
-- `rigflow-core` — shared DSP, audio, and utilities
-- `rigflow-protocol` — shared WebSocket protocol types
-## rigflow-server
-
-`rigflow-server` is the backend service for the rigflow SDR system.
-
-It discovers SDR sources, manages radio leases, runs per-radio worker
-tasks, performs DSP processing, and exposes control/status over WebSocket.
-Audio and waterfall/spectrum data are streamed to clients over UDP.
-
-### Responsibilities
-
-- Discover available radio sources
-  - RTL-SDR hardware
-  - WAV IQ files
-  - fake/test signal source
-- Manage radio acquisition and lease ownership
-- Start radio workers lazily when a client acquires a radio
-- Route control commands to the active worker
-- Stream audio and waterfall data over UDP
-- Publish runtime state over WebSocket
-
-### Network Interfaces
-
-- WebSocket control endpoint:
-
-  ```text
-  ws://<server-ip>:9000/ws
-  ```
-
-- UDP registration listener:
-
-  ```text
-  0.0.0.0:9001
-  ```
-
-Clients connect over WebSocket for control and lease management, then
-provide UDP endpoints for audio and waterfall streaming.
-
-### Protocol Model
-
-The server uses the shared `rigflow-protocol` crate.
-
-- Client → server:
-  - `ClientRadioMessage`
-  - examples: list radios, acquire radio, tune, change demod mode
-
-- Server → client:
-  - `ServerRadioMessage`
-  - examples: radio list, lease updates, runtime snapshots, runtime deltas
-
-`RuntimeSnapshot` is a full state sync.
-`RuntimeChanged` is a sparse delta containing only changed fields.
-
-### Runtime Model
-
-The server uses a lazy worker model:
-
-1. Radios are discovered at startup.
-2. A client requests a radio lease.
-3. The `RadioManager` starts or attaches to a worker for that radio.
-4. The worker owns the source, DSP pipeline, and UDP streaming.
-5. When the lease is released or expires, the worker is shut down.
-
-### Example Usage
-
-Start with the fake source:
-
-```bash
-cargo run -p rigflow-server -- --source fake
-```
-
-Start with RTL-SDR:
-
-```bash
-cargo run -p rigflow-server -- --source rtlsdr --rtl-device 0
-```
-
-Start with WAV IQ input:
-
-```bash
-cargo run -p rigflow-server -- --source wav --wav-file input_iq.wav
-```
-
-### Common Options
-
-```
---source fake|wav|rtlsdr
---center HZ
---target HZ
---demod wfm|nfm|am|usb|lsb|cw
-
-RTL-SDR:
---rtl-device INDEX
---rtl-sample-rate HZ
---rtl-gain TENTHS_DB
---rtl-auto-gain
---rtl-ppm PPM
---rtl-direct-sampling
-
-WAV:
---wav-file PATH
---wav-dir PATH
-
-Fake:
---fake-sample-rate HZ
---fake-tone HZ
-```
-
-### Related Crates
-
-- `rigflow-client` — egui desktop client
-- `rigflow-core` — shared DSP, radio, audio, and network utilities
-- `rigflow-protocol` — shared WebSocket protocol types
+[MIT](LICENSE) © 2026 David Bourgoyne
