@@ -22,7 +22,7 @@ pub struct JitterBuffer {
     target_buffer_samples: usize,
     max_buffer_samples: usize,
     max_observed_buffered_samples: usize,
-    
+
     started: bool,
     start_sequence: Option<u32>,
     next_sequence: Option<u32>,
@@ -67,7 +67,7 @@ impl JitterBuffer {
             max_buffer_samples,
             max_observed_buffered_samples: 0,
 
-	    started: false,
+            started: false,
             start_sequence: None,
             next_sequence: None,
 
@@ -144,7 +144,7 @@ impl JitterBuffer {
             return;
         }
 
-	if let Some(next) = self.next_sequence {
+        if let Some(next) = self.next_sequence {
             if sequence < next {
                 self.packets_dropped_late += 1;
                 return;
@@ -165,7 +165,7 @@ impl JitterBuffer {
             self.start_sequence = Some(sequence);
         }
 
-	// Start playback once we have enough buffered audio. We do not require
+        // Start playback once we have enough buffered audio. We do not require
         // a large perfect contiguous run forever; once playback has started,
         // later gaps are handled by concealment.
         if !self.started && self.can_start_playout() {
@@ -183,8 +183,7 @@ impl JitterBuffer {
         self.fill_playout();
 
         let buffered = self.buffered_samples();
-        self.max_observed_buffered_samples =
-            self.max_observed_buffered_samples.max(buffered);
+        self.max_observed_buffered_samples = self.max_observed_buffered_samples.max(buffered);
     }
 
     /// Pop audio into the output slice.
@@ -230,12 +229,12 @@ impl JitterBuffer {
                 self.consecutive_conceals = 0;
                 continue;
             }
-	    // If the exact expected packet is missing:
+            // If the exact expected packet is missing:
             // - if no later packets are available, wait
             // - if later packets are available, conceal one packet and advance
             let earliest_pending = self.pending.first_key_value().map(|(k, _)| *k);
 
-	    match earliest_pending {
+            match earliest_pending {
                 None => break,
 
                 Some(earliest) if earliest > seq => {
@@ -247,7 +246,7 @@ impl JitterBuffer {
                     self.consecutive_conceals += 1;
                     self.next_sequence = Some(seq.wrapping_add(1));
 
-		    // If we conceal repeatedly, we are probably badly out of sync.
+                    // If we conceal repeatedly, we are probably badly out of sync.
                     // Re-anchor to the earliest packet we actually have.
                     if self.consecutive_conceals >= 3 {
                         self.resync_to_earliest_pending();
@@ -302,7 +301,7 @@ impl JitterBuffer {
             return;
         }
 
-	// Clearly above target: trim more aggressively.
+        // Clearly above target: trim more aggressively.
         if excess >= packet && excess < packet * 4 {
             let drop_count = (packet / 4).max(16).min(self.playout.len());
             for _ in 0..drop_count {
@@ -314,9 +313,7 @@ impl JitterBuffer {
         // Far above target: pull latency down quickly.
         if excess >= packet * 4 || buffered_len >= max.saturating_sub(packet) {
             let desired = target + packet / 2;
-            let drop_count = buffered_len
-                .saturating_sub(desired)
-                .min(self.playout.len());
+            let drop_count = buffered_len.saturating_sub(desired).min(self.playout.len());
 
             for _ in 0..drop_count {
                 self.playout.pop_front();

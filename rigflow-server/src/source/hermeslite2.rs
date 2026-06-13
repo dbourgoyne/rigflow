@@ -2232,7 +2232,11 @@ fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
             recovery_flag,
             r.adc_overload
         );
-        let label = if recovery_flag { "TX FIFO idle" } else { "OK" };
+        let label = if recovery_flag {
+            "TX underrun (recovered)"
+        } else {
+            "OK"
+        };
         Some(label.to_string())
     } else {
         None
@@ -2402,9 +2406,10 @@ mod tests {
         // bit15 clear → OK (incl. 0b01, which is a FIFO-count bit, not a fault).
         assert_eq!(status_for(0b00), "OK");
         assert_eq!(status_for(0b01), "OK");
-        // bit15 set → benign idle (NOT a severe RX fault), regardless of bit14.
-        assert_eq!(status_for(0b10), "TX FIFO idle");
-        assert_eq!(status_for(0b11), "TX FIFO idle");
+        // bit15 set → benign TX-underrun recovery (NOT a severe RX fault),
+        // regardless of bit14.
+        assert_eq!(status_for(0b10), "TX underrun (recovered)");
+        assert_eq!(status_for(0b11), "TX underrun (recovered)");
     }
 
     #[test]

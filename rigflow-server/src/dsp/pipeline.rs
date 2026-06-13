@@ -298,7 +298,7 @@ impl DspPipeline {
         };
 
         match self.mode {
-            DemodMode::Usb | DemodMode::Lsb => {
+            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU => {
                 self.rebuild_ssb_filters(bandwidth_hz, self.ssb_fir_taps);
                 self.ssb_demod = SsbDemodulator::new(self.sideband);
             }
@@ -313,7 +313,7 @@ impl DspPipeline {
         self.mode = mode;
 
         match mode {
-            DemodMode::Usb => self.sideband = Sideband::Usb,
+            DemodMode::Usb | DemodMode::DgtU => self.sideband = Sideband::Usb,
             DemodMode::Lsb => self.sideband = Sideband::Lsb,
             _ => {}
         }
@@ -429,7 +429,7 @@ impl DspPipeline {
         }
 
         let mut audio = match self.mode {
-            DemodMode::Usb => self.demod_ssb(&iq, Sideband::Usb),
+            DemodMode::Usb | DemodMode::DgtU => self.demod_ssb(&iq, Sideband::Usb),
             DemodMode::Lsb => self.demod_ssb(&iq, Sideband::Lsb),
             DemodMode::Wfm | DemodMode::Nfm => self.fm_demod.process(&iq),
             DemodMode::Am => self.am_demod.process(&iq),
@@ -458,7 +458,7 @@ impl DspPipeline {
                     fir.process_in_place(&mut audio);
                 }
             }
-            DemodMode::Usb | DemodMode::Lsb => {
+            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU => {
                 self.agc.process_in_place(&mut audio);
 
                 if let Some(fir) = &mut self.audio_fir {
@@ -595,5 +595,320 @@ impl DspPipeline {
 
     pub fn filter_bandwidth_hz(&self) -> f32 {
         self.filter_bandwidth_hz
+    }
+}
+
+#[cfg(test)]
+mod ssb_tx_dsp_tests {
+    //! Software measurement of the **transmit** SSB DSP — the part of the signal
+    //! that is *ours*, not the HL2's. Sideband/carrier suppression and two-tone
+    //! IMD are properties of the IQ our modulator generates (the HL2 just
+    //! upconverts it), so they are measurable here precisely and repeatably,
+    //! without the bench / the original TinySA's 3 kHz RBW limit.
+    //!
+    //! The chain mirrors `hermeslite2::tx_ssb_mic`:
+    //! `DcBlocker → [SpeechCompressor] → [TxLimiter] → ×0.9 → ComplexSidebandFir`.
+
+    use super::ComplexSidebandFir;
+    use crate::dsp::audio::dc_blocker::DcBlocker;
+    use crate::dsp::audio::speech_compressor::{ratio_for_level, SpeechCompressor};
+    use crate::dsp::audio::tx_limiter::TxLimiter;
+    use crate::dsp::demod::Sideband;
+    use num_complex::Complex32;
+
+    // Mirror of the tx_ssb_mic constants.
+    const FS: f32 = 48_000.0;
+    const AUDIO_BW_HZ: f32 = 2400.0;
+    const AUDIO_PITCH_HZ: f32 = 300.0;
+    const FIR_TAPS: usize = 127;
+    const TX_AUDIO_SCALE: f32 = 0.9;
+
+    /// Run audio through the real TX modulator chain → baseband IQ.
+    fn modulate(
+        audio: &[f32],
+        usb: bool,
+        compressor_level: Option<u8>,
+        limiter_threshold: Option<f32>,
+    ) -> Vec<Complex32> {
+        let mut buf = audio.to_vec();
+        DcBlocker::new(0.995).process_in_place(&mut buf);
+        if let Some(level) = compressor_level {
+            SpeechCompressor::new(FS, ratio_for_level(level), 10.0, 150.0)
+                .process_in_place(&mut buf);
+        }
+        if let Some(th) = limiter_threshold {
+            TxLimiter::new(FS, th, 2.0, 120.0).process_in_place(&mut buf);
+        }
+        let cin: Vec<Complex32> = buf
+            .iter()
+            .map(|&s| Complex32::new(s * TX_AUDIO_SCALE, 0.0))
+            .collect();
+        let mut fir = ComplexSidebandFir::new(
+            FS,
+            AUDIO_BW_HZ,
+            AUDIO_PITCH_HZ,
+            FIR_TAPS,
+            if usb { Sideband::Usb } else { Sideband::Lsb },
+        );
+        let mut out = Vec::new();
+        fir.process_into(&cin, &mut out);
+        out
+    }
+
+    /// Hann-windowed, DC-removed single-bin DFT magnitude (complex-tone amplitude)
+    /// at `f_hz` — same method as the on-air `log_tx_tone_rx_sideband` analyzer.
+    fn bin_mag(samples: &[Complex32], f_hz: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let n = samples.len();
+        let mean_re = samples.iter().map(|s| s.re as f64).sum::<f64>() / n as f64;
+        let mean_im = samples.iter().map(|s| s.im as f64).sum::<f64>() / n as f64;
+        let win = |k: usize| 0.5 - 0.5 * (TAU * k as f64 / (n - 1).max(1) as f64).cos();
+        let win_sum: f64 = (0..n).map(win).sum();
+        let w = -TAU * f_hz / FS as f64;
+        let (mut ar, mut ai) = (0.0f64, 0.0f64);
+        for (k, s) in samples.iter().enumerate() {
+            let re = (s.re as f64 - mean_re) * win(k);
+            let im = (s.im as f64 - mean_im) * win(k);
+            let (sinp, cosp) = (w * k as f64).sin_cos();
+            ar += re * cosp - im * sinp;
+            ai += re * sinp + im * cosp;
+        }
+        (ar * ar + ai * ai).sqrt() / win_sum
+    }
+
+    /// |DC| of the baseband IQ = the carrier (centre-spike) leakage.
+    fn dc_mag(samples: &[Complex32]) -> f64 {
+        let n = samples.len() as f64;
+        let re = samples.iter().map(|s| s.re as f64).sum::<f64>() / n;
+        let im = samples.iter().map(|s| s.im as f64).sum::<f64>() / n;
+        (re * re + im * im).sqrt()
+    }
+
+    fn db(ratio: f64) -> f64 {
+        20.0 * ratio.max(1e-15).log10()
+    }
+
+    fn tone(freq_hz: f32, amp: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|k| amp * (std::f32::consts::TAU * freq_hz * k as f32 / FS).sin())
+            .collect()
+    }
+
+    const N: usize = 16_384;
+    const SKIP: usize = 512; // discard FIR fill transient
+
+    /// The modulator must place the tone on the wanted sideband and suppress the
+    /// opposite sideband (image) and the carrier (DC) — this is pure Rigflow DSP.
+    #[test]
+    fn ssb_modulator_suppresses_image_and_carrier() {
+        for usb in [true, false] {
+            let f = 1500.0_f64; // mid-passband audio tone
+            let audio = tone(f as f32, 0.5, N);
+            let iq = modulate(&audio, usb, None, None);
+            let s = &iq[SKIP..];
+
+            // USB → energy at +f (above carrier); LSB → at −f.
+            let (wanted, image) = if usb {
+                (bin_mag(s, f), bin_mag(s, -f))
+            } else {
+                (bin_mag(s, -f), bin_mag(s, f))
+            };
+            let image_supp = db(wanted / image);
+            let carrier_supp = db(wanted / dc_mag(s));
+
+            let sb = if usb { "USB" } else { "LSB" };
+            // Measured ≈ 74 dB image / 99 dB carrier; guard a generous floor.
+            assert!(
+                image_supp > 60.0,
+                "{sb}: opposite-sideband suppression {image_supp:.1} dB (want > 60)"
+            );
+            assert!(
+                carrier_supp > 80.0,
+                "{sb}: carrier suppression {carrier_supp:.1} dB (want > 80)"
+            );
+            println!("{sb}: image {image_supp:.1} dB, carrier {carrier_supp:.1} dB");
+        }
+    }
+
+    /// With no compression/limiting, the modulator is linear, so a two-tone input
+    /// must produce **no** IMD3/IMD5 products — i.e. our SSB generation injects no
+    /// intermod of its own. (Tones 700/1900 Hz → products at ∓500/+3100 (IMD3),
+    /// ∓1700/+4300 (IMD5), USB convention.)
+    #[test]
+    fn ssb_modulator_two_tone_is_linear() {
+        let a = tone(700.0, 0.4, N);
+        let b = tone(1900.0, 0.4, N);
+        let audio: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
+        let iq = modulate(&audio, true, None, None);
+        let s = &iq[SKIP..];
+
+        let tone_ref = bin_mag(s, 700.0).max(bin_mag(s, 1900.0));
+        let imd3 = bin_mag(s, -500.0).max(bin_mag(s, 3100.0));
+        let imd5 = bin_mag(s, -1700.0).max(bin_mag(s, 4300.0));
+        let imd3_dbc = db(imd3 / tone_ref);
+        let imd5_dbc = db(imd5 / tone_ref);
+
+        println!("linear path: IMD3 {imd3_dbc:.1} dBc, IMD5 {imd5_dbc:.1} dBc");
+        // Measured ≈ −157/−173 dBc (numerical floor); guard a generous bound.
+        assert!(
+            imd3_dbc < -100.0,
+            "linear modulator should add no IMD3, got {imd3_dbc:.1} dBc"
+        );
+        assert!(imd5_dbc < -100.0, "IMD5 {imd5_dbc:.1} dBc (want < -100)");
+    }
+
+    /// Full chain (compressor + limiter ON) at a **normal** drive level — peaks
+    /// below the limiter threshold — must still be clean: the slow compressor/
+    /// limiter can't track the 1.2 kHz two-tone beat, so they add negligible IMD.
+    #[test]
+    fn tx_chain_two_tone_clean_at_normal_level() {
+        // Each tone 0.3 → envelope peak 0.6, ×0.9 = 0.54, below the 0.9 limiter
+        // threshold → no hard limiting.
+        let a = tone(700.0, 0.3, N);
+        let b = tone(1900.0, 0.3, N);
+        let audio: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
+        let iq = modulate(&audio, true, Some(3), Some(0.9));
+        let s = &iq[SKIP..];
+
+        let tone_ref = bin_mag(s, 700.0).max(bin_mag(s, 1900.0));
+        let imd3_dbc = db(bin_mag(s, -500.0).max(bin_mag(s, 3100.0)) / tone_ref);
+
+        println!("processed (normal level): IMD3 {imd3_dbc:.1} dBc");
+        // Measured ≈ −85 dBc; guard a generous bound.
+        assert!(
+            imd3_dbc < -60.0,
+            "TX processing at normal level should stay clean, IMD3 {imd3_dbc:.1} dBc (want < -60)"
+        );
+    }
+
+    // ── §E — CW key-click envelope ──────────────────────────────────────────
+
+    /// Rectangular single-bin DFT magnitude (no window) — correct for the
+    /// zero-padded, self-tapering CW element below.
+    fn dft_mag(samples: &[Complex32], f_hz: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let w = -TAU * f_hz / FS as f64;
+        let (mut ar, mut ai) = (0.0f64, 0.0f64);
+        for (k, s) in samples.iter().enumerate() {
+            let (sinp, cosp) = (w * k as f64).sin_cos();
+            ar += s.re as f64 * cosp - s.im as f64 * sinp;
+            ai += s.re as f64 * sinp + s.im as f64 * cosp;
+        }
+        (ar * ar + ai * ai).sqrt() / samples.len() as f64
+    }
+
+    /// One keyed CW element as baseband IQ: raised-cosine rise/fall of `ramp`
+    /// samples around a `sustain`-sample key-down, complex carrier at `pitch` Hz,
+    /// zero-padded (centred) in `n`. `hard=true` skips shaping (instant on/off) to
+    /// model the key-click failure case. Mirrors `hermeslite2::send_tx_cw_packet`
+    /// (env = 0.5·(1−cos(π·level)), ENV_MS = 8 ms).
+    fn cw_element(ramp: usize, sustain: usize, pitch: f64, hard: bool, n: usize) -> Vec<Complex32> {
+        use std::f64::consts::{PI, TAU};
+        let total = ramp * 2 + sustain;
+        let start = (n - total) / 2;
+        let mut out = vec![Complex32::new(0.0, 0.0); n];
+        for i in 0..total {
+            let level = if i < ramp {
+                (i + 1) as f64 / ramp as f64
+            } else if i < ramp + sustain {
+                1.0
+            } else {
+                1.0 - (i - ramp - sustain + 1) as f64 / ramp as f64
+            };
+            let env = if hard {
+                1.0
+            } else {
+                0.5 * (1.0 - (PI * level).cos())
+            };
+            let k = start + i;
+            let phase = TAU * pitch * k as f64 / FS as f64;
+            out[k] = Complex32::new((env * phase.cos()) as f32, (env * phase.sin()) as f32);
+        }
+        out
+    }
+
+    /// CW keying must be band-limited: the 8 ms raised-cosine rise/fall keeps the
+    /// keying sidebands far down (no key clicks), and must clearly beat hard
+    /// (rectangular) keying — a regression toward unshaped keying would splatter.
+    #[test]
+    fn cw_keying_limits_click_bandwidth() {
+        const RAMP: usize = 384; // 8 ms @ 48 kHz (ENV_MS)
+        const SUSTAIN: usize = 1440; // 30 ms key-down
+        const NCW: usize = 32_768;
+        let pitch = 600.0;
+
+        // Worst keying sideband anywhere in the "click region" (≥ ±500 Hz from the
+        // carrier). Swept finely so the result doesn't depend on where the
+        // rectangle's sinc nulls happen to fall.
+        let worst_sideband = |hard: bool| -> f64 {
+            let s = cw_element(RAMP, SUSTAIN, pitch, hard, NCW);
+            let carrier = dft_mag(&s, pitch);
+            let mut worst = 0.0f64;
+            let mut off = 500.0;
+            while off <= 3000.0 {
+                worst = worst.max(dft_mag(&s, pitch + off));
+                worst = worst.max(dft_mag(&s, pitch - off));
+                off += 10.0;
+            }
+            db(worst / carrier)
+        };
+
+        let shaped = worst_sideband(false);
+        let hard = worst_sideband(true);
+        println!("CW key-click sidebands (≥ ±500 Hz): shaped {shaped:.1} dBc, hard {hard:.1} dBc");
+        assert!(
+            shaped < -50.0,
+            "shaped CW keying sidebands {shaped:.1} dBc (want < -50)"
+        );
+        assert!(
+            shaped < hard - 20.0,
+            "raised-cosine should beat hard keying by > 20 dB (shaped {shaped:.1}, hard {hard:.1})"
+        );
+    }
+
+    // ── §F — digital (FT8) occupied bandwidth / splatter ────────────────────
+
+    /// A constant-envelope FSK (FT8-like) through the real modulator must not gain
+    /// far-out-of-band splatter — i.e. our digital TX path is transparent. Close-in
+    /// spectrum is the signal's own (WSJT-X's) business; we check the far offsets
+    /// that only *our* path could fill.
+    #[test]
+    fn digital_fsk_passes_without_splatter() {
+        use std::f64::consts::TAU;
+        const SPACING: f64 = 6.25; // FT8 tone spacing
+        const SYM: usize = (0.16 * FS as f64) as usize; // 0.16 s symbol
+        const BASE: f64 = 1500.0; // mid SSB passband
+        let symbols = [3u32, 6, 1, 7, 0, 4, 2, 5, 1, 6, 3, 0, 7, 2, 5, 4];
+
+        // Continuous-phase 8-FSK audio.
+        let mut audio = Vec::with_capacity(symbols.len() * SYM);
+        let mut phase = 0.0f64;
+        for &sym in &symbols {
+            let dphi = TAU * (BASE + sym as f64 * SPACING) / FS as f64;
+            for _ in 0..SYM {
+                audio.push(0.4 * phase.sin() as f32);
+                phase += dphi;
+            }
+        }
+        // Digital path: real modulator, no compression/limiting.
+        let iq = modulate(&audio, true, None, None);
+        let s = &iq[SKIP..];
+
+        let centre = BASE + 3.5 * SPACING; // ≈ 1522 Hz, middle of the ~50 Hz band
+        let in_band = (0..8)
+            .map(|t| bin_mag(s, BASE + t as f64 * SPACING))
+            .fold(0.0f64, f64::max);
+        // Far offsets only (well beyond the ~50 Hz FT8 band) — added splatter.
+        let mut splatter = 0.0f64;
+        for off in [500.0, 900.0, 1500.0, 2500.0] {
+            splatter = splatter.max(bin_mag(s, centre + off));
+            splatter = splatter.max(bin_mag(s, centre - off));
+        }
+        let dbc = db(splatter / in_band);
+        println!("digital FSK far-offset splatter (≥ ±500 Hz): {dbc:.1} dBc");
+        assert!(
+            dbc < -45.0,
+            "digital path splatter {dbc:.1} dBc (want < -45)"
+        );
     }
 }

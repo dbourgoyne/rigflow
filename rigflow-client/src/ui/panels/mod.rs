@@ -2,11 +2,22 @@ use crate::UiState;
 use crate::ui::app::RigflowApp;
 use eframe::egui;
 
+/// Styling for a **top-level** left-panel section header (Radio Operator,
+/// Radios, Radio Control, …).  Larger + the operator-name accent colour so the
+/// main menus stand out from their sub-sections (which keep the default style).
+pub(crate) fn panel_header(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .size(16.0)
+        .strong()
+        .color(egui::Color32::from_rgb(90, 200, 255))
+}
+
 mod bookmarks;
 mod operator;
 mod problems;
 mod radio_control;
 mod radios;
+mod sections;
 
 /// Shared S-meter label formatter (also used by the top status bar).
 pub(crate) use radio_control::s_meter_label;
@@ -42,6 +53,19 @@ impl RigflowApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // First-run / not-connected cue: point a new user at the
+                        // two steps to get on the air (the panels below are open
+                        // pre-connect).  Hidden once connected.
+                        if !snapshot.server_connected {
+                            let cue = if snapshot.known_operator_ids.is_empty() {
+                                "Getting started: add an operator below, then enter your server IP and Connect."
+                            } else {
+                                "Not connected — enter your server IP and click Connect."
+                            };
+                            ui.colored_label(egui::Color32::from_rgb(255, 190, 70), cue);
+                            ui.separator();
+                        }
+
                         self.draw_operator_panel(ui, snapshot, config_mode);
                         ui.separator();
                         self.draw_server_panel(ui, snapshot, config_mode);

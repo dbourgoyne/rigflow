@@ -27,6 +27,11 @@ pub struct Agc {
     /// Maximum allowed gain
     max_gain: f32,
 
+    /// Operator "strength" in [0, 1] — the *amount* of AGC applied.  The computed
+    /// gain's deviation from unity is scaled by this, so `0` = no leveling
+    /// (passthrough, identical to disabled) and `1` = full AGC.
+    strength: f32,
+
     /// Internal envelope state (tracks signal magnitude)
     envelope: f32,
 
@@ -59,6 +64,9 @@ impl Agc {
             attack,
             decay,
             max_gain,
+            // Full strength until the operator sets one, so an AGC that is built
+            // but never told a strength behaves as a normal full AGC.
+            strength: 1.0,
             envelope: 0.0,
             enabled: true,
             current_gain: 1.0,
@@ -84,18 +92,14 @@ impl Agc {
         self.enabled = enabled;
     }
 
-    /// Map operator AGC strength in [0, 1] to attack/decay responsiveness.
+    /// Set the operator AGC strength in [0, 1] — the *amount* of leveling applied.
     ///
-    /// Higher strength → faster (more aggressive) gain adaptation.  The mapping
-    /// is centred so `strength = 0.5` reproduces the previous always-on tuning
-    /// (attack 0.90, decay 0.999), giving no behaviour change at the default.
-    /// `target_level` and `max_gain` are left unchanged.
+    /// The computed gain is interpolated toward unity by this value (see
+    /// `process_sample`), so `0` = no leveling (identical to disabled) and `1` =
+    /// full AGC.  The envelope attack/decay time constants are left at their
+    /// construction values; strength controls amount, not response speed.
     pub fn set_strength(&mut self, strength: f32) {
-        let s = strength.clamp(0.0, 1.0);
-        // attack: 0.97 (slow) .. 0.83 (fast); decay kept near 1.0 to avoid
-        // pumping: 0.9995 (very slow) .. 0.9985.
-        self.attack = 0.97 - 0.14 * s;
-        self.decay = 0.9995 - 0.001 * s;
+        self.strength = strength.clamp(0.0, 1.0);
     }
 
     /// Most recently applied gain (diagnostics).
@@ -141,8 +145,11 @@ impl Agc {
             self.max_gain
         };
 
-        self.current_gain = gain;
-        sample * gain
+        // Scale the gain's deviation from unity by strength: strength 0 leaves the
+        // sample untouched (== disabled), strength 1 applies the full computed gain.
+        let effective_gain = 1.0 + self.strength * (gain - 1.0);
+        self.current_gain = effective_gain;
+        sample * effective_gain
     }
 
     /// Process a slice and return a newly allocated output buffer.
@@ -209,18 +216,40 @@ mod tests {
     }
 
     #[test]
-    fn strength_maps_attack_decay_centered_on_half() {
+    fn strength_zero_is_passthrough() {
+        // Enabled but strength 0 must be identical to disabled (gain == 1.0).
         let mut agc = make();
-        agc.set_strength(0.5);
-        assert!((agc.attack - 0.90).abs() < 1e-6);
-        assert!((agc.decay - 0.999).abs() < 1e-6);
-        // Higher strength → faster (smaller) attack factor.
-        agc.set_strength(1.0);
-        let fast_attack = agc.attack;
+        agc.set_enabled(true);
         agc.set_strength(0.0);
+        let input: Vec<f32> = (0..512)
+            .map(|n| 0.02 * (2.0 * std::f32::consts::PI * 700.0 * n as f32 / 48000.0).sin())
+            .collect();
+        let out = agc.process(&input);
+        assert_eq!(out, input, "strength 0 must pass audio through unchanged");
+        assert_eq!(agc.current_gain(), 1.0);
+    }
+
+    #[test]
+    fn strength_scales_gain_between_unity_and_full() {
+        // Steady quiet input drives the raw gain to its max; the applied gain must
+        // interpolate from 1.0 (strength 0) to the full gain (strength 1), with
+        // 0.5 landing halfway.
+        let gain_at = |s: f32| {
+            let mut agc = make();
+            agc.set_enabled(true);
+            agc.set_strength(s);
+            let _ = agc.process(&vec![0.001f32; 4096]);
+            agc.current_gain()
+        };
+        let none = gain_at(0.0);
+        let half = gain_at(0.5);
+        let full = gain_at(1.0);
+        assert_eq!(none, 1.0, "strength 0 → unity gain");
+        assert!(full > 1.5, "strength 1 → meaningful boost (got {full})");
+        let expected_half = 1.0 + 0.5 * (full - 1.0);
         assert!(
-            agc.attack > fast_attack,
-            "lower strength is slower (attack closer to 1)"
+            (half - expected_half).abs() < 1e-3,
+            "strength 0.5 gain {half} should be halfway between 1.0 and {full}"
         );
     }
 

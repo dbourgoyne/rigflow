@@ -26,7 +26,7 @@ impl Default for AppStateFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WaterfallDisplayPreferencesFile {
     pub display_zoom: f32,
     pub adaptive_waterfall_normalization: bool,
@@ -45,7 +45,7 @@ impl Default for WaterfallDisplayPreferencesFile {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DemodPreferencesFile {
     pub filter_bandwidth_hz: f32,
     pub pitch_hz: f32,
@@ -62,7 +62,7 @@ impl DemodPreferencesFile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DemodPreferenceSetFile {
     pub wfm: DemodPreferencesFile,
     pub nfm: DemodPreferencesFile,
@@ -70,6 +70,14 @@ pub struct DemodPreferenceSetFile {
     pub usb: DemodPreferencesFile,
     pub lsb: DemodPreferencesFile,
     pub cw: DemodPreferencesFile,
+    /// Data/digital USB (FT8 etc.).  Serde default (3 kHz) so older operator
+    /// files — which predate this mode — load unchanged.
+    #[serde(default = "default_dgt_u_prefs")]
+    pub dgt_u: DemodPreferencesFile,
+}
+
+fn default_dgt_u_prefs() -> DemodPreferencesFile {
+    DemodPreferencesFile::new(3_000.0, 0.0, DeemphasisMode::Off)
 }
 
 impl Default for DemodPreferenceSetFile {
@@ -81,6 +89,7 @@ impl Default for DemodPreferenceSetFile {
             usb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
             lsb: DemodPreferencesFile::new(2_700.0, 0.0, DeemphasisMode::Off),
             cw: DemodPreferencesFile::new(500.0, 600.0, DeemphasisMode::Off),
+            dgt_u: default_dgt_u_prefs(),
         }
     }
 }
@@ -95,6 +104,7 @@ impl DemodPreferenceSetFile {
             DemodMode::Lsb => self.lsb,
             // CWU and CWL share one CW preference set (filter bw, pitch).
             DemodMode::Cwu | DemodMode::Cwl => self.cw,
+            DemodMode::DgtU => self.dgt_u,
         }
     }
 
@@ -106,8 +116,57 @@ impl DemodPreferenceSetFile {
             DemodMode::Usb => &mut self.usb,
             DemodMode::Lsb => &mut self.lsb,
             DemodMode::Cwu | DemodMode::Cwl => &mut self.cw,
+            DemodMode::DgtU => &mut self.dgt_u,
         }
     }
+}
+
+/// Per-(operator, radio) operating state — restored when the radio is acquired
+/// and saved on change, so an operator resumes each radio exactly where they
+/// left off.  Lives in `OperatorSettingsFile.radio_settings` keyed by radio ID,
+/// so it is inherently scoped per (operator, radio).  Source-control state stays
+/// in the separate `source_control_preferences` map (also per-radio).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RadioSettingsFile {
+    pub center_freq_hz: f32,
+    pub target_freq_hz: f32,
+    pub demod_mode: DemodMode,
+    pub sideband: Sideband,
+    pub demod_preferences: DemodPreferenceSetFile,
+    pub waterfall_display_preferences: WaterfallDisplayPreferencesFile,
+    pub volume_percent: u8,
+    pub cw_sidetone_volume: u8,
+    pub cw_hang_ms: u32,
+    pub squelch_enabled: bool,
+    pub squelch_threshold_db: f32,
+    pub nr2_enabled: bool,
+    pub nr2_strength: f32,
+    pub agc_enabled: bool,
+    pub agc_strength: f32,
+
+    // TX processing + CW decode — added after the first release of
+    // `radio_settings`, so each carries a serde default to keep already-saved
+    // buckets (which lack these fields) loading cleanly.
+    #[serde(default = "default_tx_limiter_enabled")]
+    pub tx_limiter_enabled: bool,
+    #[serde(default = "default_tx_limiter_threshold_percent")]
+    pub tx_limiter_threshold_percent: u16,
+    #[serde(default)]
+    pub compressor_enabled: bool,
+    #[serde(default = "default_compressor_level")]
+    pub compressor_level: u8,
+    #[serde(default)]
+    pub cw_decode_enabled: bool,
+}
+
+fn default_tx_limiter_enabled() -> bool {
+    true
+}
+fn default_tx_limiter_threshold_percent() -> u16 {
+    90
+}
+fn default_compressor_level() -> u8 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,10 +196,23 @@ pub struct OperatorSettingsFile {
     #[serde(default)]
     pub source_control_preferences: HashMap<String, SourceControlState>,
 
+    /// Per-radio operating state (Radio Control + Waterfall): mode, filters,
+    /// squelch/NR2/AGC, volume, CW sidetone/hang, waterfall display — keyed by
+    /// radio ID.  Serde default (empty) so older files load; a radio with no
+    /// entry starts from the operator-level defaults below and gets an entry on
+    /// first acquire.
+    #[serde(default)]
+    pub radio_settings: HashMap<String, RadioSettingsFile>,
+
     /// Receive-audio volume in percent (0–100), persisted per operator.
     /// Serde default so older settings files load without migration.
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
+
+    /// Show the Advanced & Diagnostics controls in Radio Control.  Serde default
+    /// (false) so older settings files load without migration.
+    #[serde(default)]
+    pub show_advanced: bool,
 
     /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
     #[serde(default)]
@@ -199,14 +271,19 @@ impl OperatorSettingsFile {
             version: OPERATOR_SETTINGS_FILE_VERSION,
             operator_id,
             selected_license: None,
-            server_ip: String::new(),
+            // Seed new operators with localhost so a single-box (client+server on
+            // one machine) setup can Connect with no typing; the user edits it for
+            // a remote/Pi server.  Persisted per-operator thereafter.
+            server_ip: "127.0.0.1".to_string(),
             demod_preferences: DemodPreferenceSetFile::default(),
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
             bookmarks: Vec::new(),
             waterfall_display_preferences: WaterfallDisplayPreferencesFile::default(),
             source_control_preferences: HashMap::new(),
+            radio_settings: HashMap::new(),
             volume_percent: default_volume_percent(),
+            show_advanced: false,
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
             cw_macros: default_cw_macros(),

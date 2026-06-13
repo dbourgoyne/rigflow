@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::UiState;
 use crate::ui::app::RigflowApp;
+use crate::ui::panels::sections::{Panel, Section};
 use crate::ui::state::DebounceState;
 use crate::ui::utils::should_send_debounced;
 use eframe::egui;
@@ -23,14 +24,9 @@ impl RigflowApp {
         // Live telemetry (S-meter, etc.) now lives in the top status bar; the
         // left panel holds configuration and controls only.
 
-        egui::CollapsingHeader::new("Radio Control")
+        egui::CollapsingHeader::new(super::panel_header("Radio Control"))
             .default_open(true)
             .show(ui, |ui| {
-                let mut save_demod_prefs = false;
-                let mut save_volume = false;
-                let mut save_cw = false;
-                let mut save_mic = false;
-
                 // Preamble (runs every frame, independent of section state):
                 // apply persisted per-demod controls when the mode changes.
                 if let Ok(mut state) = self.state.lock() {
@@ -60,78 +56,121 @@ impl RigflowApp {
                             volume_percent: state.volume_percent,
                         });
                     }
+
+                    // On radio acquire, also replay the restored mode / sideband /
+                    // squelch / NR2 / AGC to the server's DSP (these are not part
+                    // of the per-demod prefs that `apply_mode_preferences` resends).
+                    if state.pending_apply_radio_settings {
+                        state.pending_apply_radio_settings = false;
+                        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
+                            center_freq_hz: state.center_freq_hz as u64,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
+                            target_freq_hz: state.target_freq_hz as u64,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetDemodMode {
+                            mode: snapshot.demod_mode,
+                        });
+                        if matches!(
+                            snapshot.demod_mode,
+                            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
+                        ) {
+                            self.send_radio_msg(ClientRadioMessage::SetSideband {
+                                sideband: state.sideband,
+                            });
+                        }
+                        self.send_radio_msg(ClientRadioMessage::SetSquelchEnabled {
+                            enabled: state.squelch_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetSquelchThreshold {
+                            threshold_db: state.squelch_threshold_db,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetNr2Enabled {
+                            enabled: state.nr2_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
+                            strength: state.nr2_strength,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetAgcEnabled {
+                            enabled: state.agc_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetAgcStrength {
+                            strength: state.agc_strength,
+                        });
+                        // TX processing is server-side — replay it too (CW decode
+                        // is client-side, already restored on acquire).
+                        self.send_radio_msg(ClientRadioMessage::SetTxLimiter {
+                            enabled: state.tx_limiter_enabled,
+                            threshold_percent: state.tx_limiter_threshold_percent as f32,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetCompression {
+                            enabled: state.compressor_enabled,
+                            level: state.compressor_level,
+                        });
+                    }
                 }
 
-                // ── Receive (default expanded): frequently-used RX controls ──
-                egui::CollapsingHeader::new("Receive")
-                    .id_salt("rc_receive")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            save_demod_prefs |=
-                                self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
-                            save_demod_prefs |=
-                                self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
-                            save_demod_prefs |=
-                                self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
-                            self.draw_squelch_row(ui, &mut state);
-                            self.draw_nr2_row(ui, &mut state);
-                            self.draw_agc_row(ui, &mut state);
-                            self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                        // Demod mode buttons (locks state internally → outside).
-                        save_demod_prefs |= self.draw_demod_selector(ui, snapshot);
-                    });
+                // Sub-sections are drawn in weight order by the shared composer:
+                // Audio · Receive · Transmit · [Advanced · Diagnostics] · checkbox.
+                self.render_panel_sections(
+                    ui,
+                    snapshot,
+                    Panel::RadioControl,
+                    snapshot.show_advanced,
+                );
+            });
+    }
 
-                // ── Audio (default expanded) ─────────────────────────────────
-                egui::CollapsingHeader::new("Audio")
-                    .id_salt("rc_audio")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            save_volume = self.draw_volume_row(ui, &mut state);
-                            save_mic = self.draw_microphone_row(ui, &mut state);
-                            self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
-
-                // ── Transmit (default collapsed): TX setup ───────────────────
-                egui::CollapsingHeader::new("Transmit")
-                    .id_salt("rc_transmit")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
-                            save_cw |=
-                                self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
-                            save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
-
-                // ── Diagnostics (default collapsed) ──────────────────────────
-                egui::CollapsingHeader::new("Diagnostics")
-                    .id_salt("rc_diagnostics")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if let Ok(mut state) = self.state.lock() {
-                            self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
-                            self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
-                        }
-                    });
-
-                // ── Advanced (default collapsed) ─────────────────────────────
-                egui::CollapsingHeader::new("Advanced")
-                    .id_salt("rc_advanced")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        self.draw_digital_interface_row(ui, snapshot);
-                    });
-
-                if save_demod_prefs {
-                    self.save_demod_preferences_to_current_operator();
+    /// Draw one Radio Control sub-section body (dispatched by the weighted
+    /// composer in [`super::sections`]).  Each arm does its own per-operator save.
+    pub(crate) fn draw_radio_section_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        snapshot: &UiState,
+        section: Section,
+    ) {
+        match section {
+            // Audio (volume) — used constantly.
+            Section::Audio => {
+                let mut save_volume = false;
+                if let Ok(mut state) = self.state.lock() {
+                    save_volume = self.draw_volume_row(ui, &mut state);
                 }
                 if save_volume {
                     self.save_volume_to_current_operator();
+                }
+            }
+
+            // Receive: frequently-used RX controls.
+            Section::Receive => {
+                // Demod mode buttons first (locks state internally → must be
+                // outside the lock below to avoid a deadlock).
+                let mut save_demod_prefs = self.draw_demod_selector(ui, snapshot);
+                if let Ok(mut state) = self.state.lock() {
+                    save_demod_prefs |=
+                        self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
+                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
+                    save_demod_prefs |=
+                        self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_squelch_row(ui, &mut state);
+                    self.draw_nr2_row(ui, &mut state);
+                    self.draw_agc_row(ui, &mut state);
+                    self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
+                }
+                if save_demod_prefs {
+                    self.save_demod_preferences_to_current_operator();
+                }
+            }
+
+            // Transmit: how you transmit — mic (SSB) + CW message/macros/sidetone.
+            Section::Transmit => {
+                let mut save_mic = false;
+                let mut save_cw = false;
+                if let Ok(mut state) = self.state.lock() {
+                    save_mic = self.draw_microphone_row(ui, &mut state);
+                    save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
+                    save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
                 }
                 if save_cw {
                     self.save_cw_message_to_current_operator();
@@ -139,7 +178,33 @@ impl RigflowApp {
                 if save_mic {
                     self.save_mic_settings_to_current_operator();
                 }
-            });
+            }
+
+            // Advanced: normal-operation controls rarely changed.  TX Processing
+            // (limiter/compressor) + the one-time WSJT-X / FT8 setup helper.
+            Section::Advanced => {
+                if let Ok(mut state) = self.state.lock() {
+                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
+                }
+                ui.separator();
+                if ui.button("WSJT-X / FT8 Setup…").clicked() {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.show_wsjtx_setup_window = true;
+                    }
+                }
+            }
+
+            // Diagnostics: system-testing tools + their read-only meters.
+            Section::Diagnostics => {
+                if let Ok(mut state) = self.state.lock() {
+                    self.draw_two_tone_test_row(ui, &mut state, snapshot.demod_mode);
+                    self.draw_tx_audio_diag_row(ui, &mut state, snapshot.demod_mode);
+                }
+            }
+
+            // No other section is listed for Radio Control.
+            _ => {}
+        }
     }
 
     /// Receive squelch: enable checkbox, threshold slider, and a live gate
@@ -252,8 +317,7 @@ impl RigflowApp {
         );
         if response.changed() {
             let v = vol.clamp(0, 100) as u8;
-            state.cw_sidetone_volume = v;
-            // Reflect immediately into the lock-free audio control.
+            state.cw_sidetone_volume = v; // Reflect immediately into the lock-free audio control.
             state.sidetone.set_volume(v as f32 / 100.0);
         }
 
@@ -627,65 +691,6 @@ impl RigflowApp {
                 level_percent: state.two_tone_level_percent as f32,
             });
         }
-    }
-
-    /// Digital Interface (informational): the virtual audio endpoints to set in
-    /// a digital app (WSJT-X etc.), named from the app's point of view, plus the
-    /// RX routing toggle.  No CAT/PTT yet.
-    fn draw_digital_interface_row(&self, ui: &mut egui::Ui, snapshot: &UiState) {
-        use crate::digital_audio::{DIGITAL_INPUT_NAME, DIGITAL_RX_NAME};
-
-        ui.separator();
-        ui.label(RichText::new("Digital Interface").strong());
-
-        let status = |ui: &mut egui::Ui, available: bool| {
-            if available {
-                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Available");
-            } else {
-                ui.colored_label(egui::Color32::from_rgb(210, 130, 130), "Unavailable");
-            }
-        };
-
-        // App-facing devices: WSJT-X Input = RigflowDigitalRX (records),
-        // Output = RigflowDigitalInput (plays TX into).
-        egui::Grid::new("digital_interface_grid")
-            .num_columns(2)
-            .spacing([8.0, 2.0])
-            .show(ui, |ui| {
-                ui.label("App Input (record)");
-                ui.label(RichText::new(DIGITAL_RX_NAME).monospace());
-                ui.end_row();
-                ui.label("");
-                status(ui, snapshot.digital_rx_available);
-                ui.end_row();
-
-                ui.label("App Output (TX in)");
-                ui.label(RichText::new(DIGITAL_INPUT_NAME).monospace());
-                ui.end_row();
-                ui.label("");
-                status(ui, snapshot.digital_input_available);
-                ui.end_row();
-            });
-
-        // RX audio routing: mirror received audio into RigflowDigitalOutput;
-        // apps record it from RigflowDigitalRX.
-        ui.add_space(4.0);
-        let mut rx_enabled = snapshot.digital_rx.is_enabled();
-        if ui
-            .checkbox(&mut rx_enabled, "RX Digital Output")
-            .on_hover_text("Send received audio to RigflowDigitalOutput")
-            .changed()
-        {
-            snapshot.digital_rx.set_enabled(rx_enabled);
-        }
-        ui.horizontal(|ui| {
-            ui.label("RX Digital Output:");
-            if snapshot.digital_rx.is_active() {
-                ui.colored_label(egui::Color32::from_rgb(100, 200, 100), "Active");
-            } else {
-                ui.colored_label(egui::Color32::GRAY, "Inactive");
-            }
-        });
     }
 
     /// TX Processing (USB/LSB only): the soft peak limiter (ALC Phase 1).
@@ -1094,18 +1099,19 @@ impl RigflowApp {
     }
 
     fn draw_demod_selector(&self, ui: &mut egui::Ui, snapshot: &UiState) -> bool {
-        ui.label("Demod");
+        ui.label(RichText::new("Demod").size(15.0).strong());
 
         let mut selected = snapshot.demod_mode.clone();
 
         ui.horizontal(|ui| {
-            ui.radio_value(&mut selected, DemodMode::Wfm, "wfm");
-            ui.radio_value(&mut selected, DemodMode::Nfm, "nfm");
-            ui.radio_value(&mut selected, DemodMode::Am, "am");
-            ui.radio_value(&mut selected, DemodMode::Lsb, "lsb");
-            ui.radio_value(&mut selected, DemodMode::Usb, "usb");
-            ui.radio_value(&mut selected, DemodMode::Cwu, "cwu");
-            ui.radio_value(&mut selected, DemodMode::Cwl, "cwl");
+            ui.radio_value(&mut selected, DemodMode::Wfm, "WFM");
+            ui.radio_value(&mut selected, DemodMode::Nfm, "NFM");
+            ui.radio_value(&mut selected, DemodMode::Am, "AM");
+            ui.radio_value(&mut selected, DemodMode::Lsb, "LSB");
+            ui.radio_value(&mut selected, DemodMode::Usb, "USB");
+            ui.radio_value(&mut selected, DemodMode::DgtU, "DATA");
+            ui.radio_value(&mut selected, DemodMode::Cwu, "CWU");
+            ui.radio_value(&mut selected, DemodMode::Cwl, "CWL");
         });
 
         if selected == snapshot.demod_mode {
@@ -1116,19 +1122,18 @@ impl RigflowApp {
             state.demod_mode = selected.clone();
             state.sideband = match selected {
                 DemodMode::Lsb => Sideband::Lsb,
-                DemodMode::Usb => Sideband::Usb,
+                DemodMode::Usb | DemodMode::DgtU => Sideband::Usb,
                 _ => state.sideband,
             };
         }
 
         self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode: selected });
 
-        if selected == DemodMode::Lsb || selected == DemodMode::Usb {
+        if matches!(selected, DemodMode::Lsb | DemodMode::Usb | DemodMode::DgtU) {
             self.send_radio_msg(ClientRadioMessage::SetSideband {
                 sideband: match selected {
                     DemodMode::Lsb => Sideband::Lsb,
-                    DemodMode::Usb => Sideband::Usb,
-                    _ => unreachable!("sideband only sent for USB/LSB"),
+                    _ => Sideband::Usb, // USB and Data-USB
                 },
             });
         }
@@ -1146,6 +1151,18 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
 
     state.filter_bw_debounce = DebounceState::new(state.filter_bandwidth_hz);
     state.pitch_debounce = DebounceState::new(state.pitch_hz);
+
+    // RX-routing tie: entering Data-USB enables RX Digital Output (so external
+    // digital apps like WSJT-X can record); leaving it disables routing.  Only
+    // the transition into/out of Data-USB touches routing — switching among
+    // voice modes leaves it exactly as the user set it.
+    let was_dgt = state.last_demod_mode_for_controls == Some(DemodMode::DgtU);
+    let is_dgt = mode == DemodMode::DgtU;
+    if is_dgt && !was_dgt {
+        state.digital_rx.set_enabled(true);
+    } else if was_dgt && !is_dgt {
+        state.digital_rx.set_enabled(false);
+    }
 
     state.last_demod_mode_for_controls = Some(mode);
 }

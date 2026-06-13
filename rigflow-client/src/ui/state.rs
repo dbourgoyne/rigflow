@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::persistence::models::DemodPreferenceSetFile;
+use crate::persistence::models::{DemodPreferenceSetFile, RadioSettingsFile};
 use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
@@ -91,6 +91,11 @@ pub struct UiState {
 
     /// Receive-audio volume in percent (0–100).  Persisted per-operator.
     pub volume_percent: u8,
+
+    /// Show the Advanced & Diagnostics controls (two-tone test, TX-audio
+    /// diagnostics, limiter/compressor, digital interface).  Off by default for
+    /// an uncluttered view; persisted per-operator.
+    pub show_advanced: bool,
 
     /// Input sample rate from SDR source (Hz)
     pub input_sample_rate_hz: f32,
@@ -273,6 +278,15 @@ pub struct UiState {
     /// on radio acquire).
     pub pending_apply_source_control: bool,
 
+    /// Per-radio operating state (mode, filters, squelch/NR2/AGC, volume, CW
+    /// sidetone/hang, waterfall), keyed by radio ID.  Mirrors
+    /// `OperatorSettingsFile::radio_settings`.
+    pub radio_settings: HashMap<String, RadioSettingsFile>,
+
+    /// When `true`, the Radio Control replay block also re-sends the restored
+    /// mode / sideband / squelch / NR2 / AGC to the server (set on acquire).
+    pub pending_apply_radio_settings: bool,
+
     // =====================================================================
     // TX TUNE TEST (client-local; never persisted; never sent to server)
     // =====================================================================
@@ -297,6 +311,9 @@ pub struct UiState {
     /// Whether the results popup is open, and the last CSV-export status line.
     pub show_swr_sweep_window: bool,
     pub swr_sweep_csv_status: Option<String>,
+
+    /// Whether the WSJT-X / FT8 setup helper window is open (transient).
+    pub show_wsjtx_setup_window: bool,
 
     // ── TX Test Tone (FDX Phase 2; client-local, not persisted) ─────────
     /// Master enable for the TX Test Tone section (shows the controls).
@@ -387,6 +404,7 @@ impl Default for UiState {
             signal_dbm: -140.0,
             signal_s_units: 0,
             volume_percent: 50,
+            show_advanced: false,
             input_sample_rate_hz: 0.0,
 
             // =================================================================
@@ -405,7 +423,7 @@ impl Default for UiState {
             // =================================================================
             // CONNECTION / SERVER STATE
             // =================================================================
-            rigflow_server_ip: "192.168.0.225".to_string(),
+            rigflow_server_ip: "127.0.0.1".to_string(),
             rigflow_server_ws_port: 9000,
             rigflow_server_udp_port: 9001,
             udp_listen_port: 0,
@@ -495,6 +513,8 @@ impl Default for UiState {
             compressor_level: 3,
             source_control_preferences: HashMap::new(),
             pending_apply_source_control: false,
+            radio_settings: HashMap::new(),
+            pending_apply_radio_settings: false,
 
             tx_tune_running: false,
             last_tx_tune_result: TxTuneResult::default(),
@@ -505,6 +525,7 @@ impl Default for UiState {
             swr_sweep_progress: None,
             show_swr_sweep_window: false,
             swr_sweep_csv_status: None,
+            show_wsjtx_setup_window: false,
             tx_tone_enabled: false,
             tx_tone_usb: true,
             tx_tone_freq_hz: 1000.0,

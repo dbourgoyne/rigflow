@@ -145,6 +145,9 @@ fn main() -> Result<(), eframe::Error> {
     // Mute libasound's harmless stderr diagnostics (e.g. find_matching_chmap).
     alsa_quiet::silence_alsa_errors();
 
+    // Parse the command line up front so `--help` exits before any startup work.
+    let window_size = parse_cli_or_exit();
+
     // Load persisted startup state first, then wrap it in shared UI state.
     let (initial_ui_state, persistence_store) = match load_initial_ui_state(None) {
         Ok(value) => value,
@@ -206,7 +209,47 @@ fn main() -> Result<(), eframe::Error> {
         });
     }
 
-    let options = NativeOptions::default();
+    // Catch SIGINT (Ctrl-C) and SIGTERM (kill) so a terminal kill still releases
+    // the radio and disconnects cleanly before the process exits, mirroring the
+    // window-[X] path.  (SIGKILL is uncatchable; the server's heartbeat and the
+    // rig's TX watchdog are the backstop for that.)
+    {
+        let sig_cmd_tx = ws_cmd_tx.clone();
+        rt.spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut term = signal(SignalKind::terminate()).ok();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = async {
+                        match term.as_mut() {
+                            Some(t) => {
+                                t.recv().await;
+                            }
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+
+            log::info!("shutdown signal received: releasing radio and disconnecting");
+            let _ = sig_cmd_tx.send(ControlCommand::ReleaseRadio);
+            let _ = sig_cmd_tx.send(ControlCommand::Disconnect);
+            // Give the WebSocket task a moment to flush both before we exit.
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            std::process::exit(0);
+        });
+    }
+
+    let options = NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size(window_size),
+        ..NativeOptions::default()
+    };
 
     eframe::run_native(
         "rigflow-client",
@@ -221,4 +264,101 @@ fn main() -> Result<(), eframe::Error> {
             )))
         }),
     )
+}
+
+/// Default initial window size (logical points): 1280×720, comfortable on
+/// modern displays.
+const DEFAULT_WINDOW_SIZE: [f32; 2] = [1280.0, 720.0];
+
+/// Parse the command line, returning the initial window size in logical points.
+///
+/// Supported flags:
+///   `-h`, `--help`                 print usage and exit 0
+///   `-w`, `--window-size <WxH>`    initial window size, e.g. `1600x900`
+///
+/// On `--help` this prints and exits 0; on a bad argument it prints to stderr and
+/// exits 2 (matching the server's CLI convention).
+fn parse_cli_or_exit() -> [f32; 2] {
+    let mut args = std::env::args().skip(1);
+    let mut size = DEFAULT_WINDOW_SIZE;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!(
+                    "rigflow-client\n\n\
+                     USAGE:\n    \
+                     rigflow-client [OPTIONS]\n\n\
+                     OPTIONS:\n    \
+                     -w, --window-size <WxH>    Initial window size in pixels \
+                     (default {}x{})\n    \
+                     -h, --help                 Print this help and exit",
+                    DEFAULT_WINDOW_SIZE[0] as u32, DEFAULT_WINDOW_SIZE[1] as u32,
+                );
+                std::process::exit(0);
+            }
+            "-w" | "--window-size" => {
+                let value = args.next().unwrap_or_else(|| {
+                    eprintln!("error: {arg} requires a value, e.g. 1280x720");
+                    std::process::exit(2);
+                });
+                size = parse_window_size(&value).unwrap_or_else(|msg| {
+                    eprintln!("error: {msg}");
+                    std::process::exit(2);
+                });
+            }
+            // macOS injects a `-psn_<...>` process-serial-number arg when launching
+            // an .app bundle; ignore it rather than erroring.
+            other if other.starts_with("-psn_") => {}
+            other => {
+                eprintln!("error: unrecognized argument '{other}' (try --help)");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    size
+}
+
+/// Parse a `<WIDTH>x<HEIGHT>` string (e.g. `1280x720`) into a window size.
+/// Width and height must be positive integers.
+fn parse_window_size(value: &str) -> Result<[f32; 2], String> {
+    let (w, h) = value
+        .split_once(['x', 'X'])
+        .ok_or_else(|| format!("invalid window size '{value}'; expected <WIDTH>x<HEIGHT>"))?;
+    let w: u32 = w
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid width in '{value}'"))?;
+    let h: u32 = h
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid height in '{value}'"))?;
+    if w == 0 || h == 0 {
+        return Err(format!("window size '{value}' must be positive"));
+    }
+    Ok([w as f32, h as f32])
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{DEFAULT_WINDOW_SIZE, parse_window_size};
+
+    #[test]
+    fn parses_valid_size() {
+        assert_eq!(parse_window_size("1600x900").unwrap(), [1600.0, 900.0]);
+        assert_eq!(parse_window_size("1280X720").unwrap(), [1280.0, 720.0]);
+    }
+
+    #[test]
+    fn rejects_bad_sizes() {
+        assert!(parse_window_size("1280").is_err());
+        assert!(parse_window_size("0x720").is_err());
+        assert!(parse_window_size("axb").is_err());
+    }
+
+    #[test]
+    fn default_is_1280x720() {
+        assert_eq!(DEFAULT_WINDOW_SIZE, [1280.0, 720.0]);
+    }
 }

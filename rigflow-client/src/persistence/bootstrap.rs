@@ -124,8 +124,10 @@ pub fn apply_operator_settings_to_ui_state(
     // WebSocket handler can apply them on radio acquire without needing to
     // touch the persistence store.
     state.source_control_preferences = operator.source_control_preferences.clone();
+    state.radio_settings = operator.radio_settings.clone();
 
     state.volume_percent = operator.volume_percent;
+    state.show_advanced = operator.show_advanced;
 
     // Text-to-CW: restore the last-used message and speed.
     state.cw_message = operator.cw_message.clone();
@@ -169,8 +171,10 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
 
     // Write the current per-radio source-control preferences back to the file.
     operator.source_control_preferences = state.source_control_preferences.clone();
+    operator.radio_settings = state.radio_settings.clone();
 
     operator.volume_percent = state.volume_percent;
+    operator.show_advanced = state.show_advanced;
 
     operator.cw_message = state.cw_message.clone();
     operator.cw_speed_wpm = state.cw_speed_wpm;

@@ -5,7 +5,7 @@ impl RigflowApp {
     pub(crate) fn draw_waterfall_control_panel(&mut self, ui: &mut egui::Ui) {
         let mut save_waterfall_prefs = false;
 
-        ui.collapsing("Waterfall Control", |ui| {
+        ui.collapsing(super::panel_header("Waterfall Control"), |ui| {
             if let Ok(mut state) = self.state.lock() {
                 let zoom_response =
                     ui.add(egui::Slider::new(&mut state.display_zoom, 1.0..=4.0).text("Zoom"));
@@ -49,6 +49,8 @@ impl RigflowApp {
             }
         });
 
+        // Waterfall display persists per-radio via the debounced autosave (and
+        // to operator-level defaults here, which seed a radio's first acquire).
         if save_waterfall_prefs {
             self.save_waterfall_display_preferences_to_current_operator();
         }

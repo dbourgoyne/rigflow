@@ -1,7 +1,11 @@
 [package]
 name = "rigflow-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
+description = "Rigflow shared DSP, audio, jitter buffer, and radio models"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

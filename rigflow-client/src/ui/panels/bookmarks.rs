@@ -3,7 +3,7 @@ use eframe::egui;
 
 impl RigflowApp {
     pub(crate) fn draw_bookmarks_panel(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing("Bookmarks", |ui| {
+        ui.collapsing(super::panel_header("Bookmarks"), |ui| {
             let snapshot = {
                 let state = self.state.lock().unwrap();
                 state.clone()

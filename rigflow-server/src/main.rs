@@ -121,13 +121,13 @@ use log::{error, info};
 use rigflow_server::{
     app_state::AppState,
     config::ServerConfig,
+    net::udp::udp_registration::run_udp_registration_listener,
     net::websocket::ws_handler,
     radio::{
-	types::RadioManagerConfig,
-	discovery::{debug_print_discovered_radios, discover_radios},
-	manager::RadioManager,
+        discovery::{debug_print_discovered_radios, discover_radios},
+        manager::RadioManager,
+        types::RadioManagerConfig,
     },
-    net::udp::udp_registration::run_udp_registration_listener,
 };
 
 /// WebSocket endpoint for rigflow control.
@@ -249,9 +249,7 @@ fn parse_config_or_exit() -> ServerConfig {
 ///
 /// This keeps startup wiring in one place and makes `main()` easier to scan.
 fn build_app_state(radio_manager: Arc<RadioManager>) -> AppState {
-    AppState::new(
-        radio_manager,
-    )
+    AppState::new(radio_manager)
 }
 
 /// Spawn the UDP registration listener (on a pre-bound socket) used by clients

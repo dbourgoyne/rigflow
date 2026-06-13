@@ -28,7 +28,7 @@ fn category_label(kind: RadioSourceKind) -> &'static str {
 
 impl RigflowApp {
     pub(crate) fn draw_radios_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
-        egui::CollapsingHeader::new("Radios")
+        egui::CollapsingHeader::new(super::panel_header("Radios"))
             .default_open(true)
             .show(ui, |ui| {
                 if snapshot.available_radios.is_empty() | !snapshot.server_connected {

@@ -366,6 +366,65 @@ impl RigflowApp {
     /// behaviour is guaranteed consistent.  Tuning validation is unchanged
     /// (the server still validates every target); zoom only adjusts the local
     /// display.
+    /// Move the target frequency by `delta_hz` with soft-edge LO panning: as the
+    /// target nears the visible edge, shift the LO center so tuning keeps going
+    /// instead of hitting the dead zone at `center ± sample_rate/2`.  Shared by
+    /// the mouse wheel and the ←/→ arrow keys so both behave identically.  The
+    /// caller must ensure a radio is acquired.
+    pub(crate) fn tune_target_relative(&self, snapshot: &UiState, delta_hz: f32) {
+        use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
+
+        if delta_hz == 0.0 {
+            return;
+        }
+        let limits = active_freq_limits(snapshot);
+
+        // Move the target by the step, clamped only to the RF range (NOT the
+        // visible band) so it can cross the soft edge; the LO follows it.
+        let desired_target = clamp_center(snapshot.target_freq_hz + delta_hz, &limits);
+
+        // Soft threshold = 80% of the visible half-span (zoom-aware: the visible
+        // span is sample_rate / display_zoom, centered on the LO).
+        let half_span =
+            (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
+        let soft = 0.8 * half_span;
+
+        // Pan the LO by the excess past the threshold so the target settles back
+        // at ~±soft (symmetric for the left and right edges).  The target itself
+        // always moves by exactly one step — no jumps.
+        let mut new_center = snapshot.center_freq_hz;
+        let offset = desired_target - new_center;
+        if half_span > 0.0 && offset.abs() > soft {
+            let excess = offset.abs() - soft;
+            new_center = clamp_center(new_center + offset.signum() * excess, &limits);
+        }
+
+        let new_target = clamp_target(
+            desired_target,
+            new_center,
+            snapshot.input_sample_rate_hz,
+            &limits,
+        );
+
+        if let Ok(mut state) = self.state.lock() {
+            state.center_freq_hz = new_center;
+            state.target_freq_hz = new_target;
+        }
+        // Retune the LO only when it actually panned.
+        if (new_center - snapshot.center_freq_hz).abs() > 0.5 {
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+                    center_freq_hz: new_center as u64,
+                },
+            ));
+        }
+        let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+            rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                target_freq_hz: new_target as u64,
+            },
+        ));
+    }
+
     fn apply_view_interaction(&self, r: &ViewMouseResult, snapshot: &UiState) {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
@@ -386,53 +445,12 @@ impl RigflowApp {
             }
         }
 
-        // Wheel fine-tune (modifier-scaled step) with soft-edge LO pan: as the
-        // target nears the visible edge, shift the LO center so tuning keeps
-        // going instead of hitting the dead zone at `center ± sample_rate/2`.
-        // Applies to wheel tuning only — click and the C key are untouched.
-        if r.tune_delta_hz != 0.0 && snapshot.radio_acquired {
-            let limits = active_freq_limits(snapshot);
-
-            // Move the target by the step, clamped only to the RF range (NOT the
-            // visible band) so it can cross the soft edge; the LO follows it.
-            let desired_target = clamp_center(snapshot.target_freq_hz + r.tune_delta_hz, &limits);
-
-            // Soft threshold = 80% of the visible half-span (zoom-aware: the
-            // visible span is sample_rate / display_zoom, centered on the LO).
-            let half_span =
-                (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
-            let soft = 0.8 * half_span;
-
-            // Pan the LO by the excess past the threshold so the target settles
-            // back at ~±soft (symmetric for the left and right edges).  The
-            // target itself always moves by exactly one step — no jumps.
-            let mut new_center = snapshot.center_freq_hz;
-            let offset = desired_target - new_center;
-            if half_span > 0.0 && offset.abs() > soft {
-                let excess = offset.abs() - soft;
-                new_center = clamp_center(new_center + offset.signum() * excess, &limits);
-            }
-
-            let new_target = clamp_target(
-                desired_target,
-                new_center,
-                snapshot.input_sample_rate_hz,
-                &limits,
-            );
-
-            if let Ok(mut state) = self.state.lock() {
-                state.center_freq_hz = new_center;
-                state.target_freq_hz = new_target;
-            }
-            // Retune the LO only when it actually panned.
-            if (new_center - snapshot.center_freq_hz).abs() > 0.5 {
-                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                        center_freq_hz: new_center as u64,
-                    },
-                ));
-            }
-            send_target(new_target);
+        // Wheel fine-tune: resolve the mode-aware Hz step here (this code has the
+        // demod mode; the shared mouse handler does not) and apply it through the
+        // common relative-tune path, which also handles soft-edge LO panning.
+        if r.tune_dir != 0 && snapshot.radio_acquired {
+            let step = crate::ui::tuning_steps::target_step_hz(snapshot.demod_mode, r.tune_tier);
+            self.tune_target_relative(snapshot, r.tune_dir as f32 * step);
         }
 
         // Single-click → tune target to the clicked frequency.
@@ -559,5 +577,6 @@ fn mode_label(mode: rigflow_core::dsp::modes::DemodMode) -> &'static str {
         DemodMode::Am => "AM",
         DemodMode::Cwu => "CWU",
         DemodMode::Cwl => "CWL",
+        DemodMode::DgtU => "DATA-U",
     }
 }

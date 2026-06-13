@@ -1,114 +1,52 @@
 # Rigflow Release Notes
 
-> Working document. Tracks user-facing changes, known issues, and workarounds as
-> the project moves toward its first public release. Newest entries on top.
-
 ---
 
-## Unreleased
+## v0.1.0 — Initial release
 
-### Changes
+The first public release of Rigflow — a client/server SDR application for amateur radio that can
+receive and transmit on HF over the network. Highlights:
 
-- **The server command line is simplified to three flags.** Everything else
-  (frequency, mode, gain, ppm, sample rate, which source) is driven live by the
-  client and discovery now finds every source automatically, so the old per-source
-  tuning flags were redundant or dead and have been removed. What's left:
-  `--help`/`-h`, `--recordings-dir PATH` (renamed from `--wav-dir`; the IQ-recording
-  + WAV-playback directory), and `--hr50-serial auto|<path>[:baud]|none` — the amp
-  baud is now folded into the value (e.g. `--hr50-serial /dev/ttyUSB0:19200`), so
-  `--hr50-baud` is gone. Run the server with no arguments. As part of this, RTL-SDR
-  device selection now opens the **acquired radio's own device index** (so a second
-  RTL works via the radio list), rather than a single global `--rtl-device`.
+**Receive**
+- Modes: WFM, NFM, AM, USB, LSB, CW (CWU/CWL), and Data (USB for FT8/digital).
+- Real-time spectrum and waterfall, with click, scroll, and keyboard tuning (mode-aware step sizes).
+- Noise reduction (NR2), AGC, and squelch; bookmarks; RX IQ recording and playback.
 
-- **The radio list now reflects real hardware (no phantom / stale entries).**
-  RTL-SDR devices are **really enumerated** over USB — the server lists the
-  actual dongles present (none when unplugged) instead of always advertising one
-  phantom RTL that failed on acquire. A **Rescan** now also prunes a discovered
-  radio that's genuinely gone *and* idle — a removed RTL, a deleted WAV, or a
-  powered-off HL2 disappears from the list (a radio you're actively using is
-  never removed). HL2 discovery was hardened to re-broadcast within each scan and
-  dedupe replies, so a single dropped packet can't make a present HL2 flicker out.
+**Transmit** (Hermes Lite 2)
+- SSB from the microphone (USB/LSB) with a soft limiter and speech compressor.
+- CW via straight key (Space bar) or Text-to-CW with F1–F4 memory macros, sidetone, and semi
+  break-in; plus on-screen CW decode of received signals.
+- Digital (FT8 / WSJT-X): selecting the Data mode auto-routes audio, and an in-app setup window
+  shows the device names and CAT/PTT settings.
+- Built-in two-tone and Spot/SWR transmit test aids.
 
-- **One client per server, one server per host (enforced).** A server now serves a
-  single client: a second client connecting to a busy server is cleanly rejected
-  ("server already has a client") instead of causing undefined contention — so run
-  one client per server (multiple clients on a host is fine, each to its own
-  server). A second `rigflow-server` on the same host exits immediately with a
-  clear "port already in use" message rather than half-starting. A WebSocket
-  heartbeat detects dead/abandoned connections within ~40 s and frees the slot, so
-  your own client's auto-reconnect after a network outage still works (it retries
-  through the eviction window rather than being locked out).
+**Station**
+- Remote operation over the network (lightweight WebSocket control + UDP media); multiple radios
+  from one client.
+- Per-operator and per-radio settings — each radio resumes exactly where its operator left it.
+- Optional Hardrock-50 amplifier control (band tracking, ATU, SWR/power) over USB serial.
 
-- **HL2 link loss is now visible and survivable, and a shutdown can't leave the
-  rig keyed.** A brief receive gap (Ethernet blip, switch hiccup) no longer tears
-  the whole radio down: the server keeps the worker alive, surfaces the radio as
-  **"not responding"** (for any SDR — an HL2 link drop or an RTL dongle pulled
-  mid-stream) in the Source Status panel and the status light, and resumes RX
-  in place when packets return. Only a *sustained* outage (~10 s) ends the
-  session, after which the client's auto-reconnect re-acquires and
-  re-initializes a power-cycled device. Separately, the server now handles
-  **Ctrl-C / SIGTERM** by stopping all radios before exit, which **un-keys the
-  HL2** — previously a shutdown mid-transmit left PTT asserted until the radio's
-  own watchdog timed out. (A hard kill, `SIGKILL`, still relies on that
-  watchdog.)
+**Hardware & platforms**
+- Radios: Hermes Lite 2 (RX + TX), RTL-SDR (receive, incl. direct-sampling HF), plus WAV IQ playback
+  and a built-in test tone. Optional Hardrock-50 amplifier.
+- Server: Linux (x86-64 and Raspberry Pi / ARM). Client: Linux and macOS. *(Digital/FT8 is supported
+  on the Linux client only.)*
 
-- **Corrupt config no longer leaves you stuck or silently wipes everything.** If
-  an operator settings file or the app-state file is unparseable, the client now
-  quarantines the bad file (renamed to `<name>.corrupt-<timestamp>`), resets just
-  that file to defaults, and shows a Warning in the Status / Problems area —
-  instead of an unusable operator (previously) or a silent reset of *all* settings
-  (previously, on a corrupt app-state file). A file written by a **newer** Rigflow
-  build (e.g. after a downgrade) is **left untouched on disk**: the session runs on
-  defaults and you're told to upgrade to use it, so good settings aren't destroyed.
-
-- **The client now auto-reconnects after a network drop.** A transient blip
-  (WiFi hiccup, brief server restart) no longer ends the session: the control
-  plane reconnects with exponential backoff (1→2→4→8→16→30 s cap) and
-  **automatically re-acquires the radio you had**, restoring full state (the
-  server resends a runtime snapshot — no settings are lost) and resuming audio.
-  Details:
-  - Only an *unexpected* drop reconnects; an explicit **Disconnect** does not.
-  - If you reconnect faster than the server releases your old lease, re-acquire
-    retries for ~35 s until the radio frees, then reports an error if it can't.
-  - Status shows "reconnecting (attempt N)…" / "re-acquiring radio…" as a
-    transient Warning in the Status / Problems area, escalating to an Error only
-    if re-acquire ultimately gives up.
-  - Known limitation (this release): while reconnecting there is no dedicated
-    "stop reconnecting" button — the Server button reads "Connect" and
-    re-triggers an immediate attempt. Auto-reconnecting the *last* radio across a
-    full app restart is not yet implemented.
-
-- **Subsystem failures are now shown on screen, not just in the log.** A
-  fixed **Status console** docked at the bottom of the left panel (always visible,
-  scrollable when the list is long) — plus an **LED-style status light** in the top
-  status bar (green = all OK, amber = warnings only, red = an error; hover for the
-  list) — surfaces active failures with their specific reason instead of failing
-  silently. Covered:
-  - **rigctl (CAT) bind failure** — e.g. port 4532 already in use (previously
-    WSJT-X would just say "can't open rig" with no hint from Rigflow).
-  - **Digital / PipeWire unavailability** — virtual audio device creation
-    failures now show the underlying reason (e.g. `pactl` not found / PipeWire
-    down) rather than a red dot buried in *Advanced*.
-  - **Amplifier serial open failure** — an explicitly configured `--hr50-serial`
-    path that can't be opened (wrong path, permission, baud) is surfaced; a bad
-    `dialout` permission no longer fails silently. (Auto-detect finding no
-    amplifier stays log-only, so stations without an HR50 see nothing.)
-  - **Server connection failures** — connect/acquire/connection-drop errors are
-    visible even though the Server panel is collapsed by default.
-
-- **HR50 amplifier serial port is now auto-detected.** `--hr50-serial` defaults to
-  `auto`: USB-serial ports are narrowed by USB VID/PID to known converter chips
-  (FTDI, Microchip MCP2200, Silicon Labs CP210x, Prolific, CH340), then each is
-  probed with a read-only `HRRX;` and only a port that answers as a Hardrock-50
-  is used. The baud rate is auto-scanned (`--hr50-baud` is tried first). This
-  removes the previous hard-coded `/dev/ttyUSB0` default, which could send CAT
-  bytes to an unrelated serial device. An explicit path (e.g.
-  `--hr50-serial /dev/ttyUSB0`) still opens that device directly; `none` disables
-  amplifier polling.
+See the [Operator guide](operator-guide.md) for how to use these, and the
+[Validation](validation.md) page for transmit signal-quality results.
 
 ---
 
 ## Known Issues & Workarounds
+
+### Signal-strength, TX power, and SWR readings are approximate
+
+The S-meter / dBm, TX forward/reverse power (watts), and SWR are **approximate
+indications**, not lab-calibrated measurements. They use sensible default scaling
+(like Quisk's defaults) and are good for *relative* judgements — comparing signals,
+spotting a high-SWR condition, peaking a tune — but should not be treated as
+absolute, instrument-grade values. No user calibration is required (or currently
+offered); a per-rig calibration option may come in a future release.
 
 ### HL2 not discovered after a simultaneous cold boot (direct Pi↔HL2 link)
 

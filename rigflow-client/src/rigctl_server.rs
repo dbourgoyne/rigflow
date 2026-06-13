@@ -389,19 +389,15 @@ fn set_ptt(shared: &RigctlShared, on: bool) {
 
 // ── Mode name mapping ────────────────────────────────────────────────────────
 
-/// Map a Rigflow demod to the rigctl mode name reported by `m` when we have no
-/// CAT-set mode to echo.  SSB reports the **data** variant (`PKTUSB`/`PKTLSB`)
-/// rather than `USB`/`LSB`, because this CAT server exists for digital software
-/// (WSJT-X et al.) which runs in Data/Pkt mode and sets `PKTUSB`.  Reporting the
-/// data variant makes WSJT-X's first mode read match what it intends to set, so
-/// it skips its slow ~20 s mode-sync loop (which otherwise blocks even frequency
-/// changes).  Rigflow has only one upper/lower-sideband mode, so this is purely
-/// a CAT naming choice.  (If a client sets plain `USB`/`LSB`, the `m` echo
-/// reports that back — see `current_mode`.)
+/// Map a Rigflow demod to the rigctl mode name reported by `m`.  The dedicated
+/// **Data-USB** mode (`DgtU`) reports the data variant `PKTUSB` — so WSJT-X's
+/// first mode read matches what it sets and it skips its slow ~20 s mode-sync
+/// loop — while plain voice `Usb`/`Lsb` now report `USB`/`LSB` honestly.
 fn demod_to_rigctl_mode(mode: DemodMode) -> &'static str {
     match mode {
-        DemodMode::Usb => "PKTUSB",
-        DemodMode::Lsb => "PKTLSB",
+        DemodMode::Usb => "USB",
+        DemodMode::Lsb => "LSB",
+        DemodMode::DgtU => "PKTUSB",
         DemodMode::Cwu => "CW",
         DemodMode::Cwl => "CWR",
         DemodMode::Am => "AM",
@@ -412,7 +408,9 @@ fn demod_to_rigctl_mode(mode: DemodMode) -> &'static str {
 
 fn rigctl_mode_to_demod(mode: &str) -> Option<DemodMode> {
     match mode {
-        "USB" | "PKTUSB" | "DATA-U" => Some(DemodMode::Usb),
+        "USB" => Some(DemodMode::Usb),
+        // Data/packet USB selects the dedicated digital mode (auto-routes RX).
+        "PKTUSB" | "DATA-U" => Some(DemodMode::DgtU),
         "LSB" | "PKTLSB" | "DATA-L" | "RTTY" => Some(DemodMode::Lsb),
         "CW" => Some(DemodMode::Cwu),
         "CWR" => Some(DemodMode::Cwl),
