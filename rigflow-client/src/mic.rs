@@ -422,7 +422,7 @@ impl MicProc {
             self.pushed_since += pushed as u64;
             let elapsed = now.duration_since(t0).as_secs_f32();
             if elapsed >= 1.0 {
-                log::info!(
+                log::debug!(
                     "[mic] mic-TX production rate: {:.0} samples/s (expect ~48000)",
                     self.pushed_since as f32 / elapsed
                 );
