@@ -8,7 +8,7 @@
 //! phases (monitor, SSB TX): `process_mono` is the single capture→measure point.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -42,6 +42,13 @@ pub struct MicShared {
     /// always-on capture and the external source both fill it (≈2× the consume
     /// rate), pinning the server queue and dropping ~half the samples.
     external_tx_source: AtomicBool,
+    /// Capture-generation token.  Bumped on every (re)start of capture; each
+    /// stream's callback records the generation it was born with and only pushes
+    /// while it still matches.  This neutralises a *leaked* previous stream — on
+    /// macOS, dropping a `cpal` input stream does not reliably stop the audio
+    /// unit, so a switched-away device keeps capturing; without this gate it
+    /// would keep feeding the ring (2+ producers → server-side mic overrun).
+    capture_gen: AtomicU64,
     /// Outbound mic-TX audio ring (48 kHz mono f32).
     tx_ring: Mutex<VecDeque<f32>>,
 }
@@ -54,6 +61,7 @@ impl Default for MicShared {
             clipped: AtomicBool::new(false),
             tx_streaming: AtomicBool::new(false),
             external_tx_source: AtomicBool::new(false),
+            capture_gen: AtomicU64::new(0),
             tx_ring: Mutex::new(VecDeque::new()),
         }
     }
@@ -106,6 +114,15 @@ impl MicShared {
     pub fn external_tx_source(&self) -> bool {
         self.external_tx_source.load(Ordering::Relaxed)
     }
+    /// Allocate a new capture generation (called when a stream starts); the
+    /// returned token is the only one allowed to push until the next bump.
+    pub fn bump_capture_gen(&self) -> u64 {
+        self.capture_gen.fetch_add(1, Ordering::Relaxed) + 1
+    }
+    /// The generation a live capture must match to be allowed to push.
+    fn current_capture_gen(&self) -> u64 {
+        self.capture_gen.load(Ordering::Relaxed)
+    }
     /// Append captured 48 kHz mono samples (callback side); drop oldest on
     /// overflow.  No-op unless streaming.  Also used by the digital TX router
     /// to inject WSJT-X audio into the same mic-TX ring.
@@ -141,6 +158,11 @@ pub struct MicCapture {
 
 impl Drop for MicCapture {
     fn drop(&mut self) {
+        // Explicitly pause before the stream field drops.  On macOS, relying on
+        // drop alone did not reliably stop the input audio unit (the callback
+        // kept firing on a switched-away device); `pause()` stops it up front.
+        // The capture-generation gate guarantees correctness even if it doesn't.
+        let _ = self._stream.pause();
         log::debug!("[mic] microphone stream stopped ({})", self.device_name);
     }
 }
@@ -189,8 +211,11 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
     let config: cpal::StreamConfig = supported.into();
     let in_rate = config.sample_rate.0 as f32;
 
+    // Claim a fresh capture generation so any previous (possibly leaked) stream
+    // stops pushing into the shared TX ring the moment this one starts.
+    let generation = shared.bump_capture_gen();
     let err_fn = |e| log::error!("[mic] input stream error: {e}");
-    let mut proc = MicProc::new(Arc::clone(&shared), channels, in_rate);
+    let mut proc = MicProc::new(Arc::clone(&shared), channels, in_rate, generation);
 
     let stream = match sample_format {
         cpal::SampleFormat::F32 => device.build_input_stream(
@@ -232,7 +257,7 @@ pub fn start_capture(shared: Arc<MicShared>, requested: &str) -> Result<MicCaptu
         .map_err(|e| format!("play input stream: {e}"))?;
 
     log::info!(
-        "[mic] microphone device selected: {device_name} @ {in_rate:.0} Hz (requested {requested:?})"
+        "[mic] microphone device selected: {device_name} @ {in_rate:.0} Hz, {channels} ch, {sample_format:?} (requested {requested:?})"
     );
     log::debug!("[mic] microphone stream started");
 
@@ -266,23 +291,32 @@ struct MicProc {
     shared: Arc<MicShared>,
     channels: usize,
     in_rate: f32,
+    // Capture generation this stream was born with; it goes inert once a newer
+    // capture supersedes it (see `MicShared::capture_gen`).
+    generation: u64,
     mono: Vec<f32>,
     resampled: Vec<f32>,
     // Linear-resampler state (only used when in_rate != 48 kHz).
     pos: f32,
     prev: f32,
+    // Diagnostic: mic→server production-rate meter (samples pushed since rate_t0).
+    pushed_since: u64,
+    rate_t0: Option<std::time::Instant>,
 }
 
 impl MicProc {
-    fn new(shared: Arc<MicShared>, channels: usize, in_rate: f32) -> Self {
+    fn new(shared: Arc<MicShared>, channels: usize, in_rate: f32, generation: u64) -> Self {
         Self {
             shared,
             channels,
             in_rate,
+            generation,
             mono: Vec::new(),
             resampled: Vec::new(),
             pos: 0.0,
             prev: 0.0,
+            pushed_since: 0,
+            rate_t0: None,
         }
     }
 
@@ -342,6 +376,12 @@ impl MicProc {
     /// Gain, measure peak/clip, and buffer 48 kHz mono audio while streaming.
     /// (`self.mono` is the device-rate mono block.)
     fn process(&mut self) {
+        // A superseded capture (e.g. a device switched away from, whose macOS
+        // audio unit lingered after drop) goes fully inert — no level report,
+        // no ring push — leaving the newest capture as the ring's sole producer.
+        if self.generation != self.shared.current_capture_gen() {
+            return;
+        }
         let gain = self.shared.gain();
         let mut peak = 0.0f32;
         let mut clipped = false;
@@ -363,14 +403,35 @@ impl MicProc {
         // Push mic audio only when keyed AND no external source owns the ring
         // (the digital TX router feeds it directly while transmitting WSJT-X).
         if self.shared.tx_streaming() && !self.shared.external_tx_source() {
-            if (self.in_rate - TX_RATE_HZ as f32).abs() < 1.0 {
+            let pushed = if (self.in_rate - TX_RATE_HZ as f32).abs() < 1.0 {
                 self.shared.push_tx(&self.mono);
+                self.mono.len()
             } else {
                 self.resample_into_48k();
                 let out = std::mem::take(&mut self.resampled);
                 self.shared.push_tx(&out);
+                let n = out.len();
                 self.resampled = out;
+                n
+            };
+            // Diagnostic: report the actual mic→server production rate.  It should
+            // be ~48000 samples/s; a value near 96000 means the device is
+            // delivering more channels than reported (mic-TX overrun root cause).
+            let now = std::time::Instant::now();
+            let t0 = *self.rate_t0.get_or_insert(now);
+            self.pushed_since += pushed as u64;
+            let elapsed = now.duration_since(t0).as_secs_f32();
+            if elapsed >= 1.0 {
+                log::info!(
+                    "[mic] mic-TX production rate: {:.0} samples/s (expect ~48000)",
+                    self.pushed_since as f32 / elapsed
+                );
+                self.pushed_since = 0;
+                self.rate_t0 = Some(now);
             }
+        } else {
+            self.rate_t0 = None;
+            self.pushed_since = 0;
         }
     }
 

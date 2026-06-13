@@ -133,6 +133,15 @@ impl RigflowApp {
         }
         self.mic_requested = Some(desired.clone());
 
+        // Tear down the existing capture BEFORE opening the new device.  Both
+        // streams push into the same shared TX ring, so if the old one is still
+        // live when the new one starts (it was only dropped by the assignment
+        // below, after `start_capture` returned), two producers feed the ring at
+        // once → the server sees ~2× 48 kHz and reports mic-TX overruns.  On
+        // macOS a switched-away stream lingered this way; dropping first
+        // guarantees a single producer.
+        self.mic = None;
+
         match crate::mic::start_capture(shared, &desired) {
             Ok(cap) => {
                 let warning = if cap.fell_back && !desired.is_empty() {
