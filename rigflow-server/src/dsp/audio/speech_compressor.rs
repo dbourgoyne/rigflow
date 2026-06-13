@@ -114,3 +114,66 @@ impl SpeechCompressor {
         peak_gr_db
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tone(amp: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|k| amp * (2.0 * std::f32::consts::PI * 1000.0 * k as f32 / 48_000.0).sin())
+            .collect()
+    }
+    fn peak(s: &[f32]) -> f32 {
+        s.iter().fold(0.0f32, |m, &x| m.max(x.abs()))
+    }
+
+    /// Ratio 1.0 (level 0) is a no-op: no gain reduction, no make-up, passthrough.
+    #[test]
+    fn unity_at_ratio_1() {
+        let mut c = SpeechCompressor::new(48_000.0, ratio_for_level(0), 10.0, 150.0);
+        let inp = tone(0.5, 24_000);
+        let mut buf = inp.clone();
+        let gr = c.process_in_place(&mut buf);
+        assert!(gr < 0.01, "ratio 1.0 → no compression, got {gr} dB");
+        assert!(
+            inp.iter().zip(&buf).all(|(a, b)| (a - b).abs() < 1e-4),
+            "ratio 1.0 must pass audio through unchanged"
+        );
+    }
+
+    /// Above the −15 dBFS threshold the compressor reports gain reduction ≈ the
+    /// soft-knee slope × overshoot (≈6 dB for ratio 3 on a −6 dBFS tone).
+    #[test]
+    fn gain_reduction_above_threshold() {
+        let mut c = SpeechCompressor::new(48_000.0, ratio_for_level(5), 10.0, 150.0); // ratio 3
+        let mut buf = tone(0.5, 48_000); // −6 dBFS, ~9 dB over threshold
+        let gr = c.process_in_place(&mut buf);
+        assert!(
+            (3.0..9.0).contains(&gr),
+            "expected ~6 dB gain reduction for ratio 3, got {gr:.1} dB"
+        );
+    }
+
+    /// Compression shrinks the loud/quiet ratio, and make-up gain lifts quiet audio.
+    #[test]
+    fn reduces_dynamic_range_and_lifts_quiet() {
+        let mk = || SpeechCompressor::new(48_000.0, ratio_for_level(5), 10.0, 150.0);
+        let mut loud = tone(0.5, 48_000);
+        mk().process_in_place(&mut loud);
+        let mut quiet = tone(0.05, 48_000);
+        mk().process_in_place(&mut quiet);
+        let lo = peak(&loud[loud.len() - 4800..]);
+        let qo = peak(&quiet[quiet.len() - 4800..]);
+        let in_ratio = 0.5 / 0.05; // 10:1 (20 dB)
+        assert!(
+            lo / qo < in_ratio,
+            "compression should shrink the loud/quiet ratio: in {in_ratio:.1}, out {:.1}",
+            lo / qo
+        );
+        assert!(
+            qo > 0.05,
+            "make-up gain should lift the quiet tone above its input (got {qo:.3} vs 0.05)"
+        );
+    }
+}

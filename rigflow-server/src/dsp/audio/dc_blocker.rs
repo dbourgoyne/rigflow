@@ -85,3 +85,40 @@ impl DcBlocker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A constant DC input decays to ~0 (the high-pass removes the DC term).
+    #[test]
+    fn removes_dc() {
+        let mut dc = DcBlocker::new(0.995);
+        let mut buf = vec![1.0f32; 48_000];
+        dc.process_in_place(&mut buf);
+        assert!(
+            buf[buf.len() - 1].abs() < 0.05,
+            "DC should decay to ~0, tail {}",
+            buf[buf.len() - 1]
+        );
+    }
+
+    /// A 1 kHz tone passes essentially unchanged (corner is ~38 Hz).
+    #[test]
+    fn passes_tone() {
+        let mut dc = DcBlocker::new(0.995);
+        let n = 48_000;
+        let inp: Vec<f32> = (0..n)
+            .map(|k| 0.5 * (2.0 * std::f32::consts::PI * 1000.0 * k as f32 / 48_000.0).sin())
+            .collect();
+        let mut buf = inp.clone();
+        dc.process_in_place(&mut buf);
+        let amp = buf[buf.len() - 4800..]
+            .iter()
+            .fold(0.0f32, |m, &x| m.max(x.abs()));
+        assert!(
+            (amp - 0.5).abs() < 0.03,
+            "1 kHz tone should pass ~unchanged, amp {amp:.3}"
+        );
+    }
+}

@@ -97,3 +97,53 @@ impl TxLimiter {
         peak_gr_db
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tone(amp: f32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|k| amp * (2.0 * std::f32::consts::PI * 1000.0 * k as f32 / 48_000.0).sin())
+            .collect()
+    }
+    fn peak(s: &[f32]) -> f32 {
+        s.iter().fold(0.0f32, |m, &x| m.max(x.abs()))
+    }
+
+    /// A signal above the threshold must be clamped down to ~threshold, with the
+    /// limiter reporting gain reduction.
+    #[test]
+    fn clamps_peaks_to_threshold() {
+        let mut lim = TxLimiter::new(48_000.0, 0.5, 2.0, 120.0);
+        let mut buf = tone(0.9, 48_000); // 1 s, well above the 0.5 threshold
+        let gr = lim.process_in_place(&mut buf);
+        let out = peak(&buf[buf.len() - 4800..]); // steady state, last 100 ms
+        assert!(gr > 2.0, "expected gain reduction, got {gr:.1} dB");
+        assert!(
+            out < 0.9,
+            "output must be below the input peak (0.9), got {out:.3}"
+        );
+        assert!(
+            out <= 0.6,
+            "output should clamp near the 0.5 threshold, got {out:.3}"
+        );
+    }
+
+    /// A signal below the threshold passes through untouched (no GR, unity gain).
+    #[test]
+    fn passthrough_below_threshold() {
+        let mut lim = TxLimiter::new(48_000.0, 0.5, 2.0, 120.0);
+        let mut buf = tone(0.3, 48_000);
+        let gr = lim.process_in_place(&mut buf);
+        let out = peak(&buf[buf.len() - 4800..]);
+        assert!(
+            gr < 0.5,
+            "no gain reduction expected below threshold, got {gr:.2} dB"
+        );
+        assert!(
+            (out - 0.3).abs() < 0.02,
+            "should pass through unchanged, peak {out:.3}"
+        );
+    }
+}
