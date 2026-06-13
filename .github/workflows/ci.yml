@@ -8,6 +8,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Cancel an in-progress run when a newer commit is pushed to the same branch/PR,
+# so rapid successive pushes don't stack up CI runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: fmt · clippy · build · test
