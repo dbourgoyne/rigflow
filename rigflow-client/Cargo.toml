@@ -1,7 +1,11 @@
 [package]
 name = "rigflow-client"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
+description = "Rigflow SDR desktop client (egui)"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 eframe = "0.31"

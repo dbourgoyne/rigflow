@@ -1,8 +1,12 @@
 [package]
 name = "rigflow-server"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 default-run = "rigflow-server"
+description = "Rigflow SDR server: radio discovery, DSP pipeline, and UDP streaming"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
 
 [dependencies]
 uuid = { version = "1", features = ["v4"] }

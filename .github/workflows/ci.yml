@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt · clippy · build · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rigflow-client links ALSA (cpal); rigflow-server links libusb (RTL-SDR driver).
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        # Lints are informational for now; tighten to `-- -D warnings` once clean.
+        run: cargo clippy --workspace --all-targets
+
+      - name: Build (whole workspace)
+        run: cargo build --workspace
+
+      # Core + server tests run headless. The client links an audio backend, so we
+      # build it (above) but don't run its tests on a headless runner.
+      - name: Test (core + server)
+        run: cargo test -p rigflow-core -p rigflow-server

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::{RwLock, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
 
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};

@@ -68,12 +68,10 @@ pub fn parse_media_header(packet: &[u8]) -> Option<MediaHeader> {
         magic: u16::from_be_bytes([packet[0], packet[1]]),
         version: packet[2],
         stream_type: packet[3],
-        sequence: u32::from_be_bytes([
-            packet[4], packet[5], packet[6], packet[7],
-        ]),
+        sequence: u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]),
         timestamp: u64::from_be_bytes([
-            packet[8], packet[9], packet[10], packet[11],
-            packet[12], packet[13], packet[14], packet[15],
+            packet[8], packet[9], packet[10], packet[11], packet[12], packet[13], packet[14],
+            packet[15],
         ]),
     })
 }

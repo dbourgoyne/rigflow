@@ -7,5 +7,18 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+license = "MIT"
+authors = ["David Bourgoyne"]
+repository = "https://github.com/dbourgoyne/rigflow"
+
 [profile.release]
 debug = true
+
+# Distribution profile for published binaries: stripped (small) while leaving the
+# dev `release` profile's debug info intact for local backtraces. Built with
+# `cargo build --profile dist` (output in target/dist/).
+[profile.dist]
+inherits = "release"
+strip = true
