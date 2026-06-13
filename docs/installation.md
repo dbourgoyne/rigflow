@@ -32,7 +32,7 @@ RTL-SDR driver). The server does *not* need an audio library.
 # Debian / Ubuntu / Raspberry Pi OS
 sudo apt install build-essential pkg-config libusb-1.0-0-dev
 ```
-*(Fedora: `gcc pkgconf-pkg-config libusbx-devel` · Arch: `base-devel libusb`)*
+*(Fedora: `gcc pkgconf-pkg-config libusb1-devel` · Arch: `base-devel libusb`)*
 
 **Client (Linux):** the UI plays audio through ALSA, so it needs the ALSA dev headers:
 

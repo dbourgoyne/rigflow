@@ -59,10 +59,10 @@ the Rust toolchain and a few system libraries). Once those are in place:
 cargo build --release
 
 # Run the server (auto-discovers RTL-SDR, Hermes Lite 2, WAV recordings, and a test tone)
-cargo run -p rigflow-server
+cargo run --release -p rigflow-server
 
 # Run the client (in another terminal, or on another machine)
-cargo run -p rigflow-client
+cargo run --release -p rigflow-client
 ```
 
 In the client: enter the server's IP (defaults to `127.0.0.1` for a single-box setup), click

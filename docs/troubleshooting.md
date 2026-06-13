@@ -31,7 +31,7 @@ Common problems and fixes, by symptom. For setup steps see the
 **The RTL-SDR isn't found.**
 - The Linux TV-tuner driver grabs it by default — blacklist it
   (`blacklist dvb_usb_rtl28xxu`) and reboot, and make sure your user can access the USB device
-  (install the `rtl-sdr` package's udev rules). See the [Installation guide](installation.md#rtl-sdr--receive-only).
+  (install the `rtl-sdr` package's udev rules). See the [Installation guide](installation.md).
 
 **A radio releases or the client reconnects on its own.**
 - Rigflow **auto-reconnects** and re-acquires after a network blip — brief drops recover themselves.
