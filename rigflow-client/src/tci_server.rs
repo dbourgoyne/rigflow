@@ -24,7 +24,7 @@
 //! JTDX; items flagged `SPIKE:` below are the first things to verify/adjust.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -63,6 +63,13 @@ const TCI_HEADER_LEN: usize = 64;
 const TCI_SAMPLE_FLOAT32: u32 = 3; // TciSampleType::FLOAT32
 const TCI_STREAM_RX_AUDIO: u32 = 1; // TciStreamType::RX_AUDIO_STREAM
 const TCI_STREAM_TX_AUDIO: u32 = 2; // TciStreamType::TX_AUDIO_STREAM
+const TCI_STREAM_TX_CHRONO: u32 = 3; // TciStreamType::TxChrono (TX clock)
+
+/// Safety ceiling on mono samples requested per `TxChrono`.  WSJT-X allocates
+/// `length*2` floats in `data[8192]` and returns `length/2` mono samples, so the
+/// chrono's float `length` = mono*2 must stay ≤ 8192 → mono ≤ 2048.  The pump
+/// otherwise paces to wall-clock time.
+const TX_CHRONO_MAX_MONO: u32 = 2048;
 
 /// RX-audio tap fed by the media thread (`net::udp`) and drained by the TCI
 /// connection task.  No-op unless a client has requested `audio_start`.  Lives
@@ -125,6 +132,9 @@ struct TciShared {
     rx_audio: Arc<TciRxAudio>,
     /// Negotiated TCI audio sample rate (`audio_samplerate`), default 48 kHz.
     audio_rate_hz: AtomicU32,
+    /// True while keyed (PTT on).  The connection loop sends `TxChrono` frames
+    /// while this is set — WSJT-X only streams TX audio in reply to chronos.
+    tx_active: AtomicBool,
 }
 
 /// The TCI WebSocket server.
@@ -147,6 +157,7 @@ impl TciServer {
                 mic_shared,
                 rx_audio,
                 audio_rate_hz: AtomicU32::new(DEFAULT_AUDIO_RATE_HZ),
+                tx_active: AtomicBool::new(false),
             }),
         }
     }
@@ -197,9 +208,18 @@ async fn handle_connection(
     }
 
     // RX audio is flushed on a fixed cadence; ~20 ms keeps latency low and frames
-    // a sensible size (~960 samples at 48 kHz).
+    // a sensible size (~960 samples at 48 kHz).  The same tick clocks TxChrono.
     let mut flush = tokio::time::interval(Duration::from_millis(20));
     let mut rx_frames_sent = 0u64;
+
+    // TxChrono pacing: while keyed, request TX samples at exactly real-time so the
+    // FT8 waveform plays at the right speed.  `tx_start`/`tx_samples_requested`
+    // lock the cumulative request count to wall-clock, self-correcting timer
+    // jitter (sending too fast time-compresses the on-air signal → no decode).
+    let mut tx_was_active = false;
+    let mut tx_start = tokio::time::Instant::now();
+    let mut tx_samples_requested: u64 = 0;
+    let mut tx_chronos_sent = 0u64;
 
     loop {
         tokio::select! {
@@ -238,6 +258,39 @@ async fn handle_connection(
                         }
                     }
                 }
+
+                // TxChrono pump: while keyed, request TX audio at real-time rate.
+                // WSJT-X streams TX audio ONLY in reply to these frames.
+                let tx_now = shared.tx_active.load(Ordering::Relaxed);
+                if tx_now {
+                    let rate = shared.audio_rate_hz.load(Ordering::Relaxed).max(1);
+                    if !tx_was_active {
+                        tx_start = tokio::time::Instant::now();
+                        tx_samples_requested = 0;
+                        tx_chronos_sent = 0;
+                        log::info!("[tci] TX keyed — starting TxChrono pump @ {rate} Hz");
+                    }
+                    // Mono samples that should have been delivered by now.
+                    let target = (tx_start.elapsed().as_secs_f64() * rate as f64) as u64;
+                    if target > tx_samples_requested {
+                        // WSJT-X returns length/2 mono samples per chrono (it fills
+                        // `length` interleaved-stereo floats), so request 2× the
+                        // float length for the mono samples we still owe — else the
+                        // modulator is fed at half real-time (bursty underruns).
+                        let need = (target - tx_samples_requested).min(TX_CHRONO_MAX_MONO as u64);
+                        sink.send(Message::binary(encode_tx_chrono(rate, (need * 2) as u32))).await?;
+                        tx_samples_requested += need;
+                        tx_chronos_sent += 1;
+                        if tx_chronos_sent == 1 || tx_chronos_sent % 50 == 0 {
+                            log::debug!(
+                                "[tci] sent {tx_chronos_sent} TxChrono frames ({need} mono samples last)"
+                            );
+                        }
+                    }
+                } else if tx_was_active {
+                    log::info!("[tci] TX unkeyed — TxChrono pump stopped ({tx_chronos_sent} sent)");
+                }
+                tx_was_active = tx_now;
             }
         }
     }
@@ -258,6 +311,13 @@ fn handshake_lines(shared: &TciShared) -> Vec<String> {
         "vfo_limits:0,500000000;".to_string(),
         "if_limits:-24000,24000;".to_string(),
         "modulations_list:am,sam,dsb,lsb,usb,cw,nfm,digl,digu,wfm;".to_string(),
+        // Audio rates the real ExpertSDR/Thetis init burst announces.  WSJT-X
+        // configures its audio engine — including the TX-audio encoder — from
+        // the server-announced `audio_samplerate`.  Omitting it lets RX stream
+        // (each frame carries its own rate) but leaves WSJT-X with no TX rate,
+        // so it keys PTT but never streams transmit audio (zero-power symptom).
+        format!("iq_samplerate:{RX_SERVER_RATE_HZ};"),
+        format!("audio_samplerate:{DEFAULT_AUDIO_RATE_HZ};"),
         format!("dds:0,{freq};"),
         format!("vfo:0,0,{freq};"),
         "if:0,0,0;".to_string(),
@@ -356,31 +416,79 @@ fn handle_text_command(cmd: &str, shared: &TciShared) -> Option<String> {
     }
 }
 
+/// Diagnostic counters for inbound binary frames: total seen, and those passed
+/// to the modulator.  Used to pinpoint "keys but zero power" (no TX audio).
+static TX_FRAMES_SEEN: AtomicU64 = AtomicU64::new(0);
+static TX_FRAMES_FED: AtomicU64 = AtomicU64::new(0);
+
 /// Decode an inbound TX-audio `Data_Stream` and feed it to the mic-TX ring.
 fn handle_tx_audio(buf: &[u8], shared: &TciShared) {
     if buf.len() < TCI_HEADER_LEN {
+        log::debug!("[tci] TX frame too short: {} bytes", buf.len());
         return;
     }
     let u32_at = |i: usize| u32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
     let sample_rate = u32_at(4);
-    let length = u32_at(20) as usize; // field 5 (sample count)
-    let data_type = u32_at(24); // field 6 (TciStreamType)
-    let channels = u32_at(28).max(1); // field 7
+    // field 5 = number of VALID floats (interleaved stereo); the buffer on the
+    // wire is length*2 floats but only the first `length` are real audio — the
+    // tail is uninitialised heap (NaN/Inf garbage), so never read past `length`.
+    let length = u32_at(20) as usize;
+    let data_type = u32_at(24); // field 6 (TciStreamType); field 7+ = reserved
+
+    let seen = TX_FRAMES_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
+    if seen == 1 || seen % 50 == 0 {
+        log::info!(
+            "[tci] TX frame #{seen}: {} bytes, data_type={data_type}, rate={sample_rate}, \
+             length={length} (expect data_type={TCI_STREAM_TX_AUDIO})",
+            buf.len()
+        );
+    }
 
     if data_type != TCI_STREAM_TX_AUDIO {
-        return; // ignore IQ / chrono / unexpected streams
+        // Prime suspect for "keys but zero power": WSJT-X stamps TX audio with a
+        // stream-type value we drop.  Surface it loudly (rate-limited).
+        if seen == 1 || seen % 50 == 0 {
+            log::warn!(
+                "[tci] dropping TX frame: data_type={data_type} != {TCI_STREAM_TX_AUDIO} \
+                 (no audio reaches the modulator → zero RF)"
+            );
+        }
+        return;
     }
 
+    // Read only the first `length` floats (the valid, interleaved-stereo region)
+    // and downmix to mono — yielding length/2 samples per chrono.  Sanitise any
+    // stray non-finite value so garbage never reaches the modulator / HL2 DAC.
     let avail = (buf.len() - TCI_HEADER_LEN) / 4;
-    let n = length.min(avail);
-    let mut samples = Vec::with_capacity(n);
-    for i in 0..n {
+    let valid = length.min(avail);
+    let mut samples = Vec::with_capacity(valid);
+    for i in 0..valid {
         let o = TCI_HEADER_LEN + i * 4;
-        samples.push(f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]));
+        let s = f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+        samples.push(if s.is_finite() { s } else { 0.0 });
     }
 
-    let mono = downmix(&samples, channels);
+    let mono = downmix(&samples, 2); // WSJT-X TX audio is interleaved stereo
     let out = resample(&mono, sample_rate as f32, TX_SERVER_RATE_HZ as f32);
+
+    // Log signal level so we can tell "no frames" from "silent frames" from
+    // "frames not streaming" (push_tx is a no-op unless tx_streaming is set).
+    let fed = TX_FRAMES_FED.fetch_add(1, Ordering::Relaxed) + 1;
+    if fed == 1 || fed % 50 == 0 {
+        let peak = out.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+        let rms = if out.is_empty() {
+            0.0
+        } else {
+            (out.iter().map(|&s| s * s).sum::<f32>() / out.len() as f32).sqrt()
+        };
+        log::info!(
+            "[tci] TX audio fed #{fed}: {} samples, peak={peak:.3}, rms={rms:.4}, \
+             streaming={}",
+            out.len(),
+            shared.mic_shared.tx_streaming()
+        );
+    }
+
     shared.mic_shared.push_tx(&out);
 }
 
@@ -441,6 +549,29 @@ fn encode_data_stream(sample_rate: u32, stream_type: u32, channels: u32, samples
     for s in samples {
         v.extend_from_slice(&s.to_le_bytes());
     }
+    v
+}
+
+/// Encode a `TxChrono` frame: a 64-byte header (no audio payload) that requests
+/// `length` per-channel samples of TX audio.  WSJT-X replies with one
+/// `TxAudioStream` frame of `length * 2` interleaved-stereo floats per chrono;
+/// `length` (and `sample_rate`/`format`) are echoed back into that reply.
+fn encode_tx_chrono(sample_rate: u32, length: u32) -> Vec<u8> {
+    let mut v = Vec::with_capacity(TCI_HEADER_LEN);
+    let header: [u32; 8] = [
+        0,                    // receiver
+        sample_rate,          // sample_rate
+        TCI_SAMPLE_FLOAT32,   // data_format
+        0,                    // codec
+        0,                    // crc
+        length,               // length (per-channel samples requested)
+        TCI_STREAM_TX_CHRONO, // data_type = TxChrono
+        0,                    // reserved
+    ];
+    for field in header {
+        v.extend_from_slice(&field.to_le_bytes());
+    }
+    v.extend_from_slice(&[0u8; 32]); // pad header to 64 bytes (no data field)
     v
 }
 
@@ -533,6 +664,9 @@ fn set_ptt(shared: &TciShared, on: bool) {
     if let Ok(mut s) = shared.ui_state.lock() {
         s.cat_ptt = on;
     }
+    // Gate the TxChrono pump in the connection loop (WSJT-X only sends TX audio
+    // in reply to chronos, so we must clock it for the duration of the over).
+    shared.tx_active.store(on, Ordering::Relaxed);
     if on {
         shared.mic_shared.set_external_tx_source(true);
         shared.mic_shared.set_tx_streaming(true);
