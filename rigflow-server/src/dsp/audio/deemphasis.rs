@@ -1,4 +1,4 @@
-use log::info;
+use log::debug;
 
 /// First-order deemphasis filter for FM audio.
 ///
@@ -39,7 +39,7 @@ impl DeemphasisFilter {
     /// - `sample_rate_hz`: audio sample rate
     /// - `tau_seconds`: time constant (e.g. 75e-6 for 75 µs)
     pub fn new(sample_rate_hz: f32, tau_seconds: f32) -> Self {
-        info!(
+        debug!(
             "DeemphasisFilter: new: sample_rate_hz = {}, tau_seconds = {}",
             sample_rate_hz, tau_seconds
         );

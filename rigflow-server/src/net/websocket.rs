@@ -188,7 +188,7 @@ async fn handle_radio_message(
     msg: ClientRadioMessage,
     local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
 ) {
-    info!("WEBSOCKET: handle_radio_message: msg = {:?}", msg);
+    debug!("WEBSOCKET: handle_radio_message: msg = {:?}", msg);
     match msg {
         ClientRadioMessage::ListRadios => {
             let radios = app_state
@@ -1438,7 +1438,7 @@ fn log_runtime_changed(msg: &ServerRadioMessage) {
         ..
     } = msg
     {
-        info!(
+        debug!(
             "[websocket] RuntimeChanged radio={} center={:?} target={:?} demod={:?} sideband={:?} ssb_pitch={:?} cw_pitch={:?} filter_bandwidth={:?} deemphasis_mode={:?} source_control={:?}",
             radio_id.0,
             center_freq_hz,

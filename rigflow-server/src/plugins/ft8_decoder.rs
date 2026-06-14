@@ -10,7 +10,8 @@ impl RadioPlugin for FT8Decoder {
 
     fn on_event(&mut self, event: ServerEvent) {
         if let ServerEvent::AudioFrame(_) = event {
-            println!("FT8 plugin received audio frame");
+            // Per-frame: trace only, and through the log framework (not stdout).
+            log::trace!("FT8 plugin received audio frame");
         }
     }
 }
