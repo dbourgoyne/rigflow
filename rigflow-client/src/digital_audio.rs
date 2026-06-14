@@ -26,22 +26,33 @@
 //! through the `pactl` CLI (works under both via the Pulse compat layer), so no
 //! extra crate dependency is needed.  Format is fixed mono / 48000 Hz / float32.
 
+#[cfg(target_os = "linux")]
 use std::fs::File;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 
-/// Sink Rigflow plays RX audio into (the remap master).
+/// Sink Rigflow plays RX audio into (the remap master).  Referenced by the
+/// cross-platform `digital_rx` module, so it stays defined on every target.
 pub const DIGITAL_OUTPUT_NAME: &str = "RigflowDigitalOutput";
 /// Monitor of the output sink — master for the RX remap source.
+#[cfg(target_os = "linux")]
 const DIGITAL_OUTPUT_MONITOR: &str = "RigflowDigitalOutput.monitor";
-/// Source digital apps record from (remapped from the output monitor).
+/// Source digital apps record from (remapped from the output monitor).  Shown in
+/// the WSJT-X/FT8 Setup window's Linux "virtual audio" method (kept cross-platform
+/// so the window references it on every target).
 pub const DIGITAL_RX_NAME: &str = "RigflowDigitalRX";
 /// Sink digital apps play TX audio into (Rigflow reads its `.monitor`).
 pub const DIGITAL_INPUT_NAME: &str = "RigflowDigitalInput";
 
 /// Fixed audio format for the endpoints (matches the Rigflow pipeline).
+#[cfg(target_os = "linux")]
 const RATE_HZ: &str = "48000";
+#[cfg(target_os = "linux")]
 const FORMAT: &str = "float32le";
+#[cfg(target_os = "linux")]
 const CHANNELS: &str = "1";
+#[cfg(target_os = "linux")]
 const CHANNEL_MAP: &str = "mono";
 
 /// Owns the lifecycle of the virtual audio devices.  Drop unloads any modules
@@ -73,6 +84,38 @@ impl DigitalAudio {
     /// the client keeps running.  Order matters: the output sink (and its
     /// monitor) must exist before the RX remap source that masters off it.
     pub fn start() -> Self {
+        // PipeWire/Pulse virtual audio is Linux-only; on other platforms digital
+        // modes use the built-in TCI server instead, so create nothing here (and
+        // never shell out to pactl, which doesn't exist on macOS/Windows).
+        #[cfg(not(target_os = "linux"))]
+        {
+            Self::unavailable()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Self::start_linux()
+        }
+    }
+
+    /// All endpoints unavailable, no devices created (non-Linux: digital = TCI).
+    #[cfg(not(target_os = "linux"))]
+    fn unavailable() -> Self {
+        Self {
+            output_module: None,
+            rx_module: None,
+            input_module: None,
+            input_keepalive: None,
+            output_available: false,
+            rx_available: false,
+            input_available: false,
+            output_reason: None,
+            rx_reason: None,
+            input_reason: None,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn start_linux() -> Self {
         let (output_available, output_module, output_reason) = ensure_output_sink();
         let (rx_available, rx_module, rx_reason) = ensure_rx_remap_source();
         let (input_available, input_module, input_reason) = ensure_input_sink();
@@ -143,6 +186,7 @@ impl DigitalAudio {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for DigitalAudio {
     fn drop(&mut self) {
         // Stop the silence keep-alive before unloading its sink.
@@ -175,6 +219,7 @@ impl Drop for DigitalAudio {
 
 /// Ensure the `RigflowDigitalOutput` **sink** exists, then force it to unity /
 /// unmuted so the digital RX level is fixed regardless of the speaker volume.
+#[cfg(target_os = "linux")]
 fn ensure_output_sink() -> (bool, Option<u32>, Option<String>) {
     let module = if device_exists("sinks", DIGITAL_OUTPUT_NAME) {
         log::info!("[digital-audio] reusing existing sink {DIGITAL_OUTPUT_NAME}");
@@ -217,6 +262,7 @@ fn ensure_output_sink() -> (bool, Option<u32>, Option<String>) {
 /// Ensure the `RigflowDigitalRX` **remap source** (master =
 /// `RigflowDigitalOutput.monitor`) exists.  This is what apps record from,
 /// because most apps won't list monitor sources directly.
+#[cfg(target_os = "linux")]
 fn ensure_rx_remap_source() -> (bool, Option<u32>, Option<String>) {
     if device_exists("sources", DIGITAL_RX_NAME) {
         log::info!("[digital-audio] reusing existing source {DIGITAL_RX_NAME}");
@@ -247,6 +293,7 @@ fn ensure_rx_remap_source() -> (bool, Option<u32>, Option<String>) {
 /// Ensure the `RigflowDigitalInput` **sink** exists.  Apps play TX audio into
 /// it; Rigflow reads `RigflowDigitalInput.monitor` (TX routing is a later
 /// phase).  A null sink auto-creates the matching monitor source.
+#[cfg(target_os = "linux")]
 fn ensure_input_sink() -> (bool, Option<u32>, Option<String>) {
     if device_exists("sinks", DIGITAL_INPUT_NAME) {
         log::info!("[digital-audio] reusing existing sink {DIGITAL_INPUT_NAME}");
@@ -279,6 +326,7 @@ fn ensure_input_sink() -> (bool, Option<u32>, Option<String>) {
 /// (so its monitor never suspends).  Reads zeros from `/dev/zero` — pacat paces
 /// reads to the sink rate, so this is real-time silence, not a busy loop.  Tries
 /// `pacat` (Pulse/PipeWire-pulse) then `pw-cat` (PipeWire-native).
+#[cfg(target_os = "linux")]
 fn spawn_input_keepalive() -> Option<Child> {
     let zero = File::open("/dev/zero").ok()?;
     let pacat = Command::new("pacat")
@@ -322,6 +370,7 @@ fn spawn_input_keepalive() -> Option<Child> {
 
 /// Return true if a `pactl list short <kind>` entry with `name` exists.
 /// `kind` is `"sinks"` or `"sources"`.
+#[cfg(target_os = "linux")]
 fn device_exists(kind: &str, name: &str) -> bool {
     let out = match Command::new("pactl").args(["list", "short", kind]).output() {
         Ok(o) if o.status.success() => o.stdout,
@@ -337,6 +386,7 @@ fn device_exists(kind: &str, name: &str) -> bool {
 /// Run `pactl load-module …`; on success return the new module index that
 /// `pactl` prints on stdout, otherwise the failure reason (so callers can
 /// surface *why* the endpoint is unavailable rather than just a red dot).
+#[cfg(target_os = "linux")]
 fn load_module(args: &[String]) -> Result<u32, String> {
     let out = Command::new("pactl")
         .args(args)
@@ -358,6 +408,7 @@ fn load_module(args: &[String]) -> Result<u32, String> {
 }
 
 /// Best-effort `pactl unload-module <id>`; returns a short status for logging.
+#[cfg(target_os = "linux")]
 fn unload_status(id: u32) -> &'static str {
     match Command::new("pactl")
         .args(["unload-module", &id.to_string()])

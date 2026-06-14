@@ -29,8 +29,8 @@ receive and transmit on HF over the network. Highlights:
 **Hardware & platforms**
 - Radios: Hermes Lite 2 (RX + TX), RTL-SDR (receive, incl. direct-sampling HF), plus WAV IQ playback
   and a built-in test tone. Optional Hardrock-50 amplifier.
-- Server: Linux (x86-64 and Raspberry Pi / ARM). Client: Linux and macOS. *(Digital/FT8 is supported
-  on the Linux client only.)*
+- Server: Linux (x86-64 and Raspberry Pi / ARM). Client: Linux and macOS. *(Digital/FT8 uses PipeWire
+  virtual audio on Linux and a built-in TCI server on macOS — the latter is **experimental**; see below.)*
 
 See the [Operator guide](operator-guide.md) for how to use these, and the
 [Validation](validation.md) page for transmit signal-quality results.
@@ -38,6 +38,17 @@ See the [Operator guide](operator-guide.md) for how to use these, and the
 ---
 
 ## Known Issues & Workarounds
+
+### macOS FT8 / digital over TCI is experimental
+
+On macOS, digital modes (FT8/WSJT-X) run over a built-in **TCI** server instead of
+a virtual audio device — no BlackHole and no microphone permission required. This
+path is **experimental**: it has been confirmed transmitting and decoding on the
+air with mainline WSJT-X (Rig = TCI, `127.0.0.1:40001`, *Use TCI Audio*), but it
+has less on-air mileage than the Linux PipeWire path and has not been exercised
+across the full range of TCI-capable apps (JTDX, MSHV) or band/rate combinations.
+If you hit trouble, see the [Operator guide](operator-guide.md). The Linux digital
+path is unaffected.
 
 ### Signal-strength, TX power, and SWR readings are approximate
 

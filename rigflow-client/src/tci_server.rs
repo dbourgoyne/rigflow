@@ -168,9 +168,20 @@ impl TciServer {
             Ok(l) => l,
             Err(e) => {
                 log::error!("[tci] failed to bind 127.0.0.1:{}: {e}", self.port);
+                // Surface the bind failure to the UI (mirrors rigctl_status), so
+                // the WSJT-X/FT8 Setup window can show it instead of silent dead air.
+                if let Ok(mut s) = self.shared.ui_state.lock() {
+                    s.tci_status = Some(format!(
+                        "TCI server cannot bind 127.0.0.1:{} — {e}",
+                        self.port
+                    ));
+                }
                 return;
             }
         };
+        if let Ok(mut s) = self.shared.ui_state.lock() {
+            s.tci_status = None; // bound OK
+        }
         log::info!("[tci] TCI server listening on ws://127.0.0.1:{}", self.port);
 
         loop {
@@ -437,7 +448,7 @@ fn handle_tx_audio(buf: &[u8], shared: &TciShared) {
 
     let seen = TX_FRAMES_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
     if seen == 1 || seen % 50 == 0 {
-        log::info!(
+        log::debug!(
             "[tci] TX frame #{seen}: {} bytes, data_type={data_type}, rate={sample_rate}, \
              length={length} (expect data_type={TCI_STREAM_TX_AUDIO})",
             buf.len()
@@ -456,19 +467,7 @@ fn handle_tx_audio(buf: &[u8], shared: &TciShared) {
         return;
     }
 
-    // Read only the first `length` floats (the valid, interleaved-stereo region)
-    // and downmix to mono — yielding length/2 samples per chrono.  Sanitise any
-    // stray non-finite value so garbage never reaches the modulator / HL2 DAC.
-    let avail = (buf.len() - TCI_HEADER_LEN) / 4;
-    let valid = length.min(avail);
-    let mut samples = Vec::with_capacity(valid);
-    for i in 0..valid {
-        let o = TCI_HEADER_LEN + i * 4;
-        let s = f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
-        samples.push(if s.is_finite() { s } else { 0.0 });
-    }
-
-    let mono = downmix(&samples, 2); // WSJT-X TX audio is interleaved stereo
+    let mono = tx_stereo_to_mono(buf, length);
     let out = resample(&mono, sample_rate as f32, TX_SERVER_RATE_HZ as f32);
 
     // Log signal level so we can tell "no frames" from "silent frames" from
@@ -481,7 +480,7 @@ fn handle_tx_audio(buf: &[u8], shared: &TciShared) {
         } else {
             (out.iter().map(|&s| s * s).sum::<f32>() / out.len() as f32).sqrt()
         };
-        log::info!(
+        log::debug!(
             "[tci] TX audio fed #{fed}: {} samples, peak={peak:.3}, rms={rms:.4}, \
              streaming={}",
             out.len(),
@@ -490,6 +489,22 @@ fn handle_tx_audio(buf: &[u8], shared: &TciShared) {
     }
 
     shared.mic_shared.push_tx(&out);
+}
+
+/// Decode a `TxAudioStream` frame body to mono.  WSJT-X fills only the first
+/// `length` floats (interleaved stereo) of a `length*2` buffer — the tail is
+/// uninitialised heap — so read exactly `length`, sanitise non-finite samples
+/// (NaN/Inf garbage must never reach the modulator / HL2 DAC), and downmix by 2.
+fn tx_stereo_to_mono(buf: &[u8], length: usize) -> Vec<f32> {
+    let avail = buf.len().saturating_sub(TCI_HEADER_LEN) / 4;
+    let valid = length.min(avail);
+    let mut samples = Vec::with_capacity(valid);
+    for i in 0..valid {
+        let o = TCI_HEADER_LEN + i * 4;
+        let s = f32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+        samples.push(if s.is_finite() { s } else { 0.0 });
+    }
+    downmix(&samples, 2)
 }
 
 /// Build the next outbound RX-audio frame (drains the tap, resamples to the
@@ -530,7 +545,12 @@ fn interleave(mono: &[f32], channels: u32) -> Vec<f32> {
 
 /// Encode a TCI `Data_Stream` packet: 8×u32 header (`<8I`) + 32 bytes pad +
 /// little-endian float32 samples.  `length` is the sample count.  SPIKE: mono.
-fn encode_data_stream(sample_rate: u32, stream_type: u32, channels: u32, samples: &[f32]) -> Vec<u8> {
+fn encode_data_stream(
+    sample_rate: u32,
+    stream_type: u32,
+    channels: u32,
+    samples: &[f32],
+) -> Vec<u8> {
     let mut v = Vec::with_capacity(TCI_HEADER_LEN + samples.len() * 4);
     let header: [u32; 8] = [
         0,                    // receiver
@@ -598,7 +618,11 @@ fn current_demod(shared: &TciShared) -> DemodMode {
 /// recenter the LO on a band change so far jumps actually take.
 fn set_frequency(shared: &TciShared, hz: u64) {
     let (center, sample_rate, limits) = match shared.ui_state.lock() {
-        Ok(s) => (s.center_freq_hz, s.input_sample_rate_hz, active_freq_limits(&s)),
+        Ok(s) => (
+            s.center_freq_hz,
+            s.input_sample_rate_hz,
+            active_freq_limits(&s),
+        ),
         Err(_) => return,
     };
     let freq = clamp_center(hz as f32, &limits);
@@ -747,4 +771,93 @@ fn resample(input: &[f32], from_hz: f32, to_hz: f32) -> Vec<f32> {
         pos += step;
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn u32_at(buf: &[u8], byte: usize) -> u32 {
+        u32::from_le_bytes([buf[byte], buf[byte + 1], buf[byte + 2], buf[byte + 3]])
+    }
+
+    /// Build a TxAudioStream frame body: 64-byte header + the given floats.  The
+    /// header `length` is set independently so tests can mimic WSJT-X sending a
+    /// `length*2` buffer whose tail is uninitialised.
+    fn tx_frame(length: u32, floats: &[f32]) -> Vec<u8> {
+        let mut v = encode_data_stream(48_000, TCI_STREAM_TX_AUDIO, 2, floats);
+        v[20..24].copy_from_slice(&length.to_le_bytes()); // override length field
+        v
+    }
+
+    #[test]
+    fn chrono_is_header_only_with_expected_fields() {
+        let frame = encode_tx_chrono(48_000, 1920);
+        assert_eq!(
+            frame.len(),
+            TCI_HEADER_LEN,
+            "chrono carries no audio payload"
+        );
+        assert_eq!(u32_at(&frame, 4), 48_000); // sample_rate
+        assert_eq!(u32_at(&frame, 8), TCI_SAMPLE_FLOAT32); // format
+        assert_eq!(u32_at(&frame, 20), 1920); // length (float budget)
+        assert_eq!(u32_at(&frame, 24), TCI_STREAM_TX_CHRONO); // type = 3
+    }
+
+    #[test]
+    fn data_stream_header_round_trips() {
+        let frame = encode_data_stream(48_000, TCI_STREAM_RX_AUDIO, 2, &[0.5, -0.5, 0.25, -0.25]);
+        assert_eq!(frame.len(), TCI_HEADER_LEN + 4 * 4);
+        assert_eq!(u32_at(&frame, 4), 48_000);
+        assert_eq!(u32_at(&frame, 20), 4); // length = float count
+        assert_eq!(u32_at(&frame, 24), TCI_STREAM_RX_AUDIO);
+    }
+
+    #[test]
+    fn downmix_averages_interleaved_stereo() {
+        assert_eq!(downmix(&[1.0, 3.0, 2.0, 4.0], 2), vec![2.0, 3.0]);
+        assert_eq!(downmix(&[1.0, 2.0, 3.0], 1), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn tx_decode_reads_only_valid_length_and_downmixes() {
+        // length=6 valid floats (3 stereo frames, L==R) → 3 mono samples.
+        let frame = tx_frame(6, &[1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
+        assert_eq!(tx_stereo_to_mono(&frame, 6), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn tx_decode_ignores_uninitialised_tail() {
+        // WSJT-X allocates length*2 floats but fills only `length`; the tail is
+        // garbage (incl. NaN/Inf) and must never be read.
+        let floats = [1.0, 1.0, 2.0, 2.0, f32::NAN, f32::INFINITY, 9.9e30, -9.9e30];
+        let frame = tx_frame(4, &floats); // only first 4 floats are valid
+        assert_eq!(tx_stereo_to_mono(&frame, 4), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn tx_decode_sanitises_non_finite_within_valid_region() {
+        // A non-finite sample inside the valid region is zeroed, not propagated.
+        let frame = tx_frame(2, &[f32::NAN, 2.0]);
+        assert_eq!(tx_stereo_to_mono(&frame, 2), vec![1.0]); // (0.0 + 2.0) / 2
+    }
+
+    #[test]
+    fn chrono_length_yields_half_as_many_mono_samples() {
+        // Sizing contract: a chrono of float length N produces N/2 mono samples,
+        // so the pump must request 2× the mono samples it owes.
+        let n = 1920u32;
+        let valid: Vec<f32> = (0..n).map(|i| (i % 7) as f32 * 0.1).collect();
+        let frame = tx_frame(n, &valid);
+        assert_eq!(
+            tx_stereo_to_mono(&frame, n as usize).len(),
+            (n / 2) as usize
+        );
+    }
+
+    #[test]
+    fn mode_mapping_round_trips_ft8_data_usb() {
+        assert_eq!(tci_mode_to_demod("digu"), Some(DemodMode::DgtU));
+        assert_eq!(demod_to_tci_mode(DemodMode::DgtU), "digu");
+    }
 }

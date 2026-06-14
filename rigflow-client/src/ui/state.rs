@@ -244,6 +244,10 @@ pub struct UiState {
     /// could not bind its port (e.g. 4532 already in use); `None` when bound OK.
     pub rigctl_status: Option<String>,
 
+    /// TCI server status.  `Some(reason)` when the server could not bind its port
+    /// (e.g. 40001 already in use); `None` when bound OK.  Mirrors `rigctl_status`.
+    pub tci_status: Option<String>,
+
     /// Digital Audio Interface (Phase 2): RX audio router to
     /// `RigflowDigitalOutput`.  Shared with the media thread; the UI toggles it.
     pub digital_rx: Arc<crate::digital_rx::DigitalRxOutput>,
@@ -505,6 +509,7 @@ impl Default for UiState {
             digital_rx_reason: None,
             digital_input_reason: None,
             rigctl_status: None,
+            tci_status: None,
             digital_rx: crate::digital_rx::DigitalRxOutput::new(),
             tci_rx_audio: crate::tci_server::TciRxAudio::new(),
             tx_audio_diag: TxAudioDiag::default(),
@@ -651,41 +656,47 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
     }
     // Digital audio interface (PipeWire/pactl) — collapse the endpoints into one
     // line with the first captured reason (they usually share a root cause).
-    let mut digital_down: Vec<&str> = Vec::new();
-    let mut digital_reason: Option<&String> = None;
-    for (available, reason, name) in [
-        (
-            s.digital_output_available,
-            &s.digital_output_reason,
-            "RigflowDigitalOutput",
-        ),
-        (
-            s.digital_rx_available,
-            &s.digital_rx_reason,
-            "RigflowDigitalRX",
-        ),
-        (
-            s.digital_input_available,
-            &s.digital_input_reason,
-            "RigflowDigitalInput",
-        ),
-    ] {
-        if !available {
-            digital_down.push(name);
-            if digital_reason.is_none() {
-                digital_reason = reason.as_ref();
+    // PipeWire/Pulse only exists on Linux; on other platforms these endpoints are
+    // intentionally unavailable (digital uses the TCI server, not virtual audio),
+    // so they are not a problem to report.
+    #[cfg(target_os = "linux")]
+    {
+        let mut digital_down: Vec<&str> = Vec::new();
+        let mut digital_reason: Option<&String> = None;
+        for (available, reason, name) in [
+            (
+                s.digital_output_available,
+                &s.digital_output_reason,
+                "RigflowDigitalOutput",
+            ),
+            (
+                s.digital_rx_available,
+                &s.digital_rx_reason,
+                "RigflowDigitalRX",
+            ),
+            (
+                s.digital_input_available,
+                &s.digital_input_reason,
+                "RigflowDigitalInput",
+            ),
+        ] {
+            if !available {
+                digital_down.push(name);
+                if digital_reason.is_none() {
+                    digital_reason = reason.as_ref();
+                }
             }
         }
-    }
-    if !digital_down.is_empty() {
-        let reason = digital_reason
-            .map(String::as_str)
-            .unwrap_or("unavailable (PipeWire/pactl not running?)");
-        warnings.push(Problem {
-            severity: ProblemSeverity::Warning,
-            source: "Digital Audio",
-            detail: format!("{} unavailable: {reason}", digital_down.join(", ")),
-        });
+        if !digital_down.is_empty() {
+            let reason = digital_reason
+                .map(String::as_str)
+                .unwrap_or("unavailable (PipeWire/pactl not running?)");
+            warnings.push(Problem {
+                severity: ProblemSeverity::Warning,
+                source: "Digital Audio",
+                detail: format!("{} unavailable: {reason}", digital_down.join(", ")),
+            });
+        }
     }
     // Microphone fallback / unavailable (already shown in Radio Control; also
     // aggregated here).

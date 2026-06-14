@@ -44,8 +44,9 @@ For **digital modes (WSJT-X/FT8)** the client also needs **PipeWire** (or PulseA
 standard on modern Linux desktops — no extra step on most systems.
 
 **Client (macOS):** install the Xcode Command Line Tools (`xcode-select --install`). Audio uses
-CoreAudio (built in). The macOS client supports **receive and SSB/CW transmit**; FT8/digital is
-**Linux-only** (it relies on PipeWire virtual audio).
+CoreAudio (built in). The macOS client supports **receive, SSB/CW transmit, and FT8/digital** —
+the latter via a built-in **TCI** server (no BlackHole or virtual audio driver needed; see the
+operator guide). FT8 over TCI is **experimental**.
 
 ---
 

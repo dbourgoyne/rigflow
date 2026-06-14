@@ -1155,13 +1155,18 @@ fn apply_mode_preferences(state: &mut UiState, mode: DemodMode) {
     // RX-routing tie: entering Data-USB enables RX Digital Output (so external
     // digital apps like WSJT-X can record); leaving it disables routing.  Only
     // the transition into/out of Data-USB touches routing — switching among
-    // voice modes leaves it exactly as the user set it.
-    let was_dgt = state.last_demod_mode_for_controls == Some(DemodMode::DgtU);
-    let is_dgt = mode == DemodMode::DgtU;
-    if is_dgt && !was_dgt {
-        state.digital_rx.set_enabled(true);
-    } else if was_dgt && !is_dgt {
-        state.digital_rx.set_enabled(false);
+    // voice modes leaves it exactly as the user set it.  Linux-only: this drives
+    // the PipeWire virtual-audio path; on macOS digital RX flows over the
+    // always-on TCI tap instead, so there is nothing to toggle here.
+    #[cfg(target_os = "linux")]
+    {
+        let was_dgt = state.last_demod_mode_for_controls == Some(DemodMode::DgtU);
+        let is_dgt = mode == DemodMode::DgtU;
+        if is_dgt && !was_dgt {
+            state.digital_rx.set_enabled(true);
+        } else if was_dgt && !is_dgt {
+            state.digital_rx.set_enabled(false);
+        }
     }
 
     state.last_demod_mode_for_controls = Some(mode);
