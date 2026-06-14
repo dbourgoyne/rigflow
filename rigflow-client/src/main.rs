@@ -118,6 +118,7 @@ mod net;
 mod persistence;
 mod rigctl_server;
 mod sidetone;
+mod tci_server;
 mod ui;
 mod widgets;
 
@@ -204,6 +205,20 @@ fn main() -> Result<(), eframe::Error> {
         let cmd_tx_for_cat = ws_cmd_tx.clone();
         rt.spawn(async move {
             rigctl_server::RigctlServer::new(ui_state_for_cat, cmd_tx_for_cat)
+                .run()
+                .await;
+        });
+    }
+
+    // TCI server on 127.0.0.1:40001 for TCI-capable digital apps (JTDX,
+    // WSJT-X-Improved): carries CAT + PTT + RX/TX audio over one WebSocket, so
+    // FT8 works with no virtual audio driver (no BlackHole) and no mic
+    // permission.  Coexists with the rigctld CAT server above.
+    {
+        let ui_state_for_tci = Arc::clone(&ui_state);
+        let cmd_tx_for_tci = ws_cmd_tx.clone();
+        rt.spawn(async move {
+            tci_server::TciServer::new(ui_state_for_tci, cmd_tx_for_tci)
                 .run()
                 .await;
         });

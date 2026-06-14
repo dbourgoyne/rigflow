@@ -187,6 +187,13 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.digital_rx))
         .unwrap_or_else(|_| crate::digital_rx::DigitalRxOutput::new());
 
+    // TCI server RX-audio tap: a copy of received audio is mirrored here while a
+    // TCI digital app (JTDX) is streaming.  Shared with the TCI server task.
+    let tci_rx_audio = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.tci_rx_audio))
+        .unwrap_or_else(|_| crate::tci_server::TciRxAudio::new());
+
     // --- Dedicated mic-TX send thread -------------------------------------
     // Mic / digital-TX audio is sent from its own paced thread, NOT the media
     // loop.  The media loop processes the inbound full-duplex RX/waterfall flood
@@ -357,6 +364,7 @@ pub fn start_media_runtime(
                             &stats_for_thread,
                             &mut cw_decoder,
                             &digital_rx,
+                            &tci_rx_audio,
                         );
                     }
                 }

@@ -248,6 +248,10 @@ pub struct UiState {
     /// `RigflowDigitalOutput`.  Shared with the media thread; the UI toggles it.
     pub digital_rx: Arc<crate::digital_rx::DigitalRxOutput>,
 
+    /// TCI server RX-audio tap.  Shared with the media thread (push) and the TCI
+    /// server task (drain → WebSocket).  No-op until a TCI client streams.
+    pub tci_rx_audio: Arc<crate::tci_server::TciRxAudio>,
+
     /// Live TX-audio diagnostics for SSB mic transmit (zero unless keyed).
     pub tx_audio_diag: TxAudioDiag,
 
@@ -502,6 +506,7 @@ impl Default for UiState {
             digital_input_reason: None,
             rigctl_status: None,
             digital_rx: crate::digital_rx::DigitalRxOutput::new(),
+            tci_rx_audio: crate::tci_server::TciRxAudio::new(),
             tx_audio_diag: TxAudioDiag::default(),
             two_tone_enabled: false,
             two_tone_a_hz: 700.0,
