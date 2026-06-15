@@ -765,7 +765,7 @@ impl IqSource for HermesLite2Source {
 
     fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
         self.center_freq_hz = center_freq_hz;
-        info!("HL2: NCO → {} Hz", center_freq_hz as u32);
+        debug!("HL2: NCO → {} Hz", center_freq_hz as u32);
         // send_gain_cc carries both the NCO freq and the current gain code so
         // the gain register is always in sync after every tune.
         self.send_gain_cc()
@@ -790,7 +790,7 @@ impl IqSource for HermesLite2Source {
     fn set_gain_db(&mut self, gain_db: f32) -> Result<(), String> {
         // code = gain_db + 12: code 0 = -12 dB, code 60 = +48 dB
         self.lna_gain_code = (gain_db + 12.0).round().clamp(0.0, 60.0) as u8;
-        info!(
+        debug!(
             "HL2: LNA gain → {:.1} dB (code {})",
             gain_db, self.lna_gain_code
         );

@@ -28,11 +28,17 @@
 //! PCM from `parec` (Pulse) / `pw-record` (PipeWire).  A dedicated capture
 //! thread owns the child process; it only runs while PTT is keyed.
 
-use std::io::Read;
-use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+// PipeWire/Pulse capture (parec/pw-record) is Linux-only; gate the machinery so
+// macOS/Windows never shell out to it (digital TX there flows over TCI instead).
+#[cfg(target_os = "linux")]
+use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "linux")]
 use std::thread;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
 use crate::digital_audio::DIGITAL_INPUT_NAME;
@@ -58,10 +64,14 @@ impl DigitalTxInput {
             available: AtomicBool::new(false),
             mic_shared,
         });
-        let worker = Arc::clone(&me);
-        let _ = thread::Builder::new()
-            .name("digital-tx".into())
-            .spawn(move || capture_loop(worker));
+        // The monitor-capture thread (and its parec/pw-record child) is Linux-only.
+        #[cfg(target_os = "linux")]
+        {
+            let worker = Arc::clone(&me);
+            let _ = thread::Builder::new()
+                .name("digital-tx".into())
+                .spawn(move || capture_loop(worker));
+        }
         me
     }
 
@@ -106,6 +116,7 @@ impl DigitalTxInput {
 /// silence at the front of each transmission (startup underruns).  Once we've
 /// been keyed at least once we leave the recorder running and just *discard* its
 /// samples while unkeyed — so the next key-down forwards live audio instantly.
+#[cfg(target_os = "linux")]
 fn capture_loop(shared: Arc<DigitalTxInput>) {
     let mut child: Option<Child> = None;
     // Holds a partial float across reads so 4-byte samples stay aligned.
@@ -199,6 +210,7 @@ fn capture_loop(shared: Arc<DigitalTxInput>) {
 /// Spawn a raw mono/48k/float32 recorder reading `RigflowDigitalInput.monitor`
 /// and writing PCM to stdout.  Tries `parec` (Pulse/PipeWire-pulse) then
 /// `pw-record` (PipeWire-native).
+#[cfg(target_os = "linux")]
 fn spawn_recorder() -> Option<Child> {
     let monitor = format!("{DIGITAL_INPUT_NAME}.monitor");
 
@@ -237,6 +249,7 @@ fn spawn_recorder() -> Option<Child> {
         .ok()
 }
 
+#[cfg(target_os = "linux")]
 fn stop_child(child: &mut Option<Child>) {
     if let Some(mut c) = child.take() {
         let _ = c.kill();

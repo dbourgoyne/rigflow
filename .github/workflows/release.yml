@@ -1,0 +1,124 @@
+name: Release
+
+# Build the distributable binaries and attach them to a GitHub Release.
+#
+# Trigger: pushing a `v*` tag (e.g. `v0.1.0`) builds + publishes. A manual
+# `workflow_dispatch` run builds the same matrix as a dry run but does NOT
+# publish (the `publish` job is gated on a tag), so you can validate the
+# pipeline before tagging.
+#
+# Platforms: server + client for Linux x86-64 and ARM64; client-only for
+# macOS arm64 (the server stays on Linux/Pi by design). macOS binaries are
+# unsigned — see the installation guide for the Gatekeeper first-launch step.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            runner: ubuntu-latest
+            os: linux
+            packages: rigflow-server rigflow-client
+            build_args: -p rigflow-server -p rigflow-client
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+            packages: rigflow-server rigflow-client
+            build_args: -p rigflow-server -p rigflow-client
+          - label: macos-arm64
+            runner: macos-latest
+            os: macos
+            packages: rigflow-client
+            build_args: -p rigflow-client
+    steps:
+      - uses: actions/checkout@v5
+
+      # Linux: client links ALSA, server links libusb. macOS uses CoreAudio
+      # (built in) and the client needs no extra libraries.
+      - name: Install system libraries (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.label }}
+
+      # `dist` profile = release + stripped (small) binaries → target/dist/.
+      - name: Build (dist profile)
+        run: cargo build --profile dist ${{ matrix.build_args }}
+
+      # One tar.gz per binary: `<binary>-<label>.tar.gz`, extracting to a
+      # folder containing the binary + README + LICENSE + DISCLAIMER.
+      - name: Package archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-out
+          for bin in ${{ matrix.packages }}; do
+            name="${bin}-${{ matrix.label }}"
+            stage="staging/${name}"
+            mkdir -p "$stage"
+            cp "target/dist/${bin}" "$stage/"
+            cp README.md LICENSE DISCLAIMER.md "$stage/"
+            tar -C staging -czf "dist-out/${name}.tar.gz" "${name}"
+          done
+          ls -l dist-out
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: archives-${{ matrix.label }}
+          path: dist-out/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish for real tags; a workflow_dispatch run stops after `build`.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all archives
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: archives-*
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          sha256sum *.tar.gz | tee SHA256SUMS
+
+      # Draft release: the maintainer reviews the assets and the (hand-written)
+      # notes from docs/RELEASE_NOTES.md, then publishes.
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/SHA256SUMS

@@ -62,6 +62,7 @@ pub fn handle_media_packet(
     stats: &Arc<Mutex<MediaPacketStats>>,
     cw_decoder: &mut crate::cw_decode::CwDecoder,
     digital_rx: &crate::digital_rx::DigitalRxOutput,
+    tci_rx_audio: &crate::tci_server::TciRxAudio,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -84,7 +85,14 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
-            handle_audio_packet(payload, header.sequence, jitter, cw_decoder, digital_rx);
+            handle_audio_packet(
+                payload,
+                header.sequence,
+                jitter,
+                cw_decoder,
+                digital_rx,
+                tci_rx_audio,
+            );
         }
 
         STREAM_TYPE_WATERFALL => {
@@ -138,6 +146,7 @@ fn handle_audio_packet(
     jitter: &Arc<Mutex<JitterBuffer>>,
     cw_decoder: &mut crate::cw_decode::CwDecoder,
     digital_rx: &crate::digital_rx::DigitalRxOutput,
+    tci_rx_audio: &crate::tci_server::TciRxAudio,
 ) {
     if payload.len() < 2 || !payload.len().is_multiple_of(2) {
         return;
@@ -157,6 +166,9 @@ fn handle_audio_packet(
     // Mirror a copy to the digital RX output sink (no-op unless enabled).  This
     // tap is post-server-volume; the speaker path below is unaffected.
     digital_rx.push(&samples);
+
+    // Same tap for the TCI server (no-op unless a TCI client is streaming).
+    tci_rx_audio.push(&samples);
 
     if let Ok(mut jb) = jitter.lock() {
         jb.push_packet(sequence, samples);

@@ -87,7 +87,7 @@ pub async fn websocket_control_task(
                         let renew = ClientRadioMessage::RenewLease;
                         let text = serde_json::to_string(&renew)?;
 
-                        info!("CLIENT sending RenewLease");
+                        debug!("CLIENT sending RenewLease");
 
                         write.send(Message::Text(text.into())).await?;
                     }
@@ -197,11 +197,11 @@ pub async fn websocket_control_task(
                     }
 
             Some(ControlCommand::RadioMessage(cmd)) => {
-            info!("WEBSOCKET got RadioMessage: {:?}", cmd);
+            debug!("WEBSOCKET got RadioMessage: {:?}", cmd);
 
             if let Some(write) = write_opt.as_mut() {
                 let text = serde_json::to_string(&cmd)?;
-                info!("WEBSOCKET sending text: {}", text);
+                debug!("WEBSOCKET sending text: {}", text);
 
                 write.send(Message::Text(text.into())).await?;
             }
@@ -224,7 +224,7 @@ pub async fn websocket_control_task(
                         if let Ok(radio_msg) =
                             serde_json::from_str::<ServerRadioMessage>(&text)
                         {
-                            info!("CLIENT got radio message: {:?}", radio_msg);
+                            debug!("CLIENT got radio message: {:?}", radio_msg);
 
                             // Single-client policy: the server already has a
                             // client.  Keep retrying through its heartbeat-eviction
@@ -253,7 +253,7 @@ pub async fn websocket_control_task(
                                 &audio_session_generation,
                             ) {
                                 let text = serde_json::to_string(&outgoing)?;
-                                info!("CLIENT sending radio message: {}", text);
+                                debug!("CLIENT sending radio message: {}", text);
 
                                 if let Some(write) = write_opt.as_mut() {
                                     write.send(Message::Text(text.into())).await?;
@@ -266,7 +266,7 @@ pub async fn websocket_control_task(
                             let mut state = ui_state.lock().unwrap();
                             state.runtime_error = format!("error: {}", message);
                         } else {
-                            info!("CLIENT unknown message: {}", text);
+                            debug!("CLIENT unknown message: {}", text);
                         }
                     }
 

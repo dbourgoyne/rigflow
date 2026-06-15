@@ -104,7 +104,15 @@ With **"Show advanced & diagnostics controls"** ticked:
 
 ## Digital modes (WSJT-X / FT8)
 
-*(Linux client only — digital uses PipeWire virtual audio.)*
+There are two transports, and which you use depends on your platform:
+
+- **Linux** — use **either** the **virtual-audio** method (PipeWire/PulseAudio; the default, and works
+  with any digital app including FLDigi and JS8Call) **or** the **TCI** method (experimental;
+  for TCI-capable apps). Both are described below.
+- **macOS** — **TCI only** (experimental). macOS has no virtual audio device, so the PipeWire method
+  does not apply.
+
+### Linux — virtual audio (PipeWire/PulseAudio)
 
 Rigflow makes digital nearly one-click:
 
@@ -119,6 +127,24 @@ Rigflow makes digital nearly one-click:
    data/pkt mode also drives Rigflow into Data mode automatically.
 
 Leaving **DATA** turns RX routing back off.
+
+On Linux you can instead use the **TCI** method below (the same one macOS uses) for TCI-capable apps —
+the Setup window lists it as "Method 2".
+
+### macOS — TCI (experimental)
+
+macOS has no virtual audio device, so digital uses **TCI** instead: WSJT-X carries CAT, PTT, and **both
+audio directions over one localhost connection** — no BlackHole and no microphone permission. The client
+runs a TCI server at `ws://127.0.0.1:40001` whenever it's running.
+
+In WSJT-X:
+
+- **Settings → Radio:** Rig = **TCI**, TCI Server = **`127.0.0.1:40001`**, and tick **Use TCI Audio**.
+- **Settings → Audio:** Input and Output both = the **TCI** device.
+- **Mode:** Data/Pkt (or USB). Set Rigflow to **DATA**.
+
+Then operate normally — no soundcard or CAT plumbing to configure. This path also works on Linux, but the
+PipeWire route above is the default there.
 
 ---
 

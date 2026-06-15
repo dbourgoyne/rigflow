@@ -49,3 +49,22 @@ jobs:
       # build it (above) but don't run its tests on a headless runner.
       - name: Test (core + server)
         run: cargo test -p rigflow-core -p rigflow-server
+
+  # The macOS client is a shipped artifact (release.yml). Build it here so the
+  # `cfg(target_os = "macos")` paths (digital_audio no-op, digital_tx gating,
+  # the platform-aware WSJT-X setup window) can't bit-rot between releases.
+  macos-client:
+    name: macOS client build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # CoreAudio is built in; the client needs no extra system libraries.
+      - name: Build client (macOS)
+        run: cargo build -p rigflow-client

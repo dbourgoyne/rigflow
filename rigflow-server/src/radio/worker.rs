@@ -1860,7 +1860,11 @@ fn spawn_capture_thread(
 
                 if pending {
                     let mic_usb = match control_snapshot.demod_mode {
-                        DemodMode::Usb => Some(true),
+                        // DgtU (data-USB) keys on the USB sideband — WSJT-X/FT8
+                        // sets this mode when its Radio "Mode" is Data/Pkt.  The
+                        // RX pipeline already treats DgtU as USB everywhere; the
+                        // TX gate must match or digital TX is silently dropped.
+                        DemodMode::Usb | DemodMode::DgtU => Some(true),
                         DemodMode::Lsb => Some(false),
                         _ => None,
                     };

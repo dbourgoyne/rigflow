@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use log::info;
+use log::debug;
 use num_complex::Complex32;
 
 use crate::dsp::audio::agc::Agc;
@@ -274,7 +274,7 @@ impl DspPipeline {
     }
 
     fn rebuild_audio_path_for_mode(&mut self) {
-        info!(
+        debug!(
             "rebuild_audio_path_for_mode: demod={:?} deemphasis_mode={:?} tau={:?}",
             self.mode,
             self.deemphasis_mode,
@@ -337,11 +337,11 @@ impl DspPipeline {
     }
 
     pub fn set_deemphasis_mode(&mut self, mode: DeemphasisMode) {
-        info!("pipeline set_deemphasis_mode: {:?}", mode);
+        debug!("pipeline set_deemphasis_mode: {:?}", mode);
         self.deemphasis_mode = mode;
         self.rebuild_audio_path_for_mode();
         self.reset_audio_state();
-        info!(
+        debug!(
             "pipeline deemphasis after rebuild: mode={:?} tau={:?}",
             self.deemphasis_mode,
             Self::deemphasis_tau_for(self.mode, self.deemphasis_mode)
@@ -571,7 +571,7 @@ impl DspPipeline {
     }
 
     pub fn set_ssb_pitch_hz(&mut self, pitch_hz: f32) {
-        info!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
+        debug!("pipeline set_ssb_pitch_hz: {}", pitch_hz);
         self.ssb_pitch_hz = pitch_hz;
         self.rebuild_ssb_filters(self.ssb_bandwidth_hz, self.ssb_fir_taps);
         self.reset_audio_state();
