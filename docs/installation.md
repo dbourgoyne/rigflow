@@ -79,12 +79,18 @@ From **v0.1.0** onward, prebuilt binaries are published on the project's
 [Releases page](https://github.com/dbourgoyne/rigflow/releases) — no Rust toolchain needed, just the
 runtime libraries from §1.
 
-1. Download the archive for the component and platform you need — **`rigflow-server`** for the radio
-   host (**Linux x86-64** or **Linux ARM64** / Raspberry Pi) and **`rigflow-client`** for your desktop.
-   *(macOS: build from source for now — see Option B; native macOS binaries come in a later release.)*
+1. Download the archive for the component and platform you need:
+   - **`rigflow-server`** — the radio host: **Linux x86-64** or **Linux ARM64** (Raspberry Pi).
+   - **`rigflow-client`** — your desktop: **Linux x86-64**, **Linux ARM64**, or **macOS (Apple Silicon)**.
+
+   macOS runs the **client only** — run the server on a Linux box or Raspberry Pi and point the client
+   at it (see [Networking](#5-networking)).
 2. *(Optional)* verify the download against the published `SHA256SUMS`.
 3. Extract it. Each archive contains the binary plus `README.md`, `LICENSE`, and `DISCLAIMER.md`.
 4. Make it executable if needed: `chmod +x rigflow-server` (or `rigflow-client`).
+5. **macOS first launch:** the client is **unsigned**, so macOS Gatekeeper blocks it the first time.
+   Either **right-click `rigflow-client` → Open** (then confirm in the dialog), or clear the quarantine
+   flag once from a terminal: `xattr -dr com.apple.quarantine rigflow-client`.
 
 ### Option B — Build from source
 
