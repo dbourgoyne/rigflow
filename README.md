@@ -25,8 +25,8 @@ operate from your laptop.
 **Transmit** (Hermes Lite 2)
 - **SSB** from your microphone (USB/LSB), with a soft limiter + speech compressor
 - **CW** via straight-key (Space bar), or Text-to-CW with F1–F4 memory macros and sidetone
-- **Digital (FT8 / WSJT-X)** — selecting the **Data** mode auto-routes audio; an in-app setup
-  window shows the device names and CAT/PTT settings
+- **Digital (FT8 / WSJT-X)** — on **Linux** via virtual audio (PipeWire/Pulse) **or** TCI; on
+  **macOS** via TCI only (experimental). An in-app setup window shows the exact settings
 - Built-in two-tone and tune/SWR test aids
 
 **Station**

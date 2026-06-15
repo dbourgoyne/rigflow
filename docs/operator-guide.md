@@ -104,7 +104,15 @@ With **"Show advanced & diagnostics controls"** ticked:
 
 ## Digital modes (WSJT-X / FT8)
 
-### Linux — PipeWire virtual audio
+There are two transports, and which you use depends on your platform:
+
+- **Linux** — use **either** the **virtual-audio** method (PipeWire/PulseAudio; the default, and works
+  with any digital app including FLDigi and JS8Call) **or** the **TCI** method (experimental;
+  for TCI-capable apps). Both are described below.
+- **macOS** — **TCI only** (experimental). macOS has no virtual audio device, so the PipeWire method
+  does not apply.
+
+### Linux — virtual audio (PipeWire/PulseAudio)
 
 Rigflow makes digital nearly one-click:
 
@@ -120,9 +128,8 @@ Rigflow makes digital nearly one-click:
 
 Leaving **DATA** turns RX routing back off.
 
-Linux can also use the **TCI** method below (the same one macOS uses) for TCI-capable apps (WSJT-X 2.7+,
-JTDX, MSHV) — the Setup window lists it as "Method 2". The virtual-audio method above is the default and
-works with any digital app, including FLDigi and JS8Call.
+On Linux you can instead use the **TCI** method below (the same one macOS uses) for TCI-capable apps —
+the Setup window lists it as "Method 2".
 
 ### macOS — TCI (experimental)
 

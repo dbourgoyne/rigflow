@@ -40,8 +40,10 @@ sudo apt install build-essential pkg-config libusb-1.0-0-dev
 sudo apt install build-essential pkg-config libasound2-dev
 ```
 
-For **digital modes (WSJT-X/FT8)** the client also needs **PipeWire** (or PulseAudio), which is
-standard on modern Linux desktops — no extra step on most systems.
+For **digital modes (WSJT-X/FT8)** on Linux you have two options: the **virtual-audio** method,
+which needs **PipeWire** (or PulseAudio) — standard on modern Linux desktops, so no extra step on
+most systems — **or** the **TCI** method, which needs no virtual audio at all (experimental, and
+works with TCI-capable apps such as WSJT-X 2.7+, JTDX, MSHV). See the operator guide.
 
 **Client (macOS):** install the Xcode Command Line Tools (`xcode-select --install`). Audio uses
 CoreAudio (built in). The macOS client supports **receive, SSB/CW transmit, and FT8/digital** —

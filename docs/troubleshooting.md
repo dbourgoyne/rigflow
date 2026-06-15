@@ -75,19 +75,30 @@ Common problems and fixes, by symptom. For setup steps see the
 
 ## Digital (WSJT-X / FT8)
 
-*(Linux client only.)*
+FT8 works two ways: **virtual audio** (Linux only — PipeWire/PulseAudio) and **TCI** (Linux *and*
+macOS — and the **only** method on macOS; experimental). The fixes below are grouped by method.
+
+### Virtual-audio method (Linux)
 
 **WSJT-X has no audio / can't find the devices.**
 - Make sure the mode is **DATA** in Rigflow (that's what routes the audio).
 - The device names must match exactly: input **`RigflowDigitalRX`**, output **`RigflowDigitalInput`**.
-- The virtual devices need **PipeWire** (or PulseAudio) running on the client desktop.
+- The virtual devices need **PipeWire** (or PulseAudio) running on the client desktop. If you don't
+  have it, use the **TCI** method instead — it needs no virtual audio.
 
 **WSJT-X won't key the radio.**
 - In WSJT-X, CAT = **Hamlib NET rigctl**, host/port **`127.0.0.1:4532`**, and **PTT = CAT**. The
   client provides that rig-control endpoint while connected.
 
-The in-app **WSJT-X / FT8 Setup** window (Radio Control → Advanced) shows the exact values and a
-live status for each piece.
+### TCI method (Linux & macOS)
+
+**No audio over TCI.**
+- In WSJT-X: **Rig = TCI**, **TCI Server = `127.0.0.1:40001`**, tick **Use TCI Audio**, and set
+  **Audio → Input/Output** to the **TCI** device.
+- Use a TCI-capable app (WSJT-X 2.7+, JTDX, MSHV). TCI support is experimental.
+
+The in-app **WSJT-X / FT8 Setup** window (Radio Control → Advanced) shows the exact values for your
+platform, with a live status for each piece.
 
 ---
 

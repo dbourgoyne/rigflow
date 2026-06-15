@@ -29,8 +29,8 @@ receive and transmit on HF over the network. Highlights:
 **Hardware & platforms**
 - Radios: Hermes Lite 2 (RX + TX), RTL-SDR (receive, incl. direct-sampling HF), plus WAV IQ playback
   and a built-in test tone. Optional Hardrock-50 amplifier.
-- Server: Linux (x86-64 and Raspberry Pi / ARM). Client: Linux and macOS. *(Digital/FT8 uses PipeWire
-  virtual audio on Linux and a built-in TCI server on macOS — the latter is **experimental**; see below.)*
+- Server: Linux (x86-64 and Raspberry Pi / ARM). Client: Linux and macOS. *(Digital/FT8: on Linux via
+  PipeWire/PulseAudio virtual audio **or** TCI; on macOS via TCI only. TCI is **experimental**; see below.)*
 
 See the [Operator guide](operator-guide.md) for how to use these, and the
 [Validation](validation.md) page for transmit signal-quality results.
