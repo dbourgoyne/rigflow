@@ -51,19 +51,20 @@ All sources are auto-discovered at server startup; the client picks a radio from
 
 ## Quick start
 
-Prerequisites and full setup are in the **[Installation guide](docs/installation.md)** (you'll need
-the Rust toolchain and a few system libraries). Once those are in place:
+Get Rigflow from the **[Releases page](https://github.com/dbourgoyne/rigflow/releases)** — a prebuilt
+binary needs no Rust toolchain, just the runtime libraries listed in the
+**[Installation guide](docs/installation.md)** — or build from source. Then:
 
 ```bash
-# Build
-cargo build --release
-
 # Run the server (auto-discovers RTL-SDR, Hermes Lite 2, WAV recordings, and a test tone)
-cargo run --release -p rigflow-server
+./rigflow-server
 
 # Run the client (in another terminal, or on another machine)
-cargo run --release -p rigflow-client
+./rigflow-client
 ```
+
+*(From a source checkout: `cargo run --release -p rigflow-server` / `-p rigflow-client` — see the
+Installation guide for the toolchain and build libraries.)*
 
 In the client: enter the server's IP (defaults to `127.0.0.1` for a single-box setup), click
 **Connect**, pick a radio, and tune. See the **[Operator guide](docs/operator-guide.md)** for

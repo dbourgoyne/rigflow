@@ -51,6 +51,17 @@ The step size **adapts to the mode** (and modifier keys), so it's sensible on ev
 
 (↑/↓ move the LO in larger, mode-appropriate steps.)
 
+### Bands
+
+There's a **Band** row in **Source Control** (Hermes Lite 2): click a band to jump straight to its
+default frequency and mode. The highlighted band is *derived from your current frequency*, so it always
+shows where you're tuned — however you got there (band button, click, wheel, keyboard, or a bookmark).
+The HL2's transmit **low-pass filter follows the band automatically**; there's nothing to switch by hand.
+
+Tuning **within** a band just moves the dial under the same display; jumping to a **different** band
+recenters the waterfall on the new frequency. **[Bookmarks](#bookmarks)** are the quickest way to hop
+to specific frequencies.
+
 ---
 
 ## Receiving
@@ -145,6 +156,14 @@ In WSJT-X:
 
 Then operate normally — no soundcard or CAT plumbing to configure. This path also works on Linux, but the
 PipeWire route above is the default there.
+
+### WSJT-X: Split Operation
+
+Set WSJT-X's **Settings → Radio → Split Operation** to **Fake It** (recommended) or **None** — **not
+"Rig"**. Rigflow has a single VFO and doesn't implement rig split, so "Rig" leaves WSJT-X trying to set a
+split it can't, and it stalls or reports a frequency mismatch. **Fake It** keeps the transmit tone in
+WSJT-X's preferred range by nudging the dial on transmit, and Rigflow handles that as ordinary in-band
+tuning. This applies to both the virtual-audio (rigctld) and TCI paths.
 
 ---
 
