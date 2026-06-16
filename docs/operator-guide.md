@@ -90,8 +90,10 @@ adaptive or manual normalization (top/range in dB).
 Optional **TX processing** (under **Advanced**): a soft **limiter** (peak protection) and a **speech
 compressor** (more average talk power). Leave the limiter on; add compression to taste.
 
-> The Space bar only keys when no text field has focus (so it doesn't fight typing). Always confirm
-> you're transmitting into an antenna or load before keying.
+> The Space bar (SSB and CW) only keys when no text field has focus (so it doesn't fight typing), and
+> transmit **stops if the client window loses focus** — switching to another window always drops you
+> back to receive, so to keep transmitting keep the client focused. Always confirm you're transmitting
+> into an antenna or load before keying.
 
 ## Transmitting — CW
 
