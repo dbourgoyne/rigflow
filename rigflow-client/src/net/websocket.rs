@@ -69,6 +69,11 @@ pub async fn websocket_control_task(
     // Single-client policy: when the server keeps rejecting us with `server_busy`,
     // retry through the server's heartbeat-eviction window, then give up.
     let mut rejected_since: Option<Instant> = None;
+    // Did the in-flight connection come from a user Connect (vs an auto-reconnect)?
+    // A manual Connect to a busy server gives up immediately; an auto-reconnect
+    // after a drop retries through the eviction window so our own stale session
+    // can time out first.
+    let mut connect_was_manual = false;
 
     // Renew radio lease periodically while a radio is acquired.
     let mut renew_interval = tokio::time::interval(Duration::from_secs(10));
@@ -159,6 +164,7 @@ pub async fn websocket_control_task(
                                 reconnect_backoff = Duration::from_secs(1);
                                 reconnect_attempt = 0;
                                 rejected_since = None;
+                                connect_was_manual = true;
                             }
 
                             Err(err) => {
@@ -226,26 +232,45 @@ pub async fn websocket_control_task(
                         {
                             debug!("CLIENT got radio message: {:?}", radio_msg);
 
-                            // Single-client policy: the server already has a
-                            // client.  Keep retrying through its heartbeat-eviction
-                            // window (our own reconnect may just need the server to
-                            // drop our stale connection), then give up so we don't
-                            // storm a genuinely-occupied server.
+                            // Single-client policy: the server already has a client.
+                            // A *manual* Connect gives up at once; an *auto-reconnect*
+                            // after a drop retries through the server's heartbeat-
+                            // eviction window (our own stale session may just need to
+                            // time out), then gives up so we don't storm an occupied
+                            // server.  Either way, say "server in use" right away
+                            // instead of the misleading "reconnecting…".
                             if let ServerRadioMessage::RadioError { code, .. } = &radio_msg {
                                 if code == "server_busy" {
-                                    let since =
-                                        *rejected_since.get_or_insert_with(Instant::now);
-                                    if auto_reconnect_enabled
-                                        && since.elapsed() >= SERVER_BUSY_GIVE_UP
-                                    {
+                                    let since = *rejected_since.get_or_insert_with(Instant::now);
+                                    let give_up = connect_was_manual
+                                        || since.elapsed() >= SERVER_BUSY_GIVE_UP;
+                                    if give_up {
                                         auto_reconnect_enabled = false;
                                         reconnect_at = None;
                                         reconnect_target_ip = None;
+                                        rejected_since = None;
+                                        // Drop the (already server-closed) socket so the
+                                        // close handler doesn't re-arm the reconnect.
+                                        write_opt = None;
+                                        read_opt = None;
+                                        connected_server_ip = None;
+                                        let mut s = ui_state.lock().unwrap();
+                                        s.server_connected = false;
+                                        s.radio_acquired = false;
+                                        s.server_status =
+                                            "server already has a client — press Connect to retry"
+                                                .to_string();
+                                    } else {
                                         ui_state.lock().unwrap().server_status =
-                                            "server already has a client".to_string();
+                                            "server in use — retrying…".to_string();
                                     }
+                                    continue;
                                 }
                             }
+
+                            // Any other server message means the session is live —
+                            // end any busy streak so the give-up window resets.
+                            rejected_since = None;
 
                             if let Some(outgoing) = apply_radio_server_message(
                                 radio_msg,
@@ -290,10 +315,16 @@ pub async fn websocket_control_task(
                         // Disconnect, which disarms it). `last_radio_id` is kept so
                         // the radio is re-acquired once reconnected.
                         let status = if auto_reconnect_enabled {
-                            reconnect_attempt = 1;
                             reconnect_backoff = Duration::from_secs(1);
                             reconnect_at = Some(Instant::now() + reconnect_backoff);
-                            "reconnecting (attempt 1)…".to_string()
+                            if rejected_since.is_some() {
+                                // Busy streak: keep retrying but don't masquerade as a
+                                // network problem.
+                                "server in use — retrying…".to_string()
+                            } else {
+                                reconnect_attempt = 1;
+                                "reconnecting (attempt 1)…".to_string()
+                            }
                         } else {
                             format!("connection error: {}", error)
                         };
@@ -314,10 +345,16 @@ pub async fn websocket_control_task(
                         connected_server_ip = None;
 
                         let status = if auto_reconnect_enabled {
-                            reconnect_attempt = 1;
                             reconnect_backoff = Duration::from_secs(1);
                             reconnect_at = Some(Instant::now() + reconnect_backoff);
-                            "reconnecting (attempt 1)…".to_string()
+                            if rejected_since.is_some() {
+                                // Busy streak: keep retrying but don't masquerade as a
+                                // network problem.
+                                "server in use — retrying…".to_string()
+                            } else {
+                                reconnect_attempt = 1;
+                                "reconnecting (attempt 1)…".to_string()
+                            }
                         } else {
                             "no server".to_string()
                         };
@@ -343,7 +380,10 @@ pub async fn websocket_control_task(
                         reconnect_at = None;
                         reconnect_backoff = Duration::from_secs(1);
                         reconnect_attempt = 0;
-                        rejected_since = None;
+                        connect_was_manual = false;
+                        // NB: do NOT clear `rejected_since` here — a busy streak must
+                        // span reconnect attempts so the give-up window can elapse.
+                        // It's cleared once a real (non-busy) server message arrives.
 
                         let mut state = ui_state.lock().unwrap();
                         state.server_connected = true;
