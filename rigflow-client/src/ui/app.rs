@@ -183,7 +183,11 @@ impl RigflowApp {
         use rigflow_core::dsp::modes::DemodMode;
 
         let typing = ctx.wants_keyboard_input();
-        let space_held = !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+        // A hold-to-talk key can't be observed while the window is unfocused, so
+        // treat "not focused" as key-up — fail safe to RX instead of latching the
+        // transmitter when the user holds Space and switches windows.
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        let space_held = focused && !typing && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let cw_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
@@ -284,7 +288,10 @@ impl RigflowApp {
         use rigflow_core::dsp::modes::DemodMode;
 
         let typing = ctx.wants_keyboard_input();
-        let space_held = !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+        // Fail safe to RX if the window loses focus mid-hold (see handle_cw_keying):
+        // an unfocused window never sees the key-up, so treat "not focused" as up.
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        let space_held = focused && !typing && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let ssb_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
