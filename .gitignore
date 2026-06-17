@@ -1,6 +1,7 @@
 .*
 !/.gitignore
 !/.github/
+!/.githooks/
 *.o
 *.bin
 docker-compose.yml

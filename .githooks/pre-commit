@@ -1,0 +1,17 @@
+#!/bin/sh
+# Pre-commit hook: reject commits that aren't rustfmt-clean, so CI's
+# `cargo fmt --all --check` (in .github/workflows/ci.yml) never fails on a
+# missed format again.  Fast (<1s); intentionally does NOT run clippy/build/test
+# — leave those to CI.
+#
+# Enable it once per clone (hooks aren't installed automatically):
+#     git config core.hooksPath .githooks
+
+# No Rust toolchain on this machine → don't block the commit.
+command -v cargo >/dev/null 2>&1 || exit 0
+
+if ! cargo fmt --all --check; then
+    echo >&2
+    echo "pre-commit: code is not rustfmt-clean. Run 'cargo fmt --all', re-stage, and commit again." >&2
+    exit 1
+fi

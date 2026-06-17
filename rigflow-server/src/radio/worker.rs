@@ -759,10 +759,7 @@ fn spawn_amplifier_thread(
         // during TX.  Reuse the existing per-path keying flags (mic/FT8/two-tone
         // and CW) — both are reliably cleared on key-up and on worker stop.
         let tx_keyed = match control.lock() {
-            Ok(cs) => vec![
-                Arc::clone(&cs.mic_tx_active),
-                Arc::clone(&cs.cw_key_held),
-            ],
+            Ok(cs) => vec![Arc::clone(&cs.mic_tx_active), Arc::clone(&cs.cw_key_held)],
             Err(_) => Vec::new(),
         };
         crate::amplifier::run_amplifier_poller(
