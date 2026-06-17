@@ -48,6 +48,11 @@ pub struct RigflowApp {
     #[allow(dead_code)]
     pub digital_audio: crate::digital_audio::DigitalAudio,
 
+    /// Space-PTT focus latch: set when the window loses focus (we can't observe
+    /// the key-up while unfocused), cleared on a fresh Space press — so transmit
+    /// never resumes just because egui still reports Space "down" after refocus.
+    ptt_needs_fresh_press: bool,
+
     /// Graceful-exit state machine (window-[X] path).  See `handle_exit`.
     exit_phase: ExitPhase,
     shutdown_started_at: Option<Instant>,
@@ -88,6 +93,7 @@ impl RigflowApp {
             mic: None,
             mic_requested: None,
             digital_audio,
+            ptt_needs_fresh_press: false,
             exit_phase: ExitPhase::Running,
             shutdown_started_at: None,
             radio_settings_last: None,
@@ -173,6 +179,21 @@ impl RigflowApp {
         let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
     }
 
+    /// Maintain the Space-PTT focus latch once per frame (call before the PTT
+    /// handlers).  egui never clears `keys_down` on focus loss and emits no
+    /// synthetic key events on refocus, so after a blur it still reports Space
+    /// "down" — which would resume transmit on refocus.  We latch on blur and
+    /// only clear on a real, fresh Space press, so a deliberate press is required
+    /// to key again.  Shared by the SSB and CW handlers (Space is one key).
+    fn update_ptt_focus_latch(&mut self, ctx: &egui::Context) {
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        if !focused {
+            self.ptt_needs_fresh_press = true;
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+            self.ptt_needs_fresh_press = false;
+        }
+    }
+
     /// Space-bar CW keying (CW TX Phase 1).  Space held = CW key down, released
     /// = key up.  Only active when a radio is acquired, the source supports TX,
     /// and the current mode is CW.  Edge-detected against `cw_key_down` so a
@@ -185,9 +206,13 @@ impl RigflowApp {
         let typing = ctx.wants_keyboard_input();
         // A hold-to-talk key can't be observed while the window is unfocused, so
         // treat "not focused" as key-up — fail safe to RX instead of latching the
-        // transmitter when the user holds Space and switches windows.
+        // transmitter when the user holds Space and switches windows.  After a
+        // blur, `ptt_needs_fresh_press` also requires a deliberate new press so
+        // TX doesn't resume from egui's stale key state on refocus.
         let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
-        let space_held = focused && !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+        let needs_fresh = self.ptt_needs_fresh_press;
+        let space_held =
+            focused && !typing && !needs_fresh && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let cw_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
@@ -288,10 +313,13 @@ impl RigflowApp {
         use rigflow_core::dsp::modes::DemodMode;
 
         let typing = ctx.wants_keyboard_input();
-        // Fail safe to RX if the window loses focus mid-hold (see handle_cw_keying):
-        // an unfocused window never sees the key-up, so treat "not focused" as up.
+        // Fail safe to RX if the window loses focus mid-hold, and require a fresh
+        // press after a blur so TX doesn't resume from a stale key on refocus
+        // (see handle_cw_keying / update_ptt_focus_latch).
         let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
-        let space_held = focused && !typing && ctx.input(|i| i.key_down(egui::Key::Space));
+        let needs_fresh = self.ptt_needs_fresh_press;
+        let space_held =
+            focused && !typing && !needs_fresh && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let ssb_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
@@ -429,6 +457,7 @@ impl eframe::App for RigflowApp {
 
         self.ensure_mic();
         self.handle_keyboard_shortcuts(ctx);
+        self.update_ptt_focus_latch(ctx);
         self.handle_cw_keying(ctx, &snapshot);
         self.handle_cw_macros(ctx, &snapshot);
         self.handle_ssb_ptt(ctx, &snapshot);
