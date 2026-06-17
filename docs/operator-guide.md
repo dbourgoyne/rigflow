@@ -125,6 +125,14 @@ There are two transports, and which you use depends on your platform:
 - **macOS** — **TCI only** (experimental). macOS has no virtual audio device, so the PipeWire method
   does not apply.
 
+> **Clean signal path is automatic in DATA mode.** WSJT-X owns the modem, and FT8 is a single
+> constant-envelope tone that needs a flat, linear path. In **DATA** mode Rigflow therefore **bypasses
+> the TX speech compressor and limiter** (their make-up gain and clipping would only add IMD/splatter)
+> and **disables receive AGC** (a pumping AGC corrupts the relative signal levels the FT8 decoder relies
+> on). This happens regardless of your SSB-voice settings — you don't need to turn anything off by hand.
+> Set transmit level with **TX drive** so the tone sits in the linear region. (CW is unaffected: it uses
+> a separate enveloped transmit path that never runs the compressor/limiter.)
+
 ### Linux — virtual audio (PipeWire/PulseAudio)
 
 Rigflow makes digital nearly one-click:

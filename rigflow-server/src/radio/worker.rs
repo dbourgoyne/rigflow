@@ -1886,6 +1886,15 @@ fn spawn_capture_thread(
                         }
                     } else {
                         let usb = mic_usb.unwrap();
+                        // Digital (DgtU/FT8) demands a clean, linear TX: WSJT-X
+                        // owns the modem and a single constant-envelope tone gains
+                        // nothing from speech processing — the compressor's
+                        // make-up gain and any limiter clipping only add IMD /
+                        // splatter.  Force both off for DgtU regardless of the
+                        // operator's persisted SSB-voice settings.
+                        let is_digital = matches!(control_snapshot.demod_mode, DemodMode::DgtU);
+                        let limiter_enabled = control_snapshot.tx_limiter_enabled && !is_digital;
+                        let compressor_enabled = control_snapshot.compressor_enabled && !is_digital;
                         let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                         let target_freq_hz = control_snapshot.target_freq_hz;
                         let active = control.lock().ok().map(|cs| cs.mic_tx_active.clone());
@@ -1932,9 +1941,9 @@ fn spawn_capture_thread(
                                 target_freq_hz,
                                 usb,
                                 tx_drive_percent,
-                                control_snapshot.tx_limiter_enabled,
+                                limiter_enabled,
                                 control_snapshot.tx_limiter_threshold,
-                                control_snapshot.compressor_enabled,
+                                compressor_enabled,
                                 control_snapshot.compressor_level,
                                 &active,
                                 &stop_flag,

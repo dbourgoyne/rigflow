@@ -458,9 +458,19 @@ impl DspPipeline {
                     fir.process_in_place(&mut audio);
                 }
             }
-            DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU => {
+            DemodMode::Usb | DemodMode::Lsb => {
                 self.agc.process_in_place(&mut audio);
 
+                if let Some(fir) = &mut self.audio_fir {
+                    fir.process_in_place(&mut audio);
+                }
+            }
+            DemodMode::DgtU => {
+                // Digital (FT8) RX must be flat / fixed-gain: WSJT-X relies on the
+                // relative levels of signals in the passband, and an AGC pumping
+                // on a strong in-band signal amplitude-modulates the weak target
+                // and corrupts that information.  Skip AGC entirely for DgtU; the
+                // band-pass FIR still applies.
                 if let Some(fir) = &mut self.audio_fir {
                     fir.process_in_place(&mut audio);
                 }
