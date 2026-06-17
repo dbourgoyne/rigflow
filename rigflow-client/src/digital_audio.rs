@@ -57,6 +57,9 @@ const CHANNEL_MAP: &str = "mono";
 
 /// Owns the lifecycle of the virtual audio devices.  Drop unloads any modules
 /// this process created (devices that already existed are left untouched).
+// The module/keepalive handles are only read by the Linux-only Drop + helpers;
+// off Linux the endpoints are never created, so allow them to be unread there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub struct DigitalAudio {
     /// `module-null-sink` for `RigflowDigitalOutput`, if we created it.
     output_module: Option<u32>,

@@ -67,6 +67,9 @@ impl DigitalRxOutput {
     }
 
     /// Enable/disable routing (UI).  Logged on transition.
+    // Only called from the Linux-gated DATA-mode RX auto-route; on macOS the
+    // digital RX path is the TCI tap, so this is unused there.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn set_enabled(&self, on: bool) {
         if self.enabled.swap(on, Ordering::Relaxed) != on {
             if on {
