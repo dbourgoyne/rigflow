@@ -187,6 +187,14 @@ fn baud_to_speed(baud: u32) -> io::Result<libc::speed_t> {
 
 impl AmplifierTransport for SerialTransport {
     fn write_cmd(&mut self, bytes: &[u8]) -> io::Result<()> {
+        // Discard any stale/unsolicited input before sending so the upcoming
+        // solicited reply is read cleanly — the HR50 emits unsolicited status on
+        // band/PTT changes, and without this a single desync would persist and
+        // time out every later poll (the reader could never re-sync).
+        self.buf.clear();
+        unsafe {
+            libc::tcflush(self.fd, libc::TCIFLUSH);
+        }
         let mut off = 0;
         while off < bytes.len() {
             let n = unsafe {

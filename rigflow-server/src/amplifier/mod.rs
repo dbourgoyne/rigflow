@@ -54,6 +54,14 @@ const PROBE_BAUDS: &[u32] = &[19200, 9600, 38400, 57600, 115200, 4800];
 const SET_DRAIN: Duration = Duration::from_millis(120);
 /// Poll cadence once an amplifier is detected (~1 Hz).
 const POLL_INTERVAL: Duration = Duration::from_millis(1000);
+/// The HR50 firmware **hangs** (power-cycle required) if it receives serial while
+/// keyed (PTT asserted) — so the poller stays completely silent during TX and for
+/// this long after unkey, letting the amp settle into RX.  The HR50 peak-holds its
+/// last-TX PEP/Avg/SWR, so the first `HRMX` read after the settle still reports the
+/// over's TX stats.
+const TX_SETTLE: Duration = Duration::from_millis(150);
+/// How often to re-check the keyed state while holding serial off during TX.
+const TX_HOLDOFF_CHECK: Duration = Duration::from_millis(100);
 /// Retry cadence while no amplifier is detected.
 const DETECT_RETRY: Duration = Duration::from_millis(2000);
 /// Consecutive poll failures before declaring the amplifier gone.  Generous so a
@@ -170,6 +178,7 @@ pub fn run_amplifier_poller<F>(
     stop: Arc<AtomicBool>,
     commands: Receiver<AmpCommand>,
     target_freq_hz: Arc<AtomicU64>,
+    tx_keyed: Vec<Arc<AtomicBool>>,
     mut publish: F,
 ) where
     F: FnMut(&AmplifierStatus),
@@ -178,8 +187,21 @@ pub fn run_amplifier_poller<F>(
     let mut detected = false;
     let mut fails = 0u32;
     let mut last_freq_sent = 0u64;
+    let mut last_keyed: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        // Never touch the serial port while keyed (it hangs the HR50), nor for a
+        // brief settle after unkey.  This is not a poll failure — we're choosing
+        // not to poll — so `fails` is left untouched and the amp won't be dropped.
+        let keyed = tx_keyed.iter().any(|f| f.load(Ordering::Relaxed));
+        if keyed {
+            last_keyed = Some(Instant::now());
+        }
+        if keyed || last_keyed.is_some_and(|t| t.elapsed() < TX_SETTLE) {
+            sleep_responsive(&stop, TX_HOLDOFF_CHECK);
+            continue;
+        }
+
         let t = transport.as_mut();
 
         // 1. Apply queued control commands (one serial SET each).

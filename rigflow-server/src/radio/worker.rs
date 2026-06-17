@@ -755,11 +755,22 @@ fn spawn_amplifier_thread(
             }
         };
         info!("[radio-worker {radio_id}] HR50 amplifier polling on {path} @ {baud} 8N1");
+        // The HR50 hangs if sent serial while keyed, so the poller goes silent
+        // during TX.  Reuse the existing per-path keying flags (mic/FT8/two-tone
+        // and CW) — both are reliably cleared on key-up and on worker stop.
+        let tx_keyed = match control.lock() {
+            Ok(cs) => vec![
+                Arc::clone(&cs.mic_tx_active),
+                Arc::clone(&cs.cw_key_held),
+            ],
+            Err(_) => Vec::new(),
+        };
         crate::amplifier::run_amplifier_poller(
             Box::new(transport),
             stop_flag,
             amp_cmd_rx,
             amp_freq,
+            tx_keyed,
             |status| {
                 if let Ok(mut cs) = control.lock() {
                     cs.amplifier_status = status.clone();
