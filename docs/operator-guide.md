@@ -208,4 +208,6 @@ Diagnostics and Advanced are hidden until you tick **"Show advanced & diagnostic
 
 ---
 
-If something doesn't work as expected, see **[Troubleshooting](troubleshooting.md)**.
+To understand *what* Rigflow does to your audio and which behaviors are intentional, see
+**[Signal path & expected behavior](signal-path.md)**. If something doesn't work as
+expected, see **[Troubleshooting](troubleshooting.md)**.

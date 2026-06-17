@@ -53,6 +53,10 @@ Common problems and fixes, by symptom. For setup steps see the
   client can receive **inbound UDP** from the server (the media stream) — a firewall on the client
   host can silently drop it.
 
+**CWU and CWL sound the same on receive.**
+- Expected — Rigflow doesn't reject the opposite side of a CW signal yet, so the two modes differ only
+  in transmit, not receive. Not a bug. See [Signal path & expected behavior](signal-path.md).
+
 ---
 
 ## Transmitting
@@ -126,7 +130,8 @@ platform, with a live status for each piece.
 
 **The S-meter / power / SWR readings look off.**
 - They're **approximate by design** — good for relative judgements (comparing signals, spotting high
-  SWR, peaking a tune), not lab-calibrated absolute values. Not a bug.
+  SWR, peaking a tune), not lab-calibrated absolute values. Not a bug. See
+  [Signal path & expected behavior](signal-path.md).
 
 ---
 

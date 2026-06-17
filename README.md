@@ -78,6 +78,7 @@ The server and client are driven live from the UI; their command-line options ar
 
 - **[Installation guide](docs/installation.md)** — prerequisites, build, and connecting your radios
 - **[Operator guide](docs/operator-guide.md)** — receiving, transmitting (SSB/CW), and digital (WSJT-X/FT8)
+- **[Signal path & expected behavior](docs/signal-path.md)** — how Rigflow processes your audio, and what's by design
 - **[Troubleshooting](docs/troubleshooting.md)** — common issues and fixes
 - **[Validation](docs/validation.md)** — transmit signal-quality results
 - **[Release notes](docs/RELEASE_NOTES.md)** — what's in this release and known issues
