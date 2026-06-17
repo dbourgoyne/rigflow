@@ -787,6 +787,38 @@ impl RigflowApp {
                 level: state.compressor_level,
             });
         }
+
+        // Restore the TX-processing controls to their defaults (mirrors the
+        // Filter BW "Restore Default" button); greyed out when already at them.
+        // Must match `UiState::default` / the persistence defaults.
+        const DEF_LIMITER_ENABLED: bool = true;
+        const DEF_LIMITER_THRESHOLD_PCT: u16 = 90;
+        const DEF_COMPRESSOR_ENABLED: bool = false;
+        const DEF_COMPRESSOR_LEVEL: u8 = 3;
+        let at_default = state.tx_limiter_enabled == DEF_LIMITER_ENABLED
+            && state.tx_limiter_threshold_percent == DEF_LIMITER_THRESHOLD_PCT
+            && state.compressor_enabled == DEF_COMPRESSOR_ENABLED
+            && state.compressor_level == DEF_COMPRESSOR_LEVEL;
+        if ui
+            .add_enabled(
+                !at_default,
+                egui::Button::new(RichText::new("Restore Default").size(8.0)),
+            )
+            .clicked()
+        {
+            state.tx_limiter_enabled = DEF_LIMITER_ENABLED;
+            state.tx_limiter_threshold_percent = DEF_LIMITER_THRESHOLD_PCT;
+            state.compressor_enabled = DEF_COMPRESSOR_ENABLED;
+            state.compressor_level = DEF_COMPRESSOR_LEVEL;
+            self.send_radio_msg(ClientRadioMessage::SetTxLimiter {
+                enabled: DEF_LIMITER_ENABLED,
+                threshold_percent: DEF_LIMITER_THRESHOLD_PCT as f32,
+            });
+            self.send_radio_msg(ClientRadioMessage::SetCompression {
+                enabled: DEF_COMPRESSOR_ENABLED,
+                level: DEF_COMPRESSOR_LEVEL,
+            });
+        }
     }
 
     /// TX Audio Diagnostics (USB/LSB only).  Shows the server-measured audio

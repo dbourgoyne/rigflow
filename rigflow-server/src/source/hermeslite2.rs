@@ -1731,6 +1731,10 @@ impl IqSource for HermesLite2Source {
         const DIAG_CLIP_THRESH: f32 = 0.99;
         const DIAG_PEAK_HOLD: Duration = Duration::from_millis(500);
         const DIAG_CLIP_HOLD: Duration = Duration::from_millis(1000);
+        // Gain-reduction hold so the GR meters are readable: per-block GR is a
+        // transient (a window without a peak reads 0), so without a hold the
+        // gauge flickers to 0 and looks stuck. Latch the recent max, decay after.
+        const DIAG_GR_HOLD: Duration = Duration::from_millis(600);
         // TX soft peak limiter (ALC Phase 1): fast attack, slow release for
         // natural, pump-free limiting.  Engaged/released logged on the edge.
         const LIM_ATTACK_MS: f32 = 2.0;
@@ -1826,6 +1830,11 @@ impl IqSource for HermesLite2Source {
         let mut win_comp_gr_db = 0.0f32;
         let mut held_peak = 0.0f32;
         let mut peak_at = Instant::now();
+        // GR peak-hold (limiter + compressor), mirroring the peak meter's hold.
+        let mut held_gr_db = 0.0f32;
+        let mut gr_at = Instant::now();
+        let mut held_comp_gr_db = 0.0f32;
+        let mut comp_gr_at = Instant::now();
         let mut clip_until: Option<Instant> = None;
         // Underrun is counted once per transition into starvation (edge), not
         // per starved packet, so the counter reflects events not frames.
@@ -1944,6 +1953,18 @@ impl IqSource for HermesLite2Source {
                     held_peak = win_peak;
                     peak_at = now2;
                 }
+                // GR hold: latch the recent-max reduction, decay after the hold,
+                // so the meters stay readable instead of flicking to 0 each window.
+                if win_gr_db >= held_gr_db || now2.duration_since(gr_at) >= DIAG_GR_HOLD {
+                    held_gr_db = win_gr_db;
+                    gr_at = now2;
+                }
+                if win_comp_gr_db >= held_comp_gr_db
+                    || now2.duration_since(comp_gr_at) >= DIAG_GR_HOLD
+                {
+                    held_comp_gr_db = win_comp_gr_db;
+                    comp_gr_at = now2;
+                }
                 // Clip hold: latch ~1 s, log on the rising edge only.
                 if win_clip {
                     if clip_until.is_none() {
@@ -1955,7 +1976,7 @@ impl IqSource for HermesLite2Source {
                 if !clipping {
                     clip_until = None;
                 }
-                crate::tx_diag::set_levels(rms, held_peak, clipping, win_gr_db, win_comp_gr_db);
+                crate::tx_diag::set_levels(rms, held_peak, clipping, held_gr_db, held_comp_gr_db);
                 win_sumsq = 0.0;
                 win_count = 0;
                 win_peak = 0.0;
