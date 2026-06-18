@@ -17,7 +17,7 @@
 //! is `true`, the caller should write the migrated value back to disk so that
 //! subsequent loads skip the migration entirely.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::persistence::error::PersistenceError;
 use crate::persistence::models::OPERATOR_SETTINGS_FILE_VERSION;

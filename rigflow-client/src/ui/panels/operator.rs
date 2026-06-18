@@ -1,7 +1,7 @@
-use crate::UiState;
 use crate::persistence::apply_operator_settings_to_ui_state;
 use crate::ui::app::RigflowApp;
 use crate::ui::om_bands::LicenseClass;
+use crate::UiState;
 use eframe::egui;
 
 impl RigflowApp {

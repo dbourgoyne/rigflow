@@ -1,5 +1,5 @@
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 //use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
@@ -16,7 +16,7 @@ use rigflow_core::{
 };
 
 use crate::{
-    net::udp::{MediaPacketStats, handle_media_packet},
+    net::udp::{handle_media_packet, MediaPacketStats},
     sidetone::SidetoneShared,
     ui::{
         layout::{
@@ -206,26 +206,24 @@ pub fn start_media_runtime(
     {
         let mic_socket = socket.try_clone()?;
         let mic_addr = Arc::clone(&mic_server_addr);
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(5));
-                let samples = mic_shared.drain_tx();
-                if samples.is_empty() {
-                    continue;
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_millis(5));
+            let samples = mic_shared.drain_tx();
+            if samples.is_empty() {
+                continue;
+            }
+            let Some(addr) = mic_addr.lock().ok().and_then(|g| g.clone()) else {
+                continue;
+            };
+            for chunk in samples.chunks(256) {
+                let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
+                pkt.extend_from_slice(&MAGIC.to_be_bytes());
+                pkt.push(VERSION);
+                pkt.push(STREAM_TYPE_MIC_AUDIO);
+                for &s in chunk {
+                    pkt.extend_from_slice(&s.to_le_bytes());
                 }
-                let Some(addr) = mic_addr.lock().ok().and_then(|g| g.clone()) else {
-                    continue;
-                };
-                for chunk in samples.chunks(256) {
-                    let mut pkt = Vec::with_capacity(4 + chunk.len() * 4);
-                    pkt.extend_from_slice(&MAGIC.to_be_bytes());
-                    pkt.push(VERSION);
-                    pkt.push(STREAM_TYPE_MIC_AUDIO);
-                    for &s in chunk {
-                        pkt.extend_from_slice(&s.to_le_bytes());
-                    }
-                    let _ = mic_socket.send_to(&pkt, &addr);
-                }
+                let _ = mic_socket.send_to(&pkt, &addr);
             }
         });
     }

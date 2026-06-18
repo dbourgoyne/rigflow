@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
     net::udp_framing::{
-        STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL, is_valid_header, parse_media_header,
+        is_valid_header, parse_media_header, STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL,
     },
 };
 

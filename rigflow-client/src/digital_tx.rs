@@ -28,8 +28,8 @@
 //! PCM from `parec` (Pulse) / `pw-record` (PipeWire).  A dedicated capture
 //! thread owns the child process; it only runs while PTT is keyed.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 // PipeWire/Pulse capture (parec/pw-record) is Linux-only; gate the machinery so
 // macOS/Windows never shell out to it (digital TX there flows over TCI instead).
 #[cfg(target_os = "linux")]

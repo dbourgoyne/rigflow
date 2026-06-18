@@ -1,17 +1,17 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::UiState;
 use crate::ui::app::RigflowApp;
 use crate::ui::panels::sections::{Panel, Section};
 use crate::ui::state::DebounceState;
 use crate::ui::utils::should_send_debounced;
+use crate::UiState;
 use eframe::egui;
 use egui::RichText;
 use rigflow_core::dsp::modes::{
-    DeemphasisMode, DemodMode, Sideband, clamp_filter_bandwidth, default_deemphasis_mode,
-    filter_bandwidth_limits, pitch_limits,
+    clamp_filter_bandwidth, default_deemphasis_mode, filter_bandwidth_limits, pitch_limits,
+    DeemphasisMode, DemodMode, Sideband,
 };
 use rigflow_protocol::radio_control::ClientRadioMessage;
 

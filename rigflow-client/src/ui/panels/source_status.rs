@@ -1,5 +1,5 @@
-use crate::UiState;
 use crate::ui::app::RigflowApp;
+use crate::UiState;
 use eframe::egui;
 use rigflow_core::radio::amplifier::{AmplifierAtuMode, AmplifierKeyingMode, AmplifierStatus};
 use rigflow_core::radio::source_status::SourceStatus;

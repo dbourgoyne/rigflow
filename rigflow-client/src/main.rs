@@ -233,7 +233,7 @@ fn main() -> Result<(), eframe::Error> {
         rt.spawn(async move {
             #[cfg(unix)]
             {
-                use tokio::signal::unix::{SignalKind, signal};
+                use tokio::signal::unix::{signal, SignalKind};
                 let mut term = signal(SignalKind::terminate()).ok();
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
@@ -269,7 +269,14 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "rigflow-client",
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            // Pin the dark theme: the UI is dark-by-design (black spectrum,
+            // waterfall, and center panel), and many status-bar labels rely on
+            // the theme's default text color. Without this, a macOS host set to
+            // Light appearance renders that text dark-on-black (e.g. the VFO
+            // frequency vanishes). Setting a preference also stops eframe from
+            // following later OS appearance changes.
+            cc.egui_ctx.set_theme(eframe::egui::ThemePreference::Dark);
             Ok(Box::new(RigflowApp::new(
                 Arc::clone(&ui_state),
                 ws_cmd_tx.clone(),
@@ -357,7 +364,7 @@ fn parse_window_size(value: &str) -> Result<[f32; 2], String> {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{DEFAULT_WINDOW_SIZE, parse_window_size};
+    use super::{parse_window_size, DEFAULT_WINDOW_SIZE};
 
     #[test]
     fn parses_valid_size() {
