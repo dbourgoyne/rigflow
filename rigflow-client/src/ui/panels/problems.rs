@@ -5,9 +5,9 @@
 //! derived from the `UiState` snapshot by [`collect_problems`], the same source
 //! the top-bar status LED uses.
 
-use crate::ui::app::RigflowApp;
-use crate::ui::state::{collect_problems, ProblemSeverity};
 use crate::UiState;
+use crate::ui::app::RigflowApp;
+use crate::ui::state::{ProblemSeverity, collect_problems};
 use eframe::egui;
 
 /// Red for errors, amber for warnings, green for the all-clear line.

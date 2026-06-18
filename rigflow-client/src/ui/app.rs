@@ -346,7 +346,7 @@ impl RigflowApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        use crate::ui::tuning_steps::{center_step_hz, target_step_hz, TuneTier};
+        use crate::ui::tuning_steps::{TuneTier, center_step_hz, target_step_hz};
 
         // Gather arrow presses + modifiers in one input pass.
         let (up, down, left, right, shift, alt) = ctx.input(|i| {

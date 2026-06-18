@@ -154,6 +154,7 @@ impl RigflowApp {
                         Some(LicenseClass::Technician),
                         "Technician",
                     );
+                    ui.radio_value(&mut selected_license, Some(LicenseClass::Novice), "Novice");
                     ui.radio_value(&mut selected_license, None, "None");
 
                     if selected_license != snapshot.selected_license {

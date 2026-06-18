@@ -13,8 +13,8 @@
 //! so each can reach that module's private draw helpers; the composer just calls
 //! the right one.
 
-use crate::ui::app::RigflowApp;
 use crate::UiState;
+use crate::ui::app::RigflowApp;
 use eframe::egui;
 use rigflow_core::dsp::modes::DemodMode;
 

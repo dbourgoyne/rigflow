@@ -172,6 +172,11 @@ impl RigflowApp {
                             Some(LicenseClass::Technician),
                             "Technician",
                         );
+                        ui.radio_value(
+                            &mut state.pending_operator_license,
+                            Some(LicenseClass::Novice),
+                            "Novice",
+                        );
                         ui.radio_value(&mut state.pending_operator_license, None, "None");
 
                         if !state.persistence_status.is_empty() {

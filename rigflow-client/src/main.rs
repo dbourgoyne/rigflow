@@ -233,7 +233,7 @@ fn main() -> Result<(), eframe::Error> {
         rt.spawn(async move {
             #[cfg(unix)]
             {
-                use tokio::signal::unix::{signal, SignalKind};
+                use tokio::signal::unix::{SignalKind, signal};
                 let mut term = signal(SignalKind::terminate()).ok();
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
@@ -364,7 +364,7 @@ fn parse_window_size(value: &str) -> Result<[f32; 2], String> {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{parse_window_size, DEFAULT_WINDOW_SIZE};
+    use super::{DEFAULT_WINDOW_SIZE, parse_window_size};
 
     #[test]
     fn parses_valid_size() {

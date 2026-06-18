@@ -6,7 +6,7 @@ use crate::ui::{
     frequency_view::{visible_left_hz, visible_right_hz, visible_span_hz},
     layout::{BOTTOM_GUTTER, LEFT_GUTTER, RIGHT_GUTTER, TOP_GUTTER},
     om_bands::{
-        visible_om_segments, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
+        visible_om_segments, LicenseClass, OmKind, COLOR_OM_CW_ONLY, COLOR_OM_FIXED_DIGITAL,
         COLOR_OM_PHONE_IMAGE, COLOR_OM_RTTY_DATA, COLOR_OM_SSB_PHONE,
         COLOR_OM_USB_PHONE_CW_RTTY_DATA,
     },
@@ -60,7 +60,7 @@ pub fn draw_spectrum_plot(
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, spectrum_len, state);
     draw_band_overlays(&painter, plot_rect, spectrum_len, state);
-    draw_om_overlays(&painter, plot_rect, spectrum_len, state);
+    draw_om_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
     draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
 
@@ -530,11 +530,35 @@ fn om_kind_label(kind: OmKind) -> &'static str {
     }
 }
 
+/// Full meaning of an OM segment kind, shown in the hover tooltip.
+fn om_kind_full_label(kind: OmKind) -> &'static str {
+    match kind {
+        OmKind::RttyData => "RTTY and data",
+        OmKind::PhoneImage => "Phone and image",
+        OmKind::CwOnly => "CW only",
+        OmKind::SsbPhone => "SSB phone",
+        OmKind::UsbPhoneCwRttyData => "USB phone, CW, RTTY, and data",
+        OmKind::FixedDigitalMessages => "Fixed digital message forwarding system only",
+    }
+}
+
+/// Human-readable license class name for the hover tooltip.
+fn license_class_name(license: LicenseClass) -> &'static str {
+    match license {
+        LicenseClass::AmateurExtra => "Amateur Extra",
+        LicenseClass::Advanced => "Advanced",
+        LicenseClass::General => "General",
+        LicenseClass::Technician => "Technician",
+        LicenseClass::Novice => "Novice",
+    }
+}
+
 fn draw_om_overlays(
     painter: &egui::Painter,
     plot_rect: Rect,
     spectrum_len: usize,
     state: &UiState,
+    pointer_pos: Option<Pos2>,
 ) {
     let Some(license) = state.selected_license else {
         return;
@@ -558,6 +582,10 @@ fn draw_om_overlays(
     let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
     let om_y1 = band_y0 - 1.0;
     let om_y0 = om_y1 - om_strip_height;
+
+    // Track the segment under the pointer (last match wins, matching draw order
+    // so the topmost-drawn bar of an overlap is reported) for the hover tooltip.
+    let mut hovered = None;
 
     for seg in visible_segments {
         let Some(x0) = freq_to_plot_x_egui(seg.start_hz, plot_rect, spectrum_len, state) else {
@@ -593,6 +621,28 @@ fn draw_om_overlays(
                 Color32::from_rgba_premultiplied(235, 235, 235, 170),
             );
         }
+
+        // The strip is only a few pixels tall; inflate the hit area vertically
+        // (covering the label above it too) so the bar is easy to hover.
+        if let Some(p) = pointer_pos {
+            let hover_rect = seg_rect.expand2(egui::vec2(0.0, 8.0));
+            if hover_rect.contains(p) {
+                hovered = Some(seg);
+            }
+        }
+    }
+
+    if let (Some(seg), Some(p)) = (hovered, pointer_pos) {
+        let lines = vec![
+            om_kind_full_label(seg.kind).to_string(),
+            format!(
+                "{}–{} MHz · {}",
+                format_mhz(seg.band_start_hz),
+                format_mhz(seg.band_end_hz),
+                license_class_name(license),
+            ),
+        ];
+        draw_tooltip_bubble(painter, plot_rect, &lines, p);
     }
 }
 
@@ -736,6 +786,21 @@ fn draw_bookmark_tooltip(
         if !trimmed.is_empty() {
             lines.push(trimmed.to_string());
         }
+    }
+
+    draw_tooltip_bubble(painter, plot_rect, &lines, pointer_pos);
+}
+
+/// Draw a small floating tooltip bubble of text lines near the pointer, kept
+/// inside `plot_rect`. Shared by the bookmark and license-band overlays.
+fn draw_tooltip_bubble(
+    painter: &egui::Painter,
+    plot_rect: Rect,
+    lines: &[String],
+    pointer_pos: Pos2,
+) {
+    if lines.is_empty() {
+        return;
     }
 
     let font_id = FontId::monospace(10.0);
