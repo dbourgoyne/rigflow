@@ -59,8 +59,8 @@ pub fn draw_spectrum_plot(
 
     draw_grid_and_y_axis(&painter, plot_rect, outer_rect, db_min, db_max);
     draw_x_axis(&painter, plot_rect, outer_rect, spectrum_len, state);
-    draw_band_overlays(&painter, plot_rect, spectrum_len, state);
-    draw_om_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
+    let band_tooltip = draw_band_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
+    let om_tooltip = draw_om_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
     draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
 
@@ -81,6 +81,18 @@ pub fn draw_spectrum_plot(
         Stroke::new(1.0, Color32::from_gray(110)),
         egui::StrokeKind::Inside,
     );
+
+    // Band-strip hover tooltips are drawn last, so hover is always the topmost
+    // element — above both band strips, the trace, and the plot border. (The two
+    // hover zones are vertically disjoint, so at most one is Some.)
+    if let Some(p) = pointer_pos {
+        if let Some(lines) = &band_tooltip {
+            draw_tooltip_bubble(&painter, plot_rect, lines, p);
+        }
+        if let Some(lines) = &om_tooltip {
+            draw_tooltip_bubble(&painter, plot_rect, lines, p);
+        }
+    }
 
     // Shared mouse interaction (identical to the waterfall): wheel fine-tune /
     // zoom and click/double-click tuning.  The spectrum maps screen-x →
@@ -441,28 +453,34 @@ pub fn x_frac_to_frequency_hz(frac: f32, state: &UiState) -> f32 {
     left_hz + frac * visible_span_hz(state)
 }
 
+/// Draw the radio-band strip. Returns the tooltip lines for the band under the
+/// pointer (if any) so the caller can draw it last, on top of everything.
 fn draw_band_overlays(
     painter: &egui::Painter,
     plot_rect: Rect,
     spectrum_len: usize,
     state: &UiState,
-) {
+    pointer_pos: Option<Pos2>,
+) -> Option<Vec<String>> {
     let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
-        return;
+        return None;
     };
 
     if right_hz <= left_hz {
-        return;
+        return None;
     }
 
     let visible_bands = visible_radio_bands(left_hz, right_hz);
     if visible_bands.is_empty() {
-        return;
+        return None;
     }
 
     let band_strip_height = 14.0;
     let y0 = plot_rect.bottom() - band_strip_height - 2.0;
     let y1 = plot_rect.bottom() - 2.0;
+
+    // Track the band under the pointer for the hover tooltip.
+    let mut hovered = None;
 
     for band in visible_bands {
         let Some(x0) = freq_to_plot_x_egui(band.start_hz, plot_rect, spectrum_len, state) else {
@@ -498,7 +516,27 @@ fn draw_band_overlays(
                 Color32::from_rgba_premultiplied(235, 235, 235, 180),
             );
         }
+
+        // The strip is 14px tall, so it's easy to hover as-is; pad only downward
+        // (never upward into the license-band strip's hover zone just above).
+        if let Some(p) = pointer_pos {
+            let hover_rect = Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1 + 2.0));
+            if hover_rect.contains(p) {
+                hovered = Some(band);
+            }
+        }
     }
+
+    hovered.map(|band| {
+        vec![
+            band.name.to_string(),
+            format!(
+                "{}–{} MHz",
+                format_mhz(band.band_start_hz),
+                format_mhz(band.band_end_hz),
+            ),
+        ]
+    })
 }
 
 fn color32_from_u32_with_alpha(rgb: u32, alpha: u8) -> Color32 {
@@ -553,28 +591,28 @@ fn license_class_name(license: LicenseClass) -> &'static str {
     }
 }
 
+/// Draw the license (ARRL band plan) strip. Returns the tooltip lines for the
+/// segment under the pointer (if any) so the caller can draw it last, on top.
 fn draw_om_overlays(
     painter: &egui::Painter,
     plot_rect: Rect,
     spectrum_len: usize,
     state: &UiState,
     pointer_pos: Option<Pos2>,
-) {
-    let Some(license) = state.selected_license else {
-        return;
-    };
+) -> Option<Vec<String>> {
+    let license = state.selected_license?;
 
     let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
-        return;
+        return None;
     };
 
     if right_hz <= left_hz {
-        return;
+        return None;
     }
 
     let visible_segments = visible_om_segments(left_hz, right_hz, license);
     if visible_segments.is_empty() {
-        return;
+        return None;
     }
 
     let band_strip_height = 14.0;
@@ -622,18 +660,19 @@ fn draw_om_overlays(
             );
         }
 
-        // The strip is only a few pixels tall; inflate the hit area vertically
-        // (covering the label above it too) so the bar is easy to hover.
+        // The strip is only a few pixels tall; extend the hit area *upward*
+        // (over the label) so the bar is easy to hover — but not downward, to
+        // avoid overlapping the radio-band strip's hover zone just below.
         if let Some(p) = pointer_pos {
-            let hover_rect = seg_rect.expand2(egui::vec2(0.0, 8.0));
+            let hover_rect = Rect::from_min_max(Pos2::new(x0, om_y0 - 8.0), Pos2::new(x1, om_y1));
             if hover_rect.contains(p) {
                 hovered = Some(seg);
             }
         }
     }
 
-    if let (Some(seg), Some(p)) = (hovered, pointer_pos) {
-        let lines = vec![
+    hovered.map(|seg| {
+        vec![
             om_kind_full_label(seg.kind).to_string(),
             format!(
                 "{}–{} MHz · {}",
@@ -641,9 +680,8 @@ fn draw_om_overlays(
                 format_mhz(seg.band_end_hz),
                 license_class_name(license),
             ),
-        ];
-        draw_tooltip_bubble(painter, plot_rect, &lines, p);
-    }
+        ]
+    })
 }
 
 fn draw_bookmark_overlays(

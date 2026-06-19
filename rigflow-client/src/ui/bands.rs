@@ -1,182 +1,71 @@
-/// Static description of a radio band.
+/// Static description of a radio band, used for rendering the band overlay on
+/// the spectrum.
 ///
-/// This is used for:
-/// - rendering band overlays on the spectrum
-/// - suggesting a preferred demod mode (UI hint only)
-use rigflow_core::dsp::modes::DemodMode;
-
+/// The list below is transcribed 1:1 from `reference/Radio_Bands.csv` (the single
+/// source of truth for band extents, names, and colors — amateur and non-amateur
+/// alike). Update the CSV and re-transcribe when changing bands.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct RadioBand {
-    /// Display name (e.g. "40m Amateur")
+    /// Display name (e.g. "20m", "FM Broadcast").
     pub name: &'static str,
 
-    /// Preferred demod mode (UI hint only; still string for now)
-    pub preferred_demod: DemodMode,
-
-    /// Start frequency (Hz)
+    /// Start frequency (Hz).
     pub start_hz: f32,
 
-    /// End frequency (Hz)
+    /// End frequency (Hz).
     pub end_hz: f32,
 
-    /// RGB color (0xRRGGBB)
+    /// RGB color (0xRRGGBB).
     pub color: u32,
 }
 
-/// Global list of known radio bands.
+/// Global list of known radio bands — see `reference/Radio_Bands.csv`.
 ///
-/// NOTE:
-/// - Frequencies are approximate and for visualization
-/// - preferred_demod is a UI hint only (not enforced)
+/// NOTE: frequencies are approximate, for visualization only.
+#[rustfmt::skip]
 pub const RADIO_BANDS: &[RadioBand] = &[
-    RadioBand {
-        name: "AM Broadcast",
-        preferred_demod: DemodMode::Am,
-        start_hz: 530_000.0,
-        end_hz: 1_700_000.0,
-        color: 0x804000,
-    },
-    RadioBand {
-        name: "160m Amateur",
-        preferred_demod: DemodMode::Lsb,
-        start_hz: 1_800_000.0,
-        end_hz: 2_000_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "80m Amateur",
-        preferred_demod: DemodMode::Lsb,
-        start_hz: 3_500_000.0,
-        end_hz: 4_000_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "40m Amateur",
-        preferred_demod: DemodMode::Lsb,
-        start_hz: 7_000_000.0,
-        end_hz: 7_300_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "30m Amateur",
-        preferred_demod: DemodMode::Usb,
-        start_hz: 10_100_000.0,
-        end_hz: 10_150_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "20m Amateur",
-        preferred_demod: DemodMode::Usb,
-        start_hz: 14_000_000.0,
-        end_hz: 14_350_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "17m Amateur",
-        preferred_demod: DemodMode::Usb,
-        start_hz: 18_068_000.0,
-        end_hz: 18_168_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "15m Amateur",
-        preferred_demod: DemodMode::Usb,
-        start_hz: 21_000_000.0,
-        end_hz: 21_450_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "12m Amateur",
-        preferred_demod: DemodMode::Usb,
-        start_hz: 24_890_000.0,
-        end_hz: 24_990_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "10m Amateur",
-        preferred_demod: DemodMode::Usb,
-        start_hz: 28_000_000.0,
-        end_hz: 29_700_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "6m Amateur",
-        preferred_demod: DemodMode::Am,
-        start_hz: 50_000_000.0,
-        end_hz: 54_000_000.0,
-        color: 0x305080,
-    },
-    RadioBand {
-        name: "FM Broadcast",
-        preferred_demod: DemodMode::Wfm,
-        start_hz: 88_000_000.0,
-        end_hz: 108_000_000.0,
-        color: 0x205020,
-    },
-    RadioBand {
-        name: "Air Band",
-        preferred_demod: DemodMode::Am,
-        start_hz: 118_000_000.0,
-        end_hz: 137_000_000.0,
-        color: 0x505020,
-    },
-    RadioBand {
-        name: "2m Amateur",
-        preferred_demod: DemodMode::Nfm,
-        start_hz: 144_000_000.0,
-        end_hz: 148_000_000.0,
-        color: 0x204060,
-    },
-    RadioBand {
-        name: "NOAA Weather",
-        preferred_demod: DemodMode::Nfm,
-        start_hz: 162_400_000.0,
-        end_hz: 162_550_000.0,
-        color: 0x206060,
-    },
-    RadioBand {
-        name: "1.22m Amateur",
-        preferred_demod: DemodMode::Nfm,
-        start_hz: 222_000_000.0,
-        end_hz: 225_000_000.0,
-        color: 0x204060,
-    },
-    RadioBand {
-        name: "Military Air",
-        preferred_demod: DemodMode::Nfm,
-        start_hz: 225_000_000.0,
-        end_hz: 400_000_000.0,
-        color: 0x900000,
-    },
-    RadioBand {
-        name: "70cm Amateur",
-        preferred_demod: DemodMode::Nfm,
-        start_hz: 420_000_000.0,
-        end_hz: 450_000_000.0,
-        color: 0x402060,
-    },
+    RadioBand { name: "2200m",        start_hz: 135_700.0,       end_hz: 137_800.0,       color: 0x5782AD },
+    RadioBand { name: "630m",         start_hz: 472_000.0,       end_hz: 479_000.0,       color: 0xAD5769 },
+    RadioBand { name: "AM Broadcast", start_hz: 530_000.0,       end_hz: 1_700_000.0,     color: 0x804000 },
+    RadioBand { name: "160m",         start_hz: 1_800_000.0,     end_hz: 2_000_000.0,     color: 0x57AD5E },
+    RadioBand { name: "80m",          start_hz: 3_500_000.0,     end_hz: 4_000_000.0,     color: 0x7757AD },
+    RadioBand { name: "60m",          start_hz: 5_330_500.0,     end_hz: 5_405_000.0,     color: 0xAD9057 },
+    RadioBand { name: "40m",          start_hz: 7_000_000.0,     end_hz: 7_300_000.0,     color: 0x57ADAA },
+    RadioBand { name: "30m",          start_hz: 10_100_000.0,    end_hz: 10_150_000.0,    color: 0xAD5798 },
+    RadioBand { name: "20m",          start_hz: 14_000_000.0,    end_hz: 14_350_000.0,    color: 0x7EAD57 },
+    RadioBand { name: "17m",          start_hz: 18_068_000.0,    end_hz: 18_168_000.0,    color: 0x5765AD },
+    RadioBand { name: "15m",          start_hz: 21_000_000.0,    end_hz: 21_450_000.0,    color: 0xAD6257 },
+    RadioBand { name: "12m",          start_hz: 24_890_000.0,    end_hz: 24_990_000.0,    color: 0x57AD7B },
+    RadioBand { name: "10m",          start_hz: 28_000_000.0,    end_hz: 29_700_000.0,    color: 0x9457AD },
+    RadioBand { name: "6m",           start_hz: 50_000_000.0,    end_hz: 54_000_000.0,    color: 0xADAD57 },
+    RadioBand { name: "FM Broadcast", start_hz: 88_000_000.0,    end_hz: 108_000_000.0,   color: 0x205020 },
+    RadioBand { name: "Air Band",     start_hz: 118_000_000.0,   end_hz: 137_000_000.0,   color: 0x505020 },
+    RadioBand { name: "2m",           start_hz: 144_000_000.0,   end_hz: 148_000_000.0,   color: 0x5794AD },
+    RadioBand { name: "NOAA Weather", start_hz: 162_400_000.0,   end_hz: 162_550_000.0,   color: 0x206060 },
+    RadioBand { name: "1.25m",        start_hz: 219_000_000.0,   end_hz: 225_000_000.0,   color: 0xAD577B },
+    RadioBand { name: "Military Air", start_hz: 225_000_000.0,   end_hz: 400_000_000.0,   color: 0x900000 },
+    RadioBand { name: "70cm",         start_hz: 420_000_000.0,   end_hz: 450_000_000.0,   color: 0x62AD57 },
+    RadioBand { name: "33cm",         start_hz: 902_000_000.0,   end_hz: 928_000_000.0,   color: 0x6557AD },
+    RadioBand { name: "23cm",         start_hz: 1_240_000_000.0, end_hz: 1_300_000_000.0, color: 0xAD7E57 },
 ];
 
 /// A clipped version of a band that is currently visible on screen.
+/// `start_hz`/`end_hz` are clipped to the view (for drawing); `band_start_hz`/
+/// `band_end_hz` are the full allocation edges (for the hover tooltip).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct VisibleRadioBand {
     pub name: &'static str,
-    pub preferred_demod: DemodMode,
     pub start_hz: f32,
     pub end_hz: f32,
+    pub band_start_hz: f32,
+    pub band_end_hz: f32,
     pub color: u32,
 }
 
-/// Compute the subset of radio bands that intersect the current view.
-///
-/// Inputs:
-/// - `left_hz`: left edge of visible spectrum
-/// - `right_hz`: right edge of visible spectrum
-///
-/// Output:
-/// - list of bands clipped to the visible range
+/// Compute the subset of radio bands that intersect the current view, clipped to
+/// the visible range.
 pub fn visible_radio_bands(left_hz: f32, right_hz: f32) -> Vec<VisibleRadioBand> {
     if right_hz <= left_hz {
         return Vec::new();
@@ -185,7 +74,7 @@ pub fn visible_radio_bands(left_hz: f32, right_hz: f32) -> Vec<VisibleRadioBand>
     RADIO_BANDS
         .iter()
         .filter_map(|band| {
-            // Clamp band to visible region
+            // Clamp band to visible region.
             let start_hz = band.start_hz.max(left_hz);
             let end_hz = band.end_hz.min(right_hz);
 
@@ -194,12 +83,61 @@ pub fn visible_radio_bands(left_hz: f32, right_hz: f32) -> Vec<VisibleRadioBand>
             } else {
                 Some(VisibleRadioBand {
                     name: band.name,
-                    preferred_demod: band.preferred_demod,
                     start_hz,
                     end_hz,
+                    band_start_hz: band.start_hz,
+                    band_end_hz: band.end_hz,
                     color: band.color,
                 })
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names_at(freq_hz: f32) -> Vec<&'static str> {
+        visible_radio_bands(freq_hz - 100.0, freq_hz + 100.0)
+            .into_iter()
+            .map(|b| b.name)
+            .collect()
+    }
+
+    #[test]
+    fn full_band_count() {
+        assert_eq!(RADIO_BANDS.len(), 23);
+    }
+
+    #[test]
+    fn previously_missing_bands_now_present() {
+        assert_eq!(names_at(136_000.0), vec!["2200m"]);
+        assert_eq!(names_at(475_000.0), vec!["630m"]);
+        assert_eq!(names_at(5_360_000.0), vec!["60m"]);
+        assert_eq!(names_at(915_000_000.0), vec!["33cm"]);
+        assert_eq!(names_at(1_270_000_000.0), vec!["23cm"]);
+    }
+
+    #[test]
+    fn non_amateur_bands_retained() {
+        assert_eq!(names_at(1_000_000.0), vec!["AM Broadcast"]);
+        assert_eq!(names_at(98_000_000.0), vec!["FM Broadcast"]);
+        assert_eq!(names_at(125_000_000.0), vec!["Air Band"]);
+        assert_eq!(names_at(162_500_000.0), vec!["NOAA Weather"]);
+        assert_eq!(names_at(300_000_000.0), vec!["Military Air"]);
+    }
+
+    #[test]
+    fn clipping_carries_full_band_edges() {
+        // A view window inside 20m returns the band clipped, but keeps the true
+        // allocation edges for the tooltip.
+        let v = visible_radio_bands(14_100_000.0, 14_200_000.0);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "20m");
+        assert_eq!(v[0].start_hz, 14_100_000.0); // clipped to view
+        assert_eq!(v[0].end_hz, 14_200_000.0);
+        assert_eq!(v[0].band_start_hz, 14_000_000.0); // full edges
+        assert_eq!(v[0].band_end_hz, 14_350_000.0);
+    }
 }
