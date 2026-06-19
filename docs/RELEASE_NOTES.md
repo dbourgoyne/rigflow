@@ -11,20 +11,27 @@ receive and transmit on HF over the network. Highlights:
 - Modes: WFM, NFM, AM, USB, LSB, CW (CWU/CWL), and Data (USB for FT8/digital).
 - Real-time spectrum and waterfall, with click, scroll, and keyboard tuning (mode-aware step sizes).
 - Noise reduction (NR2), AGC, and squelch; bookmarks; RX IQ recording and playback.
+- On-spectrum overlays of amateur **band** and **license-privilege** segments (ARRL/US),
+  with hover details and a per-operator license selection.
 
 **Transmit** (Hermes Lite 2)
 - SSB from the microphone (USB/LSB) with a soft limiter and speech compressor.
 - CW via straight key (Space bar) or Text-to-CW with F1–F4 memory macros, sidetone, and semi
   break-in; plus on-screen CW decode of received signals.
-- Digital (FT8 / WSJT-X): selecting the Data mode auto-routes audio, and an in-app setup window
+- Digital (FT8 / WSJT-X): selecting the Data mode auto-routes audio and automatically uses a
+  clean, linear path (speech processing and receive AGC are bypassed); an in-app setup window
   shows the device names and CAT/PTT settings.
 - Built-in two-tone and Spot/SWR transmit test aids.
+- The N2ADR HF filter board is **enabled by default** for automatic per-band TX filtering
+  (cleaner harmonics); it is a harmless no-op if the board isn't installed.
 
 **Station**
 - Remote operation over the network (lightweight WebSocket control + UDP media); multiple radios
   from one client.
 - Per-operator and per-radio settings — each radio resumes exactly where its operator left it.
 - Optional Hardrock-50 amplifier control (band tracking, ATU, SWR/power) over USB serial.
+- A **Latency / Audio** panel reports live receive/transmit buffering and a measured network
+  one-way delay — useful for remote / over-network operation.
 
 **Hardware & platforms**
 - Radios: Hermes Lite 2 (RX + TX), RTL-SDR (receive, incl. direct-sampling HF), plus WAV IQ playback
@@ -34,8 +41,10 @@ receive and transmit on HF over the network. Highlights:
   one-time Gatekeeper step is in the installation guide). *(Digital/FT8: on Linux via PipeWire/PulseAudio
   virtual audio **or** TCI; on macOS via TCI only. TCI is **experimental**; see below.)*
 
-See the [Operator guide](operator-guide.md) for how to use these, and the
-[Validation](validation.md) page for transmit signal-quality results.
+See the [Operator guide](operator-guide.md) for how to use these, the
+[Signal path & expected behavior](signal-path.md) page for what Rigflow does to your audio
+(and which behaviors are by design), and the [Validation](validation.md) page for transmit
+signal-quality results.
 
 ---
 
@@ -60,6 +69,21 @@ indications**, not lab-calibrated measurements. They use sensible default scalin
 spotting a high-SWR condition, peaking a tune — but should not be treated as
 absolute, instrument-grade values. No user calibration is required (or currently
 offered); a per-rig calibration option may come in a future release.
+
+### Receive CW sounds the same for CWU and CWL
+
+Rigflow does not yet reject the opposite side of a received CW signal, so CWU and CWL
+differ only on transmit, not on receive. This is a known limitation, not a bug; see
+[Signal path & expected behavior](signal-path.md).
+
+### What the Latency panel covers
+
+The **Latency / Audio** panel measures Rigflow's own server↔client audio transport
+(receive jitter buffer + network one-way; transmit mic ring + server queue). For
+**FT8 / digital** — on both the PipeWire and TCI paths — the network and transmit
+figures apply, but FT8 bypasses the jitter buffer, and the panel does **not** include
+WSJT-X's own audio buffering or the sound-device buffers. Treat the totals as a close
+estimate; see [Signal path & expected behavior](signal-path.md).
 
 ### HL2 not discovered after a simultaneous cold boot (direct Pi↔HL2 link)
 

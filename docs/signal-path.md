@@ -85,6 +85,30 @@ For setup (device names, CAT, TCI, Split), see **Digital modes** in the
 
 ---
 
+## Latency panel
+
+The **Latency / Audio** panel measures Rigflow's own server↔client audio transport:
+on **receive**, the network one-way delay (server → client) plus the client **jitter
+buffer**, which is the *speaker* playout buffer; on **transmit**, the client mic ring
+plus the server's mic queue.
+
+What this means by mode:
+
+- **SSB and CW** are fully represented — the jitter buffer is your actual receive
+  (speaker) audio, and the mic ring + server queue are your actual transmit audio.
+- **FT8 / digital** behaves the same whether you use the Linux PipeWire path **or**
+  TCI (they reuse the same internal seams). The **network one-way** and the
+  **transmit** figures (mic ring + server queue) apply. But FT8 receive audio is tapped
+  *before* the jitter buffer on its way to WSJT-X, so the **jitter-buffer number
+  reflects speaker monitoring, not the FT8 decode path**, and the panel does **not**
+  include WSJT-X's own audio buffering or the final local hop to it (the PipeWire
+  virtual device, or the TCI localhost socket).
+
+The displayed values are smoothed and the CPAL sound-device buffers are not included,
+so treat the totals as a close estimate rather than an exact figure.
+
+---
+
 ## Known behaviors & limitations
 
 These are **intentional** — please don't file them as bugs:
