@@ -57,14 +57,10 @@ impl RigflowApp {
                     ui.add_space(6.0);
                     tci_grid(ui, &tci_server, tci_status.as_deref());
                     ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "No virtual audio device (BlackHole) or microphone permission is \
-                             needed — TCI carries CAT, PTT, and audio over one connection.",
-                        )
-                        .small()
-                        .weak(),
-                    );
+                    ui.label(crate::ui::panels::note_text(
+                        "No virtual audio device (BlackHole) or microphone permission is \
+                         needed — TCI carries CAT, PTT, and audio over one connection.",
+                    ));
                     return;
                 }
 
@@ -73,13 +69,9 @@ impl RigflowApp {
 
                 // ── Method 1: PipeWire/Pulse virtual audio (any digital app) ──
                 ui.heading("Method 1 — Virtual audio");
-                ui.label(
-                    egui::RichText::new(
-                        "Works with any digital app (FLDigi, JS8Call, any WSJT-X version).",
-                    )
-                    .small()
-                    .weak(),
-                );
+                ui.label(crate::ui::panels::note_text(
+                    "Works with any digital app (FLDigi, JS8Call, any WSJT-X version).",
+                ));
                 ui.add_space(4.0);
 
                 egui::Grid::new("wsjtx_pw_grid")
@@ -126,14 +118,10 @@ impl RigflowApp {
                         ui.colored_label(egui::Color32::GRAY, "Inactive");
                     }
                 });
-                ui.label(
-                    egui::RichText::new(
-                        "Acquire a radio and select the Data mode — RX routing turns on \
-                         automatically for decoding.",
-                    )
-                    .small()
-                    .weak(),
-                );
+                ui.label(crate::ui::panels::note_text(
+                    "Acquire a radio and select the Data mode — RX routing turns on \
+                     automatically for decoding.",
+                ));
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -141,11 +129,9 @@ impl RigflowApp {
 
                 // ── Method 2: TCI (TCI-capable apps; same path macOS uses) ──
                 ui.heading("Method 2 — TCI");
-                ui.label(
-                    egui::RichText::new("Simpler, for TCI-capable apps (WSJT-X 2.7+, JTDX, MSHV).")
-                        .small()
-                        .weak(),
-                );
+                ui.label(crate::ui::panels::note_text(
+                    "Simpler, for TCI-capable apps (WSJT-X 2.7+, JTDX, MSHV).",
+                ));
                 ui.add_space(4.0);
                 tci_grid(ui, &tci_server, tci_status.as_deref());
             });

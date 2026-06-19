@@ -88,14 +88,10 @@ impl RigflowApp {
                 self.save_source_control_prefs_to_current_operator();
             }
 
-            ui.label(
-                egui::RichText::new(
-                    "Carrier amplitude for Spot/SWR (Quisk default 50%) · \
-                         adjust transmitter power via TX Drive in Source Control",
-                )
-                .small()
-                .weak(),
-            );
+            ui.label(super::note_text(
+                "Carrier amplitude for Spot/SWR (Quisk default 50%) · \
+                 adjust transmitter power via TX Drive in Source Control",
+            ));
             ui.add_space(4.0);
 
             // ── Measure SWR button ───────────────────────────────────────

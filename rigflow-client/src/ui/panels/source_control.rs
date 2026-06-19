@@ -540,11 +540,9 @@ impl RigflowApp {
             self.send_radio_msg(ClientRadioMessage::SetSourceFdxEnabled { enabled: fdx });
             save = true;
         }
-        ui.label(
-            egui::RichText::new("Keep RX spectrum/waterfall live during Spot/SWR (visual only).")
-                .small()
-                .weak(),
-        );
+        ui.label(super::note_text(
+            "Keep RX spectrum/waterfall live during Spot/SWR (visual only).",
+        ));
 
         save
     }
@@ -605,15 +603,11 @@ impl RigflowApp {
                     .color(egui::Color32::from_rgb(255, 200, 50)),
                 );
             } else {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Tone is {:.1}% off centre at {:.0} kHz — visible on the spectrum.",
-                        off_center_pct,
-                        sr_hz / 1000.0,
-                    ))
-                    .small()
-                    .weak(),
-                );
+                ui.label(super::note_text(format!(
+                    "Tone is {:.1}% off centre at {:.0} kHz — visible on the spectrum.",
+                    off_center_pct,
+                    sr_hz / 1000.0,
+                )));
             }
         }
 
@@ -646,11 +640,9 @@ impl RigflowApp {
             );
         }
         if !state.source_control.fdx_enabled {
-            ui.label(
-                egui::RichText::new("Enable FDX to see the tone on the spectrum/waterfall.")
-                    .small()
-                    .weak(),
-            );
+            ui.label(super::note_text(
+                "Enable FDX to see the tone on the spectrum/waterfall.",
+            ));
         }
     }
 
@@ -705,11 +697,9 @@ impl RigflowApp {
             save = true;
         }
 
-        ui.label(
-            egui::RichText::new("Assert PTT before RF / hold after RF — for relay-switched amps.")
-                .small()
-                .weak(),
-        );
+        ui.label(super::note_text(
+            "Assert PTT before RF / hold after RF — for relay-switched amps.",
+        ));
 
         save
     }

@@ -12,6 +12,13 @@ pub(crate) fn panel_header(text: &str) -> egui::RichText {
         .color(egui::Color32::from_rgb(90, 200, 255))
 }
 
+/// Soft-amber, body-size styling for explanatory note / help captions — the short
+/// sentences that explain a control or panel. Readable and visually distinct from
+/// white control labels, replacing the old hard-to-read `.small().weak()` styling.
+pub(crate) fn note_text(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).color(egui::Color32::from_rgb(230, 200, 120))
+}
+
 /// Let the mouse wheel adjust a slider while the pointer is over it: scroll up
 /// increases, scroll down decreases, by `step` (clamped to `min..=max`). Marks the
 /// response changed so the caller's existing `.changed()` handling runs. Returns

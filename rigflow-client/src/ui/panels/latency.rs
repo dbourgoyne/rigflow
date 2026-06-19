@@ -152,14 +152,10 @@ impl RigflowApp {
                     }
                 });
 
-            ui.label(
-                egui::RichText::new(
-                    "One-way is measured server→client and applied to both directions \
-                     (symmetric estimate). CPAL device buffers are not included.",
-                )
-                .small()
-                .weak(),
-            );
+            ui.label(super::note_text(
+                "One-way is measured server→client and applied to both directions \
+                 (symmetric estimate). CPAL device buffers are not included.",
+            ));
         });
     }
 }
