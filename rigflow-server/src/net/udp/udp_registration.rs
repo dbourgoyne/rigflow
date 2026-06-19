@@ -7,7 +7,8 @@ use tokio::sync::RwLock;
 use log::info;
 
 use rigflow_core::net::udp_framing::{
-    MAGIC, STREAM_TYPE_MIC_AUDIO, STREAM_TYPE_REGISTER_AUDIO, VERSION,
+    build_time_sync_response, epoch_nanos, parse_time_sync_request, MAGIC, STREAM_TYPE_MIC_AUDIO,
+    STREAM_TYPE_REGISTER_AUDIO, STREAM_TYPE_TIME_SYNC_REQUEST, VERSION,
 };
 
 use crate::net::udp::mic_audio::push_mic_samples;
@@ -31,6 +32,8 @@ pub async fn run_udp_registration_listener(
 
     loop {
         let (len, src) = socket.recv_from(&mut buf).await?;
+        // Capture the server receive time as early as possible (T2 for TIME_SYNC).
+        let recv_ns = epoch_nanos();
 
         // Minimum header size
         if len < 4 {
@@ -43,7 +46,8 @@ pub async fn run_udp_registration_listener(
         let version = header[2];
         let stream_type = header[3];
 
-        if magic != MAGIC || version != VERSION {
+        // Accept any protocol version we understand (1..=VERSION).
+        if magic != MAGIC || version < 1 || version > VERSION {
             continue;
         }
 
@@ -67,6 +71,15 @@ pub async fn run_udp_registration_listener(
                 }
                 if !samples.is_empty() {
                     push_mic_samples(&samples);
+                }
+            }
+            STREAM_TYPE_TIME_SYNC_REQUEST => {
+                // Clock-offset probe: echo T1 plus the server receive (T2) and
+                // send (T3) wall-clocks so the client can compute offset + RTT.
+                if let Some((probe_id, t1)) = parse_time_sync_request(&buf[..len]) {
+                    let t3 = epoch_nanos();
+                    let resp = build_time_sync_response(probe_id, t1, recv_ns, t3);
+                    let _ = socket.send_to(&resp, src).await;
                 }
             }
             _ => {}

@@ -12,7 +12,11 @@ use tokio::sync::mpsc;
 
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
-    net::udp_framing::{MAGIC, STREAM_TYPE_MIC_AUDIO, STREAM_TYPE_REGISTER_AUDIO, VERSION},
+    net::udp_framing::{
+        MAGIC, STREAM_TYPE_AUDIO, STREAM_TYPE_MIC_AUDIO, STREAM_TYPE_REGISTER_AUDIO,
+        STREAM_TYPE_TIME_SYNC_RESPONSE, VERSION, audio_send_wall_ns, build_time_sync_request,
+        clock_offset_rtt, epoch_nanos, parse_media_header, parse_time_sync_response,
+    },
 };
 
 use crate::{
@@ -180,6 +184,13 @@ pub fn start_media_runtime(
         .map(|s| Arc::clone(&s.mic_shared))
         .unwrap_or_default();
 
+    // Lock-free audio/latency metrics, published by the media thread and read by
+    // the UI's Latency panel.
+    let audio_metrics = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.audio_metrics))
+        .unwrap_or_else(|_| crate::audio_metrics::AudioMetrics::new());
+
     // Digital RX router: when enabled, a copy of received audio is mirrored to
     // the RigflowDigitalOutput sink (Digital Audio Interface Phase 2).
     let digital_rx = ui_state
@@ -206,10 +217,14 @@ pub fn start_media_runtime(
     {
         let mic_socket = socket.try_clone()?;
         let mic_addr = Arc::clone(&mic_server_addr);
+        let mic_metrics = Arc::clone(&audio_metrics);
         thread::spawn(move || {
             loop {
                 thread::sleep(Duration::from_millis(5));
                 let samples = mic_shared.drain_tx();
+                // Publish the TX-ring depth (drained this cycle, 0 while idle so the
+                // peak decays) for the Latency panel.
+                mic_metrics.note_tx_ring(samples.len());
                 if samples.is_empty() {
                     continue;
                 }
@@ -230,7 +245,32 @@ pub fn start_media_runtime(
         });
     }
 
+    // --- Clock-offset probe thread ----------------------------------------
+    // Periodically sends a tiny TIME_SYNC request (stamped with the client send
+    // time T1) to the server, which echoes T1 plus its receive/send times.  The
+    // reply arrives back on the media socket and is handled by the media loop,
+    // which computes the clock offset + RTT.  Probing once a second keeps the
+    // offset EMA converged and bounds clock-drift error without meaningful cost.
+    {
+        let probe_socket = socket.try_clone()?;
+        let probe_addr = Arc::clone(&mic_server_addr);
+        thread::spawn(move || {
+            let mut probe_id: u32 = 0;
+            loop {
+                thread::sleep(Duration::from_millis(1000));
+                let Some(addr) = probe_addr.lock().ok().and_then(|g| g.clone()) else {
+                    continue;
+                };
+                probe_id = probe_id.wrapping_add(1);
+                let pkt = build_time_sync_request(probe_id, epoch_nanos());
+                let _ = probe_socket.send_to(&pkt, &addr);
+            }
+        });
+    }
+
     // --- Media thread ------------------------------------------------------
+
+    let audio_metrics_for_thread = Arc::clone(&audio_metrics);
 
     thread::spawn(move || {
         let mut udp_buf = [0u8; 65536];
@@ -297,12 +337,20 @@ pub fn start_media_runtime(
 
             // --- Additional interval-based stats logger -------------------
 
-            if let (Ok(mut logger), Ok(mut media_stats), Ok(jb)) = (
-                stats_logger_for_thread.lock(),
-                stats_for_thread.lock(),
-                jitter_for_thread.lock(),
-            ) {
-                logger.maybe_log(&mut media_stats, &jb, OUTPUT_SAMPLE_RATE as f32);
+            if let Ok(jb) = jitter_for_thread.lock() {
+                // Publish live RX jitter-buffer occupancy + health for the UI.
+                audio_metrics_for_thread.publish_jitter(
+                    jb.buffered_samples(),
+                    jb.packets_missing_concealed,
+                    jb.packets_dropped_late,
+                    jb.packets_dropped_overflow,
+                    jb.resync_count,
+                );
+                if let (Ok(mut logger), Ok(mut media_stats)) =
+                    (stats_logger_for_thread.lock(), stats_for_thread.lock())
+                {
+                    logger.maybe_log(&mut media_stats, &jb, OUTPUT_SAMPLE_RATE as f32);
+                }
             }
 
             // --- Handle control commands ----------------------------------
@@ -339,11 +387,14 @@ pub fn start_media_runtime(
 
             match socket.recv_from(&mut udp_buf) {
                 Ok((len, src)) => {
+                    // Capture the client receive time ASAP (T4 / audio recv stamp).
+                    let recv_ns = epoch_nanos();
+                    let stream_type = if len >= 4 { udp_buf[3] } else { 0 };
+
                     // Registration ACK (4-byte control packet)
                     if len == 4 {
                         let magic = u16::from_be_bytes([udp_buf[0], udp_buf[1]]);
                         let version = udp_buf[2];
-                        let stream_type = udp_buf[3];
 
                         if magic == MAGIC
                             && version == VERSION
@@ -352,8 +403,25 @@ pub fn start_media_runtime(
                             info!("Received UDP registration ACK from {}", src);
                         }
                     }
+                    // Clock-offset probe reply: compute offset + RTT and feed the
+                    // metrics (T4 = recv_ns captured above).
+                    else if stream_type == STREAM_TYPE_TIME_SYNC_RESPONSE {
+                        if let Some((_id, t1, t2, t3)) = parse_time_sync_response(&udp_buf[..len]) {
+                            let (offset, rtt) = clock_offset_rtt(t1, t2, t3, recv_ns);
+                            audio_metrics_for_thread.record_probe(offset, rtt);
+                        }
+                    }
                     // Media packet (audio or waterfall)
                     else if len >= 16 {
+                        // One-way RX network latency from the v2 audio send-stamp.
+                        if stream_type == STREAM_TYPE_AUDIO {
+                            if let Some(h) = parse_media_header(&udp_buf[..len]) {
+                                if let Some(send_ns) = audio_send_wall_ns(&h, &udp_buf[..len]) {
+                                    audio_metrics_for_thread.record_audio_one_way(recv_ns, send_ns);
+                                }
+                            }
+                        }
+
                         let ui_state_for_thread = Arc::clone(&ui_state);
                         handle_media_packet(
                             &udp_buf[..len],

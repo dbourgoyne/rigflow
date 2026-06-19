@@ -62,6 +62,13 @@ pub struct RigflowApp {
     /// stopped changing.  See `autosave_radio_settings`.
     pub(crate) radio_settings_last: Option<crate::persistence::models::RadioSettingsFile>,
     pub(crate) radio_settings_stable_since: Option<Instant>,
+
+    /// Held peak of the estimated TX-total latency over the current/last keying
+    /// (Latency panel).  Reset on each PTT key-down edge and accumulated while
+    /// keyed, so the over's worst case stays readable after unkey; `latency_tx_keyed`
+    /// tracks the rising edge.
+    pub(crate) latency_tx_peak_ms: f32,
+    pub(crate) latency_tx_keyed: bool,
 }
 
 impl RigflowApp {
@@ -98,6 +105,8 @@ impl RigflowApp {
             shutdown_started_at: None,
             radio_settings_last: None,
             radio_settings_stable_since: None,
+            latency_tx_peak_ms: 0.0,
+            latency_tx_keyed: false,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough

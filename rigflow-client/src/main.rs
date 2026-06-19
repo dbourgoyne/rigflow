@@ -107,6 +107,7 @@
 //! - `rigflow-protocol` — shared WebSocket protocol types
 
 mod alsa_quiet;
+mod audio_metrics;
 mod client_runtime;
 mod cw_decode;
 mod cw_text;

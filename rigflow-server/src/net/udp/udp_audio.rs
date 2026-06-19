@@ -1,13 +1,16 @@
 use std::net::{SocketAddr, UdpSocket};
 
+use rigflow_core::net::udp_framing::{epoch_nanos, MAGIC, STREAM_TYPE_AUDIO, VERSION};
+
 /// Sends audio samples over UDP using a simple custom packet format.
 ///
-/// Packet layout:
+/// Packet layout (v2):
 /// - u16 magic ("RS")
-/// - u8  version
+/// - u8  version (2)
 /// - u8  stream_type (1 = audio)
 /// - u32 sequence
 /// - u64 timestamp (sample count)
+/// - u64 send_wall_ns (server send time, epoch nanoseconds) — v2 only
 /// - payload: i16 samples (little-endian)
 pub struct UdpAudioSender {
     socket: UdpSocket,
@@ -39,14 +42,17 @@ impl UdpAudioSender {
             // Drain exactly one packet worth of samples
             let chunk_len = self.samples_per_packet;
 
-            let mut buf = Vec::with_capacity(16 + chunk_len * 2);
+            let mut buf = Vec::with_capacity(24 + chunk_len * 2);
 
             // Header
-            buf.extend_from_slice(&0x5253u16.to_be_bytes()); // "RS"
-            buf.push(1); // version
-            buf.push(1); // stream_type = audio
+            buf.extend_from_slice(&MAGIC.to_be_bytes()); // "RS"
+            buf.push(VERSION); // version (2)
+            buf.push(STREAM_TYPE_AUDIO); // stream_type = audio
             buf.extend_from_slice(&self.sequence.to_be_bytes());
             buf.extend_from_slice(&self.timestamp.to_be_bytes());
+            // v2: server send wall-clock (epoch ns), captured as late as possible
+            // before the payload so it reflects actual send time.
+            buf.extend_from_slice(&epoch_nanos().to_be_bytes());
 
             // Payload (drain directly into buffer without intermediate Vec)
             for s in self.pending.drain(..chunk_len) {

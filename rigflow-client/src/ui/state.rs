@@ -385,6 +385,10 @@ pub struct UiState {
     /// the locally generated sidetone into the speaker output.  Cloned (Arc) by
     /// the media runtime at startup; written here from the Space-bar handler.
     pub sidetone: Arc<SidetoneShared>,
+    /// Lock-free audio/latency metrics, published by the media runtime (RX jitter
+    /// occupancy + network clock-offset / one-way latency) and read by the
+    /// Latency panel.  Cloned (Arc) by the media runtime at startup.
+    pub audio_metrics: Arc<crate::audio_metrics::AudioMetrics>,
 }
 
 impl Default for UiState {
@@ -557,6 +561,7 @@ impl Default for UiState {
             mic_clip_until: None,
             mic_shared: Arc::new(crate::mic::MicShared::default()),
             sidetone: Arc::new(SidetoneShared::default()),
+            audio_metrics: crate::audio_metrics::AudioMetrics::new(),
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

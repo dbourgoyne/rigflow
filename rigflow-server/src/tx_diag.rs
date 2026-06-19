@@ -73,5 +73,7 @@ pub fn snapshot() -> TxAudioDiag {
         compressor_reduction_db: f32::from_bits(COMP_REDUCTION_BITS.load(Ordering::Relaxed)),
         underruns: UNDERRUNS.load(Ordering::Relaxed),
         overruns: OVERRUNS.load(Ordering::Relaxed),
+        // Live server-side TX buffering depth (read straight from the mic queue).
+        mic_queue_samples: crate::net::udp::mic_audio::mic_queue_len() as u32,
     }
 }

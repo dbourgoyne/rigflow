@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
     net::udp_framing::{
-        STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL, is_valid_header, parse_media_header,
+        STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL, audio_samples_offset, is_valid_header,
+        parse_media_header,
     },
 };
 
@@ -72,6 +73,8 @@ pub fn handle_media_packet(
         return;
     }
 
+    // Waterfall payload begins right after the 16-byte header; audio payload
+    // begins after the optional v2 send-wall-clock (see `audio_samples_offset`).
     let payload = &packet[16..];
 
     if let Ok(mut s) = stats.lock() {
@@ -85,8 +88,11 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Audio, header.sequence);
             }
 
+            let audio_payload = packet
+                .get(audio_samples_offset(header.version)..)
+                .unwrap_or(&[]);
             handle_audio_packet(
-                payload,
+                audio_payload,
                 header.sequence,
                 jitter,
                 cw_decoder,

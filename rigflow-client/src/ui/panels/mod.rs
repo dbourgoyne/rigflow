@@ -63,6 +63,7 @@ pub(crate) fn slider_scroll<Num: egui::emath::Numeric>(
 }
 
 mod bookmarks;
+mod latency;
 mod operator;
 mod problems;
 mod radio_control;
@@ -126,6 +127,8 @@ impl RigflowApp {
                         self.draw_source_control_panel(ui, snapshot);
                         ui.separator();
                         self.draw_waterfall_control_panel(ui);
+                        ui.separator();
+                        self.draw_latency_panel(ui, snapshot);
                         ui.separator();
                         self.draw_bookmarks_panel(ui);
                         ui.separator();

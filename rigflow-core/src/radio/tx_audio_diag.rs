@@ -29,4 +29,9 @@ pub struct TxAudioDiag {
     pub underruns: u64,
     /// Count of TX-audio overruns (producer outran the consumer; samples dropped).
     pub overruns: u64,
+    /// Current depth of the server's inbound mic-audio queue, in samples (48 kHz).
+    /// A live latency signal: how much TX audio is buffered server-side waiting for
+    /// the modulator. `#[serde(default)]` keeps it backward-compatible on the wire.
+    #[serde(default)]
+    pub mic_queue_samples: u32,
 }
