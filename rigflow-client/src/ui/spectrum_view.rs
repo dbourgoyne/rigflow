@@ -503,14 +503,9 @@ fn draw_band_overlays(
 
         let band_rect = Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1));
 
+        // Fill only — no perimeter stroke, so adjacent/short bars read as solid
+        // color blocks rather than being dominated by their outlines.
         painter.rect_filled(band_rect, 0.0, color);
-
-        painter.rect_stroke(
-            band_rect,
-            0.0,
-            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 24)),
-            egui::StrokeKind::Inside,
-        );
 
         if (x1 - x0) >= 48.0 {
             painter.text(
@@ -573,16 +568,16 @@ fn om_kind_label(kind: OmKind) -> &'static str {
     }
 }
 
-/// Full meaning of an OM segment kind, shown in the hover tooltip.
-fn om_kind_full_label(kind: OmKind) -> &'static str {
-    match kind {
-        OmKind::RttyData => "RTTY and data",
-        OmKind::PhoneImage => "Phone and image",
-        OmKind::CwOnly => "CW only",
-        OmKind::SsbPhone => "SSB phone",
-        OmKind::UsbPhoneCwRttyData => "USB phone, CW, RTTY, and data",
-        OmKind::FixedDigitalMessages => "Fixed digital message forwarding system only",
-    }
+/// Top/bottom y of the license (OM) strip, shared by `draw_om_overlays` and
+/// `draw_bookmark_overlays` (bookmarks sit just above it). The strip is a little
+/// taller than the radio-band strip so two stacked overlap lanes stay readable.
+fn om_strip_y(plot_rect: Rect) -> (f32, f32) {
+    let band_strip_height = 14.0;
+    let om_strip_height = 9.0;
+    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
+    let om_y1 = band_y0 - 1.0;
+    let om_y0 = om_y1 - om_strip_height;
+    (om_y0, om_y1)
 }
 
 /// Human-readable license class name for the hover tooltip.
@@ -620,14 +615,11 @@ fn draw_om_overlays(
         return None;
     }
 
-    let band_strip_height = 14.0;
-    let om_strip_height = band_strip_height / 3.0;
-    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
-    let om_y1 = band_y0 - 1.0;
-    let om_y0 = om_y1 - om_strip_height;
+    let (om_y0, om_y1) = om_strip_y(plot_rect);
+    let om_strip_height = om_y1 - om_y0;
 
-    // Track the segment under the pointer (last match wins, matching draw order
-    // so the topmost-drawn bar of an overlap is reported) for the hover tooltip.
+    // Track the segment under the pointer for the hover tooltip. Lanes don't
+    // overlap vertically, so at most one segment is hovered.
     let mut hovered = None;
 
     for seg in visible_segments {
@@ -642,20 +634,24 @@ fn draw_om_overlays(
             continue;
         }
 
+        // Where allocations overlap, the strip is split into stacked lanes so the
+        // distinct ARRL colors both show (e.g. RTTY/data over phone/image).
+        let lanes = seg.lanes.max(1) as f32;
+        let lane_h = om_strip_height / lanes;
+        let lane_y0 = om_y0 + seg.lane as f32 * lane_h;
+        let lane_y1 = lane_y0 + lane_h;
+
         let color = color32_from_u32_with_alpha(om_kind_color(seg.kind), 150);
 
-        let seg_rect = Rect::from_min_max(Pos2::new(x0, om_y0), Pos2::new(x1, om_y1));
+        let seg_rect = Rect::from_min_max(Pos2::new(x0, lane_y0), Pos2::new(x1, lane_y1));
 
+        // Fill only — no perimeter stroke, so the thin (and stacked) lanes read as
+        // solid color rather than being swallowed by their outlines.
         painter.rect_filled(seg_rect, 0.0, color);
 
-        painter.rect_stroke(
-            seg_rect,
-            0.0,
-            Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 32)),
-            egui::StrokeKind::Inside,
-        );
-
-        if (x1 - x0) >= 40.0 {
+        // The abbreviation only fits in a full-height (single-lane) bar; stacked
+        // lanes are too short, so they rely on the hover tooltip.
+        if seg.lanes == 1 && (x1 - x0) >= 40.0 {
             painter.text(
                 Pos2::new((x0 + x1) * 0.5, om_y0 - 1.0),
                 Align2::CENTER_BOTTOM,
@@ -665,11 +661,12 @@ fn draw_om_overlays(
             );
         }
 
-        // The strip is only a few pixels tall; extend the hit area *upward*
-        // (over the label) so the bar is easy to hover — but not downward, to
-        // avoid overlapping the radio-band strip's hover zone just below.
+        // Hover the lane's sub-rect (so the top vs bottom lane reports its own
+        // privilege). A single full-height lane also reaches up over the label;
+        // never extend below the strip into the radio-band hover zone.
         if let Some(p) = pointer_pos {
-            let hover_rect = Rect::from_min_max(Pos2::new(x0, om_y0 - 8.0), Pos2::new(x1, om_y1));
+            let top = if seg.lanes == 1 { om_y0 - 8.0 } else { lane_y0 };
+            let hover_rect = Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x1, lane_y1));
             if hover_rect.contains(p) {
                 hovered = Some(seg);
             }
@@ -678,7 +675,7 @@ fn draw_om_overlays(
 
     hovered.map(|seg| {
         vec![
-            om_kind_full_label(seg.kind).to_string(),
+            seg.key.to_string(),
             format!(
                 "{}–{} MHz · {}",
                 format_mhz(seg.band_start_hz),
@@ -714,11 +711,7 @@ fn draw_bookmark_overlays<'a>(
 
     // Position bookmark labels just above the OM strip.
     let mut clicked_bookmark_id: Option<String> = None;
-    let band_strip_height = 14.0;
-    let om_strip_height = band_strip_height / 3.0;
-    let band_y0 = plot_rect.bottom() - band_strip_height - 2.0;
-    let om_y1 = band_y0 - 1.0;
-    let om_y0 = om_y1 - om_strip_height;
+    let (om_y0, _om_y1) = om_strip_y(plot_rect);
 
     let bookmark_y1 = om_y0 - 4.0;
     let bookmark_height = 18.0;
