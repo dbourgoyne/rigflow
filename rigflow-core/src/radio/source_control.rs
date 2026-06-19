@@ -29,9 +29,10 @@ pub struct SourceControlState {
     pub tx_drive_percent: f32,
 
     /// N2ADR HF filter board enabled (HL2).  When set, the server programs the
-    /// correct band filter from the tuned frequency.  Persisted/synced like the
-    /// other source-control fields.
-    #[serde(default)]
+    /// correct band filter from the tuned frequency, suppressing TX harmonics.
+    /// **Defaults on** (safe by default; a no-op without the board).
+    /// Persisted/synced like the other source-control fields.
+    #[serde(default = "default_n2adr_enabled")]
     pub n2adr_enabled: bool,
 
     /// FDX / TX Monitor Spectrum (HL2).  When set, RX IQ captured during a
@@ -76,6 +77,13 @@ pub fn default_tx_ptt_lead_ms() -> u32 {
     20
 }
 
+/// The N2ADR HF filter board defaults **on** as a safe-by-default choice: with the
+/// board installed it auto-engages the band-pass filter (suppressing TX harmonics),
+/// and without the board the J16 control bits drive nothing (a harmless no-op).
+pub fn default_n2adr_enabled() -> bool {
+    true
+}
+
 /// Default PTT tail delay (ms).
 pub fn default_tx_ptt_tail_ms() -> u32 {
     20
@@ -90,7 +98,7 @@ impl Default for SourceControlState {
             ppm_correction: 0,
             direct_sampling: DirectSamplingMode::Off,
             tx_drive_percent: default_tx_drive_percent(),
-            n2adr_enabled: false,
+            n2adr_enabled: default_n2adr_enabled(),
             fdx_enabled: false,
             spot_level_percent: default_spot_level_percent(),
             tx_ptt_lead_ms: default_tx_ptt_lead_ms(),
@@ -161,5 +169,24 @@ impl SourceCapabilities {
             supports_band_control: false,
             supports_fdx: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn n2adr_defaults_on() {
+        // Safe-by-default: harmonic filtering engaged by default on the HL2.
+        assert!(SourceControlState::default().n2adr_enabled);
+        // Legacy persisted state that predates the field also defaults on
+        // (serde fills the missing field from `default_n2adr_enabled`).
+        let json = serde_json::to_value(SourceControlState::default()).unwrap();
+        let mut obj = json.as_object().unwrap().clone();
+        obj.remove("n2adr_enabled");
+        let restored: SourceControlState =
+            serde_json::from_value(serde_json::Value::Object(obj)).unwrap();
+        assert!(restored.n2adr_enabled);
     }
 }
