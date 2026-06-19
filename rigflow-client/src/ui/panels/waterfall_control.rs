@@ -7,10 +7,18 @@ impl RigflowApp {
 
         ui.collapsing(super::panel_header("Waterfall Control"), |ui| {
             if let Ok(mut state) = self.state.lock() {
-                let zoom_response =
+                let mut zoom_response =
                     ui.add(egui::Slider::new(&mut state.display_zoom, 1.0..=4.0).text("Zoom"));
+                let zoom_scrolled = super::slider_scroll(
+                    ui,
+                    &mut zoom_response,
+                    &mut state.display_zoom,
+                    1.0,
+                    4.0,
+                    0.1,
+                );
 
-                if zoom_response.drag_stopped() {
+                if zoom_response.drag_stopped() || zoom_scrolled {
                     save_waterfall_prefs = true;
                 }
 
@@ -28,18 +36,37 @@ impl RigflowApp {
                 let manual_enabled = !state.adaptive_waterfall_normalization;
 
                 ui.add_enabled_ui(manual_enabled, |ui| {
-                    let top_response = ui.add(
+                    let mut top_response = ui.add(
                         egui::Slider::new(&mut state.manual_waterfall_top_db, -120.0..=20.0)
                             .text("Top dB"),
                     );
+                    let top_scrolled = super::slider_scroll(
+                        ui,
+                        &mut top_response,
+                        &mut state.manual_waterfall_top_db,
+                        -120.0,
+                        20.0,
+                        1.0,
+                    );
 
-                    let range_response = ui.add(
+                    let mut range_response = ui.add(
                         egui::Slider::new(&mut state.manual_waterfall_range_db, 10.0..=120.0)
                             .text("Range dB"),
                     );
+                    let range_scrolled = super::slider_scroll(
+                        ui,
+                        &mut range_response,
+                        &mut state.manual_waterfall_range_db,
+                        10.0,
+                        120.0,
+                        1.0,
+                    );
 
                     if manual_enabled
-                        && (top_response.drag_stopped() || range_response.drag_stopped())
+                        && (top_response.drag_stopped()
+                            || range_response.drag_stopped()
+                            || top_scrolled
+                            || range_scrolled)
                     {
                         save_waterfall_prefs = true;
                     }

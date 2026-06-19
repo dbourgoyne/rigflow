@@ -234,13 +234,14 @@ impl RigflowApp {
         let enabled = state.squelch_enabled;
         ui.add_enabled_ui(enabled, |ui| {
             let mut threshold_db = state.squelch_threshold_db;
-            let response = ui.add(
+            let mut response = ui.add(
                 egui::Slider::new(&mut threshold_db, -120.0..=0.0)
                     .step_by(1.0)
                     .fixed_decimals(0)
                     .suffix(" dBFS")
                     .text("Threshold"),
             );
+            super::slider_scroll(ui, &mut response, &mut threshold_db, -120.0, 0.0, 1.0);
             if response.changed() {
                 state.squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
                 self.send_radio_msg(ClientRadioMessage::SetSquelchThreshold {
@@ -261,12 +262,13 @@ impl RigflowApp {
 
         ui.add_enabled_ui(state.nr2_enabled, |ui| {
             let mut strength = state.nr2_strength;
-            let response = ui.add(
+            let mut response = ui.add(
                 egui::Slider::new(&mut strength, 0.0..=1.0)
                     .step_by(0.05)
                     .fixed_decimals(2)
                     .text("NR2 Strength"),
             );
+            super::slider_scroll(ui, &mut response, &mut strength, 0.0, 1.0, 0.05);
             if response.changed() {
                 state.nr2_strength = strength.clamp(0.0, 1.0);
                 self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
@@ -281,12 +283,13 @@ impl RigflowApp {
     fn draw_volume_row(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
         ui.separator();
         let mut volume = state.volume_percent as i32;
-        let response = ui.add(
+        let mut response = ui.add(
             egui::Slider::new(&mut volume, 0..=100)
                 .integer()
                 .suffix("%")
                 .text("Volume"),
         );
+        super::slider_scroll(ui, &mut response, &mut volume, 0.0, 100.0, 1.0);
         if response.changed() {
             let v = volume.clamp(0, 100) as u8;
             if v != state.volume_percent {
@@ -309,12 +312,13 @@ impl RigflowApp {
         ui.separator();
 
         let mut vol = state.cw_sidetone_volume as i32;
-        let response = ui.add(
+        let mut response = ui.add(
             egui::Slider::new(&mut vol, 0..=100)
                 .integer()
                 .suffix("%")
                 .text("CW Sidetone"),
         );
+        super::slider_scroll(ui, &mut response, &mut vol, 0.0, 100.0, 1.0);
         if response.changed() {
             let v = vol.clamp(0, 100) as u8;
             state.cw_sidetone_volume = v; // Reflect immediately into the lock-free audio control.
@@ -323,13 +327,14 @@ impl RigflowApp {
 
         // Semi break-in hang time: 0–2000 ms, step 50.
         let mut hang = state.cw_hang_ms as i32;
-        let response = ui.add(
+        let mut response = ui.add(
             egui::Slider::new(&mut hang, 0..=2000)
                 .step_by(50.0)
                 .integer()
                 .suffix(" ms")
                 .text("Hang Time"),
         );
+        super::slider_scroll(ui, &mut response, &mut hang, 0.0, 2000.0, 50.0);
         if response.changed() {
             let h = hang.clamp(0, 2000) as u32;
             if h != state.cw_hang_ms {
@@ -364,15 +369,14 @@ impl RigflowApp {
 
         // Sending speed: 5–50 WPM, step 1.
         let mut wpm = state.cw_speed_wpm as i32;
-        if ui
-            .add(
-                egui::Slider::new(&mut wpm, 5..=50)
-                    .integer()
-                    .suffix(" WPM")
-                    .text("CW Speed"),
-            )
-            .changed()
-        {
+        let mut response = ui.add(
+            egui::Slider::new(&mut wpm, 5..=50)
+                .integer()
+                .suffix(" WPM")
+                .text("CW Speed"),
+        );
+        super::slider_scroll(ui, &mut response, &mut wpm, 5.0, 50.0, 1.0);
+        if response.changed() {
             let w = wpm.clamp(5, 50) as u32;
             if w != state.cw_speed_wpm {
                 state.cw_speed_wpm = w;
@@ -564,15 +568,14 @@ impl RigflowApp {
 
         // Mic gain (measurement only this phase).
         let mut gain = state.mic_gain_percent as i32;
-        if ui
-            .add(
-                egui::Slider::new(&mut gain, 0..=200)
-                    .integer()
-                    .suffix("%")
-                    .text("Mic Gain"),
-            )
-            .changed()
-        {
+        let mut response = ui.add(
+            egui::Slider::new(&mut gain, 0..=200)
+                .integer()
+                .suffix("%")
+                .text("Mic Gain"),
+        );
+        super::slider_scroll(ui, &mut response, &mut gain, 0.0, 200.0, 1.0);
+        if response.changed() {
             state.mic_gain_percent = gain.clamp(0, 200) as u16;
             state
                 .mic_shared
@@ -670,15 +673,14 @@ impl RigflowApp {
         });
 
         let mut level = state.two_tone_level_percent as i32;
-        if ui
-            .add(
-                egui::Slider::new(&mut level, 0..=100)
-                    .integer()
-                    .suffix("%")
-                    .text("Level"),
-            )
-            .changed()
-        {
+        let mut response = ui.add(
+            egui::Slider::new(&mut level, 0..=100)
+                .integer()
+                .suffix("%")
+                .text("Level"),
+        );
+        super::slider_scroll(ui, &mut response, &mut level, 0.0, 100.0, 1.0);
+        if response.changed() {
             state.two_tone_level_percent = level.clamp(0, 100) as u16;
             changed = true;
         }
@@ -713,15 +715,14 @@ impl RigflowApp {
         }
 
         let mut threshold = state.tx_limiter_threshold_percent as i32;
-        if ui
-            .add(
-                egui::Slider::new(&mut threshold, 50..=99)
-                    .integer()
-                    .suffix("%")
-                    .text("Limiter Threshold"),
-            )
-            .changed()
-        {
+        let mut response = ui.add(
+            egui::Slider::new(&mut threshold, 50..=99)
+                .integer()
+                .suffix("%")
+                .text("Limiter Threshold"),
+        );
+        super::slider_scroll(ui, &mut response, &mut threshold, 50.0, 99.0, 1.0);
+        if response.changed() {
             state.tx_limiter_threshold_percent = threshold.clamp(50, 99) as u16;
             changed = true;
         }
@@ -758,14 +759,13 @@ impl RigflowApp {
         }
 
         let mut level = state.compressor_level as i32;
-        if ui
-            .add(
-                egui::Slider::new(&mut level, 0..=10)
-                    .integer()
-                    .text("Compression Level"),
-            )
-            .changed()
-        {
+        let mut response = ui.add(
+            egui::Slider::new(&mut level, 0..=10)
+                .integer()
+                .text("Compression Level"),
+        );
+        super::slider_scroll(ui, &mut response, &mut level, 0.0, 10.0, 1.0);
+        if response.changed() {
             state.compressor_level = level.clamp(0, 10) as u8;
             comp_changed = true;
         }
@@ -884,12 +884,13 @@ impl RigflowApp {
 
         ui.add_enabled_ui(state.agc_enabled, |ui| {
             let mut strength = state.agc_strength;
-            let response = ui.add(
+            let mut response = ui.add(
                 egui::Slider::new(&mut strength, 0.0..=1.0)
                     .step_by(0.01)
                     .fixed_decimals(2)
                     .text("AGC Strength"),
             );
+            super::slider_scroll(ui, &mut response, &mut strength, 0.0, 1.0, 0.01);
             if response.changed() {
                 state.agc_strength = strength.clamp(0.0, 1.0);
                 self.send_radio_msg(ClientRadioMessage::SetAgcStrength {
@@ -915,13 +916,21 @@ impl RigflowApp {
         ui.horizontal(|ui| {
             let slider_width = (ui.available_width() - 80.0).max(100.0);
 
-            let response = ui.add_sized(
+            let mut response = ui.add_sized(
                 [slider_width, 0.0],
                 egui::Slider::new(
                     &mut state.filter_bandwidth_hz,
                     bw_limits.min_hz..=bw_limits.max_hz,
                 )
                 .text(RichText::new("Filter BW (Hz)").size(11.0)),
+            );
+            let bw_scrolled = super::slider_scroll(
+                ui,
+                &mut response,
+                &mut state.filter_bandwidth_hz,
+                bw_limits.min_hz as f64,
+                bw_limits.max_hz as f64,
+                50.0,
             );
 
             if ui
@@ -965,7 +974,7 @@ impl RigflowApp {
                 }
             }
 
-            if response.drag_stopped() {
+            if response.drag_stopped() || bw_scrolled {
                 let final_hz = state
                     .filter_bandwidth_hz
                     .round()
@@ -1006,10 +1015,18 @@ impl RigflowApp {
         ui.horizontal(|ui| {
             let slider_width = (ui.available_width() - 80.0).max(100.0);
 
-            let response = ui.add_sized(
+            let mut response = ui.add_sized(
                 [slider_width, 0.0],
                 egui::Slider::new(&mut state.pitch_hz, limits.min_hz..=limits.max_hz)
                     .text(RichText::new(limits.label).size(11.0)),
+            );
+            let pitch_scrolled = super::slider_scroll(
+                ui,
+                &mut response,
+                &mut state.pitch_hz,
+                limits.min_hz as f64,
+                limits.max_hz as f64,
+                10.0,
             );
 
             if ui
@@ -1045,7 +1062,7 @@ impl RigflowApp {
                 }
             }
 
-            if response.drag_stopped() {
+            if response.drag_stopped() || pitch_scrolled {
                 let final_hz = state.pitch_hz.round().clamp(limits.min_hz, limits.max_hz);
                 state.pitch_hz = final_hz;
                 state.demod_preferences.get_mut(demod_mode).pitch_hz = final_hz;

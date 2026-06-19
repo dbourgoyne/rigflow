@@ -69,13 +69,14 @@ impl RigflowApp {
             // (and the SWR sweep) — not voice/CW/digital TX.  Persisted via
             // the source-control prefs.
             let mut spot_level = snapshot.source_control.spot_level_percent;
-            let resp = ui.add(
+            let mut resp = ui.add(
                 egui::Slider::new(&mut spot_level, 0.0..=100.0)
                     .step_by(1.0)
                     .fixed_decimals(0)
                     .suffix("%")
                     .text("Spot Level"),
             );
+            super::slider_scroll(ui, &mut resp, &mut spot_level, 0.0, 100.0, 1.0);
             if resp.changed() {
                 let snapped = spot_level.clamp(0.0, 100.0).round();
                 self.send_radio_msg(ClientRadioMessage::SetSourceSpotLevel {

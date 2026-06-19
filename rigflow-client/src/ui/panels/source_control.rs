@@ -235,9 +235,17 @@ impl RigflowApp {
 
                     let mut gain_db = state.source_control.gain_db;
 
-                    let response = ui.add(
+                    let mut response = ui.add(
                         egui::Slider::new(&mut gain_db, min_gain..=max_gain)
                             .text(format!("Gain ({:.1} dB)", state.source_control.gain_db)),
+                    );
+                    super::slider_scroll(
+                        ui,
+                        &mut response,
+                        &mut gain_db,
+                        min_gain as f64,
+                        max_gain as f64,
+                        1.0,
                     );
                     if response.changed() {
                         let snapped_gain = gains
@@ -282,10 +290,18 @@ impl RigflowApp {
 
             ui.label("PPM Correction");
             ui.horizontal(|ui| {
-                let slider = ui.add(
+                let mut slider = ui.add(
                     egui::Slider::new(&mut ppm, ppm_min..=ppm_max)
                         .integer()
                         .show_value(false),
+                );
+                super::slider_scroll(
+                    ui,
+                    &mut slider,
+                    &mut ppm,
+                    ppm_min as f64,
+                    ppm_max as f64,
+                    1.0,
                 );
 
                 let sign = if ppm > 0 { "+" } else { "" };
@@ -350,13 +366,14 @@ impl RigflowApp {
         // -----------------------------
         if state.source_capabilities.supports_tx_tune_test {
             let mut tx_drive = state.source_control.tx_drive_percent;
-            let resp = ui.add(
+            let mut resp = ui.add(
                 egui::Slider::new(&mut tx_drive, 0.0..=100.0)
                     .step_by(1.0)
                     .fixed_decimals(0)
                     .suffix("%")
                     .text("TX Drive"),
             );
+            super::slider_scroll(ui, &mut resp, &mut tx_drive, 0.0, 100.0, 1.0);
             if resp.changed() {
                 let snapped = tx_drive.clamp(0.0, 100.0).round();
                 if (snapped - state.source_control.tx_drive_percent).abs() > f32::EPSILON {

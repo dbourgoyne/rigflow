@@ -12,6 +12,56 @@ pub(crate) fn panel_header(text: &str) -> egui::RichText {
         .color(egui::Color32::from_rgb(90, 200, 255))
 }
 
+/// Let the mouse wheel adjust a slider while the pointer is over it: scroll up
+/// increases, scroll down decreases, by `step` (clamped to `min..=max`). Marks the
+/// response changed so the caller's existing `.changed()` handling runs. Returns
+/// `true` if the wheel changed the value (useful when the caller persists on
+/// `drag_stopped()` rather than `changed()`). Call right after
+/// `ui.add(Slider::new(&mut value, min..=max)…)`.
+///
+/// While the pointer is over the slider this **swallows all wheel scroll** so the
+/// surrounding panel `ScrollArea` never scrolls and the slider stays under the
+/// cursor. The step is taken from `raw_scroll_delta` (one notch per frame), but
+/// both the raw and the multi-frame `smooth_scroll_delta` (which the `ScrollArea`
+/// actually consumes) are zeroed every hovered frame — otherwise the smoothed tail
+/// of a notch keeps scrolling the panel on the frames after the step.
+pub(crate) fn slider_scroll<Num: egui::emath::Numeric>(
+    ui: &egui::Ui,
+    response: &mut egui::Response,
+    value: &mut Num,
+    min: f64,
+    max: f64,
+    step: f64,
+) -> bool {
+    if !response.hovered() {
+        return false;
+    }
+
+    // Step the value once per wheel notch (raw delta is per-frame).
+    let raw_y = ui.input(|i| i.raw_scroll_delta.y);
+    let mut changed = false;
+    if raw_y != 0.0 {
+        let (lo, hi) = (min.min(max), min.max(max));
+        let cur = (*value).to_f64();
+        let next = (cur + step * raw_y.signum() as f64).clamp(lo, hi);
+        if next != cur {
+            *value = Num::from_f64(next);
+            response.mark_changed();
+            changed = true;
+        }
+    }
+
+    // Swallow wheel scroll for as long as the slider is hovered — including the
+    // smoothed tail on frames where `raw_scroll_delta` is already zero — so the
+    // panel ScrollArea (which reads `smooth_scroll_delta`) never moves.
+    ui.ctx().input_mut(|i| {
+        i.raw_scroll_delta = egui::Vec2::ZERO;
+        i.smooth_scroll_delta = egui::Vec2::ZERO;
+    });
+
+    changed
+}
+
 mod bookmarks;
 mod operator;
 mod problems;
