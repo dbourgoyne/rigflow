@@ -63,16 +63,6 @@ pub fn draw_spectrum_plot(
     let om_tooltip = draw_om_overlays(&painter, plot_rect, spectrum_len, state, pointer_pos);
     draw_passband_overlay(&painter, plot_rect, spectrum_len, state);
     draw_trace(&painter, plot_rect, spectrum_db, db_min, db_max, state);
-
-    let clicked_bookmark_id = draw_bookmark_overlays(
-        &painter,
-        plot_rect,
-        spectrum_len,
-        state,
-        pointer_pos,
-        pointer_clicked,
-    );
-
     draw_frequency_markers(&painter, plot_rect, spectrum_len, state);
 
     painter.rect_stroke(
@@ -82,15 +72,30 @@ pub fn draw_spectrum_plot(
         egui::StrokeKind::Inside,
     );
 
-    // Band-strip hover tooltips are drawn last, so hover is always the topmost
-    // element — above both band strips, the trace, and the plot border. (The two
-    // hover zones are vertically disjoint, so at most one is Some.)
+    // Bookmark marker boxes are drawn above the trace, passband, frequency
+    // markers, and the plot border so their labels stay readable. Click/hover
+    // detection rides along; the hover tooltip is deferred to the block below.
+    let (clicked_bookmark_id, hovered_bookmark) = draw_bookmark_overlays(
+        &painter,
+        plot_rect,
+        spectrum_len,
+        state,
+        pointer_pos,
+        pointer_clicked,
+    );
+
+    // Every hover tooltip is drawn last, so an active hover is always the topmost
+    // element. (The band, license, and bookmark hover zones are disjoint, so at
+    // most one is active.)
     if let Some(p) = pointer_pos {
         if let Some(lines) = &band_tooltip {
             draw_tooltip_bubble(&painter, plot_rect, lines, p);
         }
         if let Some(lines) = &om_tooltip {
             draw_tooltip_bubble(&painter, plot_rect, lines, p);
+        }
+        if let Some(bookmark) = hovered_bookmark {
+            draw_bookmark_tooltip(&painter, plot_rect, bookmark, pointer_pos);
         }
     }
 
@@ -684,24 +689,27 @@ fn draw_om_overlays(
     })
 }
 
-fn draw_bookmark_overlays(
+/// Draw the bookmark marker boxes and detect click/hover. Returns the clicked
+/// bookmark id (if any) and the hovered bookmark, so the caller can draw the
+/// marker boxes near the top and the hover tooltip last (always topmost).
+fn draw_bookmark_overlays<'a>(
     painter: &egui::Painter,
     plot_rect: Rect,
     spectrum_len: usize,
-    state: &UiState,
+    state: &'a UiState,
     pointer_pos: Option<Pos2>,
     pointer_clicked: bool,
-) -> Option<String> {
+) -> (Option<String>, Option<&'a crate::persistence::BookmarkFile>) {
     if state.bookmarks.is_empty() {
-        return None;
+        return (None, None);
     }
 
     let Some((left_hz, right_hz)) = zoomed_visible_freq_range_hz(spectrum_len, state) else {
-        return None;
+        return (None, None);
     };
 
     if right_hz <= left_hz {
-        return None;
+        return (None, None);
     }
 
     // Position bookmark labels just above the OM strip.
@@ -721,7 +729,7 @@ fn draw_bookmark_overlays(
     let border_color = Color32::from_rgb(255, 220, 80);
     let fill_color = Color32::from_rgba_premultiplied(0, 0, 0, 0);
 
-    let mut hovered_bookmark: Option<(&crate::persistence::BookmarkFile, Rect)> = None;
+    let mut hovered_bookmark: Option<&crate::persistence::BookmarkFile> = None;
 
     for bookmark in &state.bookmarks {
         let Some(center_x) =
@@ -788,7 +796,7 @@ fn draw_bookmark_overlays(
 
         if let Some(pointer) = pointer_pos {
             if rect.contains(pointer) {
-                hovered_bookmark = Some((bookmark, rect));
+                hovered_bookmark = Some(bookmark);
 
                 if pointer_clicked {
                     clicked_bookmark_id = Some(bookmark.id.clone());
@@ -797,11 +805,7 @@ fn draw_bookmark_overlays(
         }
     }
 
-    if let Some((bookmark, _rect)) = hovered_bookmark {
-        draw_bookmark_tooltip(painter, plot_rect, bookmark, pointer_pos);
-    }
-
-    clicked_bookmark_id
+    (clicked_bookmark_id, hovered_bookmark)
 }
 
 fn draw_bookmark_tooltip(
