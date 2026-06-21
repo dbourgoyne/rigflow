@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use log::{trace, warn};
+use log::{Level, trace};
 use rigflow_core::audio::jitter_buffer::JitterBuffer;
 
 use crate::net::udp::MediaPacketStats;
@@ -107,7 +107,21 @@ late_a={} drop_a={} late_w={} drop_w={}",
             || jb_invalid_delta > 0
             || jb_resync_delta > 0
         {
-            warn!(
+            // Routine concealment on a slightly lossy/jittery link is individually
+            // inaudible (each packet is a few ms), so it shouldn't spam at WARN.
+            // Warn only when the conceal *rate* is high enough to actually matter,
+            // or when a more serious event occurs: late drops, overflow, malformed
+            // packets, or a resync (the buffer fell badly out of order). Otherwise
+            // log at debug.
+            const CONCEAL_WARN_RATE_PER_SEC: f64 = 5.0;
+            let serious = jb_late_delta > 0
+                || jb_overflow_delta > 0
+                || jb_invalid_delta > 0
+                || jb_resync_delta > 0
+                || conceal_delta as f64 / secs >= CONCEAL_WARN_RATE_PER_SEC;
+            let level = if serious { Level::Warn } else { Level::Debug };
+            log::log!(
+                level,
                 "jitter buffer event: conceal_delta={} jb_late_delta={} \
 jb_overflow_delta={} jb_invalid_delta={} jb_resync_delta={} jb={:.1} ms started={}",
                 conceal_delta,
