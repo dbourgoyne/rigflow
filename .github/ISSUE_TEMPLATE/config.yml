@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Operator guide
+    url: https://github.com/dbourgoyne/rigflow/blob/main/docs/operator-guide.md
+    about: How to set up and operate Rigflow (CAT, digital modes, amplifier, …).
+  - name: Troubleshooting
+    url: https://github.com/dbourgoyne/rigflow/blob/main/docs/troubleshooting.md
+    about: Symptom → fix for the most common problems. Check here first.
+  - name: Expected behavior (signal path)
+    url: https://github.com/dbourgoyne/rigflow/blob/main/docs/signal-path.md
+    about: Several reported "bugs" are intentional — confirm here before filing.

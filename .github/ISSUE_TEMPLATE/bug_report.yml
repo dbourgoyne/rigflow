@@ -1,0 +1,97 @@
+name: Bug report
+description: Report a problem with Rigflow (something works incorrectly or crashes).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report. A few specifics make bugs far
+        easier to fix — especially the version, your platform, and the radio source.
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before filing
+      options:
+        - label: >
+            I checked the [Troubleshooting](https://github.com/dbourgoyne/rigflow/blob/main/docs/troubleshooting.md)
+            and [Expected behavior](https://github.com/dbourgoyne/rigflow/blob/main/docs/signal-path.md)
+            docs — several reported "bugs" are intentional (e.g. relative S-meter,
+            CW receive symmetry).
+          required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do, in order, that triggers it?
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual
+      description: What you expected to happen, and what actually happened.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Rigflow version
+      description: From the title bar / release tag, or the git commit SHA if built from source.
+      placeholder: e.g. 0.1.0 (or git SHA)
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: OS / platform
+      options:
+        - Linux x86-64
+        - Linux ARM (Raspberry Pi)
+        - macOS (Apple Silicon)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: radio
+    attributes:
+      label: Radio source
+      options:
+        - Hermes Lite 2
+        - RTL-SDR
+        - WAV / IQ playback
+        - Built-in test tone
+        - Other / N/A
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Digital transport (FT8 / digital only)
+      description: Leave as N/A for non-digital issues.
+      options:
+        - N/A (not a digital-mode issue)
+        - Linux PipeWire virtual audio
+        - TCI
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        Server and/or client output (run with `RUST_LOG=debug` if you can). Paste the
+        lines around the problem — they're automatically formatted, no backticks needed.
+      render: shell
+    validations:
+      required: false
