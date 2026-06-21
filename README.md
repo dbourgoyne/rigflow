@@ -84,6 +84,17 @@ The server and client are driven live from the UI; their command-line options ar
 - **[Release notes](docs/RELEASE_NOTES.md)** — what's in this release and known issues
 - **[Disclaimer](DISCLAIMER.md)** — operating responsibilities and warranty
 
+## Reporting bugs & requesting features
+
+Found a bug or have an idea? Please use
+**[GitHub Issues](https://github.com/dbourgoyne/rigflow/issues/new/choose)** and pick **Bug
+report** or **Feature request**. All reports go through GitHub Issues — there's no support email.
+The bug form asks for your version, platform, radio, and logs, which makes problems much faster to
+track down. For things that are already known, skim the
+**[Release notes](docs/RELEASE_NOTES.md)** (known issues) and
+**[Signal path & expected behavior](docs/signal-path.md)** first — a few reported "bugs" are
+intentional.
+
 ## Status
 
 Rigflow is **experimental** amateur-radio software for licensed operators and experimenters. It

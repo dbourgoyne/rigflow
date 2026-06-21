@@ -137,3 +137,8 @@ platform, with a live status for each piece.
 
 Still stuck? Check the server's console log (it reports discovery, leases, and TX faults), and the
 client's status console at the bottom of the left panel.
+
+If that doesn't resolve it, please open a
+[GitHub issue](https://github.com/dbourgoyne/rigflow/issues/new/choose) using the **Bug report**
+template and include your version, platform, radio, and the relevant log lines (the form prompts
+for each). Reports go through GitHub Issues — there's no support email.
