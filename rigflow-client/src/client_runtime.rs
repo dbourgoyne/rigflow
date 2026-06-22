@@ -71,8 +71,10 @@ pub struct MediaRuntimeHandles {
     /// Spectrum dB values (for plotting)
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
 
-    /// Audio stream (must be held to keep playback alive)
-    pub _audio_stream: cpal::Stream,
+    /// Audio output stream (held to keep playback alive). `None` when no output
+    /// device could be opened — the client runs without local speaker audio
+    /// rather than aborting.
+    pub _audio_stream: Option<cpal::Stream>,
 
     /// Generation counter used to reset audio state on radio switch
     pub audio_session_generation: Arc<AtomicU64>,
@@ -114,11 +116,6 @@ pub fn start_media_runtime(
     // --- Audio output (CPAL) ----------------------------------------------
 
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or("No default output device available")?;
-
-    let config = device.default_output_config()?.config();
 
     // Lock-free CW sidetone control, shared with the UI thread via UiState.
     // Extract the Arc once here so the real-time audio callback never locks.
@@ -133,15 +130,18 @@ pub fn start_media_runtime(
     // real-time audio callback reads it without locking.
     let rx_volume = Arc::new(AtomicU8::new(50));
 
-    let audio_stream = build_output_stream(
-        &device,
-        &config,
-        Arc::clone(&jitter),
-        Arc::clone(&stats_logger),
-        sidetone,
-        Arc::clone(&rx_volume),
-    )?;
-    audio_stream.play()?;
+    // Open the speaker output, degrading gracefully instead of aborting. A
+    // machine whose *default* ALSA device can't be opened — e.g. a headless Pi
+    // whose default is an unconnected HDMI sink — should still run, since radio
+    // control and the digital (FT8) paths don't need local playback. `None`
+    // means no local speaker audio; the rest of the media runtime continues.
+    let audio_stream = open_audio_output(&host, &jitter, &stats_logger, &sidetone, &rx_volume);
+    if audio_stream.is_none() {
+        log::error!(
+            "audio: no usable output device found — running without local speaker \
+             audio (radio control and digital modes still work)."
+        );
+    }
 
     // --- UI buffers --------------------------------------------------------
 
@@ -459,6 +459,94 @@ pub fn start_media_runtime(
         _audio_stream: audio_stream,
         audio_session_generation,
     })
+}
+
+/// Open a CPAL output stream, degrading gracefully instead of aborting the
+/// client. Tries the host default device first, then every other output device,
+/// using the first that opens. Returns `None` if none can be opened (e.g. a
+/// headless Pi whose default ALSA device is an unconnected HDMI sink) — the
+/// client then runs without local speaker audio.
+fn open_audio_output(
+    host: &cpal::Host,
+    jitter: &Arc<Mutex<JitterBuffer>>,
+    stats_logger: &Arc<Mutex<ClientStatsLogger>>,
+    sidetone: &Arc<SidetoneShared>,
+    rx_volume: &Arc<AtomicU8>,
+) -> Option<cpal::Stream> {
+    let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 1) Host default.
+    if let Some(device) = host.default_output_device() {
+        if let Some(stream) = try_open_output(
+            device,
+            jitter,
+            stats_logger,
+            sidetone,
+            rx_volume,
+            &mut tried,
+        ) {
+            return Some(stream);
+        }
+    }
+    // 2) Any other output device (already-tried names are skipped).
+    if let Ok(devices) = host.output_devices() {
+        for device in devices {
+            if let Some(stream) = try_open_output(
+                device,
+                jitter,
+                stats_logger,
+                sidetone,
+                rx_volume,
+                &mut tried,
+            ) {
+                return Some(stream);
+            }
+        }
+    }
+    None
+}
+
+/// Attempt to open one output device; logs and returns `None` on failure.
+/// `tried` dedups by device name so the default isn't retried during the sweep.
+fn try_open_output(
+    device: cpal::Device,
+    jitter: &Arc<Mutex<JitterBuffer>>,
+    stats_logger: &Arc<Mutex<ClientStatsLogger>>,
+    sidetone: &Arc<SidetoneShared>,
+    rx_volume: &Arc<AtomicU8>,
+    tried: &mut std::collections::HashSet<String>,
+) -> Option<cpal::Stream> {
+    let name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
+    if !tried.insert(name.clone()) {
+        return None;
+    }
+    let config = match device.default_output_config() {
+        Ok(c) => c.config(),
+        Err(e) => {
+            log::warn!("audio: output device '{name}' config query failed: {e}");
+            return None;
+        }
+    };
+    match build_output_stream(
+        &device,
+        &config,
+        Arc::clone(jitter),
+        Arc::clone(stats_logger),
+        Arc::clone(sidetone),
+        Arc::clone(rx_volume),
+    ) {
+        Ok(stream) => match stream.play() {
+            Ok(()) => Some(stream),
+            Err(e) => {
+                log::warn!("audio: output device '{name}' failed to start: {e}");
+                None
+            }
+        },
+        Err(e) => {
+            log::warn!("audio: output device '{name}' could not be opened: {e}");
+            None
+        }
+    }
 }
 
 /// Build the CPAL output stream.

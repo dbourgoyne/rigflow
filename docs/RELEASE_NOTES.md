@@ -2,6 +2,20 @@
 
 ---
 
+## v0.1.2 — Client audio robustness
+
+The client no longer crashes at startup when the default audio output device can't be opened.
+Previously it aborted with an ALSA `snd_pcm_open` error — e.g. on a Raspberry Pi whose default
+output is an unconnected HDMI sink (`Unknown errno (524)` / ENOTSUPP). It now tries the default
+device, then any other output device, and uses the first that opens; if none can be opened it runs
+**without local speaker audio** rather than aborting (radio control and the digital/FT8 paths are
+unaffected, since those don't use the local speaker).
+
+Cumulative: these binaries also include the **v0.1.1** Linux glibc packaging fix (they run on
+Debian 12 "Bookworm" / Raspberry Pi OS).
+
+---
+
 ## v0.1.1 — Packaging fix (Linux glibc)
 
 A packaging-only release — **no functional changes** since v0.1.0.
