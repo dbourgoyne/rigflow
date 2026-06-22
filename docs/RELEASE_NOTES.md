@@ -2,6 +2,20 @@
 
 ---
 
+## v0.1.1 — Packaging fix (Linux glibc)
+
+A packaging-only release — **no functional changes** since v0.1.0.
+
+The prebuilt **Linux** binaries (x86-64 and ARM64) are now built against an older glibc baseline
+(Ubuntu 22.04 / glibc 2.35) so they run on **Debian 12 "Bookworm" and Raspberry Pi OS** (glibc 2.36)
+— the primary server target. The v0.1.0 Linux binaries were built on Ubuntu 24.04 (glibc 2.39) and
+failed at launch with `version 'GLIBC_2.39' not found` on Bookworm. (glibc is backward- but not
+forward-compatible: a binary built against an older glibc runs on newer systems, not the reverse.)
+
+Building from source was never affected, and the **macOS** binary is unchanged.
+
+---
+
 ## v0.1.0 — Initial release
 
 The first public release of Rigflow — a client/server SDR application for amateur radio that can

@@ -29,14 +29,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Pin the Linux runners to Ubuntu 22.04 (glibc 2.35) so the binaries run
+        # on older-but-current distros — notably Debian 12 "Bookworm" / Raspberry
+        # Pi OS (glibc 2.36), the primary server target. glibc is backward- but
+        # NOT forward-compatible, so building on a newer runner (24.04 = glibc
+        # 2.39) yields binaries that fail with `GLIBC_2.39 not found` on Bookworm.
+        # Do NOT bump these to a newer Ubuntu without raising the minimum
+        # supported glibc. macOS is unaffected.
         include:
           - label: linux-x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             os: linux
             packages: rigflow-server rigflow-client
             build_args: -p rigflow-server -p rigflow-client
           - label: linux-arm64
-            runner: ubuntu-24.04-arm
+            runner: ubuntu-22.04-arm
             os: linux
             packages: rigflow-server rigflow-client
             build_args: -p rigflow-server -p rigflow-client
