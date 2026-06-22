@@ -66,11 +66,12 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.label }}
-
+      # No build cache here, on purpose: release builds should be clean and
+      # reproducible. A shared cache caused a stale-artifact failure when the
+      # runner image changed (the rust-cache key distinguishes runner.os = Linux
+      # but not the Ubuntu version), restoring incompatible dependency rlibs
+      # built on a different image. Releases are infrequent, so a full compile
+      # is the safer trade.
       # `dist` profile = release + stripped (small) binaries → target/dist/.
       - name: Build (dist profile)
         run: cargo build --profile dist ${{ matrix.build_args }}
