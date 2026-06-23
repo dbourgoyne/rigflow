@@ -4,6 +4,7 @@ members = [
     "rigflow-client",
     "rigflow-protocol",
     "rigflow-core",
+    "rigflow-probe",
 ]
 resolver = "2"
 

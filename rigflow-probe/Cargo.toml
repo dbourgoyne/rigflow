@@ -1,0 +1,26 @@
+[package]
+name = "rigflow-probe"
+version.workspace = true
+edition = "2021"
+description = "Rigflow headless diagnostic probe: capture the server audio stream and report dropout/jitter statistics"
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rigflow-probe"
+path = "src/main.rs"
+
+[dependencies]
+rigflow-protocol = { path = "../rigflow-protocol" }
+rigflow-core = { path = "../rigflow-core" }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hound = "3.5"
+socket2 = "0.5"
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
