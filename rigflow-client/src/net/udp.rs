@@ -53,6 +53,77 @@ enum StreamKind {
     Waterfall,
 }
 
+/// Reassembles a waterfall row from its sub-MTU chunks.
+///
+/// The server splits each row into chunks (see `udp_waterfall.rs`) so no datagram
+/// exceeds the MTU. Each chunk carries `row_seq` / `total_bins` / `bin_offset`. We
+/// accumulate chunks for the current row and emit the full row once every bin has
+/// arrived. Rows are loss-tolerant: an incomplete row is dropped when the next
+/// `row_seq` starts (imperceptible at ~20 rows/s, and far rarer than the whole-row
+/// losses IP fragmentation used to cause).
+#[derive(Default)]
+pub struct WaterfallReassembler {
+    row_seq: Option<u16>,
+    total_bins: usize,
+    buf: Vec<f32>,
+    filled: usize,
+    done: bool,
+}
+
+impl WaterfallReassembler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed one chunk (the bytes after the 16-byte media header). Returns the full
+    /// row once this chunk completes it, else `None`.
+    fn push_chunk(&mut self, payload: &[u8]) -> Option<&[f32]> {
+        // Chunk header: row_seq(2) total_bins(2) bin_offset(2), all big-endian.
+        if payload.len() < 6 {
+            return None;
+        }
+        let row_seq = u16::from_be_bytes([payload[0], payload[1]]);
+        let total_bins = u16::from_be_bytes([payload[2], payload[3]]) as usize;
+        let bin_offset = u16::from_be_bytes([payload[4], payload[5]]) as usize;
+        let data = &payload[6..];
+
+        if total_bins == 0 || !data.len().is_multiple_of(4) {
+            return None;
+        }
+        let n = data.len() / 4;
+        if bin_offset + n > total_bins {
+            return None;
+        }
+
+        // Start a fresh row when the row id changes (dropping any incomplete prior row).
+        if self.row_seq != Some(row_seq) || self.total_bins != total_bins {
+            self.row_seq = Some(row_seq);
+            self.total_bins = total_bins;
+            self.buf = vec![0.0; total_bins];
+            self.filled = 0;
+            self.done = false;
+        } else if self.done {
+            // Row already emitted; ignore stray/duplicate chunks.
+            return None;
+        }
+
+        for (j, c) in data.chunks_exact(4).enumerate() {
+            let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+            if !v.is_finite() {
+                return None;
+            }
+            self.buf[bin_offset + j] = v;
+        }
+        self.filled += n;
+
+        if self.filled >= self.total_bins {
+            self.done = true;
+            return Some(&self.buf);
+        }
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn handle_media_packet(
     packet: &[u8],
@@ -64,6 +135,7 @@ pub fn handle_media_packet(
     cw_decoder: &mut crate::cw_decode::CwDecoder,
     digital_rx: &crate::digital_rx::DigitalRxOutput,
     tci_rx_audio: &crate::tci_server::TciRxAudio,
+    waterfall_reasm: &mut WaterfallReassembler,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -107,7 +179,13 @@ pub fn handle_media_packet(
                 update_sequence_stats(&mut s, StreamKind::Waterfall, header.sequence);
             }
 
-            handle_waterfall_packet(payload, waterfall_buffer, spectrum_db, ui_state);
+            handle_waterfall_packet(
+                waterfall_reasm,
+                payload,
+                waterfall_buffer,
+                spectrum_db,
+                ui_state,
+            );
         }
 
         _ => {}
@@ -208,47 +286,25 @@ fn update_adaptive_waterfall_display(row_db: &[f32], ui_state: &Arc<Mutex<UiStat
 }
 
 fn handle_waterfall_packet(
-    payload_with_len: &[u8],
+    reasm: &mut WaterfallReassembler,
+    payload: &[u8],
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
     ui_state: &Arc<Mutex<UiState>>,
 ) {
-    if payload_with_len.len() < 2 {
+    // Accumulate this chunk; only proceed once the full row has been reassembled.
+    let Some(row_db) = reasm.push_chunk(payload) else {
         return;
-    }
-
-    // First 2 bytes are the waterfall payload length (big-endian u16).
-    let payload_len = u16::from_be_bytes([payload_with_len[0], payload_with_len[1]]) as usize;
-
-    let payload = &payload_with_len[2..];
-
-    if payload.len() != payload_len {
-        return;
-    }
-
-    // Each spectral bin is one little-endian f32.
-    if !payload.len().is_multiple_of(4) {
-        return;
-    }
-
-    let mut row_db = Vec::with_capacity(payload.len() / 4);
-
-    for chunk in payload.chunks_exact(4) {
-        row_db.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
-    }
-
-    if !row_db.iter().all(|v| v.is_finite()) {
-        return;
-    }
+    };
 
     // Update smoothed spectrum trace.
     if let Ok(mut spectrum) = spectrum_db.lock() {
-        update_spectrum_db(&mut spectrum, &row_db);
+        update_spectrum_db(&mut spectrum, row_db);
     }
 
     // If adaptive mode is enabled, update the display controls from
     // the incoming spectral row using slow smoothing.
-    update_adaptive_waterfall_display(&row_db, ui_state);
+    update_adaptive_waterfall_display(row_db, ui_state);
 
     // Read current display mapping controls.
     let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
@@ -275,10 +331,62 @@ fn handle_waterfall_packet(
             &mut fb,
             WATERFALL_IMAGE_WIDTH,
             WATERFALL_IMAGE_HEIGHT,
-            &row_db,
+            row_db,
             top_db,
             range_db,
             zoom,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a chunk payload (the bytes that follow the 16-byte media header).
+    fn chunk(row_seq: u16, total_bins: u16, bin_offset: u16, bins: &[f32]) -> Vec<u8> {
+        let mut p = Vec::new();
+        p.extend_from_slice(&row_seq.to_be_bytes());
+        p.extend_from_slice(&total_bins.to_be_bytes());
+        p.extend_from_slice(&bin_offset.to_be_bytes());
+        for b in bins {
+            p.extend_from_slice(&b.to_le_bytes());
+        }
+        p
+    }
+
+    #[test]
+    fn reassembles_full_row_from_chunks() {
+        let mut r = WaterfallReassembler::new();
+        let row: Vec<f32> = (0..1024).map(|i| i as f32).collect();
+
+        assert!(r.push_chunk(&chunk(0, 1024, 0, &row[0..256])).is_none());
+        assert!(r.push_chunk(&chunk(0, 1024, 256, &row[256..512])).is_none());
+        assert!(r.push_chunk(&chunk(0, 1024, 512, &row[512..768])).is_none());
+        assert_eq!(
+            r.push_chunk(&chunk(0, 1024, 768, &row[768..1024])),
+            Some(row.as_slice())
+        );
+    }
+
+    #[test]
+    fn incomplete_row_is_dropped_when_next_row_starts() {
+        let mut r = WaterfallReassembler::new();
+        let row: Vec<f32> = vec![1.0; 1024];
+
+        // Only 3 of 4 chunks for row 0 → never completes.
+        assert!(r.push_chunk(&chunk(0, 1024, 0, &row[0..256])).is_none());
+        assert!(r.push_chunk(&chunk(0, 1024, 256, &row[256..512])).is_none());
+        assert!(r.push_chunk(&chunk(0, 1024, 512, &row[512..768])).is_none());
+
+        // A new row id starts: the incomplete row 0 is silently dropped.
+        assert!(r.push_chunk(&chunk(1, 1024, 0, &row[0..256])).is_none());
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_chunk() {
+        let mut r = WaterfallReassembler::new();
+        // bin_offset + n exceeds total_bins → dropped.
+        assert!(r.push_chunk(&chunk(0, 4, 2, &[0.0; 4])).is_none());
     }
 }

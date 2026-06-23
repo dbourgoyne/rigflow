@@ -20,7 +20,7 @@ use rigflow_core::{
 };
 
 use crate::{
-    net::udp::{MediaPacketStats, handle_media_packet},
+    net::udp::{MediaPacketStats, WaterfallReassembler, handle_media_packet},
     sidetone::SidetoneShared,
     ui::{
         layout::{
@@ -280,6 +280,9 @@ pub fn start_media_runtime(
         let mut cw_decoder =
             crate::cw_decode::CwDecoder::new(cw_decode_shared, OUTPUT_SAMPLE_RATE as f32);
 
+        // Reassembles waterfall rows from their sub-MTU chunks; owned by this thread.
+        let mut waterfall_reasm = WaterfallReassembler::new();
+
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
 
@@ -433,6 +436,7 @@ pub fn start_media_runtime(
                             &mut cw_decoder,
                             &digital_rx,
                             &tci_rx_audio,
+                            &mut waterfall_reasm,
                         );
                     }
                 }
