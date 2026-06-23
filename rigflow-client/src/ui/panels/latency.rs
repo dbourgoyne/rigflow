@@ -80,13 +80,9 @@ impl RigflowApp {
 
             let (c, l, o, r) = (m.conceals(), m.late(), m.overflow(), m.resyncs());
             if (c | l | o | r) != 0 {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "conceal {c}  ·  late {l}  ·  overflow {o}  ·  resync {r}"
-                    ))
-                    .small()
-                    .weak(),
-                );
+                ui.label(super::note_text(format!(
+                    "conceal {c}  ·  late {l}  ·  overflow {o}  ·  resync {r}"
+                )));
             }
 
             ui.add_space(4.0);
