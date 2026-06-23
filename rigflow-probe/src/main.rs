@@ -235,6 +235,37 @@ async fn run(args: Args) -> Result<(), String> {
         }
     }
 
+    // Start draining the media socket NOW (capturing=false → discard), before the
+    // tuning + settle phase. The server began streaming audio at acquire; if we don't
+    // read the socket until later, the kernel receive buffer accumulates a multi-second
+    // backlog that then floods the jitter buffer the instant the capture window opens
+    // (a fixed startup overflow, independent of capture duration).
+    let (jitter_target, jitter_max) = args.jitter_samples(PACKET_SAMPLES);
+    info!(
+        "jitter buffer: target {} ms, max {} ms ({jitter_target}–{jitter_max} samples)",
+        args.jitter_target_ms, args.jitter_max_ms
+    );
+    let jitter = Arc::new(Mutex::new(JitterBuffer::new(
+        PACKET_SAMPLES,
+        jitter_target,
+        jitter_max,
+    )));
+    let stats = Arc::new(Mutex::new(CaptureStats::new()));
+    let capturing = Arc::new(AtomicBool::new(false));
+    let wav_path = args.wav.as_deref().map(|p| p.display().to_string());
+    let (wav_tx, wav_join) = spawn_wav_writer(args.wav.as_deref())?;
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let media_task = tokio::spawn(media_loop(
+        media_sock,
+        Arc::clone(&jitter),
+        Arc::clone(&stats),
+        wav_tx,
+        Arc::clone(&capturing),
+        shutdown_rx.clone(),
+    ));
+    let drain_task = tokio::spawn(drain_loop(Arc::clone(&jitter), shutdown_rx.clone()));
+
     // Drive tuning/mode/rate explicitly — don't rely on the AcquireRadio center
     // being applied (the initial snapshot shows the worker default, not our request).
     send_msg(
@@ -317,43 +348,6 @@ async fn run(args: Args) -> Result<(), String> {
             r.center, r.target, r.mode, r.rate, r.squelch, r.nr2, r.agc, r.signal_dbm
         );
     }
-
-    // --- Shared capture state ----------------------------------------------
-    let (jitter_target, jitter_max) = args.jitter_samples(PACKET_SAMPLES);
-    info!(
-        "jitter buffer: target {} ms, max {} ms ({jitter_target}–{jitter_max} samples)",
-        args.jitter_target_ms, args.jitter_max_ms
-    );
-    let jitter = Arc::new(Mutex::new(JitterBuffer::new(
-        PACKET_SAMPLES,
-        jitter_target,
-        jitter_max,
-    )));
-    let stats = Arc::new(Mutex::new(CaptureStats::new()));
-    let capturing = Arc::new(AtomicBool::new(false));
-
-    // The WAV writer runs on its own thread fed by a channel, so a slow disk (e.g. a
-    // Raspberry Pi SD-card flush) can never stall the UDP receive loop and drop
-    // packets — which would otherwise masquerade as server-side loss.
-    let wav_path = args.wav.as_deref().map(|p| p.display().to_string());
-    let (wav_tx, wav_join) = spawn_wav_writer(args.wav.as_deref())?;
-
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-
-    // Media receive task — drains the socket immediately (so the kernel buffer
-    // doesn't overflow during setup), but only records/counts once `capturing`.
-    let media_task = tokio::spawn(media_loop(
-        media_sock,
-        Arc::clone(&jitter),
-        Arc::clone(&stats),
-        wav_tx,
-        Arc::clone(&capturing),
-        shutdown_rx.clone(),
-    ));
-
-    // Jitter-buffer drain task — pop at 48 kHz so the buffer's concealment/late/
-    // overflow counters reflect realistic playout, not a buffer that only fills.
-    let drain_task = tokio::spawn(drain_loop(Arc::clone(&jitter), shutdown_rx.clone()));
 
     // Control task — lease renewal + ping/pong + live RuntimeChanged tracking.
     let control_task = tokio::spawn(control_loop(
