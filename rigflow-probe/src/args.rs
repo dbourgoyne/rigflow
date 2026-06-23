@@ -64,6 +64,12 @@ pub struct Args {
     /// Write the received 48 kHz mono audio to this WAV path.
     #[arg(long)]
     pub wav: Option<PathBuf>,
+
+    /// Waterfall frame rate in Hz; 0 disables the waterfall stream entirely. Use to
+    /// A/B test whether waterfall traffic contends with audio (e.g. over WiFi). Omit
+    /// to leave the server default (20 Hz). Server clamps to 0–30.
+    #[arg(long)]
+    pub waterfall_rate: Option<f32>,
 }
 
 impl Args {

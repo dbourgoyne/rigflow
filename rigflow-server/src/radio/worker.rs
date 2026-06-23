@@ -16,7 +16,7 @@ use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
-    WATERFALL_FRAME_RATE_HZ,
+    WATERFALL_FRAME_RATE_HZ, WATERFALL_FRAME_RATE_MAX_HZ,
 };
 use crate::dsp::audio::nr2::Nr2;
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
@@ -87,6 +87,9 @@ struct SharedControlState {
     signal_s_units: i32,
     /// Receive-audio volume in percent (0–100) — final audio gain stage.
     volume_percent: u8,
+    /// Waterfall frame rate in Hz (0 = off). Set by the command thread, read by the
+    /// waterfall thread each loop to pace (or skip) row generation/sends.
+    waterfall_frame_rate_hz: f32,
     pub source_control: SourceControlState,
     /// Latest telemetry polled from the IQ source (read-only, written by capture thread).
     pub source_status: SourceStatus,
@@ -480,6 +483,7 @@ fn run_iq_worker_threads(
         signal_dbm: crate::dsp::smeter::MIN_DBM,
         signal_s_units: 0,
         volume_percent: 50,
+        waterfall_frame_rate_hz: WATERFALL_FRAME_RATE_HZ,
         source_control: SourceControlState::default(),
         source_status: SourceStatus::default(),
         amplifier_status: AmplifierStatus::default(),
@@ -606,7 +610,7 @@ fn run_iq_worker_threads(
         fatal_tx.clone(),
         request.waterfall_udp_peer,
         startup_info.runtime.waterfall_bins as usize,
-        startup_info.runtime.waterfall_frame_rate_hz,
+        control.clone(),
     );
 
     // Amplifier (HR50) poller — HL2 only, when a serial device is configured.
@@ -880,6 +884,15 @@ fn spawn_command_thread(
                             control_state.volume_percent = volume_percent.min(100);
                         }
                     }
+                    WorkerCommand::SetWaterfallFrameRate { rate_hz } => {
+                        let applied = rate_hz.clamp(0.0, WATERFALL_FRAME_RATE_MAX_HZ);
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.waterfall_frame_rate_hz = applied;
+                        }
+                        info!(
+                            "[radio-worker] waterfall frame rate -> {applied} Hz (requested {rate_hz})"
+                        );
+                    }
                     WorkerCommand::SetDeemphasisMode { mode } => {
                         if let Ok(mut control_state) = control.lock() {
                             //let before = control_state.deemphasis_mode;
@@ -1125,7 +1138,7 @@ fn spawn_waterfall_thread(
     fatal_tx: std_mpsc::Sender<WorkerExit>,
     wf_target: std::net::SocketAddr,
     waterfall_window_len: usize,
-    waterfall_frame_rate_hz: f32,
+    control: Arc<Mutex<SharedControlState>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
@@ -1142,15 +1155,19 @@ fn spawn_waterfall_thread(
 
         let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
         let waterfall_max_len = waterfall_window_len * 8;
-        let waterfall_period =
-            Duration::from_secs_f32((1.0 / waterfall_frame_rate_hz.max(1.0)).max(0.001));
-        let mut next_waterfall_tick = Instant::now();
+        // Time of the last emitted row. Initialized far in the past so the first
+        // row goes out promptly. Spacing between rows is the live frame period.
+        let mut last_emit = Instant::now() - Duration::from_secs(3600);
+        // Log the effective rate whenever it changes, to confirm runtime updates.
+        let mut last_logged_rate = f32::NAN;
 
         loop {
             if stop_requested(&stop_flag) {
                 break;
             }
 
+            // Always drain the IQ channel — even when waterfall is off — so it never
+            // backs up and the capture thread's fatal-on-disconnect path is never hit.
             while let Ok(iq) = iq_wf_rx.try_recv() {
                 for sample in iq {
                     waterfall_iq_buffer.push_back(sample);
@@ -1161,9 +1178,40 @@ fn spawn_waterfall_thread(
                 }
             }
 
-            let now = Instant::now();
+            // Live frame rate (0 = off). Read each loop so a runtime change takes
+            // effect immediately.
+            let rate_hz = control
+                .lock()
+                .map(|c| c.waterfall_frame_rate_hz)
+                .unwrap_or(WATERFALL_FRAME_RATE_HZ);
 
-            if now >= next_waterfall_tick {
+            if rate_hz != last_logged_rate {
+                if rate_hz <= 0.0 {
+                    info!(
+                        "[radio-worker {}] waterfall stream disabled (rate 0 Hz)",
+                        descriptor.id.0
+                    );
+                } else {
+                    info!(
+                        "[radio-worker {}] waterfall streaming at {rate_hz} Hz",
+                        descriptor.id.0
+                    );
+                }
+                last_logged_rate = rate_hz;
+            }
+
+            if rate_hz <= 0.0 {
+                // Disabled: no FFT, no sends — just keep draining (above) and idle.
+                last_emit = Instant::now() - Duration::from_secs(3600);
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            let waterfall_period = Duration::from_secs_f32(1.0 / rate_hz);
+            let now = Instant::now();
+            let elapsed = now.duration_since(last_emit);
+
+            if elapsed >= waterfall_period {
                 if waterfall_iq_buffer.len() >= waterfall_window_len {
                     let start = waterfall_iq_buffer.len() - waterfall_window_len;
                     let mut fft_input = Vec::with_capacity(waterfall_window_len);
@@ -1191,9 +1239,9 @@ fn spawn_waterfall_thread(
                     }
                 }
 
-                next_waterfall_tick += waterfall_period;
+                last_emit = now;
             } else {
-                thread::sleep((next_waterfall_tick - now).min(Duration::from_millis(5)));
+                thread::sleep((waterfall_period - elapsed).min(Duration::from_millis(5)));
             }
         }
 

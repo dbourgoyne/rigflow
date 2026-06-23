@@ -165,6 +165,9 @@ pub enum WorkerCommand {
     SetVolume {
         volume_percent: u8,
     },
+    SetWaterfallFrameRate {
+        rate_hz: f32,
+    },
     Stop {
         reason: StopReason,
     },

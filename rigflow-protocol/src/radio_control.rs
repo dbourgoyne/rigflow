@@ -156,6 +156,13 @@ pub enum ClientRadioMessage {
         sample_rate_hz: u32,
     },
 
+    /// Set the waterfall frame rate in Hz (`0.0` disables the waterfall stream).
+    /// The server clamps to a sane ceiling. Lets an operator trade spectrum
+    /// smoothness for bandwidth/CPU on constrained links.
+    SetWaterfallFrameRate {
+        rate_hz: f32,
+    },
+
     SetSourceGainMode {
         mode: GainMode,
     },

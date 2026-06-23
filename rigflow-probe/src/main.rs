@@ -276,6 +276,19 @@ async fn run(args: Args) -> Result<(), String> {
     )
     .await?;
 
+    // Optionally set the waterfall frame rate (0 = off) to test its contention impact.
+    if let Some(rate_hz) = args.waterfall_rate {
+        send_msg(
+            &mut write,
+            &ClientRadioMessage::SetWaterfallFrameRate { rate_hz },
+        )
+        .await?;
+        info!(
+            "waterfall rate set to {rate_hz} Hz{}",
+            if rate_hz <= 0.0 { " (disabled)" } else { "" }
+        );
+    }
+
     // Shared, live report state — seeded from the snapshot, then kept current from
     // the server's RuntimeChanged messages so the report reflects what we tuned to.
     let report = Arc::new(Mutex::new(ReportState {

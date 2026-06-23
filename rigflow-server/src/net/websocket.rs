@@ -680,6 +680,22 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetWaterfallFrameRate { rate_hz } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetWaterfallFrameRate { rate_hz },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_waterfall_frame_rate_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetSourceGainMode { mode } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

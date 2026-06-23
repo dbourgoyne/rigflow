@@ -4,6 +4,10 @@ use rigflow_core::dsp::modes::DemodMode;
 
 pub const WATERFALL_BINS: usize = 1024;
 pub const WATERFALL_FRAME_RATE_HZ: f32 = 20.0;
+/// Upper bound for a client-requested waterfall frame rate (Hz). The rate is
+/// adjustable at runtime (0 = off) but clamped to this ceiling; also the bound a
+/// future UI slider should use.
+pub const WATERFALL_FRAME_RATE_MAX_HZ: f32 = 30.0;
 
 // Keep this only if it is still referenced elsewhere.
 pub const WATERFALL_EVERY_N_BLOCKS: usize = 1;
