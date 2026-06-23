@@ -84,6 +84,13 @@ The server and client are driven live from the UI; their command-line options ar
 - **[Release notes](docs/RELEASE_NOTES.md)** — what's in this release and known issues
 - **[Disclaimer](DISCLAIMER.md)** — operating responsibilities and warranty
 
+## Community & support
+
+Have a question, want setup help, or just want to share your station? Join the
+**[GitHub Discussions](https://github.com/dbourgoyne/rigflow/discussions)** — use **Q&A**
+for how-to questions, **Ideas** to float a feature before filing it, and **Show and tell**
+for your remote setup and on-air results.
+
 ## Reporting bugs & requesting features
 
 Found a bug or have an idea? Please use
