@@ -2,6 +2,21 @@
 
 ---
 
+## v0.1.3 — Client log & audio-device polish
+
+- **Quieter logs by default.** The client now defaults to its own messages at `info` and
+  dependencies at `warn`, so noisy third-party output (winit/eframe, the accessibility D-Bus
+  chatter, ALSA/JACK device probing) no longer buries the useful lines. Set `RUST_LOG` to override
+  for debugging.
+- **Smarter audio-output selection.** The fallback now prefers the PipeWire/PulseAudio device and
+  skips the JACK plugin, so it lands cleanly on a working output instead of poking the (possibly
+  broken) `default` device or a non-running JACK server — notably on Raspberry Pi / PipeWire
+  systems, where those probes printed alarming-but-harmless errors.
+
+Cumulative with the **v0.1.1** (Linux glibc) and **v0.1.2** (audio-crash) fixes.
+
+---
+
 ## v0.1.2 — Client audio robustness
 
 The client no longer crashes at startup when the default audio output device can't be opened.

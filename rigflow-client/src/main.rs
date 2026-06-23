@@ -140,9 +140,14 @@ use crate::ui::state::UiState;
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging for both the UI process and background runtime tasks.
-    env_logger::Builder::from_default_env()
-        .format_timestamp_millis()
-        .init();
+    // Default to quiet: our own crate at info, everything else at warn, so noisy
+    // dependencies (winit, eframe, zbus/accesskit, ALSA/JACK device probing)
+    // don't bury the useful lines. `RUST_LOG` overrides this for debugging.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,rigflow_client=info"),
+    )
+    .format_timestamp_millis()
+    .init();
 
     // Mute libasound's harmless stderr diagnostics (e.g. find_matching_chmap).
     alsa_quiet::silence_alsa_errors();

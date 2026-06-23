@@ -475,7 +475,29 @@ fn open_audio_output(
 ) -> Option<cpal::Stream> {
     let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // 1) Host default.
+    // 1) Prefer the sound-server devices: they route through PipeWire/PulseAudio
+    //    to the user's chosen default sink and "just work", avoiding a raw hw:/
+    //    HDMI default (which may not open) and the `jack` plugin (which spews
+    //    connection errors when no JACK server is running). Try in priority order.
+    for want in ["pipewire", "pulse"] {
+        if let Ok(devices) = host.output_devices() {
+            for device in devices {
+                if device.name().map(|n| n == want).unwrap_or(false) {
+                    if let Some(stream) = try_open_output(
+                        device,
+                        jitter,
+                        stats_logger,
+                        sidetone,
+                        rx_volume,
+                        &mut tried,
+                    ) {
+                        return Some(stream);
+                    }
+                }
+            }
+        }
+    }
+    // 2) Host default.
     if let Some(device) = host.default_output_device() {
         if let Some(stream) = try_open_output(
             device,
@@ -488,9 +510,14 @@ fn open_audio_output(
             return Some(stream);
         }
     }
-    // 2) Any other output device (already-tried names are skipped).
+    // 3) Any other output device, skipping `jack` (never auto-selected: it fails
+    //    on our mono config and probing it prints noisy errors when no JACK server
+    //    is up; a JACK user could force it via an explicit device flag later).
     if let Ok(devices) = host.output_devices() {
         for device in devices {
+            if device.name().map(|n| n.contains("jack")).unwrap_or(false) {
+                continue;
+            }
             if let Some(stream) = try_open_output(
                 device,
                 jitter,
