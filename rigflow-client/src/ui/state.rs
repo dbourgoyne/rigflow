@@ -119,6 +119,13 @@ pub struct UiState {
     /// Pitch debounce (shared across modes)
     pub pitch_debounce: DebounceState,
 
+    /// Waterfall frame-rate debounce (continuous slider → server).
+    pub waterfall_rate_debounce: DebounceState,
+
+    /// Set on radio acquire so the panel pushes the restored waterfall rate to the
+    /// server on connect (the server starts at its own default).
+    pub pending_apply_waterfall_rate: bool,
+
     // =====================================================================
     // CONNECTION / SERVER STATE
     // =====================================================================
@@ -173,6 +180,10 @@ pub struct UiState {
     pub adaptive_range_db_estimate: f32,
 
     pub display_zoom: f32,
+
+    /// Waterfall frame rate in Hz sent to the server (0 = off). Persisted with the
+    /// other waterfall display prefs; range 0–30 (matches the server clamp).
+    pub waterfall_frame_rate_hz: f32,
 
     // =====================================================================
     // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
@@ -432,6 +443,9 @@ impl Default for UiState {
 
             pitch_debounce: DebounceState::new(0.0),
 
+            waterfall_rate_debounce: DebounceState::new(20.0),
+            pending_apply_waterfall_rate: false,
+
             // =================================================================
             // CONNECTION / SERVER STATE
             // =================================================================
@@ -467,6 +481,7 @@ impl Default for UiState {
             adaptive_range_db_estimate: 100.0,
 
             display_zoom: 1.0,
+            waterfall_frame_rate_hz: 20.0,
 
             // =================================================================
             // OPERATOR / PERSISTENCE

@@ -25,6 +25,7 @@ pub(crate) fn radio_settings_from_ui(state: &UiState) -> RadioSettingsFile {
             adaptive_waterfall_normalization: state.adaptive_waterfall_normalization,
             manual_waterfall_top_db: state.manual_waterfall_top_db,
             manual_waterfall_range_db: state.manual_waterfall_range_db,
+            waterfall_frame_rate_hz: state.waterfall_frame_rate_hz,
         },
         volume_percent: state.volume_percent,
         cw_sidetone_volume: state.cw_sidetone_volume,
@@ -220,6 +221,7 @@ impl RigflowApp {
                 state.adaptive_waterfall_normalization,
                 state.manual_waterfall_top_db,
                 state.manual_waterfall_range_db,
+                state.waterfall_frame_rate_hz,
             )
         };
 
@@ -229,6 +231,7 @@ impl RigflowApp {
             adaptive_waterfall_normalization,
             manual_top_db,
             manual_range_db,
+            waterfall_frame_rate_hz,
         ) = snapshot;
 
         if operator_id.trim().is_empty() {
@@ -253,6 +256,10 @@ impl RigflowApp {
                 operator_settings
                     .waterfall_display_preferences
                     .manual_waterfall_range_db = manual_range_db;
+
+                operator_settings
+                    .waterfall_display_preferences
+                    .waterfall_frame_rate_hz = waterfall_frame_rate_hz;
 
                 if let Err(err) = self
                     .persistence_store

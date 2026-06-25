@@ -32,6 +32,14 @@ pub struct WaterfallDisplayPreferencesFile {
     pub adaptive_waterfall_normalization: bool,
     pub manual_waterfall_top_db: f32,
     pub manual_waterfall_range_db: f32,
+    /// Waterfall frame rate in Hz (0 = off). Serde default keeps older operator
+    /// files (written before this field existed) loading cleanly.
+    #[serde(default = "default_waterfall_frame_rate_hz")]
+    pub waterfall_frame_rate_hz: f32,
+}
+
+fn default_waterfall_frame_rate_hz() -> f32 {
+    20.0
 }
 
 impl Default for WaterfallDisplayPreferencesFile {
@@ -41,6 +49,7 @@ impl Default for WaterfallDisplayPreferencesFile {
             adaptive_waterfall_normalization: true,
             manual_waterfall_top_db: -35.0,
             manual_waterfall_range_db: 70.0,
+            waterfall_frame_rate_hz: default_waterfall_frame_rate_hz(),
         }
     }
 }

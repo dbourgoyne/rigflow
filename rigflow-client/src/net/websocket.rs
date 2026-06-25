@@ -681,6 +681,8 @@ pub fn apply_radio_server_message(
                     rs.waterfall_display_preferences.manual_waterfall_top_db;
                 state.manual_waterfall_range_db =
                     rs.waterfall_display_preferences.manual_waterfall_range_db;
+                state.waterfall_frame_rate_hz =
+                    rs.waterfall_display_preferences.waterfall_frame_rate_hz;
                 state.volume_percent = rs.volume_percent;
                 state.cw_sidetone_volume = rs.cw_sidetone_volume;
                 state.cw_hang_ms = rs.cw_hang_ms;
@@ -703,6 +705,9 @@ pub fn apply_radio_server_message(
 
             // Do NOT overwrite persisted per-demod prefs here.
             state.pending_apply_mode_controls = true;
+            // Push the waterfall rate (operator default or per-radio override) to the
+            // server, which otherwise starts at its own default.
+            state.pending_apply_waterfall_rate = true;
         }
 
         ServerRadioMessage::RuntimeChanged {

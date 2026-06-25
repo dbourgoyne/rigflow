@@ -87,6 +87,9 @@ pub fn apply_operator_settings_to_ui_state(
     state.manual_waterfall_range_db = operator
         .waterfall_display_preferences
         .manual_waterfall_range_db;
+    state.waterfall_frame_rate_hz = operator
+        .waterfall_display_preferences
+        .waterfall_frame_rate_hz;
 
     // Keep selection stable if possible, otherwise clear it.
     let selected_still_exists = state
