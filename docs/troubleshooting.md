@@ -133,6 +133,33 @@ platform, with a live status for each piece.
   SWR, peaking a tune), not lab-calibrated absolute values. Not a bug. See
   [Signal path & expected behavior](signal-path.md).
 
+## Capturing diagnostics with rigflow-probe
+
+For hard-to-pin-down problems (audio dropouts, waterfall stutter), a maintainer may ask you to
+capture data with **`rigflow-probe`** — a small headless tool that connects to the server like the
+client does, but with no GUI and no speakers. It records the received audio to a WAV and prints
+transport statistics (packet loss, jitter-buffer events, server pacing), which helps separate a
+server/DSP issue from a network one.
+
+It isn't shipped as a prebuilt binary — build it from source. It needs the
+[Rust toolchain](installation.md) but, unlike the client, **no audio libraries**:
+
+```bash
+cargo build --profile dist -p rigflow-probe
+```
+
+Then run it against your server (use `127.0.0.1` if the probe and server are on the same machine),
+pointing at the radio and frequency of interest:
+
+```bash
+./target/dist/rigflow-probe --radio hl2 --target-hz 14074000 --mode usb \
+  --server <server-ip> --duration 30 --wav capture.wav
+```
+
+It prints a summary on exit and writes `capture.wav`; `--help` lists all options. The server is
+single-client, so disconnect the GUI client first. Share the printed summary (and the WAV, if
+asked) on the issue.
+
 ---
 
 Still stuck? Check the server's console log (it reports discovery, leases, and TX faults), and the
