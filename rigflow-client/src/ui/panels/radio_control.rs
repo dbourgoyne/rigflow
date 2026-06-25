@@ -91,6 +91,15 @@ impl RigflowApp {
                         self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
                             strength: state.nr2_strength,
                         });
+                        self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerEnabled {
+                            enabled: state.nb_enabled,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerThreshold {
+                            threshold: state.nb_threshold,
+                        });
+                        self.send_radio_msg(ClientRadioMessage::SetNotchAutoEnabled {
+                            enabled: state.notch_auto_enabled,
+                        });
                         self.send_radio_msg(ClientRadioMessage::SetAgcEnabled {
                             enabled: state.agc_enabled,
                         });
@@ -155,6 +164,8 @@ impl RigflowApp {
                     self.draw_squelch_row(ui, &mut state);
                     self.draw_nr2_row(ui, &mut state);
                     self.draw_agc_row(ui, &mut state);
+                    self.draw_noise_blanker_row(ui, &mut state);
+                    self.draw_notch_row(ui, &mut state);
                     self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
                 }
                 if save_demod_prefs {
@@ -276,6 +287,72 @@ impl RigflowApp {
                 });
             }
         });
+    }
+
+    /// Impulse noise blanker enable + level.  Radio (DSP) control sent to the
+    /// server; persisted per radio via the background autosave.
+    fn draw_noise_blanker_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        ui.separator();
+        let mut enabled = state.nb_enabled;
+        if ui.checkbox(&mut enabled, "Noise blanker").changed() {
+            state.nb_enabled = enabled;
+            self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerEnabled { enabled });
+        }
+
+        ui.add_enabled_ui(state.nb_enabled, |ui| {
+            let mut threshold = state.nb_threshold;
+            let mut response = ui.add(
+                egui::Slider::new(&mut threshold, 0.0..=1.0)
+                    .step_by(0.05)
+                    .fixed_decimals(2)
+                    .text("NB Level"),
+            );
+            super::slider_scroll(ui, &mut response, &mut threshold, 0.0, 1.0, 0.05);
+            if response.changed() {
+                state.nb_threshold = threshold.clamp(0.0, 1.0);
+                self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerThreshold {
+                    threshold: state.nb_threshold,
+                });
+            }
+        });
+    }
+
+    /// Adaptive auto-notch enable (nulls steady carriers) plus a "Restore Default"
+    /// for the noise-blanker + notch group.  Radio (DSP) controls; persisted per radio.
+    fn draw_notch_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        let mut enabled = state.notch_auto_enabled;
+        if ui.checkbox(&mut enabled, "Auto notch").changed() {
+            state.notch_auto_enabled = enabled;
+            self.send_radio_msg(ClientRadioMessage::SetNotchAutoEnabled { enabled });
+        }
+
+        // Defaults must match `UiState::default` / the persistence serde defaults.
+        const DEF_NB_ENABLED: bool = false;
+        const DEF_NB_THRESHOLD: f32 = 0.5;
+        const DEF_NOTCH_AUTO_ENABLED: bool = false;
+        let at_default = state.nb_enabled == DEF_NB_ENABLED
+            && (state.nb_threshold - DEF_NB_THRESHOLD).abs() < f32::EPSILON
+            && state.notch_auto_enabled == DEF_NOTCH_AUTO_ENABLED;
+        if ui
+            .add_enabled(
+                !at_default,
+                egui::Button::new(RichText::new("Restore Default").size(8.0)),
+            )
+            .clicked()
+        {
+            state.nb_enabled = DEF_NB_ENABLED;
+            state.nb_threshold = DEF_NB_THRESHOLD;
+            state.notch_auto_enabled = DEF_NOTCH_AUTO_ENABLED;
+            self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerEnabled {
+                enabled: DEF_NB_ENABLED,
+            });
+            self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerThreshold {
+                threshold: DEF_NB_THRESHOLD,
+            });
+            self.send_radio_msg(ClientRadioMessage::SetNotchAutoEnabled {
+                enabled: DEF_NOTCH_AUTO_ENABLED,
+            });
+        }
     }
 
     /// Receive-audio volume slider (0–100%).  Sends `SetVolume` on change and

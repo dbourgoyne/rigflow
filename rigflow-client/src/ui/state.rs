@@ -81,6 +81,13 @@ pub struct UiState {
     /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max).
     pub nr2_strength: f32,
 
+    /// Impulse noise blanker enabled (radio control).
+    pub nb_enabled: bool,
+    /// Noise-blanker level/sensitivity in [0.0, 1.0].
+    pub nb_threshold: f32,
+    /// Adaptive auto-notch enabled (nulls steady carriers) (radio control).
+    pub notch_auto_enabled: bool,
+
     /// AGC (automatic gain control) — radio control.
     pub agc_enabled: bool,
     pub agc_strength: f32,
@@ -422,6 +429,9 @@ impl Default for UiState {
             squelch_open: true,
             nr2_enabled: false,
             nr2_strength: 0.5,
+            nb_enabled: false,
+            nb_threshold: 0.5,
+            notch_auto_enabled: false,
             agc_enabled: true,
             agc_strength: 0.5,
             signal_dbm: -140.0,

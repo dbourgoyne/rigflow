@@ -690,6 +690,9 @@ pub fn apply_radio_server_message(
                 state.squelch_threshold_db = rs.squelch_threshold_db;
                 state.nr2_enabled = rs.nr2_enabled;
                 state.nr2_strength = rs.nr2_strength;
+                state.nb_enabled = rs.nb_enabled;
+                state.nb_threshold = rs.nb_threshold;
+                state.notch_auto_enabled = rs.notch_auto_enabled;
                 state.agc_enabled = rs.agc_enabled;
                 state.agc_strength = rs.agc_strength;
                 state.tx_limiter_enabled = rs.tx_limiter_enabled;

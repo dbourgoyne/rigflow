@@ -156,6 +156,15 @@ pub enum WorkerCommand {
     SetNr2Strength {
         strength: f32,
     },
+    SetNoiseBlankerEnabled {
+        enabled: bool,
+    },
+    SetNoiseBlankerThreshold {
+        threshold: f32,
+    },
+    SetNotchAutoEnabled {
+        enabled: bool,
+    },
     SetAgcEnabled {
         enabled: bool,
     },

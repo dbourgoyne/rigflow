@@ -2,6 +2,8 @@ pub mod agc;
 pub mod audio_fir;
 pub mod dc_blocker;
 pub mod deemphasis;
+pub mod noise_blanker;
+pub mod notch;
 pub mod nr2;
 pub mod resampler;
 pub mod speech_compressor;

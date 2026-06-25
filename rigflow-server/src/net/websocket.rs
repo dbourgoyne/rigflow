@@ -616,6 +616,54 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetNoiseBlankerEnabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetNoiseBlankerEnabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_noise_blanker_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::SetNoiseBlankerThreshold { threshold } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetNoiseBlankerThreshold { threshold },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_noise_blanker_threshold_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
+        ClientRadioMessage::SetNotchAutoEnabled { enabled } => {
+            if let Err(err) = send_worker_command_for_session(
+                app_state,
+                session,
+                WorkerCommand::SetNotchAutoEnabled { enabled },
+            )
+            .await
+            {
+                send_radio_error(
+                    local_tx,
+                    "set_notch_auto_enabled_failed",
+                    &radio_manager_error_string(err),
+                );
+            }
+        }
+
         ClientRadioMessage::SetAgcEnabled { enabled } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,

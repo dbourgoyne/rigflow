@@ -137,6 +137,21 @@ pub enum ClientRadioMessage {
         strength: f32,
     },
 
+    /// Enable/disable the impulse noise blanker (radio control, DSP-side).
+    SetNoiseBlankerEnabled {
+        enabled: bool,
+    },
+
+    /// Set the noise-blanker level/sensitivity in [0.0, 1.0] (radio control).
+    SetNoiseBlankerThreshold {
+        threshold: f32,
+    },
+
+    /// Enable/disable the adaptive auto-notch (nulls steady carriers) (radio control).
+    SetNotchAutoEnabled {
+        enabled: bool,
+    },
+
     /// Enable/disable AGC (radio control, DSP-side).
     SetAgcEnabled {
         enabled: bool,

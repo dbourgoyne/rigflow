@@ -18,6 +18,8 @@ use crate::config::{
     choose_block_size, choose_decimation, ServerConfig, SourceKind, WATERFALL_BINS,
     WATERFALL_FRAME_RATE_HZ, WATERFALL_FRAME_RATE_MAX_HZ,
 };
+use crate::dsp::audio::noise_blanker::NoiseBlanker;
+use crate::dsp::audio::notch::AutoNotch;
 use crate::dsp::audio::nr2::Nr2;
 use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
@@ -77,6 +79,12 @@ struct SharedControlState {
     nr2_enabled: bool,
     /// NR2 strength in [0.0, 1.0] (0 = none, 1 = max suppression).
     nr2_strength: f32,
+    /// Impulse noise blanker enabled (radio control, DSP-side).
+    nb_enabled: bool,
+    /// Noise-blanker level/sensitivity in [0.0, 1.0].
+    nb_threshold: f32,
+    /// Adaptive auto-notch enabled (nulls steady carriers).
+    notch_auto_enabled: bool,
     /// AGC (automatic gain control) — radio control, DSP-side.
     agc_enabled: bool,
     agc_strength: f32,
@@ -478,6 +486,9 @@ fn run_iq_worker_threads(
         squelch_open: true,
         nr2_enabled: false,
         nr2_strength: 0.5,
+        nb_enabled: false,
+        nb_threshold: 0.5,
+        notch_auto_enabled: false,
         agc_enabled: true,
         agc_strength: 0.5,
         signal_dbm: crate::dsp::smeter::MIN_DBM,
@@ -862,6 +873,21 @@ fn spawn_command_thread(
                     WorkerCommand::SetNr2Enabled { enabled } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.nr2_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetNoiseBlankerEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.nb_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetNoiseBlankerThreshold { threshold } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.nb_threshold = threshold.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetNotchAutoEnabled { enabled } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.notch_auto_enabled = enabled;
                         }
                     }
                     WorkerCommand::SetNr2Strength { strength } => {
@@ -2178,6 +2204,8 @@ fn spawn_dsp_thread(
         // NR2 spectral noise-reduction processor, owned by this (DSP) thread.
         // Only engaged while enabled; reset on demod-mode / sample-rate change.
         let mut nr2 = Nr2::new();
+        let mut noise_blanker = NoiseBlanker::new();
+        let mut auto_notch = AutoNotch::new();
 
         loop {
             if stop_requested(&stop_flag) {
@@ -2219,6 +2247,8 @@ fn spawn_dsp_thread(
                 while iq_audio_rx.try_recv().is_ok() {}
                 // Audio config changed — clear NR2 and S-meter state.
                 nr2.reset();
+                noise_blanker.reset();
+                auto_notch.reset();
                 smoothed_channel_power = 0.0;
                 changed = true;
             }
@@ -2362,6 +2392,8 @@ fn spawn_dsp_thread(
 
                 // Demod mode changed — clear NR2 and S-meter state.
                 nr2.reset();
+                noise_blanker.reset();
+                auto_notch.reset();
                 smoothed_channel_power = 0.0;
 
                 //		if changed {
@@ -2407,7 +2439,17 @@ fn spawn_dsp_thread(
             }
 
             match iq_audio_rx.recv_timeout(Duration::from_millis(10)) {
-                Ok(iq) => {
+                Ok(mut iq) => {
+                    // ── Noise blanker (impulse removal, on wideband IQ) ──────
+                    // Runs on the raw IQ before demodulation, where impulses are
+                    // sharp. Disabled → passthrough; reset on first disable.
+                    if current.nb_enabled {
+                        noise_blanker.set_threshold(current.nb_threshold);
+                        noise_blanker.process_iq_in_place(&mut iq, pipeline_sample_rate_hz);
+                    } else if noise_blanker.is_active() {
+                        noise_blanker.reset();
+                    }
+
                     let mut audio_f32 = pipeline.process_audio(&iq);
 
                     // ── NR2 spectral noise reduction ─────────────────────────
@@ -2458,6 +2500,20 @@ fn spawn_dsp_thread(
                             pipeline.agc_current_gain(),
                         );
                         last_agc_log = Instant::now();
+                    }
+
+                    // ── Auto-notch (null steady carriers) ────────────────────
+                    // Spectral WOLA; protects the wanted tone in CW modes.
+                    if current.notch_auto_enabled {
+                        let protect_hz =
+                            if matches!(current.demod_mode, DemodMode::Cwu | DemodMode::Cwl) {
+                                current.cw_pitch_hz
+                            } else {
+                                0.0
+                            };
+                        audio_f32 = auto_notch.process(&audio_f32, protect_hz);
+                    } else if auto_notch.is_active() {
+                        auto_notch.reset();
                     }
 
                     if current.nr2_enabled {

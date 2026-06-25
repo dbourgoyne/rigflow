@@ -153,6 +153,16 @@ pub struct RadioSettingsFile {
     pub agc_enabled: bool,
     pub agc_strength: f32,
 
+    // Noise blanker + auto-notch — added after the first release of
+    // `radio_settings`, so each carries a serde default to keep already-saved
+    // buckets (which lack these fields) loading cleanly.
+    #[serde(default)]
+    pub nb_enabled: bool,
+    #[serde(default = "default_nb_threshold")]
+    pub nb_threshold: f32,
+    #[serde(default)]
+    pub notch_auto_enabled: bool,
+
     // TX processing + CW decode — added after the first release of
     // `radio_settings`, so each carries a serde default to keep already-saved
     // buckets (which lack these fields) loading cleanly.
@@ -168,6 +178,9 @@ pub struct RadioSettingsFile {
     pub cw_decode_enabled: bool,
 }
 
+fn default_nb_threshold() -> f32 {
+    0.5
+}
 fn default_tx_limiter_enabled() -> bool {
     true
 }
