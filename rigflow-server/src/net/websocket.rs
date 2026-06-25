@@ -1239,6 +1239,9 @@ fn runtime_changed_from_runtime(
     let center_freq_hz =
         (current.center_freq_hz != previous.center_freq_hz).then_some(current.center_freq_hz);
 
+    let input_sample_rate_hz = (current.input_sample_rate_hz != previous.input_sample_rate_hz)
+        .then_some(current.input_sample_rate_hz);
+
     let target_freq_hz =
         (current.target_freq_hz != previous.target_freq_hz).then_some(current.target_freq_hz);
 
@@ -1320,6 +1323,7 @@ fn runtime_changed_from_runtime(
     };
 
     let has_change = center_freq_hz.is_some()
+        || input_sample_rate_hz.is_some()
         || target_freq_hz.is_some()
         || demod_mode.is_some()
         || sideband.is_some()
@@ -1348,6 +1352,7 @@ fn runtime_changed_from_runtime(
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
+        input_sample_rate_hz,
         center_freq_hz,
         target_freq_hz,
         demod_mode,

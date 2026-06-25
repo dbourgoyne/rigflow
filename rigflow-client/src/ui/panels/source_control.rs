@@ -182,6 +182,21 @@ impl RigflowApp {
                     self.send_radio_msg(ClientRadioMessage::SetSourceSampleRate {
                         sample_rate_hz: selected_sample_rate,
                     });
+
+                    // Re-center the LO on the tuned signal so it stays inside the
+                    // (possibly narrower) captured band and the spectrum zooms
+                    // around it — otherwise an off-centre signal can fall outside
+                    // a smaller bandwidth and vanish.
+                    let limits = crate::ui::freq_limits::active_freq_limits(&state);
+                    let new_center =
+                        crate::ui::freq_limits::clamp_center(state.target_freq_hz, &limits);
+                    if (new_center - state.center_freq_hz).abs() > 0.5 {
+                        state.center_freq_hz = new_center;
+                        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
+                            center_freq_hz: new_center as u64,
+                        });
+                    }
+
                     save = true;
                 }
             } else {

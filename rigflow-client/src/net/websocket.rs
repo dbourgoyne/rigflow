@@ -715,6 +715,7 @@ pub fn apply_radio_server_message(
 
         ServerRadioMessage::RuntimeChanged {
             radio_id: _,
+            input_sample_rate_hz,
             center_freq_hz,
             target_freq_hz,
             demod_mode,
@@ -739,6 +740,11 @@ pub fn apply_radio_server_message(
             swr_sweep_progress,
             ..
         } => {
+            // Source bandwidth changed (e.g. HL2 sample-rate switch) — update the
+            // spectrum/waterfall span scale.
+            if let Some(value) = input_sample_rate_hz {
+                state.input_sample_rate_hz = value;
+            }
             if let Some(progress) = swr_sweep_progress {
                 state.swr_sweep_progress = Some(progress);
             }

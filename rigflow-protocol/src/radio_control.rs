@@ -466,6 +466,11 @@ pub enum ServerRadioMessage {
     RuntimeChanged {
         radio_id: RadioId,
 
+        /// Source input (IQ) sample rate, when it changes — e.g. the operator
+        /// switched HL2 bandwidth. The client uses it to scale the spectrum span.
+        #[serde(default)]
+        input_sample_rate_hz: Option<f32>,
+
         center_freq_hz: Option<u64>,
         target_freq_hz: Option<u64>,
 
