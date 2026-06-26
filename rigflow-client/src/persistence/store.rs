@@ -10,7 +10,10 @@ use crate::persistence::{
     error::PersistenceError,
     migrations::migrate_operator_settings_value,
     models::{AppStateFile, OperatorSettingsFile},
-    paths::{app_state_path, normalize_operator_id, operator_file_path, operators_dir},
+    paths::{
+        app_state_path, normalize_operator_id, operator_file_path, operators_dir,
+        rx_recordings_dir, voice_keyer_clips_dir,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,24 @@ impl PersistenceStore {
         fs::create_dir_all(&self.config_dir)?;
         fs::create_dir_all(operators_dir(&self.config_dir))?;
         Ok(())
+    }
+
+    /// Ensure the per-operator data directories (RX recordings, voice-keyer
+    /// clips) exist for `operator_id`.  Call when an operator is loaded/switched.
+    pub fn ensure_operator_data_layout(&self, operator_id: &str) -> Result<(), PersistenceError> {
+        fs::create_dir_all(self.rx_recordings_dir(operator_id))?;
+        fs::create_dir_all(self.voice_keyer_clips_dir(operator_id))?;
+        Ok(())
+    }
+
+    /// Directory holding this operator's RX audio recordings.
+    pub fn rx_recordings_dir(&self, operator_id: &str) -> PathBuf {
+        rx_recordings_dir(&self.config_dir, operator_id)
+    }
+
+    /// Directory holding this operator's SSB voice-keyer clips.
+    pub fn voice_keyer_clips_dir(&self, operator_id: &str) -> PathBuf {
+        voice_keyer_clips_dir(&self.config_dir, operator_id)
     }
 
     pub fn load_app_state(&self) -> Result<AppStateFile, PersistenceError> {

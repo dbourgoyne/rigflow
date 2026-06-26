@@ -179,6 +179,7 @@ impl RigflowApp {
                 let mut save_cw = false;
                 if let Ok(mut state) = self.state.lock() {
                     save_mic = self.draw_microphone_row(ui, &mut state);
+                    self.draw_voice_keyer_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_message_row(ui, &mut state, snapshot.demod_mode);
                     save_cw |= self.draw_cw_macros_row(ui, &mut state, snapshot.demod_mode);
                     self.draw_cw_sidetone_row(ui, &mut state, snapshot.demod_mode);
@@ -382,6 +383,137 @@ impl RigflowApp {
     /// the locally generated sidetone; never sent to the server) and Hang Time
     /// (semi break-in — sent to the server, controls how long PTT persists after
     /// the last element).  CW Pitch is the existing pitch row above.
+    /// SSB voice keyer: record a clip from the mic (local, no transmit), preview
+    /// it through the speakers, delete it, and transmit the selected clip on the
+    /// current frequency.  Every action just sets a request flag processed in
+    /// `update()`; the safety-critical keying lives in `voice_keyer.rs`.
+    fn draw_voice_keyer_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
+        ui.separator();
+        ui.label("Voice Keyer");
+
+        // Precompute everything that reads `state`, so the closures below only
+        // write request flags / the name field (avoids overlapping borrows).
+        let ssb = matches!(mode, DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU);
+        let playing = state.voice_keyer.is_playing();
+        let progress = state.voice_keyer.progress();
+        let previewing = state.clip_preview.is_active();
+        let recording = state.clip_recording;
+        let clip_elapsed = state.clip_rec_status.elapsed_secs;
+        let clips = state.voice_keyer_clips.clone();
+        let selected = state.voice_keyer_clip.clone();
+        let have_clip = !selected.is_empty();
+        let tx_ready =
+            ssb && state.radio_acquired && state.source_capabilities.supports_tx_tune_test;
+        let busy = playing || previewing;
+
+        // --- Record a new clip from the mic (local; never transmits) --------
+        ui.horizontal(|ui| {
+            ui.label("New clip:");
+            ui.add_enabled(
+                !recording,
+                egui::TextEdit::singleline(&mut state.clip_name_input)
+                    .hint_text("name")
+                    .desired_width(120.0),
+            );
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!recording && !busy, egui::Button::new("Record"))
+                .clicked()
+            {
+                state.clip_rec_request = Some(true);
+            }
+            if ui
+                .add_enabled(recording, egui::Button::new("Stop"))
+                .clicked()
+            {
+                state.clip_rec_request = Some(false);
+            }
+            if recording {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 90, 90),
+                    format!("● Recording {clip_elapsed}s"),
+                );
+            }
+        });
+
+        // --- Select / preview / delete -------------------------------------
+        let mut new_selected: Option<String> = None;
+        egui::ComboBox::from_label("Clip")
+            .selected_text(if selected.is_empty() {
+                "— none —".to_string()
+            } else {
+                selected.clone()
+            })
+            .show_ui(ui, |ui| {
+                for c in &clips {
+                    if ui.selectable_label(&selected == c, c).clicked() {
+                        new_selected = Some(c.clone());
+                    }
+                }
+            });
+        if let Some(sel) = new_selected {
+            state.voice_keyer_clip = sel;
+            state.voice_keyer_clip_dirty = true;
+        }
+
+        ui.horizontal(|ui| {
+            if previewing {
+                if ui.button("Stop preview").clicked() {
+                    state.clip_preview_request = Some(false);
+                }
+            } else if ui
+                .add_enabled(have_clip && !recording, egui::Button::new("Preview"))
+                .clicked()
+            {
+                state.clip_preview_request = Some(true);
+            }
+            if ui
+                .add_enabled(
+                    have_clip && !recording && !busy,
+                    egui::Button::new("Delete"),
+                )
+                .clicked()
+            {
+                state.clip_delete_request = true;
+            }
+        });
+
+        // --- Transmit / abort ----------------------------------------------
+        ui.horizontal(|ui| {
+            if playing {
+                if ui.button("Abort").clicked() {
+                    state.voice_keyer_abort_request = true;
+                }
+                ui.add(egui::ProgressBar::new(progress).desired_width(120.0));
+            } else if ui
+                .add_enabled(
+                    have_clip && tx_ready && !recording && !previewing,
+                    egui::Button::new("Transmit"),
+                )
+                .clicked()
+            {
+                state.voice_keyer_play_request = true;
+            }
+        });
+
+        if playing {
+            ui.colored_label(
+                egui::Color32::from_rgb(100, 220, 100),
+                "● Transmitting clip…",
+            );
+        } else if !ssb {
+            ui.label(
+                RichText::new("Switch to USB / LSB / Data to transmit a clip.")
+                    .small()
+                    .weak(),
+            );
+        }
+        if let Some(err) = &state.voice_keyer_error {
+            ui.colored_label(egui::Color32::from_rgb(230, 140, 60), err.clone());
+        }
+    }
+
     fn draw_cw_sidetone_row(&self, ui: &mut egui::Ui, state: &mut UiState, mode: DemodMode) {
         if !matches!(mode, DemodMode::Cwu | DemodMode::Cwl) {
             return;

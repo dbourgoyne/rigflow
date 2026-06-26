@@ -108,6 +108,7 @@
 
 mod alsa_quiet;
 mod audio_metrics;
+mod audio_recorder;
 mod client_runtime;
 mod cw_decode;
 mod cw_text;
@@ -121,6 +122,7 @@ mod rigctl_server;
 mod sidetone;
 mod tci_server;
 mod ui;
+mod voice_keyer;
 mod widgets;
 
 use log::error;

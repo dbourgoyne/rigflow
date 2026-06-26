@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::persistence::models::{DemodPreferenceSetFile, RadioSettingsFile};
@@ -420,6 +420,47 @@ pub struct UiState {
     /// occupancy + network clock-offset / one-way latency) and read by the
     /// Latency panel.  Cloned (Arc) by the media runtime at startup.
     pub audio_metrics: Arc<crate::audio_metrics::AudioMetrics>,
+
+    // ── Per-operator audio recording + voice keyer (client-only, on disk) ──
+    /// RX-audio recorder sink slot, shared with the CPAL output callback; `Some`
+    /// while recording.  Installed/cleared by the UI thread.
+    pub rx_rec_slot: Arc<Mutex<Option<crate::audio_recorder::AudioRecorderSink>>>,
+    /// Live RX-audio recording status (mirrors the owning recorder each frame).
+    pub rx_audio_rec_status: crate::audio_recorder::AudioRecordingStatus,
+    /// Live voice-keyer clip recording status (mirrors its recorder each frame).
+    pub clip_rec_status: crate::audio_recorder::AudioRecordingStatus,
+    /// True while a clip is being recorded from the mic (UI gate / indicator).
+    pub clip_recording: bool,
+    /// Name being entered for a new voice-keyer clip recording.
+    pub clip_name_input: String,
+    /// Voice-keyer clip filenames found in the operator's clips dir (runtime).
+    pub voice_keyer_clips: Vec<String>,
+    /// Selected voice-keyer clip filename ("" = none).  Persisted per operator.
+    pub voice_keyer_clip: String,
+    /// Local clip preview buffer, shared with the CPAL output callback.
+    pub clip_preview: Arc<crate::audio_recorder::ClipPreview>,
+    /// Lock-free voice-keyer playback state (playing/abort/progress), shared with
+    /// the keyer playback thread.
+    pub voice_keyer: Arc<crate::voice_keyer::KeyerShared>,
+    /// Last voice-keyer / clip error to surface in the UI (runtime).
+    pub voice_keyer_error: Option<String>,
+
+    // UI → update() action requests (runtime; processed and cleared each frame),
+    // so the `&self` UI panels don't need `&mut self` for client-local actions.
+    /// RX audio recording: `Some(true)` = start, `Some(false)` = stop.
+    pub rx_rec_request: Option<bool>,
+    /// Voice-keyer clip recording: `Some(true)` = start, `Some(false)` = stop.
+    pub clip_rec_request: Option<bool>,
+    /// Clip preview: `Some(true)` = preview selected clip, `Some(false)` = stop.
+    pub clip_preview_request: Option<bool>,
+    /// Delete the selected voice-keyer clip.
+    pub clip_delete_request: bool,
+    /// Transmit the selected voice-keyer clip.
+    pub voice_keyer_play_request: bool,
+    /// Abort the voice keyer from the UI button.
+    pub voice_keyer_abort_request: bool,
+    /// The selected clip changed in the UI and should be persisted.
+    pub voice_keyer_clip_dirty: bool,
 }
 
 impl Default for UiState {
@@ -604,6 +645,23 @@ impl Default for UiState {
             mic_shared: Arc::new(crate::mic::MicShared::default()),
             sidetone: Arc::new(SidetoneShared::default()),
             audio_metrics: crate::audio_metrics::AudioMetrics::new(),
+            rx_rec_slot: Arc::new(Mutex::new(None)),
+            rx_audio_rec_status: crate::audio_recorder::AudioRecordingStatus::default(),
+            clip_rec_status: crate::audio_recorder::AudioRecordingStatus::default(),
+            clip_recording: false,
+            clip_name_input: String::new(),
+            voice_keyer_clips: Vec::new(),
+            voice_keyer_clip: String::new(),
+            clip_preview: crate::audio_recorder::ClipPreview::new(),
+            voice_keyer: crate::voice_keyer::KeyerShared::new(),
+            voice_keyer_error: None,
+            rx_rec_request: None,
+            clip_rec_request: None,
+            clip_preview_request: None,
+            clip_delete_request: false,
+            voice_keyer_play_request: false,
+            voice_keyer_abort_request: false,
+            voice_keyer_clip_dirty: false,
         };
 
         let prefs = state.demod_preferences.get(state.demod_mode);

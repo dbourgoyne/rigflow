@@ -29,7 +29,7 @@ const MOMENTUM_MIN_HZ_PER_S: f32 = 100.0;
 /// tone).  Drag-pan and momentum are disabled while transmitting so the band
 /// filters can't be swept out from under an active transmit.
 fn is_transmitting(s: &UiState) -> bool {
-    s.cw_key_down || s.ssb_ptt_down || s.cat_ptt || s.tx_tone_running
+    s.cw_key_down || s.ssb_ptt_down || s.cat_ptt || s.tx_tone_running || s.voice_keyer.is_playing()
 }
 
 impl RigflowApp {
@@ -358,7 +358,8 @@ impl RigflowApp {
             || snapshot.cw_key_down
             || snapshot.tx_tone_running
             || snapshot.tx_tune_running
-            || snapshot.cat_ptt;
+            || snapshot.cat_ptt
+            || snapshot.voice_keyer.is_playing();
         if transmitting {
             ui.label(
                 egui::RichText::new("TX")

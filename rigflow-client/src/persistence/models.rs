@@ -256,6 +256,11 @@ pub struct OperatorSettingsFile {
     /// Microphone measurement gain in percent (0–200).
     #[serde(default = "default_mic_gain_percent")]
     pub mic_gain_percent: u16,
+
+    /// Selected SSB voice-keyer clip filename ("" = none).  The clip files live
+    /// in `operators/<ID>/voice_keyer_clips/`.
+    #[serde(default)]
+    pub voice_keyer_clip: String,
 }
 
 /// Persisted CW memory macro (label + transmit text).
@@ -311,6 +316,7 @@ impl OperatorSettingsFile {
             cw_macros: default_cw_macros(),
             mic_device: String::new(),
             mic_gain_percent: default_mic_gain_percent(),
+            voice_keyer_clip: String::new(),
         }
     }
 }

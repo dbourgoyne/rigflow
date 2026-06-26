@@ -20,6 +20,7 @@ use rigflow_core::{
 };
 
 use crate::{
+    audio_recorder::{AudioRecorderSink, ClipPreview},
     net::udp::{MediaPacketStats, WaterfallReassembler, handle_media_packet},
     sidetone::SidetoneShared,
     ui::{
@@ -130,12 +131,31 @@ pub fn start_media_runtime(
     // real-time audio callback reads it without locking.
     let rx_volume = Arc::new(AtomicU8::new(50));
 
+    // RX-audio recording sink slot + voice-keyer clip preview live in UiState so
+    // both the real-time output callback (below) and the UI thread reach them.
+    let rx_rec_slot = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.rx_rec_slot))
+        .unwrap_or_default();
+    let clip_preview = ui_state
+        .lock()
+        .map(|s| Arc::clone(&s.clip_preview))
+        .unwrap_or_else(|_| ClipPreview::new());
+
     // Open the speaker output, degrading gracefully instead of aborting. A
     // machine whose *default* ALSA device can't be opened — e.g. a headless Pi
     // whose default is an unconnected HDMI sink — should still run, since radio
     // control and the digital (FT8) paths don't need local playback. `None`
     // means no local speaker audio; the rest of the media runtime continues.
-    let audio_stream = open_audio_output(&host, &jitter, &stats_logger, &sidetone, &rx_volume);
+    let audio_stream = open_audio_output(
+        &host,
+        &jitter,
+        &stats_logger,
+        &sidetone,
+        &rx_volume,
+        &rx_rec_slot,
+        &clip_preview,
+    );
     if audio_stream.is_none() {
         log::error!(
             "audio: no usable output device found — running without local speaker \
@@ -470,12 +490,15 @@ pub fn start_media_runtime(
 /// using the first that opens. Returns `None` if none can be opened (e.g. a
 /// headless Pi whose default ALSA device is an unconnected HDMI sink) — the
 /// client then runs without local speaker audio.
+#[allow(clippy::too_many_arguments)]
 fn open_audio_output(
     host: &cpal::Host,
     jitter: &Arc<Mutex<JitterBuffer>>,
     stats_logger: &Arc<Mutex<ClientStatsLogger>>,
     sidetone: &Arc<SidetoneShared>,
     rx_volume: &Arc<AtomicU8>,
+    rx_rec_slot: &Arc<Mutex<Option<AudioRecorderSink>>>,
+    clip_preview: &Arc<ClipPreview>,
 ) -> Option<cpal::Stream> {
     let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -493,6 +516,8 @@ fn open_audio_output(
                         stats_logger,
                         sidetone,
                         rx_volume,
+                        rx_rec_slot,
+                        clip_preview,
                         &mut tried,
                     ) {
                         return Some(stream);
@@ -509,6 +534,8 @@ fn open_audio_output(
             stats_logger,
             sidetone,
             rx_volume,
+            rx_rec_slot,
+            clip_preview,
             &mut tried,
         ) {
             return Some(stream);
@@ -528,6 +555,8 @@ fn open_audio_output(
                 stats_logger,
                 sidetone,
                 rx_volume,
+                rx_rec_slot,
+                clip_preview,
                 &mut tried,
             ) {
                 return Some(stream);
@@ -545,6 +574,8 @@ fn try_open_output(
     stats_logger: &Arc<Mutex<ClientStatsLogger>>,
     sidetone: &Arc<SidetoneShared>,
     rx_volume: &Arc<AtomicU8>,
+    rx_rec_slot: &Arc<Mutex<Option<AudioRecorderSink>>>,
+    clip_preview: &Arc<ClipPreview>,
     tried: &mut std::collections::HashSet<String>,
 ) -> Option<cpal::Stream> {
     let name = device.name().unwrap_or_else(|_| "<unknown>".to_string());
@@ -565,6 +596,8 @@ fn try_open_output(
         Arc::clone(stats_logger),
         Arc::clone(sidetone),
         Arc::clone(rx_volume),
+        Arc::clone(rx_rec_slot),
+        Arc::clone(clip_preview),
     ) {
         Ok(stream) => match stream.play() {
             Ok(()) => Some(stream),
@@ -594,6 +627,8 @@ fn build_output_stream(
     stats_logger: Arc<Mutex<ClientStatsLogger>>,
     sidetone: Arc<SidetoneShared>,
     rx_volume: Arc<AtomicU8>,
+    rx_rec_slot: Arc<Mutex<Option<AudioRecorderSink>>>,
+    clip_preview: Arc<ClipPreview>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
     let supported_configs = device.supported_output_configs()?;
 
@@ -656,6 +691,18 @@ fn build_output_stream(
                 }
             }
 
+            // --- RX audio recording tap ------------------------------------
+            // Post-jitter-buffer (faithfully "what you hear", with gap
+            // concealment) and pre-volume (recording level independent of the
+            // monitor knob).  Non-blocking: `try_lock` so a brief control-side
+            // install/remove never stalls the real-time callback, and the sink
+            // drops-and-counts if the writer falls behind.
+            if let Ok(slot) = rx_rec_slot.try_lock() {
+                if let Some(sink) = slot.as_ref() {
+                    sink.push(data);
+                }
+            }
+
             // --- Receive Volume (applied here, speaker path only) ----------
             // Volume moved from the server to the client so the Digital Audio
             // Interface RX tap stays at fixed unity gain.  Ramp toward the
@@ -698,6 +745,11 @@ fn build_output_stream(
                     phase -= std::f32::consts::TAU;
                 }
             }
+
+            // --- Mix in the local voice-keyer clip preview (no transmit) ---
+            // Auditions a recorded clip through the speakers; post-volume so it
+            // plays at clip level regardless of the RX volume knob.
+            clip_preview.mix_into(data);
 
             if let Ok(mut logger) = stats_logger_for_audio.lock() {
                 logger.add_audio_samples(data.len());

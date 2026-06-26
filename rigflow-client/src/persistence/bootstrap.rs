@@ -146,6 +146,9 @@ pub fn apply_operator_settings_to_ui_state(
     // Microphone: restore selected device + gain.
     state.mic_device = operator.mic_device.clone();
     state.mic_gain_percent = operator.mic_gain_percent;
+
+    // Voice keyer: restore the last selected clip filename.
+    state.voice_keyer_clip = operator.voice_keyer_clip.clone();
 }
 
 pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut OperatorSettingsFile) {
@@ -192,4 +195,6 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
 
     operator.mic_device = state.mic_device.clone();
     operator.mic_gain_percent = state.mic_gain_percent;
+
+    operator.voice_keyer_clip = state.voice_keyer_clip.clone();
 }

@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::audio_recorder::AudioRecorderSink;
+
 /// Clip threshold on the post-gain sample magnitude.
 const CLIP_LEVEL: f32 = 0.99;
 
@@ -51,6 +53,12 @@ pub struct MicShared {
     capture_gen: AtomicU64,
     /// Outbound mic-TX audio ring (48 kHz mono f32).
     tx_ring: Mutex<VecDeque<f32>>,
+    /// Set while recording a local voice-keyer clip from the mic.  The callback
+    /// then writes gained 48 kHz mono audio to `clip_rec` — local only, never
+    /// transmitted (independent of `tx_streaming`).
+    clip_recording: AtomicBool,
+    /// Sink for the in-progress local clip recording (None when idle).
+    clip_rec: Mutex<Option<AudioRecorderSink>>,
 }
 
 impl Default for MicShared {
@@ -63,6 +71,8 @@ impl Default for MicShared {
             external_tx_source: AtomicBool::new(false),
             capture_gen: AtomicU64::new(0),
             tx_ring: Mutex::new(VecDeque::new()),
+            clip_recording: AtomicBool::new(false),
+            clip_rec: Mutex::new(None),
         }
     }
 }
@@ -138,6 +148,27 @@ impl MicShared {
             }
         }
     }
+    /// Install (or clear, with `None`) the local clip-recording sink.  While set,
+    /// mic capture is written to it as 48 kHz mono — local only, never
+    /// transmitted.
+    pub fn set_clip_recorder(&self, sink: Option<AudioRecorderSink>) {
+        let on = sink.is_some();
+        if let Ok(mut g) = self.clip_rec.lock() {
+            *g = sink;
+        }
+        self.clip_recording.store(on, Ordering::Relaxed);
+    }
+    pub fn clip_recording(&self) -> bool {
+        self.clip_recording.load(Ordering::Relaxed)
+    }
+    fn push_clip(&self, samples: &[f32]) {
+        if let Ok(g) = self.clip_rec.lock() {
+            if let Some(s) = g.as_ref() {
+                s.push(samples);
+            }
+        }
+    }
+
     /// Drain all buffered mic-TX samples (media-thread side).
     pub fn drain_tx(&self) -> Vec<f32> {
         match self.tx_ring.lock() {
@@ -399,6 +430,21 @@ impl MicProc {
             log::debug!("[mic] clipping detected (peak {peak:.3})");
         }
         self.shared.report(peak, clipped);
+
+        // Local voice-keyer clip recording: write gained 48 kHz mono mic audio to
+        // a WAV.  Independent of TX — never keys the radio.  Mutually exclusive
+        // with mic TX in practice (the UI refuses to transmit while recording a
+        // clip), so the shared resampler state is never contended.
+        if self.shared.clip_recording() {
+            if (self.in_rate - TX_RATE_HZ as f32).abs() < 1.0 {
+                self.shared.push_clip(&self.mono);
+            } else {
+                self.resample_into_48k();
+                let out = std::mem::take(&mut self.resampled);
+                self.shared.push_clip(&out);
+                self.resampled = out;
+            }
+        }
 
         // Push mic audio only when keyed AND no external source owns the ring
         // (the digital TX router feeds it directly while transmitting WSJT-X).

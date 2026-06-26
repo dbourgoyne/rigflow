@@ -42,6 +42,23 @@ pub fn operator_file_path(config_dir: &Path, operator_id: &str) -> PathBuf {
     operators_dir(config_dir).join(file_name)
 }
 
+/// Per-operator data directory: `operators/<ID>/`, a sibling of the operator's
+/// `<ID>.json` settings file.  Holds per-operator audio files (RX recordings and
+/// voice-keyer clips) that must live with the operator on the client host.
+pub fn operator_data_dir(config_dir: &Path, operator_id: &str) -> PathBuf {
+    operators_dir(config_dir).join(sanitize_operator_id_for_file(operator_id))
+}
+
+/// Directory for this operator's RX audio recordings.
+pub fn rx_recordings_dir(config_dir: &Path, operator_id: &str) -> PathBuf {
+    operator_data_dir(config_dir, operator_id).join("rx_recordings")
+}
+
+/// Directory for this operator's SSB voice-keyer clips.
+pub fn voice_keyer_clips_dir(config_dir: &Path, operator_id: &str) -> PathBuf {
+    operator_data_dir(config_dir, operator_id).join("voice_keyer_clips")
+}
+
 /// Normalize operator IDs for persistence.
 ///
 /// Current behavior:

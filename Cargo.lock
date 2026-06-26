@@ -3432,6 +3432,7 @@ dependencies = [
  "egui_plot",
  "env_logger",
  "futures-util",
+ "hound",
  "log",
  "minifb",
  "rigflow-core",

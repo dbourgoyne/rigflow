@@ -51,7 +51,7 @@ pub struct RigflowApp {
     /// Space-PTT focus latch: set when the window loses focus (we can't observe
     /// the key-up while unfocused), cleared on a fresh Space press — so transmit
     /// never resumes just because egui still reports Space "down" after refocus.
-    ptt_needs_fresh_press: bool,
+    pub(crate) ptt_needs_fresh_press: bool,
 
     /// Graceful-exit state machine (window-[X] path).  See `handle_exit`.
     exit_phase: ExitPhase,
@@ -69,6 +69,14 @@ pub struct RigflowApp {
     /// tracks the rising edge.
     pub(crate) latency_tx_peak_ms: f32,
     pub(crate) latency_tx_keyed: bool,
+
+    /// Owning handle for the in-progress RX-audio recording (`None` when idle).
+    pub(crate) rx_recorder: Option<crate::audio_recorder::AudioRecorder>,
+    /// Owning handle for the in-progress voice-keyer clip recording.
+    pub(crate) clip_recorder: Option<crate::audio_recorder::AudioRecorder>,
+    /// Operator whose voice-keyer clip list is currently cached, so the list is
+    /// refreshed (and the per-operator data dirs ensured) on an operator switch.
+    pub(crate) clips_listed_for: Option<String>,
 }
 
 impl RigflowApp {
@@ -107,6 +115,9 @@ impl RigflowApp {
             radio_settings_stable_since: None,
             latency_tx_peak_ms: 0.0,
             latency_tx_keyed: false,
+            rx_recorder: None,
+            clip_recorder: None,
+            clips_listed_for: None,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -335,7 +346,11 @@ impl RigflowApp {
             && matches!(
                 snapshot.demod_mode,
                 DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
-            );
+            )
+            // The voice keyer owns the mic-TX path while playing, and a clip
+            // recording must never key the radio: suppress manual PTT for both.
+            && !snapshot.voice_keyer.is_playing()
+            && !snapshot.clip_recording;
         let want_tx = space_held && ssb_ready;
 
         if want_tx != snapshot.ssb_ptt_down {
@@ -427,6 +442,9 @@ impl RigflowApp {
         match self.exit_phase {
             ExitPhase::Running => {
                 if close_requested && snapshot.server_connected {
+                    // Abort any voice-keyer transmission first; its guard sends
+                    // StopMicTx, which flushes within the shutdown hold below.
+                    snapshot.voice_keyer.request_abort();
                     if snapshot.radio_acquired {
                         let _ = self.ws_cmd_tx.send(ControlCommand::ReleaseRadio);
                     }
@@ -469,6 +487,7 @@ impl eframe::App for RigflowApp {
         self.update_ptt_focus_latch(ctx);
         self.handle_cw_keying(ctx, &snapshot);
         self.handle_cw_macros(ctx, &snapshot);
+        self.enforce_keyer_safety(ctx, &snapshot);
         self.handle_ssb_ptt(ctx, &snapshot);
         self.draw_left_panel(ctx, &snapshot, config_mode);
         self.draw_center_panel(ctx, &snapshot);
@@ -477,6 +496,12 @@ impl eframe::App for RigflowApp {
         self.draw_delete_operator_dialog(ctx);
         self.draw_swr_sweep_window(ctx);
         self.draw_wsjtx_setup_window(ctx);
+
+        // Per-operator audio recording + voice keyer: ensure dirs / refresh the
+        // clip list on an operator switch, run any UI-requested action, and
+        // mirror live recorder status into UiState for the panels.
+        self.sync_audio_recording_state(&snapshot);
+        self.process_audio_requests(&snapshot);
 
         // Persist per-radio settings: diff the live per-radio state against the
         // saved bucket and save ~600 ms after it stops changing.  Debounced so a

@@ -104,10 +104,11 @@ impl RigflowApp {
                 }
             }
 
-            // Recording: IQ record/playback.
+            // Recording: IQ record/playback (server) + RX audio record (client).
             Section::Recording => {
-                if let Ok(state) = self.state.lock() {
+                if let Ok(mut state) = self.state.lock() {
                     self.draw_iq_recording_section(ui, &state);
+                    self.draw_audio_recording_section(ui, &mut state);
                 }
             }
 
@@ -457,6 +458,55 @@ impl RigflowApp {
         } else {
             ui.label("Dropped IQ Buffers: 0");
         }
+    }
+
+    /// RX audio recording: record the decoded audio you hear to a per-operator
+    /// WAV (client-side; no transmit, no server protocol).  Start/Stop set
+    /// request flags processed in `update()`; live status mirrors the recorder.
+    fn draw_audio_recording_section(&self, ui: &mut egui::Ui, state: &mut UiState) {
+        ui.separator();
+        ui.label("Audio Recording");
+
+        let rec = state.rx_audio_rec_status.clone();
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!rec.recording, egui::Button::new("Start Recording"))
+                .clicked()
+            {
+                state.rx_rec_request = Some(true);
+            }
+            if ui
+                .add_enabled(rec.recording, egui::Button::new("Stop Recording"))
+                .clicked()
+            {
+                state.rx_rec_request = Some(false);
+            }
+        });
+
+        if rec.recording {
+            ui.colored_label(egui::Color32::from_rgb(230, 90, 90), "● Recording");
+            if let Some(name) = &rec.filename {
+                ui.label(egui::RichText::new(name).small().monospace());
+                ui.label(format!(
+                    "{}   {}",
+                    format_elapsed(rec.elapsed_secs),
+                    format_size(rec.file_size_bytes),
+                ));
+            }
+            if rec.dropped_chunks > 0 {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 140, 60),
+                    format!("Dropped audio chunks: {}", rec.dropped_chunks),
+                );
+            }
+        } else {
+            ui.colored_label(egui::Color32::GRAY, "○ Idle");
+        }
+        ui.label(
+            egui::RichText::new("Saved per-operator — the audio you hear.")
+                .small()
+                .weak(),
+        );
     }
 
     /// HL2 Band Control: band radio buttons (tune to default freq + mode via the

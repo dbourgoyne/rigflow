@@ -744,7 +744,7 @@ fn demod_to_tci_mode(mode: DemodMode) -> &'static str {
 }
 
 /// Downmix interleaved frames to mono (no-op for 1 channel).
-fn downmix(samples: &[f32], channels: u32) -> Vec<f32> {
+pub(crate) fn downmix(samples: &[f32], channels: u32) -> Vec<f32> {
     if channels <= 1 {
         return samples.to_vec();
     }
@@ -757,7 +757,7 @@ fn downmix(samples: &[f32], channels: u32) -> Vec<f32> {
 
 /// Stateless linear resampler.  SPIKE: resets phase per call, so block-boundary
 /// error is one interpolation step (~negligible for FT8); carry phase if needed.
-fn resample(input: &[f32], from_hz: f32, to_hz: f32) -> Vec<f32> {
+pub(crate) fn resample(input: &[f32], from_hz: f32, to_hz: f32) -> Vec<f32> {
     if input.is_empty() || (from_hz - to_hz).abs() < 1.0 {
         return input.to_vec();
     }
