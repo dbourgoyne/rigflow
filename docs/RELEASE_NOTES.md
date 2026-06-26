@@ -2,6 +2,48 @@
 
 ---
 
+## v0.1.4 — Voice keyer, receive notch/blanker, and a smoother waterfall
+
+> **⚠ Upgrade the client and server together.** This release changes the client↔server media
+> framing (waterfall packets) and adds a control-plane field, so a new client needs a new server
+> and vice-versa — a mismatched pair misbehaves (e.g. the waterfall stops updating). The Linux
+> server and the Linux/macOS client binaries below are all v0.1.4; install the matching pair.
+> (Previous releases were client-only fixes; this one is not.)
+
+**Receive**
+
+- **Auto-notch and noise blanker.** A new auto-notch nulls steady carriers and heterodynes
+  (that tuner-upper whistle) while leaving speech intact, and a noise blanker knocks down impulse
+  noise like ignition and power-line clicks. Both live in the Receive section with an enable +
+  level and a "Restore Default"; remembered per radio.
+- **Changing the sample rate now behaves.** The spectrum/waterfall span rescales to the new rate
+  and the station you're listening to stays in view — previously a lower sample rate could drop the
+  signal off the edge of the display.
+
+**Operating**
+
+- **SSB voice keyer.** Record a short clip from your microphone (e.g. a CQ call), preview it
+  through your speakers, then transmit it on the current frequency with one click — with an Abort
+  button, a hard time limit, and automatic un-keying as safeguards. Clips are stored per operator.
+  One clip, single-shot per press.
+- **RX audio recording.** Record the audio you're hearing to a WAV file (per operator) — handy for
+  logging a QSO or capturing a signal. Start/Stop in Source Control.
+- **Click-and-drag tuning.** Grab the spectrum or waterfall and drag to sweep frequency; flick and
+  release and it keeps gliding, then coasts to a stop. Works on both displays and all radios.
+
+**Display & network**
+
+- **Smoother waterfall over WiFi.** Waterfall rows are now split into smaller network packets, so a
+  single lost packet no longer drops a whole row — far fewer dropouts and less stutter on busy or
+  wireless links.
+- **Adjustable waterfall frame rate.** A new slider (0–30 Hz, 0 = off) trades waterfall smoothness
+  for bandwidth/CPU on a constrained link; remembered per operator and radio.
+- **Latency panel readability.** The receive buffer-health line is now easier to read.
+
+See the [Operator guide](operator-guide.md) for how to use these.
+
+---
+
 ## v0.1.3 — Client log & audio-device polish
 
 - **Quieter logs by default.** The client now defaults to its own messages at `info` and

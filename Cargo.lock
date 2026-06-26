@@ -3424,7 +3424,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rigflow-client"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "cpal",
  "eframe",
@@ -3445,7 +3445,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-core"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -3453,7 +3453,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-probe"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "clap",
  "env_logger",
@@ -3471,7 +3471,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-protocol"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "rigflow-core",
  "serde",
@@ -3480,7 +3480,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-server"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "axum",
  "env_logger",
