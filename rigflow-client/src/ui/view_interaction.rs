@@ -11,6 +11,10 @@ use eframe::egui;
 
 use crate::ui::tuning_steps::TuneTier;
 
+/// Minimum pointer speed at release (screen points/s) to start flick-momentum
+/// panning.  Below this a release just stops the pan — no inertia.
+const MIN_FLING_PX_PER_S: f32 = 150.0;
+
 /// Outcome of one frame of mouse interaction over a Spectrum/Waterfall view.
 /// All fields are inert (None/0/false) when there is nothing to do.
 ///
@@ -31,6 +35,13 @@ pub struct ViewMouseResult {
     pub tune_tier: TuneTier,
     /// Ctrl+wheel zoom: +1 = zoom in, -1 = zoom out, 0 = none.
     pub zoom_steps: i32,
+    /// Horizontal click-drag this frame, converted to a target-frequency delta
+    /// (Hz) via the view's local Hz-per-pixel.  Grab-and-slide: dragging right
+    /// yields a negative delta (lower frequency).  0 when not dragging.
+    pub drag_delta_hz: f32,
+    /// Set on drag release to the fling velocity in Hz/s, to seed momentum
+    /// panning.  `None` unless the release was a deliberate flick.
+    pub fling_velocity_hz_per_s: Option<f32>,
 }
 
 /// Compute the shared mouse interaction for a view.
@@ -101,6 +112,25 @@ pub fn handle_view_mouse(
             .interact_pointer_pos()
             .filter(|p| rect.contains(*p))
             .map(|p| freq_at_x(p.x));
+    }
+
+    // --- Click-drag → pan the spectrum (grab-and-slide) ------------------
+    // Convert horizontal drag to a frequency delta using the view's local
+    // Hz-per-pixel (the `freq_at_x` map is linear across `rect`, so a 1 px
+    // sample gives the slope).  Dragging right pulls the spectrum right,
+    // revealing lower frequencies, so the delta is negated.  A drag is never a
+    // click, so any click-tune the response also reported is suppressed.
+    let hz_per_px = freq_at_x(rect.left() + 1.0) - freq_at_x(rect.left());
+    if response.dragged() {
+        result.drag_delta_hz = -response.drag_delta().x * hz_per_px;
+        result.tune_to_hz = None;
+    }
+    if response.drag_stopped() {
+        let vx = ui.input(|i| i.pointer.velocity().x);
+        if vx.abs() > MIN_FLING_PX_PER_S {
+            result.fling_velocity_hz_per_s = Some(-vx * hz_per_px);
+        }
+        result.tune_to_hz = None;
     }
 
     // --- `C` key (cursor over the view) → center LO on the target --------

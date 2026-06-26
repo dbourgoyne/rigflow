@@ -8,9 +8,34 @@ use crate::ui::spectrum_view::{
 use crate::ui::view_interaction::ViewMouseResult;
 use eframe::egui;
 use log::warn;
+use std::time::{Duration, Instant};
+
+/// Minimum spacing between drag/momentum control-channel sends (~33/s).  Local
+/// UI state still updates every frame; only the WebSocket retunes are throttled.
+const PAN_SEND_INTERVAL: Duration = Duration::from_millis(30);
+/// Exponential (viscous) decay time constant for flick momentum (seconds).
+/// Velocity falls by `1/e` every `MOMENTUM_TAU` — this shapes the main glide.
+const MOMENTUM_TAU: f32 = 0.35;
+/// Constant (Coulomb) deceleration added on top of the exponential decay, in
+/// Hz/s².  Subtracted from the speed every frame, it is negligible during the
+/// fast glide but dominant at low speed, so momentum terminates in a fraction of
+/// a second instead of crawling along the exponential asymptote.  Raise it to
+/// make the tail die faster / stop sooner.
+const MOMENTUM_DECEL_HZ_PER_S2: f32 = 20_000.0;
+/// Momentum stops once its speed drops below this (Hz/s).
+const MOMENTUM_MIN_HZ_PER_S: f32 = 100.0;
+
+/// True while the radio is keyed by any path (CW, SSB PTT, CAT PTT, or a test
+/// tone).  Drag-pan and momentum are disabled while transmitting so the band
+/// filters can't be swept out from under an active transmit.
+fn is_transmitting(s: &UiState) -> bool {
+    s.cw_key_down || s.ssb_ptt_down || s.cat_ptt || s.tx_tone_running
+}
 
 impl RigflowApp {
     pub(crate) fn draw_center_panel(&mut self, ctx: &egui::Context, snapshot: &UiState) {
+        // Advance any in-flight flick-momentum pan before drawing this frame.
+        self.advance_pan_momentum(ctx, snapshot);
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::NONE
                 .fill(egui::Color32::BLACK)
@@ -201,7 +226,7 @@ impl RigflowApp {
                                         texture.id(),
                                         egui::vec2(image_width, waterfall_height),
                                     ))
-                                    .sense(egui::Sense::click());
+                                    .sense(egui::Sense::click_and_drag());
 
                                     let response = ui.add(image);
                                     let rect = response.rect;
@@ -425,6 +450,133 @@ impl RigflowApp {
         ));
     }
 
+    /// Pan the target frequency by `delta_hz`, applying the same soft-edge LO
+    /// pan as [`tune_target_relative`] but with **throttled** control-channel
+    /// sends so a 60 fps drag / momentum sweep doesn't flood the server with
+    /// retunes.  Local UI state is updated on every call (smooth display);
+    /// `SetTargetFrequency` / `SetCenterFrequency` are sent at most once per
+    /// [`PAN_SEND_INTERVAL`] unless `force_send` is set (used for the final,
+    /// exact value when a gesture ends, so the server lands on the settled
+    /// frequency with the correct band filters).
+    ///
+    /// Returns `true` if the target actually moved; `false` means it was pinned
+    /// at a band edge — the caller uses that to stop momentum.
+    fn pan_target_by(&self, snapshot: &UiState, delta_hz: f32, force_send: bool) -> bool {
+        use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
+
+        if delta_hz == 0.0 && !force_send {
+            return false;
+        }
+        let limits = active_freq_limits(snapshot);
+        let desired_target = clamp_center(snapshot.target_freq_hz + delta_hz, &limits);
+
+        // Soft-edge LO pan — identical math to `tune_target_relative`.
+        let half_span =
+            (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
+        let soft = 0.8 * half_span;
+        let mut new_center = snapshot.center_freq_hz;
+        let offset = desired_target - new_center;
+        if half_span > 0.0 && offset.abs() > soft {
+            let excess = offset.abs() - soft;
+            new_center = clamp_center(new_center + offset.signum() * excess, &limits);
+        }
+        let new_target = clamp_target(
+            desired_target,
+            new_center,
+            snapshot.input_sample_rate_hz,
+            &limits,
+        );
+
+        let moved = (new_target - snapshot.target_freq_hz).abs() > 0.5
+            || (new_center - snapshot.center_freq_hz).abs() > 0.5;
+
+        // Apply locally every frame; decide under the lock whether this frame's
+        // send passes the throttle, and whether the LO changed and must be sent.
+        let (do_center, do_target) = {
+            let mut state = match self.state.lock() {
+                Ok(s) => s,
+                Err(_) => return moved,
+            };
+            state.center_freq_hz = new_center;
+            state.target_freq_hz = new_target;
+
+            let now = Instant::now();
+            let allow = force_send || now.duration_since(state.last_pan_send) >= PAN_SEND_INTERVAL;
+            if !allow {
+                (false, false)
+            } else {
+                state.last_pan_send = now;
+                // Send the LO only when it changed since the last sent value, so
+                // a center change that lands in a throttled frame still reaches
+                // the server on the next allowed send.
+                let send_center = (new_center - state.last_sent_center_hz).abs() > 0.5;
+                if send_center {
+                    state.last_sent_center_hz = new_center;
+                }
+                (send_center, true)
+            }
+        };
+
+        if do_center {
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+                    center_freq_hz: new_center as u64,
+                },
+            ));
+        }
+        if do_target {
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                    target_freq_hz: new_target as u64,
+                },
+            ));
+        }
+        moved
+    }
+
+    /// Advance flick-momentum panning by one frame.  Called every frame from
+    /// `draw_center_panel`; a no-op unless a fling is active.  Decays the
+    /// velocity exponentially and stops at the band edge, on transmit, or once
+    /// the speed falls below [`MOMENTUM_MIN_HZ_PER_S`], force-sending the final
+    /// exact frequency so the server's band filters match before any TX.
+    pub(crate) fn advance_pan_momentum(&self, ctx: &egui::Context, snapshot: &UiState) {
+        let v = snapshot.pan_velocity_hz_per_s;
+        if v == 0.0 {
+            return;
+        }
+
+        // Never sweep while transmitting or with no radio acquired.
+        if !snapshot.radio_acquired || is_transmitting(snapshot) {
+            if let Ok(mut s) = self.state.lock() {
+                s.pan_velocity_hz_per_s = 0.0;
+            }
+            return;
+        }
+
+        let dt = ctx.input(|i| i.stable_dt).clamp(0.0, 0.1);
+        // Decay first so we know whether this is the stopping frame.  Viscous
+        // (exponential) decay shapes the glide; a constant Coulomb term then
+        // subtracts a fixed speed each frame so the tail terminates quickly
+        // instead of asymptoting toward zero.
+        let mut new_v = v * (-dt / MOMENTUM_TAU).exp();
+        new_v = new_v.signum() * (new_v.abs() - MOMENTUM_DECEL_HZ_PER_S2 * dt).max(0.0);
+        let stopping = new_v.abs() < MOMENTUM_MIN_HZ_PER_S;
+
+        // Move by this frame's velocity; force the exact final send when stopping
+        // so the server lands precisely on the settled frequency.
+        let moved = self.pan_target_by(snapshot, v * dt, stopping);
+        if stopping || !moved {
+            new_v = 0.0;
+        }
+
+        if let Ok(mut s) = self.state.lock() {
+            s.pan_velocity_hz_per_s = new_v;
+        }
+        if new_v != 0.0 {
+            ctx.request_repaint();
+        }
+    }
+
     fn apply_view_interaction(&self, r: &ViewMouseResult, snapshot: &UiState) {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
@@ -435,6 +587,13 @@ impl RigflowApp {
                 },
             ));
         };
+
+        // Any explicit tune / zoom / click cancels an in-flight momentum sweep.
+        if r.tune_dir != 0 || r.tune_to_hz.is_some() || r.center_on_target || r.zoom_steps != 0 {
+            if let Ok(mut state) = self.state.lock() {
+                state.pan_velocity_hz_per_s = 0.0;
+            }
+        }
 
         // Ctrl+wheel zoom — display only (×1.25 per notch, clamped to the same
         // 1..4 range as the zoom slider).  Works regardless of acquisition.
@@ -497,6 +656,25 @@ impl RigflowApp {
                 send_target(new_target);
             } else if let Ok(mut state) = self.state.lock() {
                 state.server_status = "cannot tune: no radio acquired".to_string();
+            }
+        }
+
+        // Click-drag pan (grab-and-slide) — live, throttled.  An active drag
+        // cancels any prior momentum so the two don't fight.  Disabled while
+        // transmitting so the band can't be swept out from under a transmit.
+        if r.drag_delta_hz != 0.0 && snapshot.radio_acquired && !is_transmitting(snapshot) {
+            if let Ok(mut state) = self.state.lock() {
+                state.pan_velocity_hz_per_s = 0.0;
+            }
+            self.pan_target_by(snapshot, r.drag_delta_hz, false);
+        }
+
+        // Flick release → seed momentum (decays to a stop over ~1–1.5 s).
+        if let Some(v) = r.fling_velocity_hz_per_s {
+            if snapshot.radio_acquired && !is_transmitting(snapshot) {
+                if let Ok(mut state) = self.state.lock() {
+                    state.pan_velocity_hz_per_s = v;
+                }
             }
         }
     }

@@ -364,6 +364,19 @@ pub struct UiState {
     /// status-bar TX indicator and the rigctl `t` readback.
     pub cat_ptt: bool,
 
+    // ── Spectrum drag-pan momentum (client-local; never persisted) ───────
+    /// Flick-momentum pan velocity in Hz/s.  0 = no momentum.  Seeded on a drag
+    /// release with enough speed and decayed to 0 each frame by
+    /// `advance_pan_momentum`.
+    pub pan_velocity_hz_per_s: f32,
+    /// Throttle timestamp for drag/momentum control-channel sends, so a 60 fps
+    /// sweep doesn't flood the server with retunes.
+    pub last_pan_send: Instant,
+    /// Last LO (center) frequency actually sent during a drag/momentum pan, so a
+    /// center change that lands in a throttled frame still reaches the server on
+    /// the next allowed send.
+    pub last_sent_center_hz: f32,
+
     // ── CW sidetone (client-local; never sent to server) ────────────────
     /// CW Sidetone Volume in percent (0–100), independent of RX Volume.
     pub cw_sidetone_volume: u8,
@@ -492,6 +505,10 @@ impl Default for UiState {
 
             display_zoom: 1.0,
             waterfall_frame_rate_hz: 20.0,
+
+            pan_velocity_hz_per_s: 0.0,
+            last_pan_send: Instant::now(),
+            last_sent_center_hz: 0.0,
 
             // =================================================================
             // OPERATOR / PERSISTENCE

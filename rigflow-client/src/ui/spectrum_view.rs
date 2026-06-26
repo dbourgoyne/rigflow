@@ -33,7 +33,7 @@ pub fn draw_spectrum_plot(
 ) -> SpectrumInteraction {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
 
-    let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (outer_rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let painter = ui.painter_at(outer_rect);
 
     painter.rect_filled(outer_rect, 4.0, Color32::from_rgb(20, 20, 24));
