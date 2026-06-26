@@ -26,21 +26,27 @@ impl RigflowApp {
         let server_q_ms = diag.mic_queue_samples as f32 / SAMPLE_RATE_HZ * 1000.0;
         let tx_total = net_ms + mic_ring_ms + server_q_ms + TX_HL2_FIFO_MS;
 
-        // Hold the TX-total peak across an over: reset on the PTT key-down edge,
-        // accumulate while keyed, and persist after unkey (so the over's worst case
-        // stays readable — it only updates again on the next keying).
+        // Hold the TX-total value + peak across an over: reset on the key-down
+        // edge, update live while keyed, and freeze after unkey — so the readout
+        // shows the last over's value (not drifting RX-side estimates) and only
+        // changes again on the next keying.  Any TX path keys it, incl. the
+        // voice keyer (which keys the server directly via StartMicTx).
         let keyed = snapshot.ssb_ptt_down
             || snapshot.cw_key_down
             || snapshot.tx_tone_running
             || snapshot.tx_tune_running
-            || snapshot.cat_ptt;
+            || snapshot.cat_ptt
+            || snapshot.voice_keyer.is_playing();
         if keyed && !self.latency_tx_keyed {
             self.latency_tx_peak_ms = 0.0;
+            self.latency_tx_total_ms = 0.0;
         }
         self.latency_tx_keyed = keyed;
         if keyed {
+            self.latency_tx_total_ms = tx_total;
             self.latency_tx_peak_ms = self.latency_tx_peak_ms.max(tx_total);
         }
+        let tx_total = self.latency_tx_total_ms;
         let tx_peak = self.latency_tx_peak_ms;
 
         ui.collapsing(super::panel_header("Latency / Audio"), |ui| {

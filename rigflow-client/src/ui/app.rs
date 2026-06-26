@@ -69,6 +69,10 @@ pub struct RigflowApp {
     /// tracks the rising edge.
     pub(crate) latency_tx_peak_ms: f32,
     pub(crate) latency_tx_keyed: bool,
+    /// Held "TX total" latency: updated live while keyed, frozen at the last
+    /// over's final value after unkey (reset on the next key-down edge), so the
+    /// readout doesn't drift while receiving.
+    pub(crate) latency_tx_total_ms: f32,
 
     /// Owning handle for the in-progress RX-audio recording (`None` when idle).
     pub(crate) rx_recorder: Option<crate::audio_recorder::AudioRecorder>,
@@ -115,6 +119,7 @@ impl RigflowApp {
             radio_settings_stable_since: None,
             latency_tx_peak_ms: 0.0,
             latency_tx_keyed: false,
+            latency_tx_total_ms: 0.0,
             rx_recorder: None,
             clip_recorder: None,
             clips_listed_for: None,
