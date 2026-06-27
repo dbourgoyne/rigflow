@@ -18,10 +18,20 @@ pub struct UdpAudioSender {
     timestamp: u64,
     samples_per_packet: usize,
     pending: Vec<i16>,
+    /// Media stream type tag (VFO A audio by default; VFO B uses its own type so
+    /// the client demuxes the two receivers off the same socket).
+    stream_type: u8,
 }
 
 impl UdpAudioSender {
     pub fn new(samples_per_packet: usize) -> std::io::Result<Self> {
+        Self::new_with_stream_type(samples_per_packet, STREAM_TYPE_AUDIO)
+    }
+
+    pub fn new_with_stream_type(
+        samples_per_packet: usize,
+        stream_type: u8,
+    ) -> std::io::Result<Self> {
         let socket = UdpSocket::bind("0.0.0.0:0")?;
         socket.set_nonblocking(true)?;
 
@@ -31,6 +41,7 @@ impl UdpAudioSender {
             timestamp: 0,
             samples_per_packet,
             pending: Vec::new(),
+            stream_type,
         })
     }
 
@@ -47,7 +58,7 @@ impl UdpAudioSender {
             // Header
             buf.extend_from_slice(&MAGIC.to_be_bytes()); // "RS"
             buf.push(VERSION); // version (2)
-            buf.push(STREAM_TYPE_AUDIO); // stream_type = audio
+            buf.push(self.stream_type); // audio (VFO A) or VFO-B audio
             buf.extend_from_slice(&self.sequence.to_be_bytes());
             buf.extend_from_slice(&self.timestamp.to_be_bytes());
             // v2: server send wall-clock (epoch ns), captured as late as possible

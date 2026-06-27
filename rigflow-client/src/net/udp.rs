@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use rigflow_core::{
     audio::jitter_buffer::JitterBuffer,
     net::udp_framing::{
-        STREAM_TYPE_AUDIO, STREAM_TYPE_WATERFALL, audio_samples_offset, is_valid_header,
-        parse_media_header,
+        STREAM_TYPE_AUDIO, STREAM_TYPE_AUDIO_VFO_B, STREAM_TYPE_WATERFALL,
+        STREAM_TYPE_WATERFALL_VFO_B, audio_samples_offset, is_valid_header, parse_media_header,
     },
 };
 
@@ -136,6 +136,11 @@ pub fn handle_media_packet(
     digital_rx: &crate::digital_rx::DigitalRxOutput,
     tci_rx_audio: &crate::tci_server::TciRxAudio,
     waterfall_reasm: &mut WaterfallReassembler,
+    // VFO B (dual-watch) sinks — second receiver's audio + spectrum/waterfall.
+    jitter_b: &Arc<Mutex<JitterBuffer>>,
+    waterfall_buffer_b: &Arc<Mutex<Vec<u32>>>,
+    spectrum_db_b: &Arc<Mutex<Vec<f32>>>,
+    waterfall_reasm_b: &mut WaterfallReassembler,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -188,7 +193,43 @@ pub fn handle_media_packet(
             );
         }
 
+        // VFO B (dual-watch): route the second receiver's streams to the B
+        // buffers.  B audio does NOT feed the CW decoder / digital-RX / TCI taps
+        // (those follow VFO A only).
+        STREAM_TYPE_AUDIO_VFO_B => {
+            let audio_payload = packet
+                .get(audio_samples_offset(header.version)..)
+                .unwrap_or(&[]);
+            handle_audio_packet_b(audio_payload, header.sequence, jitter_b);
+        }
+
+        STREAM_TYPE_WATERFALL_VFO_B => {
+            handle_waterfall_packet(
+                waterfall_reasm_b,
+                payload,
+                waterfall_buffer_b,
+                spectrum_db_b,
+                ui_state,
+            );
+        }
+
         _ => {}
+    }
+}
+
+/// VFO B audio: decode i16 LE → f32 and push to VFO B's jitter buffer only.
+/// (No CW-decode / digital-RX / TCI taps — those are VFO A.)
+fn handle_audio_packet_b(payload: &[u8], sequence: u32, jitter_b: &Arc<Mutex<JitterBuffer>>) {
+    if payload.len() < 2 || !payload.len().is_multiple_of(2) {
+        return;
+    }
+    let mut samples = Vec::with_capacity(payload.len() / 2);
+    for chunk in payload.chunks_exact(2) {
+        let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+        samples.push(s as f32 / i16::MAX as f32);
+    }
+    if let Ok(mut jb) = jitter_b.lock() {
+        jb.push_packet(sequence, samples);
     }
 }
 

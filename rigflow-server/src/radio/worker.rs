@@ -33,6 +33,9 @@ use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
+use rigflow_core::net::udp_framing::{
+    STREAM_TYPE_AUDIO, STREAM_TYPE_AUDIO_VFO_B, STREAM_TYPE_WATERFALL, STREAM_TYPE_WATERFALL_VFO_B,
+};
 use rigflow_core::radio::amplifier::AmplifierStatus;
 use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
 use rigflow_core::radio::iq_recording::IqRecordingStatus;
@@ -625,6 +628,21 @@ fn run_iq_worker_threads(
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
     let (iq_wf_tx, iq_wf_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+
+    // VFO B (dual-watch) second-receiver channels + control mirror.  The DSP-B
+    // and waterfall-B threads block on these empty channels when dual-watch is
+    // off (the capture thread only feeds them when enabled), so idle cost is
+    // ~zero.  `control_b` presents VFO B's settings in VFO-A shape so the
+    // existing DSP/waterfall threads are reused verbatim.
+    let (iq_audio_b_tx, iq_audio_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
+    let (iq_wf_b_tx, iq_wf_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+    let control_b = Arc::new(Mutex::new(
+        control
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_else(|e| e.into_inner().clone()),
+    ));
+
     let (startup_info_tx, startup_info_rx) =
         std_mpsc::sync_channel::<Result<StartupInfo, String>>(1);
     let (capture_start_tx, capture_start_rx) = std_mpsc::sync_channel::<()>(1);
@@ -672,6 +690,9 @@ fn run_iq_worker_threads(
         confirmed_sample_rate_hz.clone(),
         needs_cc_keepalive,
         amp_freq.clone(),
+        iq_audio_b_tx,
+        iq_wf_b_tx,
+        control_b.clone(),
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -712,6 +733,7 @@ fn run_iq_worker_threads(
         request.audio_udp_peer,
         startup_info.clone(),
         confirmed_sample_rate_hz.clone(),
+        STREAM_TYPE_AUDIO,
     );
 
     let waterfall_thread = spawn_waterfall_thread(
@@ -722,6 +744,41 @@ fn run_iq_worker_threads(
         request.waterfall_udp_peer,
         startup_info.runtime.waterfall_bins as usize,
         control.clone(),
+        STREAM_TYPE_WATERFALL,
+    );
+
+    // VFO B (dual-watch) DSP + waterfall: reuse the same threads via `control_b`
+    // and VFO-B stream types, sharing the client's audio/waterfall UDP peers.
+    // They block on their (empty) channels while dual-watch is off — zero idle
+    // cost — and process only when the capture thread feeds them VFO B IQ.
+    //
+    // The DSP-B thread must NOT publish the authoritative WorkerStatus (VFO A
+    // owns it), so it gets a throwaway watch channel whose receiver we hold open;
+    // VFO B's S-meter is read back from `control_b` by the capture thread.
+    let (status_b_tx, _status_b_rx) = watch::channel(WorkerStatus::Starting);
+    let dsp_b_thread = spawn_dsp_thread(
+        descriptor.clone(),
+        server_cfg.clone(),
+        control_b.clone(),
+        stop_flag.clone(),
+        fatal_tx.clone(),
+        status_b_tx,
+        iq_audio_b_rx,
+        request.audio_udp_peer,
+        startup_info.clone(),
+        confirmed_sample_rate_hz.clone(),
+        STREAM_TYPE_AUDIO_VFO_B,
+    );
+
+    let waterfall_b_thread = spawn_waterfall_thread(
+        descriptor.clone(),
+        iq_wf_b_rx,
+        stop_flag.clone(),
+        fatal_tx.clone(),
+        request.waterfall_udp_peer,
+        startup_info.runtime.waterfall_bins as usize,
+        control_b.clone(),
+        STREAM_TYPE_WATERFALL_VFO_B,
     );
 
     // Amplifier (HR50) poller — HL2 only, when a serial device is configured.
@@ -765,6 +822,8 @@ fn run_iq_worker_threads(
     let _ = capture_thread.join();
     let _ = dsp_thread.join();
     let _ = waterfall_thread.join();
+    let _ = dsp_b_thread.join();
+    let _ = waterfall_b_thread.join();
     if let Some(h) = amplifier_thread {
         let _ = h.join();
     }
@@ -1320,6 +1379,7 @@ fn spawn_command_thread(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_waterfall_thread(
     descriptor: RadioDescriptor,
     iq_wf_rx: std_mpsc::Receiver<Vec<Complex32>>,
@@ -1328,11 +1388,12 @@ fn spawn_waterfall_thread(
     wf_target: std::net::SocketAddr,
     waterfall_window_len: usize,
     control: Arc<Mutex<SharedControlState>>,
+    waterfall_stream_type: u8,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
 
-        let mut waterfall = match UdpWaterfallSender::new() {
+        let mut waterfall = match UdpWaterfallSender::new_with_stream_type(waterfall_stream_type) {
             Ok(sender) => sender,
             Err(error) => {
                 let reason = format!("failed to create UDP waterfall sender: {error}");
@@ -1484,6 +1545,9 @@ fn spawn_capture_thread(
     confirmed_sample_rate_hz: Arc<AtomicU32>,
     needs_cc_keepalive: bool,
     amp_freq: Arc<AtomicU64>,
+    iq_audio_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
+    iq_wf_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
+    control_b: Arc<Mutex<SharedControlState>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut source = match create_worker_source(
@@ -1556,6 +1620,10 @@ fn spawn_capture_thread(
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
+        // VFO B (dual-watch) second-receiver state, tracked to program the source
+        // only on change.  `u64::MAX` forces the first RX1-NCO program.
+        let mut last_dual_watch = false;
+        let mut last_vfo_b_freq: u64 = u64::MAX;
 
         debug!(
             "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
@@ -1572,6 +1640,51 @@ fn spawn_capture_thread(
 
             let control_snapshot = current_control(&control);
             let current_source_control = control_snapshot.source_control.clone();
+
+            // ── VFO B (dual-watch) second-receiver management + control_b mirror ──
+            {
+                let vfo = control_snapshot.vfo.clone();
+                if vfo.dual_watch_enabled != last_dual_watch {
+                    if let Err(e) = source.set_secondary_receiver_enabled(vfo.dual_watch_enabled) {
+                        warn!(
+                            "[radio-worker {}] dual-watch toggle failed: {e}",
+                            descriptor.id.0
+                        );
+                    }
+                    last_dual_watch = vfo.dual_watch_enabled;
+                    last_vfo_b_freq = u64::MAX; // force RX1 NCO reprogram
+                }
+                if vfo.dual_watch_enabled {
+                    if vfo.vfo_b_target_freq_hz != last_vfo_b_freq {
+                        if let Err(e) =
+                            source.set_secondary_center_frequency(vfo.vfo_b_target_freq_hz as f32)
+                        {
+                            warn!("[radio-worker {}] VFO B NCO failed: {e}", descriptor.id.0);
+                        }
+                        last_vfo_b_freq = vfo.vfo_b_target_freq_hz;
+                    }
+                    // Mirror into control_b in VFO-A shape: inherit all of VFO A's
+                    // RX processing (AGC/NR2/NB/notch/squelch/volume), then override
+                    // the VFO-B-independent freq/mode/filter.  Read VFO B's S-meter
+                    // back into the main control for the snapshot.
+                    if let Ok(mut cb) = control_b.lock() {
+                        let (b_dbm, b_su) = (cb.signal_dbm, cb.signal_s_units);
+                        *cb = control_snapshot.clone();
+                        cb.center_freq_hz = vfo.vfo_b_target_freq_hz;
+                        cb.target_freq_hz = vfo.vfo_b_target_freq_hz;
+                        cb.demod_mode = vfo.vfo_b_demod_mode;
+                        cb.sideband = vfo.vfo_b_sideband;
+                        cb.filter_bandwidth_hz = vfo.vfo_b_filter_bandwidth_hz;
+                        cb.ssb_pitch_hz = vfo.vfo_b_ssb_pitch_hz;
+                        cb.cw_pitch_hz = vfo.vfo_b_cw_pitch_hz;
+                        drop(cb);
+                        if let Ok(mut a) = control.lock() {
+                            a.vfo.vfo_b_signal_dbm = b_dbm;
+                            a.vfo.vfo_b_signal_s_units = b_su;
+                        }
+                    }
+                }
+            }
 
             if current_source_control.sample_rate_hz != applied_source_control.sample_rate_hz {
                 if let Err(err) = source.set_sample_rate(current_source_control.sample_rate_hz) {
@@ -2347,6 +2460,17 @@ fn spawn_capture_thread(
                     break;
                 }
             }
+
+            // VFO B (dual-watch): fan the secondary receiver's IQ (deinterleaved
+            // during the read_block above) to the DSP-B / waterfall-B threads.
+            // Both use try_send so a stalled B pipeline can NEVER block VFO A.
+            if control_snapshot.vfo.dual_watch_enabled {
+                let iq_b = source.read_secondary_block();
+                if !iq_b.is_empty() {
+                    let _ = iq_audio_b_tx.try_send(iq_b.clone());
+                    let _ = iq_wf_b_tx.try_send(iq_b);
+                }
+            }
         }
 
         // Finalize any in-progress recording on capture-thread exit so the WAV
@@ -2357,6 +2481,7 @@ fn spawn_capture_thread(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_dsp_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -2368,6 +2493,7 @@ fn spawn_dsp_thread(
     audio_target: std::net::SocketAddr,
     startup_info: StartupInfo,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
+    audio_stream_type: u8,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut pipeline_sample_rate_hz = startup_info.input_sample_rate_hz;
@@ -2399,7 +2525,7 @@ fn spawn_dsp_thread(
             pipeline.client_output_sample_rate(),
         );
 
-        let mut audio = match UdpAudioSender::new(240) {
+        let mut audio = match UdpAudioSender::new_with_stream_type(240, audio_stream_type) {
             Ok(sender) => sender,
             Err(error) => {
                 let reason = format!("failed to create UDP audio sender: {error}");

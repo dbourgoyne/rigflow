@@ -72,6 +72,11 @@ pub struct MediaRuntimeHandles {
     /// Spectrum dB values (for plotting)
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
 
+    /// VFO B (dual-watch) waterfall + spectrum buffers, populated only while the
+    /// server is streaming the second receiver.  Read by the stacked-spectra UI.
+    pub waterfall_buffer_b: Arc<Mutex<Vec<u32>>>,
+    pub spectrum_db_b: Arc<Mutex<Vec<f32>>>,
+
     /// Audio output stream (held to keep playback alive). `None` when no output
     /// device could be opened — the client runs without local speaker audio
     /// rather than aborting.
@@ -105,6 +110,14 @@ pub fn start_media_runtime(
     // --- Jitter buffer -----------------------------------------------------
 
     let jitter = Arc::new(Mutex::new(JitterBuffer::new(
+        PACKET_SAMPLES,
+        TARGET_BUFFER_SAMPLES,
+        MAX_BUFFER_SAMPLES,
+    )));
+
+    // VFO B (dual-watch) second receiver's jitter buffer.  Stays empty/silent
+    // until dual-watch is enabled and the server streams VFO B audio.
+    let jitter_b = Arc::new(Mutex::new(JitterBuffer::new(
         PACKET_SAMPLES,
         TARGET_BUFFER_SAMPLES,
         MAX_BUFFER_SAMPLES,
@@ -169,8 +182,12 @@ pub fn start_media_runtime(
     let waterfall_height = HEIGHT - WATERFALL_TOP;
 
     let waterfall_buffer = Arc::new(Mutex::new(vec![0u32; waterfall_width * waterfall_height]));
-
     let spectrum_db = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
+
+    // VFO B (dual-watch) second receiver's spectrum + waterfall buffers.
+    let waterfall_buffer_b = Arc::new(Mutex::new(vec![0u32; waterfall_width * waterfall_height]));
+    let spectrum_db_b = Arc::new(Mutex::new(vec![SPECTRUM_DB_MIN; WIDTH]));
+
     let media_stats = Arc::new(Mutex::new(MediaPacketStats::new()));
 
     // --- Control channel ---------------------------------------------------
@@ -182,6 +199,9 @@ pub fn start_media_runtime(
     let jitter_for_thread = Arc::clone(&jitter);
     let waterfall_for_thread = Arc::clone(&waterfall_buffer);
     let spectrum_for_thread = Arc::clone(&spectrum_db);
+    let jitter_b_for_thread = Arc::clone(&jitter_b);
+    let waterfall_b_for_thread = Arc::clone(&waterfall_buffer_b);
+    let spectrum_b_for_thread = Arc::clone(&spectrum_db_b);
     let stats_for_thread = Arc::clone(&media_stats);
     let stats_logger_for_thread = Arc::clone(&stats_logger);
 
@@ -302,6 +322,8 @@ pub fn start_media_runtime(
 
         // Reassembles waterfall rows from their sub-MTU chunks; owned by this thread.
         let mut waterfall_reasm = WaterfallReassembler::new();
+        // Separate reassembler for VFO B's waterfall (independent chunk state).
+        let mut waterfall_reasm_b = WaterfallReassembler::new();
 
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -457,6 +479,10 @@ pub fn start_media_runtime(
                             &digital_rx,
                             &tci_rx_audio,
                             &mut waterfall_reasm,
+                            &jitter_b_for_thread,
+                            &waterfall_b_for_thread,
+                            &spectrum_b_for_thread,
+                            &mut waterfall_reasm_b,
                         );
                     }
                 }
@@ -480,6 +506,8 @@ pub fn start_media_runtime(
         media_cmd_tx,
         waterfall_buffer,
         spectrum_db,
+        waterfall_buffer_b,
+        spectrum_db_b,
         _audio_stream: audio_stream,
         audio_session_generation,
     })
