@@ -231,9 +231,25 @@ impl RigflowApp {
         }
     }
 
+    /// The mode transmit actually uses: VFO B's mode when split is on and the TX
+    /// VFO is B, otherwise VFO A's mode.  The Space-key handlers (CW keying, CW
+    /// macros, SSB PTT) choose their path from this so a split with differing A/B
+    /// modes keys the correct one — matching the server's effective TX mode.
+    /// Without this, the client keyed off VFO A's mode while the server modulated
+    /// the TX VFO's mode, so a cross-mode split (e.g. A=USB, TX VFO B=CW) asserted
+    /// PTT but produced no RF.
+    fn effective_tx_mode(snapshot: &UiState) -> rigflow_core::dsp::modes::DemodMode {
+        use rigflow_core::radio::vfo::VfoSelect;
+        if snapshot.split_enabled && snapshot.tx_vfo == VfoSelect::B {
+            snapshot.vfo_b_demod_mode
+        } else {
+            snapshot.demod_mode
+        }
+    }
+
     /// Space-bar CW keying (CW TX Phase 1).  Space held = CW key down, released
     /// = key up.  Only active when a radio is acquired, the source supports TX,
-    /// and the current mode is CW.  Edge-detected against `cw_key_down` so a
+    /// and the effective TX mode is CW.  Edge-detected against `cw_key_down` so a
     /// single Start/Stop is sent per press (no auto-repeat spam).  When a text
     /// edit has keyboard focus we treat Space as "not keying" so it isn't stolen
     /// from text widgets (and any in-progress key is released).
@@ -253,14 +269,28 @@ impl RigflowApp {
 
         let cw_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
-            && matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl);
+            && matches!(
+                Self::effective_tx_mode(snapshot),
+                DemodMode::Cwu | DemodMode::Cwl
+            );
         let want_key = space_held && cw_ready;
 
         // Keep the lock-free sidetone control current every frame so CW Pitch
         // and Sidetone Volume changes take effect immediately.  The Arc is
         // shared with the audio callback; writing via the snapshot clone hits
         // the same inner state.
-        snapshot.sidetone.set_pitch_hz(snapshot.pitch_hz);
+        // Sidetone pitch follows the transmitting VFO: VFO A's pitch normally,
+        // VFO B's CW pitch when keying a split TX on B.  Otherwise a cross-mode
+        // split (A=USB → pitch 0) would set the sidetone to 0 Hz and you'd see
+        // the CW pulse but hear nothing.
+        let cw_pitch = if snapshot.split_enabled
+            && snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B
+        {
+            snapshot.vfo_b_cw_pitch_hz
+        } else {
+            snapshot.pitch_hz
+        };
+        snapshot.sidetone.set_pitch_hz(cw_pitch);
         snapshot
             .sidetone
             .set_volume(snapshot.cw_sidetone_volume as f32 / 100.0);
@@ -305,7 +335,10 @@ impl RigflowApp {
         if ctx.wants_keyboard_input()
             || !snapshot.radio_acquired
             || !snapshot.source_capabilities.supports_tx_tune_test
-            || !matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl)
+            || !matches!(
+                Self::effective_tx_mode(snapshot),
+                DemodMode::Cwu | DemodMode::Cwl
+            )
             || self.cw_text_sending.load(Ordering::Relaxed)
         {
             return;
@@ -361,7 +394,7 @@ impl RigflowApp {
         let ssb_ready = snapshot.radio_acquired
             && snapshot.source_capabilities.supports_tx_tune_test
             && matches!(
-                snapshot.demod_mode,
+                Self::effective_tx_mode(snapshot),
                 DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
             )
             // The voice keyer owns the mic-TX path while playing, and a clip
