@@ -98,15 +98,15 @@ impl RigflowApp {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(acquired, egui::Button::new("A → B"))
+                    .add_enabled(acquired, egui::Button::new("Copy A -> B"))
                     .on_hover_text("Copy VFO A's frequency + mode to VFO B")
                     .clicked()
                 {
                     self.copy_a_to_b(snapshot);
                 }
                 if ui
-                    .add_enabled(acquired, egui::Button::new("A ⇄ B"))
-                    .on_hover_text("Swap VFO A and VFO B")
+                    .add_enabled(acquired, egui::Button::new("Swap A <-> B"))
+                    .on_hover_text("Swap VFO A and VFO B (frequency + mode)")
                     .clicked()
                 {
                     self.swap_ab(snapshot);
@@ -257,17 +257,31 @@ impl RigflowApp {
     fn swap_ab(&self, snapshot: &UiState) {
         let a_hz = snapshot.target_freq_hz.max(0.0) as u64;
         let b_hz = snapshot.vfo_b_target_freq_hz.max(0.0) as u64;
-        // VFO A ← B, VFO B ← A (frequency swap; modes follow).
+        let a_mode = snapshot.demod_mode;
+        let a_sb = snapshot.sideband;
+        let b_mode = snapshot.vfo_b_demod_mode;
+        let b_sb = snapshot.vfo_b_sideband;
+        // VFO A ⇄ VFO B: swap both frequency and mode/sideband.
         self.set_local(|s| {
             s.target_freq_hz = b_hz as f32;
             s.vfo_b_target_freq_hz = a_hz as f32;
+            s.demod_mode = b_mode;
+            s.sideband = b_sb;
+            s.vfo_b_demod_mode = a_mode;
+            s.vfo_b_sideband = a_sb;
         });
+        // VFO A ← B's freq + mode.
         self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
             target_freq_hz: b_hz,
         });
+        self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode: b_mode });
+        self.send_radio_msg(ClientRadioMessage::SetSideband { sideband: b_sb });
+        // VFO B ← A's freq + mode.
         self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency {
             target_freq_hz: a_hz,
         });
+        self.send_radio_msg(ClientRadioMessage::SetVfoBDemodMode { mode: a_mode });
+        self.send_radio_msg(ClientRadioMessage::SetVfoBSideband { sideband: a_sb });
     }
 
     /// Briefly lock `UiState` to apply a local edit for snappy feedback.

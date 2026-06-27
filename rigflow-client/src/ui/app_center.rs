@@ -488,10 +488,18 @@ impl RigflowApp {
             );
         }
         if snapshot.rit_enabled && snapshot.rit_offset_hz != 0 {
-            ui.label(egui::RichText::new(format!("RIT{:+}", snapshot.rit_offset_hz)).small());
+            ui.label(
+                egui::RichText::new(format!("RIT {:+} Hz", snapshot.rit_offset_hz))
+                    .strong()
+                    .color(egui::Color32::from_rgb(120, 210, 255)),
+            );
         }
         if snapshot.xit_enabled && snapshot.xit_offset_hz != 0 {
-            ui.label(egui::RichText::new(format!("XIT{:+}", snapshot.xit_offset_hz)).small());
+            ui.label(
+                egui::RichText::new(format!("XIT {:+} Hz", snapshot.xit_offset_hz))
+                    .strong()
+                    .color(egui::Color32::from_rgb(235, 180, 70)),
+            );
         }
 
         ui.separator();
