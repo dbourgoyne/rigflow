@@ -1,5 +1,5 @@
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 //use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
@@ -144,6 +144,12 @@ pub fn start_media_runtime(
     // real-time audio callback reads it without locking.
     let rx_volume = Arc::new(AtomicU8::new(50));
 
+    // Dual-watch flag for the (always-stereo) output callback: off → VFO A to
+    // both L+R (centered mono); on → VFO A left, VFO B right.  Mirrored from
+    // `UiState.dual_watch_enabled` by the media thread; toggling is an atomic
+    // flag flip (no stream rebuild → no audio pop / device freeze).
+    let dual_watch_audio = Arc::new(AtomicBool::new(false));
+
     // RX-audio recording sink slot + voice-keyer clip preview live in UiState so
     // both the real-time output callback (below) and the UI thread reach them.
     let rx_rec_slot = ui_state
@@ -163,9 +169,11 @@ pub fn start_media_runtime(
     let audio_stream = open_audio_output(
         &host,
         &jitter,
+        &jitter_b,
         &stats_logger,
         &sidetone,
         &rx_volume,
+        &dual_watch_audio,
         &rx_rec_slot,
         &clip_preview,
     );
@@ -335,6 +343,7 @@ pub fn start_media_runtime(
             // audio callback reads (volume is applied client-side, speaker only).
             if let Ok(s) = ui_state.lock() {
                 rx_volume.store(s.volume_percent, Ordering::Relaxed);
+                dual_watch_audio.store(s.dual_watch_enabled, Ordering::Relaxed);
             }
 
             // --- Session change detection (radio switch) -------------------
@@ -522,9 +531,11 @@ pub fn start_media_runtime(
 fn open_audio_output(
     host: &cpal::Host,
     jitter: &Arc<Mutex<JitterBuffer>>,
+    jitter_b: &Arc<Mutex<JitterBuffer>>,
     stats_logger: &Arc<Mutex<ClientStatsLogger>>,
     sidetone: &Arc<SidetoneShared>,
     rx_volume: &Arc<AtomicU8>,
+    dual_watch: &Arc<AtomicBool>,
     rx_rec_slot: &Arc<Mutex<Option<AudioRecorderSink>>>,
     clip_preview: &Arc<ClipPreview>,
 ) -> Option<cpal::Stream> {
@@ -541,9 +552,11 @@ fn open_audio_output(
                     if let Some(stream) = try_open_output(
                         device,
                         jitter,
+                        jitter_b,
                         stats_logger,
                         sidetone,
                         rx_volume,
+                        dual_watch,
                         rx_rec_slot,
                         clip_preview,
                         &mut tried,
@@ -559,9 +572,11 @@ fn open_audio_output(
         if let Some(stream) = try_open_output(
             device,
             jitter,
+            jitter_b,
             stats_logger,
             sidetone,
             rx_volume,
+            dual_watch,
             rx_rec_slot,
             clip_preview,
             &mut tried,
@@ -580,9 +595,11 @@ fn open_audio_output(
             if let Some(stream) = try_open_output(
                 device,
                 jitter,
+                jitter_b,
                 stats_logger,
                 sidetone,
                 rx_volume,
+                dual_watch,
                 rx_rec_slot,
                 clip_preview,
                 &mut tried,
@@ -599,9 +616,11 @@ fn open_audio_output(
 fn try_open_output(
     device: cpal::Device,
     jitter: &Arc<Mutex<JitterBuffer>>,
+    jitter_b: &Arc<Mutex<JitterBuffer>>,
     stats_logger: &Arc<Mutex<ClientStatsLogger>>,
     sidetone: &Arc<SidetoneShared>,
     rx_volume: &Arc<AtomicU8>,
+    dual_watch: &Arc<AtomicBool>,
     rx_rec_slot: &Arc<Mutex<Option<AudioRecorderSink>>>,
     clip_preview: &Arc<ClipPreview>,
     tried: &mut std::collections::HashSet<String>,
@@ -621,9 +640,11 @@ fn try_open_output(
         &device,
         &config,
         Arc::clone(jitter),
+        Arc::clone(jitter_b),
         Arc::clone(stats_logger),
         Arc::clone(sidetone),
         Arc::clone(rx_volume),
+        Arc::clone(dual_watch),
         Arc::clone(rx_rec_slot),
         Arc::clone(clip_preview),
     ) {
@@ -648,28 +669,42 @@ fn try_open_output(
 /// - pulls audio from the jitter buffer
 /// - fills silence on lock failure or underflow
 /// - feeds audio sample counts into the periodic stats logger
+#[allow(clippy::too_many_arguments)]
 fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     jitter: Arc<Mutex<JitterBuffer>>,
+    jitter_b: Arc<Mutex<JitterBuffer>>,
     stats_logger: Arc<Mutex<ClientStatsLogger>>,
     sidetone: Arc<SidetoneShared>,
     rx_volume: Arc<AtomicU8>,
+    dual_watch: Arc<AtomicBool>,
     rx_rec_slot: Arc<Mutex<Option<AudioRecorderSink>>>,
     clip_preview: Arc<ClipPreview>,
 ) -> Result<cpal::Stream, Box<dyn std::error::Error>> {
-    let supported_configs = device.supported_output_configs()?;
+    let supported: Vec<_> = device.supported_output_configs()?.collect();
 
+    // Prefer a **stereo** F32 @ 48 kHz config (VFO A → left, VFO B → right for
+    // dual-watch); fall back to mono (downmixed) if the device has no stereo F32
+    // config.  Toggling dual-watch never rebuilds the stream — the callback just
+    // reads the atomic flag — so the channel layout is fixed for the stream's
+    // life and there is no audio pop / device freeze on toggle.
     let mut selected = None;
-
-    // Try to find an exact match for our preferred format
-    for cfg in supported_configs {
-        if cfg.channels() == CHANNELS
-            && cfg.sample_format() == cpal::SampleFormat::F32
-            && OUTPUT_SAMPLE_RATE >= cfg.min_sample_rate().0
-            && OUTPUT_SAMPLE_RATE <= cfg.max_sample_rate().0
-        {
-            selected = Some(cfg.with_sample_rate(cpal::SampleRate(OUTPUT_SAMPLE_RATE)));
+    for want_ch in [2u16, 1u16] {
+        for cfg in &supported {
+            if cfg.channels() == want_ch
+                && cfg.sample_format() == cpal::SampleFormat::F32
+                && OUTPUT_SAMPLE_RATE >= cfg.min_sample_rate().0
+                && OUTPUT_SAMPLE_RATE <= cfg.max_sample_rate().0
+            {
+                selected = Some(
+                    cfg.clone()
+                        .with_sample_rate(cpal::SampleRate(OUTPUT_SAMPLE_RATE)),
+                );
+                break;
+            }
+        }
+        if selected.is_some() {
             break;
         }
     }
@@ -677,24 +712,31 @@ fn build_output_stream(
     let selected_config = if let Some(cfg) = selected {
         cfg.config()
     } else {
-        // Fallback: adapt default config
+        // Fallback: adapt default config (keep its channel count).
         let mut cfg = config.clone();
-        cfg.channels = CHANNELS;
+        cfg.channels = config.channels.max(CHANNELS);
         cfg.sample_rate = cpal::SampleRate(OUTPUT_SAMPLE_RATE);
         cfg
     };
 
+    let channels = (selected_config.channels as usize).max(1);
     log::info!(
-        "Using output device: {} @ {} Hz",
+        "Using output device: {} @ {} Hz, {} ch",
         device.name().unwrap_or_else(|_| "<unknown>".to_string()),
-        selected_config.sample_rate.0
+        selected_config.sample_rate.0,
+        channels,
     );
+    if channels < 2 {
+        log::info!("audio: mono output — dual-watch will downmix VFO A+B to one channel");
+    }
 
     let err_fn = |err| {
         log::error!("audio stream error: {err}");
     };
 
     let jitter_for_audio = Arc::clone(&jitter);
+    let jitter_b_for_audio = Arc::clone(&jitter_b);
+    let dual_watch_for_audio = Arc::clone(&dual_watch);
     let stats_logger_for_audio = Arc::clone(&stats_logger);
 
     // CW sidetone oscillator state, owned by the audio callback (real-time):
@@ -706,81 +748,113 @@ fn build_output_stream(
     let mut env: f32 = 0.0;
     // Client-side receive-Volume gain, ramped across each callback (click-free).
     let mut applied_gain: f32 = 1.0;
+    // Per-callback scratch for the popped VFO A / B mono frames (reused to avoid
+    // real-time allocation).
+    let mut buf_a: Vec<f32> = Vec::new();
+    let mut buf_b: Vec<f32> = Vec::new();
+    let mut rec_buf: Vec<f32> = Vec::new();
 
     let stream = device.build_output_stream(
         &selected_config,
         move |data: &mut [f32], _| {
+            let frames = data.len() / channels;
+            let dual = dual_watch_for_audio.load(Ordering::Relaxed);
+
+            // --- Pop VFO A (and VFO B when dual-watch) mono frames ----------
+            buf_a.resize(frames, 0.0);
             if let Ok(mut jb) = jitter_for_audio.lock() {
-                jb.pop_samples(data);
+                jb.pop_samples(&mut buf_a);
             } else {
-                // Fallback: output silence if lock fails
-                for sample in data.iter_mut() {
-                    *sample = 0.0;
+                buf_a.iter_mut().for_each(|s| *s = 0.0);
+            }
+            if dual {
+                buf_b.resize(frames, 0.0);
+                if let Ok(mut jb) = jitter_b_for_audio.lock() {
+                    jb.pop_samples(&mut buf_b);
+                } else {
+                    buf_b.iter_mut().for_each(|s| *s = 0.0);
                 }
             }
 
-            // --- RX audio recording tap ------------------------------------
-            // Post-jitter-buffer (faithfully "what you hear", with gap
-            // concealment) and pre-volume (recording level independent of the
-            // monitor knob).  Non-blocking: `try_lock` so a brief control-side
-            // install/remove never stalls the real-time callback, and the sink
-            // drops-and-counts if the writer falls behind.
+            // --- RX audio recording tap (pre-volume, mono) -----------------
+            // Post-jitter "what you hear" — VFO A, or an A+B downmix when
+            // dual-watch.  Non-blocking try_lock; the sink drops-and-counts.
             if let Ok(slot) = rx_rec_slot.try_lock() {
                 if let Some(sink) = slot.as_ref() {
-                    sink.push(data);
+                    if dual {
+                        rec_buf.resize(frames, 0.0);
+                        for i in 0..frames {
+                            rec_buf[i] = 0.5 * (buf_a[i] + buf_b[i]);
+                        }
+                        sink.push(&rec_buf);
+                    } else {
+                        sink.push(&buf_a);
+                    }
                 }
             }
 
-            // --- Receive Volume (applied here, speaker path only) ----------
-            // Volume moved from the server to the client so the Digital Audio
-            // Interface RX tap stays at fixed unity gain.  Ramp toward the
-            // target across the callback (no clicks) and soft-limit so a boost
-            // can't hard-clip the speaker.  Mapping: 0% silence, 50% unity,
-            // 100% +12 dB.  Applied before the sidetone mix (sidetone has its
-            // own volume).
+            // --- Receive Volume + interleave (A → left, B → right) ----------
+            // Volume is applied client-side (speaker path only); ramped per frame
+            // (no clicks) and soft-limited so a boost can't hard-clip.  Dual-watch
+            // off → VFO A to both channels (centered mono).
             let target_gain = volume_gain(rx_volume.load(Ordering::Relaxed));
-            let n = data.len();
-            if n > 0 {
-                let step = (target_gain - applied_gain) / n as f32;
-                let mut g = applied_gain;
-                for sample in data.iter_mut() {
-                    g += step;
-                    *sample = soft_clip(*sample * g);
+            let step = if frames > 0 {
+                (target_gain - applied_gain) / frames as f32
+            } else {
+                0.0
+            };
+            let mut g = applied_gain;
+            for i in 0..frames {
+                g += step;
+                let l = soft_clip(buf_a[i] * g);
+                let base = i * channels;
+                if channels >= 2 {
+                    let r = if dual { soft_clip(buf_b[i] * g) } else { l };
+                    data[base] = l;
+                    data[base + 1] = r;
+                    for s in data[base + 2..base + channels].iter_mut() {
+                        *s = l; // any extra channels carry the left signal
+                    }
+                } else {
+                    data[base] = if dual {
+                        soft_clip(0.5 * (buf_a[i] + buf_b[i]) * g)
+                    } else {
+                        l
+                    };
                 }
-                applied_gain = target_gain;
             }
+            applied_gain = target_gain;
 
-            // --- Mix in the local CW sidetone (never sent to the server) ---
-            // Read the lock-free control once per callback; phase/env persist
-            // across callbacks for continuity.
-            let target = if sidetone.keyed() { 1.0 } else { 0.0 };
-            let volume = sidetone.volume();
+            // --- Mix in the local CW sidetone (centered; per FRAME) ---------
+            // The oscillator phase/env advance per frame and the tone is added to
+            // every channel of the frame, so it stays centered and at-pitch
+            // regardless of the channel count.
+            let st_target = if sidetone.keyed() { 1.0 } else { 0.0 };
+            let st_volume = sidetone.volume();
             let phase_inc = std::f32::consts::TAU * sidetone.pitch_hz() / stream_sample_rate;
-            for sample in data.iter_mut() {
-                // Ramp the envelope toward the keyed target (5 ms), then shape
-                // it with a raised cosine for a click-free attack/decay.
-                if env < target {
-                    env = (env + env_step).min(target);
-                } else if env > target {
-                    env = (env - env_step).max(target);
+            for i in 0..frames {
+                if env < st_target {
+                    env = (env + env_step).min(st_target);
+                } else if env > st_target {
+                    env = (env - env_step).max(st_target);
                 }
                 let shaped = 0.5 * (1.0 - (std::f32::consts::PI * env).cos());
-                let tone = volume * shaped * phase.sin();
-                *sample = (*sample + tone).clamp(-1.0, 1.0);
-
+                let tone = st_volume * shaped * phase.sin();
+                let base = i * channels;
+                for s in data[base..base + channels].iter_mut() {
+                    *s = (*s + tone).clamp(-1.0, 1.0);
+                }
                 phase += phase_inc;
                 if phase >= std::f32::consts::TAU {
                     phase -= std::f32::consts::TAU;
                 }
             }
 
-            // --- Mix in the local voice-keyer clip preview (no transmit) ---
-            // Auditions a recorded clip through the speakers; post-volume so it
-            // plays at clip level regardless of the RX volume knob.
-            clip_preview.mix_into(data);
+            // --- Mix in the local voice-keyer clip preview (centered) ------
+            clip_preview.mix_into_channels(data, channels);
 
             if let Ok(mut logger) = stats_logger_for_audio.lock() {
-                logger.add_audio_samples(data.len());
+                logger.add_audio_samples(frames);
             }
         },
         err_fn,
