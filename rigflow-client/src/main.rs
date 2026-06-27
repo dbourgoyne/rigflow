@@ -290,6 +290,8 @@ fn main() -> Result<(), eframe::Error> {
                 ws_cmd_tx.clone(),
                 media_handles.waterfall_buffer.clone(),
                 media_handles.spectrum_db.clone(),
+                media_handles.waterfall_buffer_b.clone(),
+                media_handles.spectrum_db_b.clone(),
                 persistence_store,
             )))
         }),

@@ -74,8 +74,6 @@ pub struct UiState {
     pub split_enabled: bool,
     /// Which VFO transmits while split is on.
     pub tx_vfo: VfoSelect,
-    /// Which VFO the single-VFO tuning paths edit when dual-watch is off.
-    pub active_vfo: VfoSelect,
     pub dual_watch_enabled: bool,
     /// True when the source has a second hardware receiver (HL2). Gates the UI.
     pub dual_watch_supported: bool,
@@ -509,7 +507,6 @@ impl Default for UiState {
             xit_offset_hz: 0,
             split_enabled: false,
             tx_vfo: VfoSelect::A,
-            active_vfo: VfoSelect::A,
             dual_watch_enabled: false,
             dual_watch_supported: false,
             demod_mode: DemodMode::Wfm,

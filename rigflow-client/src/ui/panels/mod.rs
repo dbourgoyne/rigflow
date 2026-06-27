@@ -83,6 +83,7 @@ mod server;
 mod source_control;
 mod source_status;
 mod tx_tune_test;
+mod vfo;
 mod waterfall_control;
 
 impl RigflowApp {
@@ -130,6 +131,8 @@ impl RigflowApp {
                         ui.separator();
                         self.draw_radios_panel(ui, snapshot);
                         self.draw_radio_control_panel(ui, snapshot);
+                        ui.separator();
+                        self.draw_vfo_panel(ui, snapshot);
                         ui.separator();
                         self.draw_source_control_panel(ui, snapshot);
                         ui.separator();

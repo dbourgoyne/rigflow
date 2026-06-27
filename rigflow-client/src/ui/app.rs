@@ -27,8 +27,14 @@ pub struct RigflowApp {
     pub ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
     pub waterfall_buffer: Arc<Mutex<Vec<u32>>>,
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
+    /// VFO B (dual-watch) spectrum + waterfall buffers, drawn in the stacked
+    /// lower pane when dual-watch is active.
+    pub spectrum_db_b: Arc<Mutex<Vec<f32>>>,
+    pub waterfall_buffer_b: Arc<Mutex<Vec<u32>>>,
     pub persistence_store: PersistenceStore,
     pub waterfall_texture: Option<egui::TextureHandle>,
+    /// Texture for VFO B's waterfall (separate from VFO A's).
+    pub waterfall_texture_b: Option<egui::TextureHandle>,
 
     /// Text-to-CW sender control (shared with its timer thread): `cw_text_abort`
     /// requests a prompt stop; `cw_text_sending` is true while a message plays.
@@ -84,11 +90,14 @@ pub struct RigflowApp {
 }
 
 impl RigflowApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: Arc<Mutex<UiState>>,
         ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
         waterfall_buffer: Arc<Mutex<Vec<u32>>>,
         spectrum_db: Arc<Mutex<Vec<f32>>>,
+        waterfall_buffer_b: Arc<Mutex<Vec<u32>>>,
+        spectrum_db_b: Arc<Mutex<Vec<f32>>>,
         persistence_store: PersistenceStore,
     ) -> Self {
         // Create the virtual digital-audio endpoints once, at startup.
@@ -105,8 +114,11 @@ impl RigflowApp {
             ws_cmd_tx,
             waterfall_buffer,
             spectrum_db,
+            spectrum_db_b,
+            waterfall_buffer_b,
             persistence_store,
             waterfall_texture: None,
+            waterfall_texture_b: None,
             cw_text_abort: Arc::new(AtomicBool::new(false)),
             cw_text_sending: Arc::new(AtomicBool::new(false)),
             mic: None,

@@ -59,15 +59,24 @@ impl RigflowApp {
                     );
 
                     let lo_strip_height = 34.0;
-                    let spectrum_height = 220.0;
                     let gap = 6.0;
-                    let waterfall_height = (ui.available_height()
-                        - lo_strip_height
-                        - spectrum_height
-                        - gap
-                        - gap
-                        - 2.0)
-                        .max(120.0);
+                    // Dual-watch stacks VFO B below VFO A: spectrum A shrinks and
+                    // a VFO B spectrum + waterfall pane is added below.
+                    let dual = snapshot.dual_watch_enabled;
+                    let spectrum_height = if dual { 140.0 } else { 220.0 };
+                    let spectrum_b_height = 120.0;
+                    let fixed = lo_strip_height
+                        + spectrum_height
+                        + gap * 2.0
+                        + 2.0
+                        + if dual { spectrum_b_height + gap } else { 0.0 };
+                    let waterfall_total = (ui.available_height() - fixed).max(120.0);
+                    let waterfall_height = if dual {
+                        (waterfall_total / 2.0).max(60.0)
+                    } else {
+                        waterfall_total
+                    };
+                    let waterfall_b_height = waterfall_height;
 
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), lo_strip_height),
@@ -195,6 +204,41 @@ impl RigflowApp {
                         },
                     );
 
+                    // ── VFO B spectrum (dual-watch): stacked below VFO A ──────
+                    if dual {
+                        ui.add_space(gap);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), spectrum_b_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                let b_view = vfo_b_view(snapshot);
+                                let spectrum_b = {
+                                    let g = self.spectrum_db_b.lock().unwrap();
+                                    g.clone()
+                                };
+                                let (db_min, db_max) = if b_view.adaptive_waterfall_normalization {
+                                    let top = b_view.adaptive_top_db_estimate + 3.0;
+                                    (top - b_view.adaptive_range_db_estimate, top)
+                                } else {
+                                    let top = b_view.manual_waterfall_top_db;
+                                    (top - b_view.manual_waterfall_range_db, top)
+                                };
+                                let inter = draw_spectrum_plot(
+                                    ui,
+                                    egui::vec2(ui.available_width(), spectrum_b_height),
+                                    &spectrum_b,
+                                    db_min,
+                                    db_max,
+                                    &b_view,
+                                );
+                                // Click-to-tune VFO B (other gestures stay on A).
+                                if let Some(freq) = inter.mouse.tune_to_hz {
+                                    self.tune_vfo_b(freq);
+                                }
+                            },
+                        );
+                    }
+
                     ui.add_space(gap);
                     ui.separator();
                     ui.add_space(gap);
@@ -265,8 +309,81 @@ impl RigflowApp {
                             }
                         },
                     );
+
+                    // ── VFO B waterfall (dual-watch): stacked below A's ───────
+                    if dual {
+                        ui.add_space(gap);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), waterfall_b_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                render_waterfall_texture(
+                                    ctx,
+                                    WATERFALL_IMAGE_WIDTH,
+                                    WATERFALL_IMAGE_HEIGHT,
+                                    &self.waterfall_buffer_b,
+                                    &mut self.waterfall_texture_b,
+                                    "waterfall_texture_b",
+                                );
+                                if let Some(texture) = &self.waterfall_texture_b {
+                                    let image_width =
+                                        (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER)
+                                            .max(100.0);
+                                    let b_view = vfo_b_view(snapshot);
+                                    let spectrum_len = {
+                                        let s = self.spectrum_db_b.lock().unwrap();
+                                        s.len()
+                                    };
+                                    let mut tune_to: Option<f32> = None;
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(LEFT_GUTTER);
+                                        let image = egui::Image::new((
+                                            texture.id(),
+                                            egui::vec2(image_width, waterfall_b_height),
+                                        ))
+                                        .sense(egui::Sense::click_and_drag());
+                                        let response = ui.add(image);
+                                        let rect = response.rect;
+                                        let mouse = crate::ui::view_interaction::handle_view_mouse(
+                                            ui,
+                                            &response,
+                                            rect,
+                                            |x| {
+                                                let frac = ((x - rect.left()) / rect.width())
+                                                    .clamp(0.0, 1.0);
+                                                if let Some((l, r)) = zoomed_visible_freq_range_hz(
+                                                    spectrum_len,
+                                                    &b_view,
+                                                ) {
+                                                    l + frac * (r - l)
+                                                } else {
+                                                    x_frac_to_frequency_hz(frac, &b_view)
+                                                }
+                                            },
+                                        );
+                                        tune_to = mouse.tune_to_hz;
+                                    });
+                                    if let Some(freq) = tune_to {
+                                        self.tune_vfo_b(freq);
+                                    }
+                                }
+                            },
+                        );
+                    }
                 });
         });
+    }
+
+    /// Tune VFO B (dual-watch click-to-tune) — update local state for snappy
+    /// feedback and tell the server (which programs the RX1 NCO).
+    fn tune_vfo_b(&self, freq_hz: f32) {
+        let f = freq_hz.max(0.0) as u64;
+        if let Ok(mut s) = self.state.lock() {
+            s.vfo_b_target_freq_hz = f as f32;
+        }
+        let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+            rigflow_protocol::ClientRadioMessage::SetVfoBFrequency { target_freq_hz: f },
+        ));
     }
 
     /// Top status bar: compact, single-row live operating telemetry.  Reads
@@ -339,6 +456,43 @@ impl RigflowApp {
         );
         // Mode.
         ui.label(egui::RichText::new(mode_label(snapshot.demod_mode)).strong());
+
+        // VFO B + split / RIT / XIT badges (only when relevant).
+        if snapshot.split_enabled || snapshot.dual_watch_enabled {
+            ui.separator();
+            let b_tx =
+                snapshot.split_enabled && snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B;
+            ui.label(
+                egui::RichText::new(format!(
+                    "B {}  {}",
+                    format_freq_dotted(snapshot.vfo_b_target_freq_hz.max(0.0) as u64),
+                    mode_label(snapshot.vfo_b_demod_mode)
+                ))
+                .color(if b_tx {
+                    egui::Color32::from_rgb(235, 80, 80)
+                } else {
+                    egui::Color32::from_rgb(160, 200, 235)
+                }),
+            );
+        }
+        if snapshot.split_enabled {
+            let tx_letter = if snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B {
+                "B"
+            } else {
+                "A"
+            };
+            ui.label(
+                egui::RichText::new(format!("SPLIT▶{tx_letter}"))
+                    .strong()
+                    .color(egui::Color32::from_rgb(235, 180, 70)),
+            );
+        }
+        if snapshot.rit_enabled && snapshot.rit_offset_hz != 0 {
+            ui.label(egui::RichText::new(format!("RIT{:+}", snapshot.rit_offset_hz)).small());
+        }
+        if snapshot.xit_enabled && snapshot.xit_offset_hz != 0 {
+            ui.label(egui::RichText::new(format!("XIT{:+}", snapshot.xit_offset_hz)).small());
+        }
 
         ui.separator();
 
@@ -681,45 +835,70 @@ impl RigflowApp {
     }
 
     fn update_waterfall_texture(&mut self, ctx: &egui::Context, wf_width: usize, wf_height: usize) {
-        let pixels = {
-            let guard = self.waterfall_buffer.lock().unwrap();
-            guard.clone()
-        };
-
-        if pixels.len() != wf_width * wf_height {
-            warn!(
-                "waterfall texture size mismatch: pixels={} expected={}",
-                pixels.len(),
-                wf_width * wf_height
-            );
-            return;
-        }
-
-        let mut image = egui::ColorImage::new([wf_width, wf_height], egui::Color32::BLACK);
-
-        for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
-            let rgb = *src;
-            let r = ((rgb >> 16) & 0xff) as u8;
-            let g = ((rgb >> 8) & 0xff) as u8;
-            let b = (rgb & 0xff) as u8;
-            *dst = egui::Color32::from_rgb(r, g, b);
-        }
-
-        match &mut self.waterfall_texture {
-            Some(texture) => {
-                texture.set(image, egui::TextureOptions::NEAREST);
-            }
-            None => {
-                let texture =
-                    ctx.load_texture("waterfall_texture", image, egui::TextureOptions::NEAREST);
-                self.waterfall_texture = Some(texture);
-            }
-        }
+        render_waterfall_texture(
+            ctx,
+            wf_width,
+            wf_height,
+            &self.waterfall_buffer,
+            &mut self.waterfall_texture,
+            "waterfall_texture",
+        );
     }
 }
 
 /// Format a frequency in Hz with `.` thousands separators, e.g.
 /// `14074000 → "14.074.000"`.
+/// A VFO-A-shaped view of VFO B's state, so the spectrum/waterfall drawing and
+/// the screen-x → frequency mapping work for the second receiver unchanged.
+fn vfo_b_view(snapshot: &UiState) -> UiState {
+    let mut v = snapshot.clone();
+    v.center_freq_hz = snapshot.vfo_b_target_freq_hz;
+    v.target_freq_hz = snapshot.vfo_b_target_freq_hz;
+    v.demod_mode = snapshot.vfo_b_demod_mode;
+    v.sideband = snapshot.vfo_b_sideband;
+    v.filter_bandwidth_hz = snapshot.vfo_b_filter_bandwidth_hz;
+    v.signal_dbm = snapshot.vfo_b_signal_dbm;
+    v.signal_s_units = snapshot.vfo_b_signal_s_units;
+    v
+}
+
+/// Render a waterfall pixel buffer (ARGB u32) into `texture`, reused for both
+/// VFO A and VFO B so the two stacked waterfalls share one code path.
+fn render_waterfall_texture(
+    ctx: &egui::Context,
+    wf_width: usize,
+    wf_height: usize,
+    buffer: &std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    texture: &mut Option<egui::TextureHandle>,
+    name: &str,
+) {
+    let pixels = {
+        let guard = buffer.lock().unwrap();
+        guard.clone()
+    };
+    if pixels.len() != wf_width * wf_height {
+        warn!(
+            "waterfall texture size mismatch: pixels={} expected={}",
+            pixels.len(),
+            wf_width * wf_height
+        );
+        return;
+    }
+    let mut image = egui::ColorImage::new([wf_width, wf_height], egui::Color32::BLACK);
+    for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
+        let rgb = *src;
+        *dst = egui::Color32::from_rgb(
+            ((rgb >> 16) & 0xff) as u8,
+            ((rgb >> 8) & 0xff) as u8,
+            (rgb & 0xff) as u8,
+        );
+    }
+    match texture {
+        Some(t) => t.set(image, egui::TextureOptions::NEAREST),
+        None => *texture = Some(ctx.load_texture(name, image, egui::TextureOptions::NEAREST)),
+    }
+}
+
 fn format_freq_dotted(hz: u64) -> String {
     let digits = hz.to_string();
     let n = digits.len();
