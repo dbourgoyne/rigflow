@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use rigflow_core::dsp::modes::{default_deemphasis_mode, DeemphasisMode};
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::vfo::VfoSelect;
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::config::{
@@ -384,6 +385,92 @@ fn soft_clip(x: f32) -> f32 {
     }
 }
 
+/// Extra settle (ms) for a **cross-band** transmit: external amp relays and the
+/// async serial HR50 band switch need longer than the same-band PTT lead before
+/// RF, or RF would hit a switching/mismatched filter. Same-band TX adds nothing.
+const TX_CROSS_BAND_SETTLE_MS: u64 = 80;
+
+/// Effective transmit frequency from VFO / split / XIT state.
+/// Simplex (no split) = VFO A; split = the selected TX VFO; plus the XIT offset.
+fn effective_tx_freq_hz(cs: &SharedControlState) -> u64 {
+    let base = if cs.vfo.split_enabled {
+        match cs.vfo.tx_vfo {
+            VfoSelect::A => cs.target_freq_hz,
+            VfoSelect::B => cs.vfo.vfo_b_target_freq_hz,
+        }
+    } else {
+        cs.target_freq_hz
+    };
+    let off = if cs.vfo.xit_enabled {
+        cs.vfo.xit_offset_hz as i64
+    } else {
+        0
+    };
+    (base as i64 + off).max(0) as u64
+}
+
+/// Effective VFO-A receive frequency: the tuned frequency plus the RIT offset
+/// (RIT shifts only what you hear, not the dial or transmit).
+fn effective_rx_freq_hz(cs: &SharedControlState) -> u64 {
+    let off = if cs.vfo.rit_enabled {
+        cs.vfo.rit_offset_hz as i64
+    } else {
+        0
+    };
+    (cs.target_freq_hz as i64 + off).max(0) as u64
+}
+
+/// Effective transmit demod mode (drives CW side / SSB sideband selection).
+/// Follows the TX VFO when split is on, else the primary (VFO A) mode.
+fn effective_tx_demod_mode(cs: &SharedControlState) -> DemodMode {
+    if cs.vfo.split_enabled && cs.vfo.tx_vfo == VfoSelect::B {
+        cs.vfo.vfo_b_demod_mode
+    } else {
+        cs.demod_mode
+    }
+}
+
+/// Hot-switch protection: program the N2ADR LPF + external-amp band for the
+/// transmit frequency **before** RF, and (cross-band only) block long enough for
+/// relays / the serial amp to settle. Returns `true` if it was a cross-band
+/// change, so the caller restores the RX band afterward. Same-band is a no-op
+/// beyond keeping the amp mirror on the (identical) TX freq.
+fn prepare_tx_band(
+    source: &mut dyn IqSource,
+    amp_freq: &AtomicU64,
+    n2adr_enabled: bool,
+    rx_freq_hz: u64,
+    tx_freq_hz: u64,
+) -> bool {
+    let cross_band = band_from_frequency(rx_freq_hz) != band_from_frequency(tx_freq_hz);
+    // Amp follows the TX freq so the HR50 selects the TX band filter.
+    amp_freq.store(tx_freq_hz, Ordering::Relaxed);
+    if n2adr_enabled {
+        if let Some(band) = band_from_frequency(tx_freq_hz) {
+            let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
+        }
+    }
+    if cross_band {
+        std::thread::sleep(std::time::Duration::from_millis(TX_CROSS_BAND_SETTLE_MS));
+    }
+    cross_band
+}
+
+/// Restore the receive band after a transmit: point the amp mirror back at the
+/// RX frequency, and (cross-band only) force the per-loop N2ADR tracker to
+/// reprogram the RX band on the next capture iteration.
+fn restore_rx_band(
+    amp_freq: &AtomicU64,
+    rx_freq_hz: u64,
+    cross_band: bool,
+    last_n2adr_band: &mut Option<HamBand>,
+) {
+    amp_freq.store(rx_freq_hz, Ordering::Relaxed);
+    if cross_band {
+        *last_n2adr_band = None;
+    }
+}
+
 fn build_runtime_state(
     control: &SharedControlState,
     input_sample_rate_hz: f32,
@@ -584,6 +671,7 @@ fn run_iq_worker_threads(
         initial_center_freq_hz,
         confirmed_sample_rate_hz.clone(),
         needs_cc_keepalive,
+        amp_freq.clone(),
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -1395,6 +1483,7 @@ fn spawn_capture_thread(
     initial_center_freq_hz: u64,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
     needs_cc_keepalive: bool,
+    amp_freq: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut source = match create_worker_source(
@@ -1754,12 +1843,19 @@ fn spawn_capture_thread(
                     .and_then(|mut cs| cs.pending_tx_tune_test.take());
 
                 if let Some(duration_ms) = pending {
-                    // Spot/SWR transmits on the operator's target frequency (not
-                    // the RX DDC centre).  TX power is the configured source
-                    // drive percent, read from control state at measure time.
-                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    // Spot/SWR transmits on the *effective TX* frequency (split /
+                    // XIT aware), not the RX DDC centre.  Program the TX band
+                    // (N2ADR + amp) before RF and restore the RX band after.
+                    let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     let spot_level_percent = control_snapshot.source_control.spot_level_percent;
+                    let cross_band = prepare_tx_band(
+                        source.as_mut(),
+                        &amp_freq,
+                        control_snapshot.source_control.n2adr_enabled,
+                        control_snapshot.target_freq_hz,
+                        target_freq_hz,
+                    );
                     info!(
                         "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
                         descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
@@ -1770,6 +1866,13 @@ fn spawn_capture_thread(
                         duration_ms,
                         tx_drive_percent,
                         spot_level_percent,
+                    );
+
+                    restore_rx_band(
+                        &amp_freq,
+                        control_snapshot.target_freq_hz,
+                        cross_band,
+                        &mut last_n2adr_band,
                     );
 
                     info!(
@@ -1901,7 +2004,14 @@ fn spawn_capture_thread(
                 if let Some((tone_hz, usb)) = pending {
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     let spot_level_percent = control_snapshot.source_control.spot_level_percent;
-                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
+                    let cross_band = prepare_tx_band(
+                        source.as_mut(),
+                        &amp_freq,
+                        control_snapshot.source_control.n2adr_enabled,
+                        control_snapshot.target_freq_hz,
+                        target_freq_hz,
+                    );
                     let stop = control.lock().ok().map(|cs| cs.tx_tone_stop.clone());
 
                     if let Some(stop) = stop {
@@ -1920,6 +2030,12 @@ fn spawn_capture_thread(
                             warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
                         }
                     }
+                    restore_rx_band(
+                        &amp_freq,
+                        control_snapshot.target_freq_hz,
+                        cross_band,
+                        &mut last_n2adr_band,
+                    );
                 }
             }
 
@@ -1940,15 +2056,18 @@ fn spawn_capture_thread(
                     .unwrap_or(false);
 
                 if pending {
-                    let cw_usb = match control_snapshot.demod_mode {
+                    // CW TX side + frequency come from the *effective TX* VFO
+                    // (split-aware), not the RX pipeline mode.
+                    let tx_mode = effective_tx_demod_mode(&control_snapshot);
+                    let cw_usb = match tx_mode {
                         DemodMode::Cwu => Some(true),
                         DemodMode::Cwl => Some(false),
                         _ => None,
                     };
                     if cw_usb.is_none() {
                         warn!(
-                            "[radio-worker {}] CW key ignored: mode is {:?}, not CWU/CWL",
-                            descriptor.id.0, control_snapshot.demod_mode
+                            "[radio-worker {}] CW key ignored: TX mode is {:?}, not CWU/CWL",
+                            descriptor.id.0, tx_mode
                         );
                         // Clear the held flag so a stale key doesn't linger.
                         if let Ok(cs) = control.lock() {
@@ -1957,14 +2076,25 @@ fn spawn_capture_thread(
                     } else {
                         let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                         let spot_level_percent = control_snapshot.source_control.spot_level_percent;
-                        // CW transmit pitch = the operator's CW pitch from Radio
-                        // Control (the same value used for RX CW demod), so TX and
-                        // RX share one pitch.
-                        let pitch_hz = control_snapshot.cw_pitch_hz;
+                        // CW transmit pitch from the TX VFO (B when split on B).
+                        let pitch_hz = if control_snapshot.vfo.split_enabled
+                            && control_snapshot.vfo.tx_vfo == VfoSelect::B
+                        {
+                            control_snapshot.vfo.vfo_b_cw_pitch_hz
+                        } else {
+                            control_snapshot.cw_pitch_hz
+                        };
                         // CW TX side comes from the MODE (CWU=above, CWL=below),
                         // never the generic SSB sideband field.
                         let usb = cw_usb.unwrap();
-                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
+                        let cross_band = prepare_tx_band(
+                            source.as_mut(),
+                            &amp_freq,
+                            control_snapshot.source_control.n2adr_enabled,
+                            control_snapshot.target_freq_hz,
+                            target_freq_hz,
+                        );
                         // Semi break-in hang time (PTT persists between elements).
                         let hang_ms = control_snapshot.cw_hang_ms;
                         let held = control.lock().ok().map(|cs| cs.cw_key_held.clone());
@@ -1995,6 +2125,12 @@ fn spawn_capture_thread(
                                 cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
                             }
                         }
+                        restore_rx_band(
+                            &amp_freq,
+                            control_snapshot.target_freq_hz,
+                            cross_band,
+                            &mut last_n2adr_band,
+                        );
                     }
                 }
             }
@@ -2016,7 +2152,9 @@ fn spawn_capture_thread(
                     .unwrap_or(false);
 
                 if pending {
-                    let mic_usb = match control_snapshot.demod_mode {
+                    // Sideband + frequency from the *effective TX* VFO (split-aware).
+                    let tx_mode = effective_tx_demod_mode(&control_snapshot);
+                    let mic_usb = match tx_mode {
                         // DgtU (data-USB) keys on the USB sideband — WSJT-X/FT8
                         // sets this mode when its Radio "Mode" is Data/Pkt.  The
                         // RX pipeline already treats DgtU as USB everywhere; the
@@ -2027,8 +2165,8 @@ fn spawn_capture_thread(
                     };
                     if mic_usb.is_none() {
                         warn!(
-                            "[radio-worker {}] mic TX ignored: mode is {:?}, not USB/LSB",
-                            descriptor.id.0, control_snapshot.demod_mode
+                            "[radio-worker {}] mic TX ignored: TX mode is {:?}, not USB/LSB",
+                            descriptor.id.0, tx_mode
                         );
                         if let Ok(cs) = control.lock() {
                             cs.mic_tx_active.store(false, Ordering::Relaxed);
@@ -2041,11 +2179,18 @@ fn spawn_capture_thread(
                         // make-up gain and any limiter clipping only add IMD /
                         // splatter.  Force both off for DgtU regardless of the
                         // operator's persisted SSB-voice settings.
-                        let is_digital = matches!(control_snapshot.demod_mode, DemodMode::DgtU);
+                        let is_digital = matches!(tx_mode, DemodMode::DgtU);
                         let limiter_enabled = control_snapshot.tx_limiter_enabled && !is_digital;
                         let compressor_enabled = control_snapshot.compressor_enabled && !is_digital;
                         let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
-                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
+                        let cross_band = prepare_tx_band(
+                            source.as_mut(),
+                            &amp_freq,
+                            control_snapshot.source_control.n2adr_enabled,
+                            control_snapshot.target_freq_hz,
+                            target_freq_hz,
+                        );
                         let active = control.lock().ok().map(|cs| cs.mic_tx_active.clone());
 
                         if let Some(active) = active {
@@ -2102,6 +2247,12 @@ fn spawn_capture_thread(
                                 warn!("[radio-worker {}] mic TX error: {e}", descriptor.id.0);
                             }
                         }
+                        restore_rx_band(
+                            &amp_freq,
+                            control_snapshot.target_freq_hz,
+                            cross_band,
+                            &mut last_n2adr_band,
+                        );
                     }
                 }
             }
@@ -2410,8 +2561,10 @@ fn spawn_dsp_thread(
                 changed = true;
             }
 
-            if current.target_freq_hz != applied.target_freq_hz {
-                pipeline.set_target_frequency(current.target_freq_hz as f32);
+            // RX NCO tunes to the effective RX frequency (tuned + RIT offset), so
+            // a RIT change retunes even when the dial frequency is unchanged.
+            if effective_rx_freq_hz(&current) != effective_rx_freq_hz(&applied) {
+                pipeline.set_target_frequency(effective_rx_freq_hz(&current) as f32);
                 changed = true;
             }
 
