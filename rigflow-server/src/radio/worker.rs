@@ -25,8 +25,8 @@ use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::radio::types::{
-    AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo, WorkerRuntimeState,
-    WorkerStartResult, WorkerStatus,
+    AcquireRequest, StopReason, VfoSplitState, WorkerCommand, WorkerExit, WorkerReadyInfo,
+    WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
@@ -64,6 +64,9 @@ const SWR_SWEEP_SPOT_MS: u32 = 250;
 struct SharedControlState {
     center_freq_hz: u64,
     target_freq_hz: u64,
+    /// Dual-VFO / split / RIT-XIT state (set by the command thread; the DSP
+    /// thread copies it into `WorkerRuntimeState` and fills VFO-B signal/support).
+    vfo: VfoSplitState,
     demod_mode: DemodMode,
     sideband: Sideband,
     ssb_pitch_hz: f32,
@@ -388,6 +391,7 @@ fn build_runtime_state(
     WorkerRuntimeState {
         center_freq_hz: control.center_freq_hz,
         target_freq_hz: control.target_freq_hz,
+        vfo: control.vfo.clone(),
         demod_mode: control.demod_mode,
         sideband: control.sideband,
         ssb_pitch_hz: control.ssb_pitch_hz,
@@ -475,6 +479,14 @@ fn run_iq_worker_threads(
     let control = Arc::new(Mutex::new(SharedControlState {
         center_freq_hz: initial_center_freq_hz,
         target_freq_hz: initial_target_freq_hz,
+        vfo: VfoSplitState {
+            // VFO B starts mirroring VFO A's frequency; mode/filter independent.
+            vfo_b_target_freq_hz: initial_target_freq_hz,
+            vfo_b_center_freq_hz: initial_center_freq_hz,
+            // Dual-watch needs a second hardware receiver — HL2 only.
+            dual_watch_supported: matches!(source_kind, SourceKind::HermesLite2),
+            ..VfoSplitState::default()
+        },
         demod_mode: server_cfg.demod,
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
@@ -981,6 +993,69 @@ fn spawn_command_thread(
                         if let Ok(mut control_state) = control.lock() {
                             control_state.source_control.tx_ptt_lead_ms = lead_ms.min(100);
                             control_state.source_control.tx_ptt_tail_ms = tail_ms.min(100);
+                        }
+                    }
+
+                    // ── Dual-VFO / split / RIT-XIT (Stage 0: store only; the DSP
+                    // thread (Stage 3) and TX path (Stage 1) read these) ──
+                    WorkerCommand::SetVfoBFrequency { hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_target_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetVfoBDemodMode { mode } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_demod_mode = mode;
+                        }
+                    }
+                    WorkerCommand::SetVfoBSideband { sideband } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_sideband = sideband;
+                        }
+                    }
+                    WorkerCommand::SetVfoBFilterBandwidth { bandwidth_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_filter_bandwidth_hz = bandwidth_hz;
+                        }
+                    }
+                    WorkerCommand::SetVfoBPitch { pitch_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            match cs.vfo.vfo_b_demod_mode {
+                                DemodMode::Cwu | DemodMode::Cwl => {
+                                    cs.vfo.vfo_b_cw_pitch_hz = pitch_hz.clamp(100.0, 1500.0);
+                                }
+                                _ => {
+                                    cs.vfo.vfo_b_ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
+                                }
+                            }
+                        }
+                    }
+                    WorkerCommand::SetRit { enabled, offset_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.rit_enabled = enabled;
+                            cs.vfo.rit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::SetXit { enabled, offset_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.xit_enabled = enabled;
+                            cs.vfo.xit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::SetSplit { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.split_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetTxVfo { vfo } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.tx_vfo = vfo;
+                        }
+                    }
+                    WorkerCommand::SetDualWatch { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            // Honor the capability gate; non-HL2 sources stay off.
+                            cs.vfo.dual_watch_enabled = enabled && cs.vfo.dual_watch_supported;
                         }
                     }
 

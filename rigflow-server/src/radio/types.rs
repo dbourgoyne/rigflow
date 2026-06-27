@@ -11,6 +11,7 @@ use rigflow_core::radio::{
     swr_sweep::{SwrSweepProgress, SwrSweepResult},
     tx_audio_diag::TxAudioDiag,
     tx_tune::TxTuneResult,
+    vfo::VfoSelect,
     LeaseId, RadioDescriptor, RadioId,
 };
 
@@ -75,6 +76,57 @@ pub enum StopReason {
     UserRequested,
 }
 
+/// Dual-VFO / split / RIT-XIT state (VFO B is independent: own mode + filter).
+/// Grouped so the many worker / snapshot / delta sites touch a single field.
+/// Defaults make pre-dual-watch behavior byte-identical.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VfoSplitState {
+    pub vfo_b_target_freq_hz: u64,
+    /// VFO B's own hardware-receiver center (RX1 NCO); independent of VFO A.
+    pub vfo_b_center_freq_hz: u64,
+    pub vfo_b_demod_mode: DemodMode,
+    pub vfo_b_sideband: Sideband,
+    pub vfo_b_filter_bandwidth_hz: f32,
+    pub vfo_b_ssb_pitch_hz: f32,
+    pub vfo_b_cw_pitch_hz: f32,
+    pub vfo_b_signal_dbm: f32,
+    pub vfo_b_signal_s_units: i32,
+    pub rit_enabled: bool,
+    pub rit_offset_hz: i32,
+    pub xit_enabled: bool,
+    pub xit_offset_hz: i32,
+    pub split_enabled: bool,
+    pub tx_vfo: VfoSelect,
+    pub dual_watch_enabled: bool,
+    /// True when the source has a second hardware receiver (HL2). Static per
+    /// source; set at worker start from `IqSource::max_receivers() >= 2`.
+    pub dual_watch_supported: bool,
+}
+
+impl Default for VfoSplitState {
+    fn default() -> Self {
+        Self {
+            vfo_b_target_freq_hz: 0,
+            vfo_b_center_freq_hz: 0,
+            vfo_b_demod_mode: DemodMode::Usb,
+            vfo_b_sideband: Sideband::Usb,
+            vfo_b_filter_bandwidth_hz: 2700.0,
+            vfo_b_ssb_pitch_hz: 0.0,
+            vfo_b_cw_pitch_hz: 600.0,
+            vfo_b_signal_dbm: -140.0,
+            vfo_b_signal_s_units: 0,
+            rit_enabled: false,
+            rit_offset_hz: 0,
+            xit_enabled: false,
+            xit_offset_hz: 0,
+            split_enabled: false,
+            tx_vfo: VfoSelect::A,
+            dual_watch_enabled: false,
+            dual_watch_supported: false,
+        }
+    }
+}
+
 /// Runtime state snapshot of a worker.
 ///
 /// This is sent to clients via RuntimeSnapshot / RuntimeChanged.
@@ -82,6 +134,8 @@ pub enum StopReason {
 pub struct WorkerRuntimeState {
     pub center_freq_hz: u64,
     pub target_freq_hz: u64,
+    /// Dual-VFO / split / RIT-XIT state.
+    pub vfo: VfoSplitState,
     pub demod_mode: DemodMode,
     pub sideband: Sideband,
     pub ssb_pitch_hz: f32,
@@ -204,6 +258,39 @@ pub enum WorkerCommand {
     SetSourceTxSequencing {
         lead_ms: u32,
         tail_ms: u32,
+    },
+    // ── Dual-VFO / split / RIT-XIT ──
+    SetVfoBFrequency {
+        hz: u64,
+    },
+    SetVfoBDemodMode {
+        mode: DemodMode,
+    },
+    SetVfoBSideband {
+        sideband: Sideband,
+    },
+    SetVfoBFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+    SetVfoBPitch {
+        pitch_hz: f32,
+    },
+    SetRit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    SetXit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    SetSplit {
+        enabled: bool,
+    },
+    SetTxVfo {
+        vfo: VfoSelect,
+    },
+    SetDualWatch {
+        enabled: bool,
     },
     /// CW key down / up (Space bar).  The server keys the CW carrier with
     /// envelope shaping; `tx_drive_percent` / `spot_level_percent` set power.

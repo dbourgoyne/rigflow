@@ -7,6 +7,7 @@ pub mod source_status;
 pub mod swr_sweep;
 pub mod tx_audio_diag;
 pub mod tx_tune;
+pub mod vfo;
 
 pub use amplifier::{AmplifierAtuMode, AmplifierKeyingMode, AmplifierModel, AmplifierStatus};
 pub use iq_recording::IqRecordingStatus;
@@ -16,3 +17,4 @@ pub use model::{
 pub use source_status::SourceStatus;
 pub use tx_audio_diag::TxAudioDiag;
 pub use tx_tune::{TxTuneResult, TxTuneState, TxTuneStatus, compute_swr};
+pub use vfo::VfoSelect;

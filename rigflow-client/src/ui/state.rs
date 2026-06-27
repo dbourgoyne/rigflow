@@ -15,6 +15,7 @@ use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
 use rigflow_core::radio::tx_audio_diag::TxAudioDiag;
 use rigflow_core::radio::tx_tune::TxTuneResult;
+use rigflow_core::radio::vfo::VfoSelect;
 
 /// A single CW memory macro: a short button label and the text to transmit.
 #[derive(Debug, Clone, Default)]
@@ -55,6 +56,29 @@ pub struct UiState {
 
     /// Target tuned frequency, in Hz
     pub target_freq_hz: f32,
+
+    // ── Dual-VFO / split / RIT-XIT (mirrors server runtime; UI lands in Stage 5).
+    // VFO A is the existing flat fields above; VFO B is independent (own mode). ──
+    pub vfo_b_target_freq_hz: f32,
+    pub vfo_b_demod_mode: DemodMode,
+    pub vfo_b_sideband: Sideband,
+    pub vfo_b_filter_bandwidth_hz: f32,
+    pub vfo_b_ssb_pitch_hz: f32,
+    pub vfo_b_cw_pitch_hz: f32,
+    pub vfo_b_signal_dbm: f32,
+    pub vfo_b_signal_s_units: i32,
+    pub rit_enabled: bool,
+    pub rit_offset_hz: i32,
+    pub xit_enabled: bool,
+    pub xit_offset_hz: i32,
+    pub split_enabled: bool,
+    /// Which VFO transmits while split is on.
+    pub tx_vfo: VfoSelect,
+    /// Which VFO the single-VFO tuning paths edit when dual-watch is off.
+    pub active_vfo: VfoSelect,
+    pub dual_watch_enabled: bool,
+    /// True when the source has a second hardware receiver (HL2). Gates the UI.
+    pub dual_watch_supported: bool,
 
     /// Current demodulation mode
     pub demod_mode: DemodMode,
@@ -471,6 +495,23 @@ impl Default for UiState {
             // =================================================================
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
+            vfo_b_target_freq_hz: 0.0,
+            vfo_b_demod_mode: DemodMode::Usb,
+            vfo_b_sideband: Sideband::Usb,
+            vfo_b_filter_bandwidth_hz: 2700.0,
+            vfo_b_ssb_pitch_hz: 0.0,
+            vfo_b_cw_pitch_hz: 600.0,
+            vfo_b_signal_dbm: -140.0,
+            vfo_b_signal_s_units: 0,
+            rit_enabled: false,
+            rit_offset_hz: 0,
+            xit_enabled: false,
+            xit_offset_hz: 0,
+            split_enabled: false,
+            tx_vfo: VfoSelect::A,
+            active_vfo: VfoSelect::A,
+            dual_watch_enabled: false,
+            dual_watch_supported: false,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,
 

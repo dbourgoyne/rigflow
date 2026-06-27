@@ -26,6 +26,38 @@ pub trait IqSource {
     }
 
     // -----------------------------
+    // Multi-receiver (dual-watch VFO B)
+    // -----------------------------
+
+    /// Number of independent hardware receivers this source can stream at once.
+    /// Default 1 (single RX); the HL2 returns 2 when its second DDC is usable.
+    /// Dual-watch (a second VFO you can hear) requires `>= 2`.
+    fn max_receivers(&self) -> u8 {
+        1
+    }
+
+    /// Enable/disable the secondary hardware receiver (RX1).  Default no-op
+    /// (single-RX sources).  HL2 overrides it to set the OpenHPSDR receiver-count
+    /// field; while enabled, `read_block` deinterleaves RX1 samples that
+    /// `read_secondary_block` then drains.
+    fn set_secondary_receiver_enabled(&mut self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Program the secondary receiver's NCO (its independent center frequency).
+    /// Default no-op; HL2 overrides it (RX1 NCO register).  Independent of the
+    /// primary `set_center_frequency`, so VFO B can sit on a different band.
+    fn set_secondary_center_frequency(&mut self, _center_freq_hz: f32) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Drain RX1 samples deinterleaved from the same packets as the most recent
+    /// `read_block` (time-aligned, equal length).  Default empty (single-RX).
+    fn read_secondary_block(&mut self) -> Vec<Complex32> {
+        Vec::new()
+    }
+
+    // -----------------------------
     // NEW: capabilities + control
     // -----------------------------
 

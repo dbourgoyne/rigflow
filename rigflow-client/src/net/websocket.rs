@@ -631,10 +631,42 @@ pub fn apply_radio_server_message(
             tx_tune_result,
             swr_sweep_result,
             swr_sweep_progress,
+            vfo_b_target_freq_hz,
+            vfo_b_demod_mode,
+            vfo_b_sideband,
+            vfo_b_filter_bandwidth_hz,
+            vfo_b_ssb_pitch_hz,
+            vfo_b_cw_pitch_hz,
+            rit_enabled,
+            rit_offset_hz,
+            xit_enabled,
+            xit_offset_hz,
+            split_enabled,
+            tx_vfo,
+            dual_watch_enabled,
+            dual_watch_supported,
+            vfo_b_signal_dbm,
+            vfo_b_signal_s_units,
             ..
         } => {
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
+            state.vfo_b_target_freq_hz = vfo_b_target_freq_hz as f32;
+            state.vfo_b_demod_mode = vfo_b_demod_mode;
+            state.vfo_b_sideband = vfo_b_sideband;
+            state.vfo_b_filter_bandwidth_hz = vfo_b_filter_bandwidth_hz;
+            state.vfo_b_ssb_pitch_hz = vfo_b_ssb_pitch_hz;
+            state.vfo_b_cw_pitch_hz = vfo_b_cw_pitch_hz;
+            state.vfo_b_signal_dbm = vfo_b_signal_dbm;
+            state.vfo_b_signal_s_units = vfo_b_signal_s_units;
+            state.rit_enabled = rit_enabled;
+            state.rit_offset_hz = rit_offset_hz;
+            state.xit_enabled = xit_enabled;
+            state.xit_offset_hz = xit_offset_hz;
+            state.split_enabled = split_enabled;
+            state.tx_vfo = tx_vfo;
+            state.dual_watch_enabled = dual_watch_enabled;
+            state.dual_watch_supported = dual_watch_supported;
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.swr_sweep_result = swr_sweep_result;
             state.swr_sweep_progress = swr_sweep_progress;
@@ -738,12 +770,77 @@ pub fn apply_radio_server_message(
             tx_tune_result,
             swr_sweep_result,
             swr_sweep_progress,
+            vfo_b_target_freq_hz,
+            vfo_b_demod_mode,
+            vfo_b_sideband,
+            vfo_b_filter_bandwidth_hz,
+            vfo_b_ssb_pitch_hz,
+            vfo_b_cw_pitch_hz,
+            rit_enabled,
+            rit_offset_hz,
+            xit_enabled,
+            xit_offset_hz,
+            split_enabled,
+            tx_vfo,
+            dual_watch_enabled,
+            dual_watch_supported,
+            vfo_b_signal_dbm,
+            vfo_b_signal_s_units,
             ..
         } => {
             // Source bandwidth changed (e.g. HL2 sample-rate switch) — update the
             // spectrum/waterfall span scale.
             if let Some(value) = input_sample_rate_hz {
                 state.input_sample_rate_hz = value;
+            }
+            // ── Dual-VFO / split / RIT-XIT deltas ──
+            if let Some(v) = vfo_b_target_freq_hz {
+                state.vfo_b_target_freq_hz = v as f32;
+            }
+            if let Some(v) = vfo_b_demod_mode {
+                state.vfo_b_demod_mode = v;
+            }
+            if let Some(v) = vfo_b_sideband {
+                state.vfo_b_sideband = v;
+            }
+            if let Some(v) = vfo_b_filter_bandwidth_hz {
+                state.vfo_b_filter_bandwidth_hz = v;
+            }
+            if let Some(v) = vfo_b_ssb_pitch_hz {
+                state.vfo_b_ssb_pitch_hz = v;
+            }
+            if let Some(v) = vfo_b_cw_pitch_hz {
+                state.vfo_b_cw_pitch_hz = v;
+            }
+            if let Some(v) = vfo_b_signal_dbm {
+                state.vfo_b_signal_dbm = v;
+            }
+            if let Some(v) = vfo_b_signal_s_units {
+                state.vfo_b_signal_s_units = v;
+            }
+            if let Some(v) = rit_enabled {
+                state.rit_enabled = v;
+            }
+            if let Some(v) = rit_offset_hz {
+                state.rit_offset_hz = v;
+            }
+            if let Some(v) = xit_enabled {
+                state.xit_enabled = v;
+            }
+            if let Some(v) = xit_offset_hz {
+                state.xit_offset_hz = v;
+            }
+            if let Some(v) = split_enabled {
+                state.split_enabled = v;
+            }
+            if let Some(v) = tx_vfo {
+                state.tx_vfo = v;
+            }
+            if let Some(v) = dual_watch_enabled {
+                state.dual_watch_enabled = v;
+            }
+            if let Some(v) = dual_watch_supported {
+                state.dual_watch_supported = v;
             }
             if let Some(progress) = swr_sweep_progress {
                 state.swr_sweep_progress = Some(progress);
