@@ -105,8 +105,23 @@ impl RigflowApp {
                             {
                                 let limits =
                                     crate::ui::freq_limits::active_freq_limits(&state_snapshot);
-                                new_center_freq_hz = Some(crate::ui::freq_limits::clamp_center(
+                                let clamped_center = crate::ui::freq_limits::clamp_center(
                                     new_center_hz as f32,
+                                    &limits,
+                                );
+                                new_center_freq_hz = Some(clamped_center);
+
+                                // Offset-preserving LO: shift the tuned target by the
+                                // same delta so the LO Offset (target − center) stays
+                                // constant and target never leaves center ± sr/2 (the
+                                // IQ passband).  clamp_target re-validates against the
+                                // new center for safety (e.g. when the center clamp
+                                // shortened the delta near a band edge).
+                                let delta = clamped_center - state_snapshot.center_freq_hz;
+                                new_target_freq_hz = Some(crate::ui::freq_limits::clamp_target(
+                                    state_snapshot.target_freq_hz + delta,
+                                    clamped_center,
+                                    state_snapshot.input_sample_rate_hz,
                                     &limits,
                                 ));
                             }
@@ -122,17 +137,14 @@ impl RigflowApp {
                                     lo_offset_hz,
                                 )
                             {
-                                let raw_target = (state_snapshot.center_freq_hz.round() as i64
-                                    + new_offset_hz)
-                                    .max(0) as f32;
-                                let limits =
-                                    crate::ui::freq_limits::active_freq_limits(&state_snapshot);
-                                new_target_freq_hz = Some(crate::ui::freq_limits::clamp_target(
-                                    raw_target,
-                                    state_snapshot.center_freq_hz,
-                                    state_snapshot.input_sample_rate_hz,
-                                    &limits,
-                                ));
+                                // Move the tuned target by the offset change, reusing
+                                // the same soft-edge LO pan as the wheel / arrow keys
+                                // (`tune_target_relative`): when the target reaches the
+                                // visible edge the LO follows it, so the target never
+                                // leaves center ± sr/2 (the IQ passband).  Equivalent
+                                // delta: (center + new_offset) − current_target.
+                                let delta = (new_offset_hz - lo_offset_hz) as f32;
+                                self.tune_target_relative(&state_snapshot, delta);
                             }
 
                             if let Some(new_center_hz) = new_center_freq_hz {
