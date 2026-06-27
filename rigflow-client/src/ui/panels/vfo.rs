@@ -14,6 +14,7 @@ use rigflow_protocol::radio_control::ClientRadioMessage;
 
 use crate::UiState;
 use crate::ui::app::RigflowApp;
+use crate::ui::tuning_steps::{TuneTier, target_step_hz};
 
 /// Modes offered for VFO B (same set the demod selector uses).
 const VFO_MODES: [DemodMode; 8] = [
@@ -63,18 +64,50 @@ impl RigflowApp {
                     ui.label(mode_label(snapshot.demod_mode));
                     ui.end_row();
 
-                    // VFO B (editable).
+                    // VFO B (editable).  Click to type an exact value in MHz, or
+                    // roll the mouse wheel over the field to nudge — mode-aware
+                    // steps, same table as VFO A tuning (wheel = fine, Shift =
+                    // medium, Alt = coarse).  The custom_parser reads the typed
+                    // text as MHz; without it egui would treat "14.055" as 14 Hz.
                     let b_tx = snapshot.split_enabled && snapshot.tx_vfo == VfoSelect::B;
                     ui.label(if b_tx { "B ▶TX" } else { "B" });
                     let mut b_hz = vfo_b_hz as i64;
-                    let resp = ui.add_enabled(
+                    let mut resp = ui.add_enabled(
                         acquired,
                         egui::DragValue::new(&mut b_hz)
                             .speed(100.0)
                             .range(0..=470_000_000i64)
                             .custom_formatter(|n, _| format!("{:.6}", n / 1_000_000.0))
+                            .custom_parser(|s| s.parse::<f64>().ok().map(|mhz| mhz * 1_000_000.0))
                             .suffix(" MHz"),
                     );
+                    // Mouse-wheel-over-field nudge (and swallow the scroll so the
+                    // side-panel ScrollArea doesn't move while the pointer is here).
+                    if acquired && resp.hovered() {
+                        let raw_y = ui.input(|i| i.raw_scroll_delta.y);
+                        if raw_y != 0.0 {
+                            let tier = ui.input(|i| {
+                                if i.modifiers.alt {
+                                    TuneTier::Coarse
+                                } else if i.modifiers.shift {
+                                    TuneTier::Medium
+                                } else {
+                                    TuneTier::Fine
+                                }
+                            });
+                            let step = target_step_hz(snapshot.vfo_b_demod_mode, tier);
+                            let next =
+                                (b_hz as f32 + step * raw_y.signum()).clamp(0.0, 470_000_000.0);
+                            if next as i64 != b_hz {
+                                b_hz = next as i64;
+                                resp.mark_changed();
+                            }
+                        }
+                        ui.ctx().input_mut(|i| {
+                            i.raw_scroll_delta = egui::Vec2::ZERO;
+                            i.smooth_scroll_delta = egui::Vec2::ZERO;
+                        });
+                    }
                     if resp.changed() {
                         self.set_local(|s| s.vfo_b_target_freq_hz = b_hz.max(0) as f32);
                         self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency {
