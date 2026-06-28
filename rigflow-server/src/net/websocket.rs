@@ -17,8 +17,8 @@ use crate::{
         api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
         session::SessionState,
         types::{
-            ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerRuntimeState,
-            WorkerStatus,
+            ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerEvent,
+            WorkerRuntimeState, WorkerStatus,
         },
     },
 };
@@ -339,6 +339,42 @@ async fn handle_radio_message(
                     last_runtime = Some(runtime);
                 }
             });
+
+            // Forward transient worker events (async errors, e.g. a cross-band TX
+            // aborted because the amp band change couldn't be confirmed) to this
+            // client as RadioError.  Best-effort: events are not replayed.
+            match app_state
+                .radio_manager
+                .subscribe_events(
+                    &session.client_id,
+                    &acquire_result.radio_id,
+                    &acquire_result.lease_id,
+                )
+                .await
+            {
+                Ok(mut events_rx) => {
+                    let local_tx_events = local_tx.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            match events_rx.recv().await {
+                                Ok(WorkerEvent::Error { code, message }) => {
+                                    send_radio(
+                                        &local_tx_events,
+                                        ServerRadioMessage::RadioError { code, message },
+                                    );
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    continue
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    debug!("[websocket] subscribe_events failed: {err:?}");
+                }
+            }
         }
 
         ClientRadioMessage::ReleaseRadio => {

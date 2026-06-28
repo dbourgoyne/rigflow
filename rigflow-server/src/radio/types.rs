@@ -385,6 +385,15 @@ pub struct WorkerReadyInfo {
     pub runtime: WorkerRuntimeState,
 }
 
+/// Transient, fire-and-forget event from a worker thread to the leasing client —
+/// an asynchronous failure not tied to a specific command (e.g. a cross-band TX
+/// aborted because the HR50 band change couldn't be confirmed before RF).
+/// Delivered over a broadcast channel and surfaced as `ServerRadioMessage::RadioError`.
+#[derive(Debug, Clone)]
+pub enum WorkerEvent {
+    Error { code: String, message: String },
+}
+
 /// Result of worker startup handshake.
 #[derive(Debug)]
 pub enum WorkerStartResult {

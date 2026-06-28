@@ -939,6 +939,8 @@ pub fn apply_radio_server_message(
             // surface a spurious per-retry error for either.
             if code != "radio_busy" && code != "server_busy" {
                 state.runtime_error = format!("radio error: {}", message);
+                // Timestamped so the Problems panel shows it briefly then clears.
+                state.last_radio_error = Some((message, std::time::Instant::now()));
             }
         }
     }

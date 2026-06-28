@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info, trace, warn};
 use num_complex::Complex32;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use rigflow_core::dsp::modes::{default_deemphasis_mode, DeemphasisMode};
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
@@ -26,8 +26,8 @@ use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::radio::types::{
-    AcquireRequest, StopReason, VfoSplitState, WorkerCommand, WorkerExit, WorkerReadyInfo,
-    WorkerRuntimeState, WorkerStartResult, WorkerStatus,
+    AcquireRequest, StopReason, VfoSplitState, WorkerCommand, WorkerEvent, WorkerExit,
+    WorkerReadyInfo, WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
@@ -190,6 +190,7 @@ pub async fn run_radio_worker(
     server_cfg: ServerConfig,
     mut worker_rx: mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
+    events_tx: broadcast::Sender<WorkerEvent>,
     mut stop_rx: oneshot::Receiver<()>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
 ) -> WorkerExit {
@@ -226,6 +227,7 @@ pub async fn run_radio_worker(
         let thread_request = request.clone();
         let thread_server_cfg = server_cfg.clone();
         let thread_status_tx = status_tx.clone();
+        let thread_events_tx = events_tx.clone();
         let thread_stop_flag = stop_flag.clone();
         let thread_stop_reason = stop_reason.clone();
 
@@ -238,6 +240,7 @@ pub async fn run_radio_worker(
                 thread_server_cfg,
                 cmd_rx_std,
                 thread_status_tx,
+                thread_events_tx,
                 startup_tx,
                 thread_stop_flag,
                 thread_stop_reason,
@@ -393,6 +396,46 @@ fn soft_clip(x: f32) -> f32 {
 /// RF, or RF would hit a switching/mismatched filter. Same-band TX adds nothing.
 const TX_CROSS_BAND_SETTLE_MS: u64 = 80;
 
+/// Ceiling (not a per-key cost) on how long [`prepare_tx_band`] waits for the
+/// HR50 poller to confirm it sent the FA band change (cross-band only, amp
+/// present).  A successful key returns as soon as the poller confirms — tens of
+/// ms with a responsive amp.  The bound is set by the worst case: the poller may
+/// already be blocked in one serial read when the request lands (`READ_TIMEOUT`,
+/// 700 ms — a condvar can't interrupt an in-flight UART read), plus the prep's own
+/// `send_set` drain (`SET_DRAIN`, 120 ms), plus margin.  A lower value would
+/// spuriously abort a good key that merely coincided with a status read.  On
+/// timeout the TX is aborted (no RF).
+const AMP_TX_PREP_TIMEOUT_MS: u64 = 1000;
+
+/// Outcome of [`prepare_tx_band`].  `cross_band` drives the RX-band restore;
+/// `ready` is false only when a cross-band amp band change could not be confirmed
+/// — the caller must then abort the transmit (never key into a mismatched band).
+struct TxBandPrep {
+    cross_band: bool,
+    ready: bool,
+}
+
+/// Surface an aborted cross-band TX (amp band change unconfirmed) to the log and
+/// — via the worker event channel — to the leasing client as a `RadioError`.
+fn abort_cross_band_tx(
+    events_tx: &broadcast::Sender<WorkerEvent>,
+    radio_id: &str,
+    tx_freq_hz: u64,
+) {
+    warn!(
+        "[radio-worker {radio_id}] cross-band TX aborted: HR50 band change to {tx_freq_hz} Hz \
+         not confirmed within {AMP_TX_PREP_TIMEOUT_MS} ms"
+    );
+    // Best-effort: no subscriber (client between updates) just drops it.
+    let _ = events_tx.send(WorkerEvent::Error {
+        code: "tx_band_unconfirmed".to_string(),
+        message: format!(
+            "Cross-band TX aborted: amplifier band change to {:.3} MHz not confirmed",
+            tx_freq_hz as f64 / 1_000_000.0
+        ),
+    });
+}
+
 /// Effective transmit frequency from VFO / split / XIT state.
 /// Simplex (no split) = VFO A; split = the selected TX VFO; plus the XIT offset.
 fn effective_tx_freq_hz(cs: &SharedControlState) -> u64 {
@@ -441,10 +484,13 @@ fn effective_tx_demod_mode(cs: &SharedControlState) -> DemodMode {
 fn prepare_tx_band(
     source: &mut dyn IqSource,
     amp_freq: &AtomicU64,
+    amp_tx_prep_req: &AtomicU64,
+    amp_tx_prep_done: &AtomicBool,
+    amp_present: bool,
     n2adr_enabled: bool,
     rx_freq_hz: u64,
     tx_freq_hz: u64,
-) -> bool {
+) -> TxBandPrep {
     let cross_band = band_from_frequency(rx_freq_hz) != band_from_frequency(tx_freq_hz);
     // Amp follows the TX freq so the HR50 selects the TX band filter.
     amp_freq.store(tx_freq_hz, Ordering::Relaxed);
@@ -453,10 +499,44 @@ fn prepare_tx_band(
             let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
         }
     }
-    if cross_band {
-        std::thread::sleep(std::time::Duration::from_millis(TX_CROSS_BAND_SETTLE_MS));
+    // Same-band needs no band switch; nothing to wait for.
+    if !cross_band {
+        return TxBandPrep {
+            cross_band: false,
+            ready: true,
+        };
     }
-    cross_band
+    // Cross-band: the HR50 band relays must switch BEFORE RF.  The poller owns the
+    // serial and goes silent once keyed, so we ask it (while still unkeyed) to send
+    // the FA band change now and wait for confirmation, then let the relays settle.
+    if !amp_present {
+        // No HR50 to protect — the internal N2ADR LPF (set above) is enough.
+        std::thread::sleep(std::time::Duration::from_millis(TX_CROSS_BAND_SETTLE_MS));
+        return TxBandPrep {
+            cross_band: true,
+            ready: true,
+        };
+    }
+    amp_tx_prep_done.store(false, Ordering::Relaxed);
+    // tx_freq_hz.max(1) so the request is never 0 (= "no request").
+    amp_tx_prep_req.store(tx_freq_hz.max(1), Ordering::Relaxed);
+    let start = std::time::Instant::now();
+    while !amp_tx_prep_done.load(Ordering::Relaxed) {
+        if start.elapsed() >= std::time::Duration::from_millis(AMP_TX_PREP_TIMEOUT_MS) {
+            amp_tx_prep_req.store(0, Ordering::Relaxed);
+            return TxBandPrep {
+                cross_band: true,
+                ready: false,
+            };
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    // FA is on the wire; give the band relays + amp time to settle before RF.
+    std::thread::sleep(std::time::Duration::from_millis(TX_CROSS_BAND_SETTLE_MS));
+    TxBandPrep {
+        cross_band: true,
+        ready: true,
+    }
 }
 
 /// Restore the receive band after a transmit: point the amp mirror back at the
@@ -536,6 +616,7 @@ fn run_iq_worker_threads(
     server_cfg: ServerConfig,
     cmd_rx: std_mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
+    events_tx: broadcast::Sender<WorkerEvent>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
     stop_flag: Arc<AtomicBool>,
     stop_reason: Arc<Mutex<StopReason>>,
@@ -659,6 +740,12 @@ fn run_iq_worker_threads(
     let amp_freq = Arc::new(AtomicU64::new(
         control.lock().map(|c| c.target_freq_hz).unwrap_or(0),
     ));
+    // Cross-band TX band-prep handshake: the capture thread (prepare_tx_band)
+    // stores the TX freq in `amp_tx_prep_req` to ask the poller to send FA *now*
+    // (while unkeyed), and waits on `amp_tx_prep_done` before keying.  0 = no
+    // request.  The poller services it between serial reads (see service_tx_prep).
+    let amp_tx_prep_req = Arc::new(AtomicU64::new(0));
+    let amp_tx_prep_done = Arc::new(AtomicBool::new(false));
 
     // HL2 has a watchdog: if no C&C packets arrive in ~60 s it stops streaming.
     // The capture thread sends a keepalive C&C every 30 s to prevent this.
@@ -690,6 +777,9 @@ fn run_iq_worker_threads(
         confirmed_sample_rate_hz.clone(),
         needs_cc_keepalive,
         amp_freq.clone(),
+        amp_tx_prep_req.clone(),
+        amp_tx_prep_done.clone(),
+        events_tx.clone(),
         iq_audio_b_tx,
         iq_wf_b_tx,
         control_b.clone(),
@@ -792,6 +882,8 @@ fn run_iq_worker_threads(
             stop_flag.clone(),
             amp_cmd_rx,
             amp_freq.clone(),
+            amp_tx_prep_req.clone(),
+            amp_tx_prep_done.clone(),
         )
     } else {
         None
@@ -893,6 +985,8 @@ fn spawn_amplifier_thread(
     stop_flag: Arc<AtomicBool>,
     amp_cmd_rx: std_mpsc::Receiver<crate::amplifier::AmpCommand>,
     amp_freq: Arc<AtomicU64>,
+    amp_tx_prep_req: Arc<AtomicU64>,
+    amp_tx_prep_done: Arc<AtomicBool>,
 ) -> Option<thread::JoinHandle<()>> {
     let configured = server_cfg.hr50_serial.clone()?;
     let radio_id = descriptor.id.0;
@@ -941,6 +1035,8 @@ fn spawn_amplifier_thread(
             stop_flag,
             amp_cmd_rx,
             amp_freq,
+            amp_tx_prep_req,
+            amp_tx_prep_done,
             tx_keyed,
             |status| {
                 if let Ok(mut cs) = control.lock() {
@@ -1545,6 +1641,9 @@ fn spawn_capture_thread(
     confirmed_sample_rate_hz: Arc<AtomicU32>,
     needs_cc_keepalive: bool,
     amp_freq: Arc<AtomicU64>,
+    amp_tx_prep_req: Arc<AtomicU64>,
+    amp_tx_prep_done: Arc<AtomicBool>,
+    events_tx: broadcast::Sender<WorkerEvent>,
     iq_audio_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
     iq_wf_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
     control_b: Arc<Mutex<SharedControlState>>,
@@ -1962,45 +2061,52 @@ fn spawn_capture_thread(
                     let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     let spot_level_percent = control_snapshot.source_control.spot_level_percent;
-                    let cross_band = prepare_tx_band(
+                    let prep = prepare_tx_band(
                         source.as_mut(),
                         &amp_freq,
+                        &amp_tx_prep_req,
+                        &amp_tx_prep_done,
+                        control_snapshot.amplifier_status.model.is_some(),
                         control_snapshot.source_control.n2adr_enabled,
                         control_snapshot.target_freq_hz,
                         target_freq_hz,
                     );
-                    info!(
-                        "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
-                        descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
-                    );
+                    if prep.ready {
+                        info!(
+                            "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
+                            descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
+                        );
 
-                    let result = source.tx_tune_test(
-                        target_freq_hz,
-                        duration_ms,
-                        tx_drive_percent,
-                        spot_level_percent,
-                    );
+                        let result = source.tx_tune_test(
+                            target_freq_hz,
+                            duration_ms,
+                            tx_drive_percent,
+                            spot_level_percent,
+                        );
+
+                        info!(
+                            "[radio-worker {}] TX tune test complete: result={:?}",
+                            descriptor.id.0, result.message
+                        );
+
+                        // FDX / TX Monitor Spectrum: forward any RX IQ the source
+                        // captured during the pulse into the spectrum/waterfall path
+                        // (see `forward_fdx_iq`).  Empty unless FDX is enabled.
+                        forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+
+                        if let Ok(mut cs) = control.lock() {
+                            cs.last_tx_tune_result = Some(result);
+                        }
+                    } else {
+                        abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                    }
 
                     restore_rx_band(
                         &amp_freq,
                         control_snapshot.target_freq_hz,
-                        cross_band,
+                        prep.cross_band,
                         &mut last_n2adr_band,
                     );
-
-                    info!(
-                        "[radio-worker {}] TX tune test complete: result={:?}",
-                        descriptor.id.0, result.message
-                    );
-
-                    // FDX / TX Monitor Spectrum: forward any RX IQ the source
-                    // captured during the pulse into the spectrum/waterfall path
-                    // (see `forward_fdx_iq`).  Empty unless FDX is enabled.
-                    forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
-
-                    if let Ok(mut cs) = control.lock() {
-                        cs.last_tx_tune_result = Some(result);
-                    }
                 }
             }
 
@@ -2118,16 +2224,21 @@ fn spawn_capture_thread(
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     let spot_level_percent = control_snapshot.source_control.spot_level_percent;
                     let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
-                    let cross_band = prepare_tx_band(
+                    let prep = prepare_tx_band(
                         source.as_mut(),
                         &amp_freq,
+                        &amp_tx_prep_req,
+                        &amp_tx_prep_done,
+                        control_snapshot.amplifier_status.model.is_some(),
                         control_snapshot.source_control.n2adr_enabled,
                         control_snapshot.target_freq_hz,
                         target_freq_hz,
                     );
                     let stop = control.lock().ok().map(|cs| cs.tx_tone_stop.clone());
 
-                    if let Some(stop) = stop {
+                    if !prep.ready {
+                        abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                    } else if let Some(stop) = stop {
                         let mut forward = |iq: Vec<Complex32>| {
                             let _ = iq_wf_tx.try_send(iq);
                         };
@@ -2146,7 +2257,7 @@ fn spawn_capture_thread(
                     restore_rx_band(
                         &amp_freq,
                         control_snapshot.target_freq_hz,
-                        cross_band,
+                        prep.cross_band,
                         &mut last_n2adr_band,
                     );
                 }
@@ -2201,9 +2312,12 @@ fn spawn_capture_thread(
                         // never the generic SSB sideband field.
                         let usb = cw_usb.unwrap();
                         let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
-                        let cross_band = prepare_tx_band(
+                        let prep = prepare_tx_band(
                             source.as_mut(),
                             &amp_freq,
+                            &amp_tx_prep_req,
+                            &amp_tx_prep_done,
+                            control_snapshot.amplifier_status.model.is_some(),
                             control_snapshot.source_control.n2adr_enabled,
                             control_snapshot.target_freq_hz,
                             target_freq_hz,
@@ -2212,7 +2326,14 @@ fn spawn_capture_thread(
                         let hang_ms = control_snapshot.cw_hang_ms;
                         let held = control.lock().ok().map(|cs| cs.cw_key_held.clone());
 
-                        if let Some(held) = held {
+                        if !prep.ready {
+                            abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                            // Clear the latched key request so we don't immediately
+                            // retry-spam the aborted cross-band session.
+                            if let Ok(mut cs) = control.lock() {
+                                cs.pending_cw_key = false;
+                            }
+                        } else if let Some(held) = held {
                             let mut forward = |iq: Vec<Complex32>| {
                                 let _ = iq_wf_tx.try_send(iq);
                             };
@@ -2241,7 +2362,7 @@ fn spawn_capture_thread(
                         restore_rx_band(
                             &amp_freq,
                             control_snapshot.target_freq_hz,
-                            cross_band,
+                            prep.cross_band,
                             &mut last_n2adr_band,
                         );
                     }
@@ -2297,16 +2418,26 @@ fn spawn_capture_thread(
                         let compressor_enabled = control_snapshot.compressor_enabled && !is_digital;
                         let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                         let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
-                        let cross_band = prepare_tx_band(
+                        let prep = prepare_tx_band(
                             source.as_mut(),
                             &amp_freq,
+                            &amp_tx_prep_req,
+                            &amp_tx_prep_done,
+                            control_snapshot.amplifier_status.model.is_some(),
                             control_snapshot.source_control.n2adr_enabled,
                             control_snapshot.target_freq_hz,
                             target_freq_hz,
                         );
                         let active = control.lock().ok().map(|cs| cs.mic_tx_active.clone());
 
-                        if let Some(active) = active {
+                        if !prep.ready {
+                            abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                            // Drop the key request so the aborted cross-band mic TX
+                            // doesn't immediately retry every loop.
+                            if let Ok(cs) = control.lock() {
+                                cs.mic_tx_active.store(false, Ordering::Relaxed);
+                            }
+                        } else if let Some(active) = active {
                             let mut forward = |iq: Vec<Complex32>| {
                                 let _ = iq_wf_tx.try_send(iq);
                             };
@@ -2363,7 +2494,7 @@ fn spawn_capture_thread(
                         restore_rx_band(
                             &amp_freq,
                             control_snapshot.target_freq_hz,
-                            cross_band,
+                            prep.cross_band,
                             &mut last_n2adr_band,
                         );
                     }

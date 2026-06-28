@@ -190,6 +190,12 @@ pub struct UiState {
     // =====================================================================
     pub runtime_error: String,
 
+    /// Most recent server-pushed transient error (`RadioError`), timestamped so
+    /// the Problems panel can show it for a few seconds then auto-clear.  Used for
+    /// async worker failures like a cross-band TX aborted because the amp band
+    /// change couldn't be confirmed.
+    pub last_radio_error: Option<(String, Instant)>,
+
     pub selected_license: Option<LicenseClass>,
 
     pub spectrum_zoom_x: f32,
@@ -568,6 +574,7 @@ impl Default for UiState {
             // UI STATE
             // =================================================================
             runtime_error: String::new(),
+            last_radio_error: None,
             selected_license: None,
             spectrum_zoom_x: 1.0,
 
@@ -740,6 +747,10 @@ pub struct Problem {
 /// and this is the single place that decides what counts as a problem, so the
 /// status-bar badge count and the panel list always agree.  Errors are ordered
 /// before warnings.
+/// How long a transient server-pushed `RadioError` stays in the Problems panel
+/// before it auto-clears (it's a one-shot event, not a standing condition).
+const RADIO_ERROR_NOTICE_SECS: u64 = 8;
+
 pub fn collect_problems(s: &UiState) -> Vec<Problem> {
     let mut errors: Vec<Problem> = Vec::new();
     let mut warnings: Vec<Problem> = Vec::new();
@@ -776,6 +787,19 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
             source: "Amplifier",
             detail: err.clone(),
         });
+    }
+    // Transient server-pushed error (RadioError) — e.g. a cross-band TX aborted
+    // because the amp band change wasn't confirmed, or a rejected command.  Shown
+    // for a few seconds then auto-clears (it's a one-shot event, not a standing
+    // condition).
+    if let Some((msg, when)) = &s.last_radio_error {
+        if when.elapsed().as_secs() < RADIO_ERROR_NOTICE_SECS {
+            errors.push(Problem {
+                severity: ProblemSeverity::Error,
+                source: "Radio",
+                detail: msg.clone(),
+            });
+        }
     }
     // The SDR stopped sending IQ (HL2 link blip, RTL dongle pulled, device
     // powered off, …).  Only while a radio is held (so stale status after a

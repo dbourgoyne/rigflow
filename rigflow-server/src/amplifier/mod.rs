@@ -178,6 +178,8 @@ pub fn run_amplifier_poller<F>(
     stop: Arc<AtomicBool>,
     commands: Receiver<AmpCommand>,
     target_freq_hz: Arc<AtomicU64>,
+    amp_tx_prep_req: Arc<AtomicU64>,
+    amp_tx_prep_done: Arc<AtomicBool>,
     tx_keyed: Vec<Arc<AtomicBool>>,
     mut publish: F,
 ) where
@@ -204,6 +206,17 @@ pub fn run_amplifier_poller<F>(
 
         let t = transport.as_mut();
 
+        // A cross-band split key-down waits for the band change before RF, so
+        // honor a pending TX band-prep request as early as possible — and again
+        // between each blocking status read below — to keep the pre-TX wait short.
+        service_tx_prep(
+            t,
+            &tx_keyed,
+            &amp_tx_prep_req,
+            &amp_tx_prep_done,
+            &mut last_freq_sent,
+        );
+
         // 1. Apply queued control commands (one serial SET each).
         while let Ok(cmd) = commands.try_recv() {
             match cmd {
@@ -220,10 +233,31 @@ pub fn run_amplifier_poller<F>(
             last_freq_sent = freq;
         }
 
-        // 3. Poll status / telemetry.
+        // 3. Poll status / telemetry (servicing band-prep between each read).
         let rx = query_hrrx(t);
+        service_tx_prep(
+            t,
+            &tx_keyed,
+            &amp_tx_prep_req,
+            &amp_tx_prep_done,
+            &mut last_freq_sent,
+        );
         let vt = query_hrvt(t);
+        service_tx_prep(
+            t,
+            &tx_keyed,
+            &amp_tx_prep_req,
+            &amp_tx_prep_done,
+            &mut last_freq_sent,
+        );
         let mx = query(t, CMD_HRMX, "HRMX", "HRMX").and_then(|s| parse_hrmx(&s));
+        service_tx_prep(
+            t,
+            &tx_keyed,
+            &amp_tx_prep_req,
+            &amp_tx_prep_done,
+            &mut last_freq_sent,
+        );
         let at = query(t, CMD_HRAT, "HRAT", "HRAT").and_then(|s| parse_hrat(&s));
 
         if rx.is_some() || vt.is_some() {
@@ -273,7 +307,64 @@ pub fn run_amplifier_poller<F>(
         } else {
             DETECT_RETRY
         };
-        sleep_responsive(&stop, wait);
+        wait_servicing_prep(
+            &stop,
+            wait,
+            transport.as_mut(),
+            &tx_keyed,
+            &amp_tx_prep_req,
+            &amp_tx_prep_done,
+            &mut last_freq_sent,
+        );
+    }
+}
+
+/// Service a pending TX band-prep request: if the worker asked for an immediate
+/// `FA` (a cross-band split key-down, set while still unkeyed) and we're not
+/// keyed, send it now and signal completion via `prep_done`.  Called at several
+/// points in the poll loop so the request is honored within one in-flight serial
+/// read.  Never touches the serial while keyed (the HR50 hangs).
+fn service_tx_prep(
+    t: &mut dyn AmplifierTransport,
+    tx_keyed: &[Arc<AtomicBool>],
+    prep_req: &AtomicU64,
+    prep_done: &AtomicBool,
+    last_freq_sent: &mut u64,
+) {
+    let req = prep_req.load(Ordering::Relaxed);
+    if req == 0 {
+        return;
+    }
+    if tx_keyed.iter().any(|f| f.load(Ordering::Relaxed)) {
+        // Should not happen (prep precedes key), but never serial while keyed.
+        return;
+    }
+    send_set(t, &cmd_fa(req), "FA(tx-prep)");
+    *last_freq_sent = req;
+    prep_req.store(0, Ordering::Relaxed);
+    prep_done.store(true, Ordering::Relaxed);
+}
+
+/// Idle wait that also services TX band-prep requests at ~10 ms granularity, so a
+/// cross-band key-down isn't blocked by the 1 s poll cadence.  Wakes early on
+/// `stop`.
+#[allow(clippy::too_many_arguments)]
+fn wait_servicing_prep(
+    stop: &Arc<AtomicBool>,
+    dur: Duration,
+    t: &mut dyn AmplifierTransport,
+    tx_keyed: &[Arc<AtomicBool>],
+    prep_req: &AtomicU64,
+    prep_done: &AtomicBool,
+    last_freq_sent: &mut u64,
+) {
+    let step = Duration::from_millis(10);
+    let mut left = dur;
+    while left > Duration::ZERO && !stop.load(Ordering::Relaxed) {
+        service_tx_prep(t, tx_keyed, prep_req, prep_done, last_freq_sent);
+        let s = step.min(left);
+        std::thread::sleep(s);
+        left = left.saturating_sub(s);
     }
 }
 
