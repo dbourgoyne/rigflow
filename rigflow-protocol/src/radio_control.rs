@@ -352,6 +352,12 @@ pub enum ClientRadioMessage {
     SetVfoBFrequency {
         target_freq_hz: u64,
     },
+    /// Set VFO B's LO / centre frequency (the RX1 hardware NCO).  Together with
+    /// `SetVfoBFrequency` this gives VFO B the same centre+target panadapter model
+    /// as VFO A (LO window + tuned offset within it).
+    SetVfoBCenterFrequency {
+        center_freq_hz: u64,
+    },
     /// Set VFO B's demod mode.
     SetVfoBDemodMode {
         mode: DemodMode,
@@ -523,6 +529,8 @@ pub enum ServerRadioMessage {
         // ── Dual-VFO / split / RIT-XIT (VFO B is independent: own mode + filter) ──
         #[serde(default)]
         vfo_b_target_freq_hz: u64,
+        #[serde(default)]
+        vfo_b_center_freq_hz: u64,
         #[serde(default = "default_demod_mode")]
         vfo_b_demod_mode: DemodMode,
         #[serde(default = "default_sideband")]
@@ -629,6 +637,8 @@ pub enum ServerRadioMessage {
         // ── Dual-VFO / split / RIT-XIT deltas (None = unchanged) ──
         #[serde(default)]
         vfo_b_target_freq_hz: Option<u64>,
+        #[serde(default)]
+        vfo_b_center_freq_hz: Option<u64>,
         #[serde(default)]
         vfo_b_demod_mode: Option<DemodMode>,
         #[serde(default)]

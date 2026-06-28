@@ -263,6 +263,9 @@ pub enum WorkerCommand {
     SetVfoBFrequency {
         hz: u64,
     },
+    SetVfoBCenterFrequency {
+        hz: u64,
+    },
     SetVfoBDemodMode {
         mode: DemodMode,
     },

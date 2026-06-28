@@ -114,10 +114,7 @@ impl RigflowApp {
                         });
                     }
                     if resp.changed() {
-                        self.set_local(|s| s.vfo_b_target_freq_hz = b_hz.max(0) as f32);
-                        self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency {
-                            target_freq_hz: b_hz.max(0) as u64,
-                        });
+                        self.set_vfo_b_freq_centered(b_hz.max(0) as u64);
                     }
                     // VFO B mode.
                     let mut b_mode = snapshot.vfo_b_demod_mode;
@@ -285,10 +282,21 @@ impl RigflowApp {
         self.send_radio_msg(ClientRadioMessage::SetVfoBSideband { sideband: sb });
     }
 
+    /// Set VFO B's frequency and centre its LO window on it (RX1 NCO = target),
+    /// so the tuned freq is always inside the window — the "QSY here" behaviour.
+    /// Spectrum / spinner tuning then pans / offsets within the window from there.
+    fn set_vfo_b_freq_centered(&self, hz: u64) {
+        self.set_local(|s| {
+            s.vfo_b_target_freq_hz = hz as f32;
+            s.vfo_b_center_freq_hz = hz as f32;
+        });
+        self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency { target_freq_hz: hz });
+        self.send_radio_msg(ClientRadioMessage::SetVfoBCenterFrequency { center_freq_hz: hz });
+    }
+
     fn copy_a_to_b(&self, snapshot: &UiState) {
         let hz = snapshot.target_freq_hz.max(0.0) as u64;
-        self.set_local(|s| s.vfo_b_target_freq_hz = hz as f32);
-        self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency { target_freq_hz: hz });
+        self.set_vfo_b_freq_centered(hz);
         self.apply_vfo_b_mode(snapshot.demod_mode);
     }
 
@@ -299,25 +307,24 @@ impl RigflowApp {
         let a_sb = snapshot.sideband;
         let b_mode = snapshot.vfo_b_demod_mode;
         let b_sb = snapshot.vfo_b_sideband;
-        // VFO A ⇄ VFO B: swap both frequency and mode/sideband.
+        // VFO A ⇄ VFO B: swap frequency + mode/sideband, re-centring each VFO's
+        // LO window on its new frequency.
         self.set_local(|s| {
             s.target_freq_hz = b_hz as f32;
-            s.vfo_b_target_freq_hz = a_hz as f32;
+            s.center_freq_hz = b_hz as f32;
             s.demod_mode = b_mode;
             s.sideband = b_sb;
-            s.vfo_b_demod_mode = a_mode;
-            s.vfo_b_sideband = a_sb;
         });
-        // VFO A ← B's freq + mode.
         self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
             target_freq_hz: b_hz,
         });
+        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
+            center_freq_hz: b_hz,
+        });
         self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode: b_mode });
         self.send_radio_msg(ClientRadioMessage::SetSideband { sideband: b_sb });
-        // VFO B ← A's freq + mode.
-        self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency {
-            target_freq_hz: a_hz,
-        });
+        // VFO B ← A's freq + mode (centred).
+        self.set_vfo_b_freq_centered(a_hz);
         self.send_radio_msg(ClientRadioMessage::SetVfoBDemodMode { mode: a_mode });
         self.send_radio_msg(ClientRadioMessage::SetVfoBSideband { sideband: a_sb });
     }

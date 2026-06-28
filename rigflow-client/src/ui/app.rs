@@ -477,7 +477,7 @@ impl RigflowApp {
                 TuneTier::Fine
             };
             let delta = target_dir as f32 * target_step_hz(mode, tier);
-            self.tune_target_relative(&snapshot, delta);
+            self.tune_target_relative(&snapshot, delta, crate::ui::app_center::TuneVfo::A);
         }
     }
 

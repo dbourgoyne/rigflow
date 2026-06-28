@@ -1262,6 +1262,11 @@ fn spawn_command_thread(
                             cs.vfo.vfo_b_target_freq_hz = hz;
                         }
                     }
+                    WorkerCommand::SetVfoBCenterFrequency { hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_center_freq_hz = hz;
+                        }
+                    }
                     WorkerCommand::SetVfoBDemodMode { mode } => {
                         if let Ok(mut cs) = control.lock() {
                             cs.vfo.vfo_b_demod_mode = mode;
@@ -1778,13 +1783,15 @@ fn spawn_capture_thread(
                     last_vfo_b_freq = u64::MAX; // force RX1 NCO reprogram
                 }
                 if vfo.dual_watch_enabled {
-                    if vfo.vfo_b_target_freq_hz != last_vfo_b_freq {
+                    // RX1 hardware NCO tracks VFO B's LO/centre (like VFO A's DDC0);
+                    // the DSP-B fine-tunes (target − centre) into baseband.
+                    if vfo.vfo_b_center_freq_hz != last_vfo_b_freq {
                         if let Err(e) =
-                            source.set_secondary_center_frequency(vfo.vfo_b_target_freq_hz as f32)
+                            source.set_secondary_center_frequency(vfo.vfo_b_center_freq_hz as f32)
                         {
                             warn!("[radio-worker {}] VFO B NCO failed: {e}", descriptor.id.0);
                         }
-                        last_vfo_b_freq = vfo.vfo_b_target_freq_hz;
+                        last_vfo_b_freq = vfo.vfo_b_center_freq_hz;
                     }
                     // Mirror into control_b in VFO-A shape: inherit all of VFO A's
                     // RX processing (AGC/NR2/NB/notch/squelch/volume), then override
@@ -1793,7 +1800,7 @@ fn spawn_capture_thread(
                     if let Ok(mut cb) = control_b.lock() {
                         let (b_dbm, b_su) = (cb.signal_dbm, cb.signal_s_units);
                         *cb = control_snapshot.clone();
-                        cb.center_freq_hz = vfo.vfo_b_target_freq_hz;
+                        cb.center_freq_hz = vfo.vfo_b_center_freq_hz;
                         cb.target_freq_hz = vfo.vfo_b_target_freq_hz;
                         cb.demod_mode = vfo.vfo_b_demod_mode;
                         cb.sideband = vfo.vfo_b_sideband;

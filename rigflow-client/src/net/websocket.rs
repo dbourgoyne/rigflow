@@ -632,6 +632,7 @@ pub fn apply_radio_server_message(
             swr_sweep_result,
             swr_sweep_progress,
             vfo_b_target_freq_hz,
+            vfo_b_center_freq_hz,
             vfo_b_demod_mode,
             vfo_b_sideband,
             vfo_b_filter_bandwidth_hz,
@@ -652,6 +653,7 @@ pub fn apply_radio_server_message(
             state.center_freq_hz = center_freq_hz as f32;
             state.target_freq_hz = target_freq_hz as f32;
             state.vfo_b_target_freq_hz = vfo_b_target_freq_hz as f32;
+            state.vfo_b_center_freq_hz = vfo_b_center_freq_hz as f32;
             state.vfo_b_demod_mode = vfo_b_demod_mode;
             state.vfo_b_sideband = vfo_b_sideband;
             state.vfo_b_filter_bandwidth_hz = vfo_b_filter_bandwidth_hz;
@@ -771,6 +773,7 @@ pub fn apply_radio_server_message(
             swr_sweep_result,
             swr_sweep_progress,
             vfo_b_target_freq_hz,
+            vfo_b_center_freq_hz,
             vfo_b_demod_mode,
             vfo_b_sideband,
             vfo_b_filter_bandwidth_hz,
@@ -796,6 +799,9 @@ pub fn apply_radio_server_message(
             // ── Dual-VFO / split / RIT-XIT deltas ──
             if let Some(v) = vfo_b_target_freq_hz {
                 state.vfo_b_target_freq_hz = v as f32;
+            }
+            if let Some(v) = vfo_b_center_freq_hz {
+                state.vfo_b_center_freq_hz = v as f32;
             }
             if let Some(v) = vfo_b_demod_mode {
                 state.vfo_b_demod_mode = v;

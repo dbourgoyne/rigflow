@@ -69,7 +69,11 @@ impl RigflowApp {
                         + spectrum_height
                         + gap * 2.0
                         + 2.0
-                        + if dual { spectrum_b_height + gap } else { 0.0 };
+                        + if dual {
+                            spectrum_b_height + gap + lo_strip_height
+                        } else {
+                            0.0
+                        };
                     let waterfall_total = (ui.available_height() - fixed).max(120.0);
                     let waterfall_height = if dual {
                         (waterfall_total / 2.0).max(60.0)
@@ -81,96 +85,7 @@ impl RigflowApp {
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), lo_strip_height),
                         egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            let state_snapshot = {
-                                let state = self.state.lock().unwrap();
-                                state.clone()
-                            };
-
-                            let strip_rect = ui.max_rect();
-                            let lo_y = strip_rect.top() + 2.0;
-
-                            let lo_pos = egui::Pos2::new(strip_rect.left() + 12.0, lo_y);
-                            let lo_offset_pos = egui::Pos2::new(strip_rect.right() - 12.0, lo_y);
-
-                            let mut new_center_freq_hz = None;
-                            let mut new_target_freq_hz = None;
-
-                            if let Some(new_center_hz) =
-                                crate::widgets::lo_frequency_widget::draw_lo_widget(
-                                    ui,
-                                    lo_pos,
-                                    state_snapshot.center_freq_hz.max(0.0) as u64,
-                                )
-                            {
-                                let limits =
-                                    crate::ui::freq_limits::active_freq_limits(&state_snapshot);
-                                let clamped_center = crate::ui::freq_limits::clamp_center(
-                                    new_center_hz as f32,
-                                    &limits,
-                                );
-                                new_center_freq_hz = Some(clamped_center);
-
-                                // Offset-preserving LO: shift the tuned target by the
-                                // same delta so the LO Offset (target − center) stays
-                                // constant and target never leaves center ± sr/2 (the
-                                // IQ passband).  clamp_target re-validates against the
-                                // new center for safety (e.g. when the center clamp
-                                // shortened the delta near a band edge).
-                                let delta = clamped_center - state_snapshot.center_freq_hz;
-                                new_target_freq_hz = Some(crate::ui::freq_limits::clamp_target(
-                                    state_snapshot.target_freq_hz + delta,
-                                    clamped_center,
-                                    state_snapshot.input_sample_rate_hz,
-                                    &limits,
-                                ));
-                            }
-
-                            let lo_offset_hz = (state_snapshot.target_freq_hz
-                                - state_snapshot.center_freq_hz)
-                                .round() as i64;
-
-                            if let Some(new_offset_hz) =
-                                crate::widgets::lo_frequency_widget::draw_lo_offset_widget(
-                                    ui,
-                                    lo_offset_pos,
-                                    lo_offset_hz,
-                                )
-                            {
-                                // Move the tuned target by the offset change, reusing
-                                // the same soft-edge LO pan as the wheel / arrow keys
-                                // (`tune_target_relative`): when the target reaches the
-                                // visible edge the LO follows it, so the target never
-                                // leaves center ± sr/2 (the IQ passband).  Equivalent
-                                // delta: (center + new_offset) − current_target.
-                                let delta = (new_offset_hz - lo_offset_hz) as f32;
-                                self.tune_target_relative(&state_snapshot, delta);
-                            }
-
-                            if let Some(new_center_hz) = new_center_freq_hz {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.center_freq_hz = new_center_hz;
-                                }
-
-                                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                                        center_freq_hz: new_center_hz as u64,
-                                    },
-                                ));
-                            }
-
-                            if let Some(new_target_hz) = new_target_freq_hz {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.target_freq_hz = new_target_hz;
-                                }
-
-                                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                                    rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                                        target_freq_hz: new_target_hz as u64,
-                                    },
-                                ));
-                            }
-                        },
+                        |ui| self.draw_lo_strip(ui, TuneVfo::A),
                     );
 
                     ui.allocate_ui_with_layout(
@@ -212,13 +127,19 @@ impl RigflowApp {
                             if let Some(bookmark_id) = interaction.clicked_bookmark_id {
                                 self.apply_bookmark(&bookmark_id);
                             }
-                            self.apply_view_interaction(&interaction.mouse, snapshot);
+                            self.apply_view_interaction(&interaction.mouse, snapshot, TuneVfo::A);
                         },
                     );
 
                     // ── VFO B spectrum (dual-watch): stacked below VFO A ──────
                     if dual {
                         ui.add_space(gap);
+                        // VFO B's own LO + LO-Offset spinner strip.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), lo_strip_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| self.draw_lo_strip(ui, TuneVfo::B),
+                        );
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), spectrum_b_height),
                             egui::Layout::top_down(egui::Align::Min),
@@ -243,10 +164,9 @@ impl RigflowApp {
                                     db_max,
                                     &b_view,
                                 );
-                                // Click-to-tune VFO B (other gestures stay on A).
-                                if let Some(freq) = inter.mouse.tune_to_hz {
-                                    self.tune_vfo_b(freq);
-                                }
+                                // Full VFO B tuning — click / drag / wheel / recenter,
+                                // identical to VFO A but on VFO B's centre/target.
+                                self.apply_view_interaction(&inter.mouse, snapshot, TuneVfo::B);
                             },
                         );
                     }
@@ -317,7 +237,7 @@ impl RigflowApp {
                                     );
                                 });
 
-                                self.apply_view_interaction(&mouse, snapshot);
+                                self.apply_view_interaction(&mouse, snapshot, TuneVfo::A);
                             }
                         },
                     );
@@ -346,7 +266,7 @@ impl RigflowApp {
                                         let s = self.spectrum_db_b.lock().unwrap();
                                         s.len()
                                     };
-                                    let mut tune_to: Option<f32> = None;
+                                    let mut wf_mouse = ViewMouseResult::default();
                                     ui.horizontal(|ui| {
                                         ui.add_space(LEFT_GUTTER);
                                         let image = egui::Image::new((
@@ -356,7 +276,7 @@ impl RigflowApp {
                                         .sense(egui::Sense::click_and_drag());
                                         let response = ui.add(image);
                                         let rect = response.rect;
-                                        let mouse = crate::ui::view_interaction::handle_view_mouse(
+                                        wf_mouse = crate::ui::view_interaction::handle_view_mouse(
                                             ui,
                                             &response,
                                             rect,
@@ -373,29 +293,14 @@ impl RigflowApp {
                                                 }
                                             },
                                         );
-                                        tune_to = mouse.tune_to_hz;
                                     });
-                                    if let Some(freq) = tune_to {
-                                        self.tune_vfo_b(freq);
-                                    }
+                                    self.apply_view_interaction(&wf_mouse, snapshot, TuneVfo::B);
                                 }
                             },
                         );
                     }
                 });
         });
-    }
-
-    /// Tune VFO B (dual-watch click-to-tune) — update local state for snappy
-    /// feedback and tell the server (which programs the RX1 NCO).
-    fn tune_vfo_b(&self, freq_hz: f32) {
-        let f = freq_hz.max(0.0) as u64;
-        if let Ok(mut s) = self.state.lock() {
-            s.vfo_b_target_freq_hz = f as f32;
-        }
-        let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-            rigflow_protocol::ClientRadioMessage::SetVfoBFrequency { target_freq_hz: f },
-        ));
     }
 
     /// Top status bar: compact, single-row live operating telemetry.  Reads
@@ -571,17 +476,18 @@ impl RigflowApp {
     /// instead of hitting the dead zone at `center ± sample_rate/2`.  Shared by
     /// the mouse wheel and the ←/→ arrow keys so both behave identically.  The
     /// caller must ensure a radio is acquired.
-    pub(crate) fn tune_target_relative(&self, snapshot: &UiState, delta_hz: f32) {
+    pub(crate) fn tune_target_relative(&self, snapshot: &UiState, delta_hz: f32, vfo: TuneVfo) {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
         if delta_hz == 0.0 {
             return;
         }
         let limits = active_freq_limits(snapshot);
+        let cur_center = vfo.center(snapshot);
 
         // Move the target by the step, clamped only to the RF range (NOT the
         // visible band) so it can cross the soft edge; the LO follows it.
-        let desired_target = clamp_center(snapshot.target_freq_hz + delta_hz, &limits);
+        let desired_target = clamp_center(vfo.target(snapshot) + delta_hz, &limits);
 
         // Soft threshold = 80% of the visible half-span (zoom-aware: the visible
         // span is sample_rate / display_zoom, centered on the LO).
@@ -592,7 +498,7 @@ impl RigflowApp {
         // Pan the LO by the excess past the threshold so the target settles back
         // at ~±soft (symmetric for the left and right edges).  The target itself
         // always moves by exactly one step — no jumps.
-        let mut new_center = snapshot.center_freq_hz;
+        let mut new_center = cur_center;
         let offset = desired_target - new_center;
         if half_span > 0.0 && offset.abs() > soft {
             let excess = offset.abs() - soft;
@@ -607,21 +513,17 @@ impl RigflowApp {
         );
 
         if let Ok(mut state) = self.state.lock() {
-            state.center_freq_hz = new_center;
-            state.target_freq_hz = new_target;
+            vfo.set_center(&mut state, new_center);
+            vfo.set_target(&mut state, new_target);
         }
         // Retune the LO only when it actually panned.
-        if (new_center - snapshot.center_freq_hz).abs() > 0.5 {
+        if (new_center - cur_center).abs() > 0.5 {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                    center_freq_hz: new_center as u64,
-                },
+                vfo.center_msg(new_center as u64),
             ));
         }
         let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-            rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                target_freq_hz: new_target as u64,
-            },
+            vfo.target_msg(new_target as u64),
         ));
     }
 
@@ -636,20 +538,28 @@ impl RigflowApp {
     ///
     /// Returns `true` if the target actually moved; `false` means it was pinned
     /// at a band edge — the caller uses that to stop momentum.
-    fn pan_target_by(&self, snapshot: &UiState, delta_hz: f32, force_send: bool) -> bool {
+    fn pan_target_by(
+        &self,
+        snapshot: &UiState,
+        delta_hz: f32,
+        force_send: bool,
+        vfo: TuneVfo,
+    ) -> bool {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
         if delta_hz == 0.0 && !force_send {
             return false;
         }
         let limits = active_freq_limits(snapshot);
-        let desired_target = clamp_center(snapshot.target_freq_hz + delta_hz, &limits);
+        let cur_center = vfo.center(snapshot);
+        let cur_target = vfo.target(snapshot);
+        let desired_target = clamp_center(cur_target + delta_hz, &limits);
 
         // Soft-edge LO pan — identical math to `tune_target_relative`.
         let half_span =
             (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
         let soft = 0.8 * half_span;
-        let mut new_center = snapshot.center_freq_hz;
+        let mut new_center = cur_center;
         let offset = desired_target - new_center;
         if half_span > 0.0 && offset.abs() > soft {
             let excess = offset.abs() - soft;
@@ -662,8 +572,7 @@ impl RigflowApp {
             &limits,
         );
 
-        let moved = (new_target - snapshot.target_freq_hz).abs() > 0.5
-            || (new_center - snapshot.center_freq_hz).abs() > 0.5;
+        let moved = (new_target - cur_target).abs() > 0.5 || (new_center - cur_center).abs() > 0.5;
 
         // Apply locally every frame; decide under the lock whether this frame's
         // send passes the throttle, and whether the LO changed and must be sent.
@@ -672,8 +581,8 @@ impl RigflowApp {
                 Ok(s) => s,
                 Err(_) => return moved,
             };
-            state.center_freq_hz = new_center;
-            state.target_freq_hz = new_target;
+            vfo.set_center(&mut state, new_center);
+            vfo.set_target(&mut state, new_target);
 
             let now = Instant::now();
             let allow = force_send || now.duration_since(state.last_pan_send) >= PAN_SEND_INTERVAL;
@@ -694,16 +603,12 @@ impl RigflowApp {
 
         if do_center {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                    center_freq_hz: new_center as u64,
-                },
+                vfo.center_msg(new_center as u64),
             ));
         }
         if do_target {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                    target_freq_hz: new_target as u64,
-                },
+                vfo.target_msg(new_target as u64),
             ));
         }
         moved
@@ -739,7 +644,7 @@ impl RigflowApp {
 
         // Move by this frame's velocity; force the exact final send when stopping
         // so the server lands precisely on the settled frequency.
-        let moved = self.pan_target_by(snapshot, v * dt, stopping);
+        let moved = self.pan_target_by(snapshot, v * dt, stopping, TuneVfo::A);
         if stopping || !moved {
             new_v = 0.0;
         }
@@ -752,15 +657,11 @@ impl RigflowApp {
         }
     }
 
-    fn apply_view_interaction(&self, r: &ViewMouseResult, snapshot: &UiState) {
+    fn apply_view_interaction(&self, r: &ViewMouseResult, snapshot: &UiState, vfo: TuneVfo) {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
-        let send_target = |new_target: f32| {
-            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                    target_freq_hz: new_target as u64,
-                },
-            ));
+        let send = |msg: rigflow_protocol::ClientRadioMessage| {
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
         };
 
         // Any explicit tune / zoom / click cancels an in-flight momentum sweep.
@@ -783,8 +684,9 @@ impl RigflowApp {
         // demod mode; the shared mouse handler does not) and apply it through the
         // common relative-tune path, which also handles soft-edge LO panning.
         if r.tune_dir != 0 && snapshot.radio_acquired {
-            let step = crate::ui::tuning_steps::target_step_hz(snapshot.demod_mode, r.tune_tier);
-            self.tune_target_relative(snapshot, r.tune_dir as f32 * step);
+            let step =
+                crate::ui::tuning_steps::target_step_hz(vfo.demod_mode(snapshot), r.tune_tier);
+            self.tune_target_relative(snapshot, r.tune_dir as f32 * step, vfo);
         }
 
         // Single-click → tune target to the clicked frequency.
@@ -793,14 +695,14 @@ impl RigflowApp {
                 let limits = active_freq_limits(snapshot);
                 let new_target = clamp_target(
                     freq_hz,
-                    snapshot.center_freq_hz,
+                    vfo.center(snapshot),
                     snapshot.input_sample_rate_hz,
                     &limits,
                 );
                 if let Ok(mut state) = self.state.lock() {
-                    state.target_freq_hz = new_target;
+                    vfo.set_target(&mut state, new_target);
                 }
-                send_target(new_target);
+                send(vfo.target_msg(new_target as u64));
             } else if let Ok(mut state) = self.state.lock() {
                 state.server_status = "cannot tune: no radio acquired".to_string();
             }
@@ -812,7 +714,7 @@ impl RigflowApp {
         if r.center_on_target {
             if snapshot.radio_acquired {
                 let limits = active_freq_limits(snapshot);
-                let new_center = clamp_center(snapshot.target_freq_hz, &limits);
+                let new_center = clamp_center(vfo.target(snapshot), &limits);
                 let new_target = clamp_target(
                     new_center,
                     new_center,
@@ -820,15 +722,11 @@ impl RigflowApp {
                     &limits,
                 );
                 if let Ok(mut state) = self.state.lock() {
-                    state.center_freq_hz = new_center;
-                    state.target_freq_hz = new_target;
+                    vfo.set_center(&mut state, new_center);
+                    vfo.set_target(&mut state, new_target);
                 }
-                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                        center_freq_hz: new_center as u64,
-                    },
-                ));
-                send_target(new_target);
+                send(vfo.center_msg(new_center as u64));
+                send(vfo.target_msg(new_target as u64));
             } else if let Ok(mut state) = self.state.lock() {
                 state.server_status = "cannot tune: no radio acquired".to_string();
             }
@@ -841,16 +739,85 @@ impl RigflowApp {
             if let Ok(mut state) = self.state.lock() {
                 state.pan_velocity_hz_per_s = 0.0;
             }
-            self.pan_target_by(snapshot, r.drag_delta_hz, false);
+            self.pan_target_by(snapshot, r.drag_delta_hz, false, vfo);
         }
 
-        // Flick release → seed momentum (decays to a stop over ~1–1.5 s).
+        // Flick release → seed momentum (VFO A only; the shared momentum field
+        // animates VFO A's spectrum).  VFO B still pans live during the drag.
         if let Some(v) = r.fling_velocity_hz_per_s {
-            if snapshot.radio_acquired && !is_transmitting(snapshot) {
+            if vfo == TuneVfo::A && snapshot.radio_acquired && !is_transmitting(snapshot) {
                 if let Ok(mut state) = self.state.lock() {
                     state.pan_velocity_hz_per_s = v;
                 }
             }
+        }
+    }
+
+    /// Draw the LO + LO-Offset spinner strip for `vfo`.  Offset-preserving LO
+    /// (the tuned target rides with the LO) and soft-edge LO-Offset (the LO
+    /// follows the target at the passband edge) — identical for VFO A and VFO B.
+    fn draw_lo_strip(&self, ui: &mut egui::Ui, vfo: TuneVfo) {
+        use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
+
+        let state_snapshot = {
+            let state = self.state.lock().unwrap();
+            state.clone()
+        };
+        let strip_rect = ui.max_rect();
+        let lo_y = strip_rect.top() + 2.0;
+        let lo_pos = egui::Pos2::new(strip_rect.left() + 12.0, lo_y);
+        let lo_offset_pos = egui::Pos2::new(strip_rect.right() - 12.0, lo_y);
+
+        let cur_center = vfo.center(&state_snapshot);
+        let cur_target = vfo.target(&state_snapshot);
+        let mut new_center_freq_hz = None;
+        let mut new_target_freq_hz = None;
+
+        if let Some(new_center_hz) = crate::widgets::lo_frequency_widget::draw_lo_widget(
+            ui,
+            lo_pos,
+            cur_center.max(0.0) as u64,
+        ) {
+            let limits = active_freq_limits(&state_snapshot);
+            let clamped_center = clamp_center(new_center_hz as f32, &limits);
+            new_center_freq_hz = Some(clamped_center);
+            // Offset-preserving LO: shift the target by the same delta so the LO
+            // Offset stays constant and the target never leaves center ± sr/2.
+            let delta = clamped_center - cur_center;
+            new_target_freq_hz = Some(clamp_target(
+                cur_target + delta,
+                clamped_center,
+                state_snapshot.input_sample_rate_hz,
+                &limits,
+            ));
+        }
+
+        let lo_offset_hz = (cur_target - cur_center).round() as i64;
+        if let Some(new_offset_hz) = crate::widgets::lo_frequency_widget::draw_lo_offset_widget(
+            ui,
+            lo_offset_pos,
+            lo_offset_hz,
+        ) {
+            // Reuse the soft-edge LO pan (LO follows the target at the edge).
+            let delta = (new_offset_hz - lo_offset_hz) as f32;
+            self.tune_target_relative(&state_snapshot, delta, vfo);
+        }
+
+        if let Some(new_center_hz) = new_center_freq_hz {
+            if let Ok(mut state) = self.state.lock() {
+                vfo.set_center(&mut state, new_center_hz);
+            }
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                vfo.center_msg(new_center_hz as u64),
+            ));
+        }
+        if let Some(new_target_hz) = new_target_freq_hz {
+            if let Ok(mut state) = self.state.lock() {
+                vfo.set_target(&mut state, new_target_hz);
+            }
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                vfo.target_msg(new_target_hz as u64),
+            ));
         }
     }
 
@@ -868,11 +835,68 @@ impl RigflowApp {
 
 /// Format a frequency in Hz with `.` thousands separators, e.g.
 /// `14074000 → "14.074.000"`.
+/// Which VFO a tuning gesture operates on.  Abstracts the centre/target state
+/// fields and the protocol messages so the tuning helpers (relative tune, drag
+/// pan, click-to-tune, recenter, LO/LO-Offset spinners) are VFO-agnostic and
+/// VFO B tunes identically to VFO A.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum TuneVfo {
+    A,
+    B,
+}
+
+impl TuneVfo {
+    fn center(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.center_freq_hz,
+            TuneVfo::B => s.vfo_b_center_freq_hz,
+        }
+    }
+    fn target(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.target_freq_hz,
+            TuneVfo::B => s.vfo_b_target_freq_hz,
+        }
+    }
+    fn set_center(self, s: &mut UiState, hz: f32) {
+        match self {
+            TuneVfo::A => s.center_freq_hz = hz,
+            TuneVfo::B => s.vfo_b_center_freq_hz = hz,
+        }
+    }
+    fn set_target(self, s: &mut UiState, hz: f32) {
+        match self {
+            TuneVfo::A => s.target_freq_hz = hz,
+            TuneVfo::B => s.vfo_b_target_freq_hz = hz,
+        }
+    }
+    fn demod_mode(self, s: &UiState) -> rigflow_core::dsp::modes::DemodMode {
+        match self {
+            TuneVfo::A => s.demod_mode,
+            TuneVfo::B => s.vfo_b_demod_mode,
+        }
+    }
+    fn center_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
+        use rigflow_protocol::ClientRadioMessage as M;
+        match self {
+            TuneVfo::A => M::SetCenterFrequency { center_freq_hz: hz },
+            TuneVfo::B => M::SetVfoBCenterFrequency { center_freq_hz: hz },
+        }
+    }
+    fn target_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
+        use rigflow_protocol::ClientRadioMessage as M;
+        match self {
+            TuneVfo::A => M::SetTargetFrequency { target_freq_hz: hz },
+            TuneVfo::B => M::SetVfoBFrequency { target_freq_hz: hz },
+        }
+    }
+}
+
 /// A VFO-A-shaped view of VFO B's state, so the spectrum/waterfall drawing and
 /// the screen-x → frequency mapping work for the second receiver unchanged.
 fn vfo_b_view(snapshot: &UiState) -> UiState {
     let mut v = snapshot.clone();
-    v.center_freq_hz = snapshot.vfo_b_target_freq_hz;
+    v.center_freq_hz = snapshot.vfo_b_center_freq_hz;
     v.target_freq_hz = snapshot.vfo_b_target_freq_hz;
     v.demod_mode = snapshot.vfo_b_demod_mode;
     v.sideband = snapshot.vfo_b_sideband;

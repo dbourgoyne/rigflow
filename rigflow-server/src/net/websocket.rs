@@ -1228,6 +1228,16 @@ async fn handle_radio_message(
             )
             .await;
         }
+        ClientRadioMessage::SetVfoBCenterFrequency { center_freq_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBCenterFrequency { hz: center_freq_hz },
+                "set_vfo_b_center_frequency_failed",
+            )
+            .await;
+        }
         ClientRadioMessage::SetVfoBDemodMode { mode } => {
             forward_worker_command(
                 app_state,
@@ -1458,6 +1468,8 @@ fn runtime_changed_from_runtime(
     let (pv, cv) = (&previous.vfo, &current.vfo);
     let vfo_b_target_freq_hz =
         (cv.vfo_b_target_freq_hz != pv.vfo_b_target_freq_hz).then_some(cv.vfo_b_target_freq_hz);
+    let vfo_b_center_freq_hz =
+        (cv.vfo_b_center_freq_hz != pv.vfo_b_center_freq_hz).then_some(cv.vfo_b_center_freq_hz);
     let vfo_b_demod_mode =
         (cv.vfo_b_demod_mode != pv.vfo_b_demod_mode).then_some(cv.vfo_b_demod_mode);
     let vfo_b_sideband = (cv.vfo_b_sideband != pv.vfo_b_sideband).then_some(cv.vfo_b_sideband);
@@ -1530,6 +1542,7 @@ fn runtime_changed_from_runtime(
         || swr_sweep_result.is_some()
         || swr_sweep_progress.is_some()
         || vfo_b_target_freq_hz.is_some()
+        || vfo_b_center_freq_hz.is_some()
         || vfo_b_demod_mode.is_some()
         || vfo_b_sideband.is_some()
         || vfo_b_filter_bandwidth_hz.is_some()
@@ -1576,6 +1589,7 @@ fn runtime_changed_from_runtime(
         swr_sweep_result,
         swr_sweep_progress,
         vfo_b_target_freq_hz,
+        vfo_b_center_freq_hz,
         vfo_b_demod_mode,
         vfo_b_sideband,
         vfo_b_filter_bandwidth_hz,
@@ -1634,6 +1648,7 @@ fn runtime_snapshot_from_status(
             swr_sweep_result: runtime.last_swr_sweep_result.clone(),
             swr_sweep_progress: runtime.swr_sweep_progress,
             vfo_b_target_freq_hz: runtime.vfo.vfo_b_target_freq_hz,
+            vfo_b_center_freq_hz: runtime.vfo.vfo_b_center_freq_hz,
             vfo_b_demod_mode: runtime.vfo.vfo_b_demod_mode,
             vfo_b_sideband: runtime.vfo.vfo_b_sideband,
             vfo_b_filter_bandwidth_hz: runtime.vfo.vfo_b_filter_bandwidth_hz,

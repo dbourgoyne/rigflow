@@ -60,6 +60,9 @@ pub struct UiState {
     // ── Dual-VFO / split / RIT-XIT (mirrors server runtime; UI lands in Stage 5).
     // VFO A is the existing flat fields above; VFO B is independent (own mode). ──
     pub vfo_b_target_freq_hz: f32,
+    /// VFO B's LO / centre (RX1 hardware NCO).  With `vfo_b_target_freq_hz` this
+    /// gives VFO B the same centre+target panadapter model as VFO A.
+    pub vfo_b_center_freq_hz: f32,
     pub vfo_b_demod_mode: DemodMode,
     pub vfo_b_sideband: Sideband,
     pub vfo_b_filter_bandwidth_hz: f32,
@@ -500,6 +503,7 @@ impl Default for UiState {
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
             vfo_b_target_freq_hz: 0.0,
+            vfo_b_center_freq_hz: 0.0,
             vfo_b_demod_mode: DemodMode::Usb,
             vfo_b_sideband: Sideband::Usb,
             vfo_b_filter_bandwidth_hz: 2700.0,
