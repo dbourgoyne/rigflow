@@ -79,6 +79,11 @@ impl RigflowApp {
                             .range(0..=470_000_000i64)
                             .custom_formatter(|n, _| format!("{:.6}", n / 1_000_000.0))
                             .custom_parser(|s| s.parse::<f64>().ok().map(|mhz| mhz * 1_000_000.0))
+                            // Commit a typed value only on Enter / focus-loss, not on
+                            // every keystroke — otherwise each intermediate value
+                            // (e.g. a half-typed "7") would retune VFO B and bounce
+                            // the amp band as you type.  Dragging still updates live.
+                            .update_while_editing(false)
                             .suffix(" MHz"),
                     );
                     // Mouse-wheel-over-field nudge (and swallow the scroll so the
