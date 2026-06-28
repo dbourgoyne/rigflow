@@ -109,6 +109,13 @@ pub trait IqSource {
     /// (sources that cannot receive while transmitting); HL2 overrides it.
     fn set_fdx_enabled(&mut self, _enabled: bool) {}
 
+    /// Install a shared "transmitting" flag the source sets while PTT is asserted
+    /// (from the start of `tx_seq_begin` until `tx_seq_end` has released PTT).  The
+    /// HR50 amplifier poller watches it to stay off the serial for the *entire*
+    /// real keyed window — covering every TX path and any skew from the per-path
+    /// software keying flags.  Default no-op (non-HL2 sources / no amplifier).
+    fn set_tx_active_flag(&mut self, _flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {}
+
     /// Drain and return any RX IQ captured during the most recent transmit
     /// while FDX was enabled.  Default returns empty (nothing captured).
     fn take_fdx_iq(&mut self) -> Vec<Complex32> {

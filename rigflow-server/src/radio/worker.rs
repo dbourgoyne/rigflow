@@ -719,6 +719,13 @@ fn run_iq_worker_threads(
     // before keying (the poller can't switch the band while keyed).  0 = none yet.
     let amp_fa_sent = Arc::new(AtomicU64::new(0));
 
+    // "HL2 is keyed" flag for the TX paths that assert PTT WITHOUT a per-path keyed
+    // flag — tune test (Spot/SWR), test tone, and the SWR sweep.  The HR50 firmware
+    // hangs if it gets serial while keyed, and mic/CW already gate the poller via
+    // `mic_tx_active`/`cw_key_held`; this closes the gap for the other paths.  Set
+    // around those transmits in the capture loop; watched by the amp poller.
+    let tx_active = Arc::new(AtomicBool::new(false));
+
     // HL2 has a watchdog: if no C&C packets arrive in ~60 s it stops streaming.
     // The capture thread sends a keepalive C&C every 30 s to prevent this.
     let needs_cc_keepalive = matches!(source_kind, SourceKind::HermesLite2);
@@ -749,6 +756,7 @@ fn run_iq_worker_threads(
         needs_cc_keepalive,
         amp_freq.clone(),
         amp_fa_sent.clone(),
+        tx_active.clone(),
         events_tx.clone(),
         iq_audio_b_tx,
         iq_wf_b_tx,
@@ -853,6 +861,7 @@ fn run_iq_worker_threads(
             amp_cmd_rx,
             amp_freq.clone(),
             amp_fa_sent.clone(),
+            tx_active.clone(),
         )
     } else {
         None
@@ -955,6 +964,7 @@ fn spawn_amplifier_thread(
     amp_cmd_rx: std_mpsc::Receiver<crate::amplifier::AmpCommand>,
     amp_freq: Arc<AtomicU64>,
     amp_fa_sent: Arc<AtomicU64>,
+    tx_active: Arc<AtomicBool>,
 ) -> Option<thread::JoinHandle<()>> {
     let configured = server_cfg.hr50_serial.clone()?;
     let radio_id = descriptor.id.0;
@@ -992,11 +1002,17 @@ fn spawn_amplifier_thread(
         };
         info!("[radio-worker {radio_id}] HR50 amplifier polling on {path} @ {baud} 8N1");
         // The HR50 hangs if sent serial while keyed, so the poller goes silent
-        // during TX.  Reuse the existing per-path keying flags (mic/FT8/two-tone
-        // and CW) — both are reliably cleared on key-up and on worker stop.
+        // during TX.  Watch the per-path keying flags (mic/FT8/two-tone, CW — both
+        // cleared on key-up and worker stop) plus `tx_active`, which covers the TX
+        // paths that assert PTT without a per-path flag (tune test, test tone, SWR
+        // sweep).  Any one true → the poller stays off the serial.
         let tx_keyed = match control.lock() {
-            Ok(cs) => vec![Arc::clone(&cs.mic_tx_active), Arc::clone(&cs.cw_key_held)],
-            Err(_) => Vec::new(),
+            Ok(cs) => vec![
+                Arc::clone(&cs.mic_tx_active),
+                Arc::clone(&cs.cw_key_held),
+                tx_active.clone(),
+            ],
+            Err(_) => vec![tx_active.clone()],
         };
         crate::amplifier::run_amplifier_poller(
             Box::new(transport),
@@ -1610,6 +1626,7 @@ fn spawn_capture_thread(
     needs_cc_keepalive: bool,
     amp_freq: Arc<AtomicU64>,
     amp_fa_sent: Arc<AtomicU64>,
+    tx_active: Arc<AtomicBool>,
     events_tx: broadcast::Sender<WorkerEvent>,
     iq_audio_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
     iq_wf_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
@@ -1629,6 +1646,11 @@ fn spawn_capture_thread(
                 return;
             }
         };
+
+        // Give the source the shared "transmitting" flag so the HR50 poller stays
+        // off the serial for the entire real keyed window (HL2 sets it in
+        // tx_seq_begin/end; no-op on other sources).
+        source.set_tx_active_flag(tx_active.clone());
 
         // This thread owns the IQ source, so source-level controls are applied here.
         let initial_source_control = source.source_control_state();

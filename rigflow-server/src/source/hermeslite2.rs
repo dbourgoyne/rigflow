@@ -143,6 +143,10 @@ pub struct HermesLite2Source {
     /// RX IQ captured during the most recent transmit while `fdx_enabled`.
     /// Drained by [`HermesLite2Source::take_fdx_iq`] after `tx_tune_test`.
     fdx_iq: Vec<Complex32>,
+    /// Shared "transmitting" flag (set in `tx_seq_begin`, cleared at the end of
+    /// `tx_seq_end`) so the HR50 poller stays off the serial for the whole real
+    /// keyed window.  `None` until the worker installs it via `set_tx_active_flag`.
+    tx_active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// TX PTT sequencing delays (ms): PTT is asserted, `tx_ptt_lead_ms` elapses
     /// before RF, and `tx_ptt_tail_ms` is held after RF stops before release.
     /// Used by every transmit path (Spot/SWR/sweep/test-tone, future CW).
@@ -185,6 +189,7 @@ impl HermesLite2Source {
             n2adr_filter_c2: 0,
             fdx_enabled: false,
             fdx_iq: Vec::new(),
+            tx_active: None,
             tx_ptt_lead_ms: 20,
             tx_ptt_tail_ms: 20,
             last_rx: Instant::now(),
@@ -675,6 +680,12 @@ impl HermesLite2Source {
     ///
     /// Safety: RF is never emitted before this returns (amplitude is 0 here).
     fn tx_seq_begin(&mut self, nco_u32: u32) -> Result<(), String> {
+        // Mark transmitting BEFORE any PTT so the HR50 poller stops touching the
+        // serial; cleared at the end of `tx_seq_end` once PTT is actually released.
+        if let Some(f) = &self.tx_active {
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
 
         // Non-blocking for the whole transmit; drain any queued DDC packets.
@@ -759,6 +770,12 @@ impl HermesLite2Source {
         let _ = self.send_gain_cc();
         let _ = self.socket.set_nonblocking(false);
         let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
+
+        // PTT is released on every exit path (normal stop and tx_seq_begin errors)
+        // — clear "transmitting" so the HR50 poller may resume touching the serial.
+        if let Some(f) = &self.tx_active {
+            f.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Drain and parse any queued D2H DDC packets (status side-effects only).
@@ -952,6 +969,10 @@ impl IqSource for HermesLite2Source {
             );
         }
         self.fdx_enabled = enabled;
+    }
+
+    fn set_tx_active_flag(&mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.tx_active = Some(flag);
     }
 
     fn take_fdx_iq(&mut self) -> Vec<Complex32> {
