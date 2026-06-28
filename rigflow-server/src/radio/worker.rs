@@ -539,16 +539,12 @@ fn prepare_tx_band(
     }
 }
 
-/// Restore the receive band after a transmit: point the amp mirror back at the
-/// RX frequency, and (cross-band only) force the per-loop N2ADR tracker to
-/// reprogram the RX band on the next capture iteration.
-fn restore_rx_band(
-    amp_freq: &AtomicU64,
-    rx_freq_hz: u64,
-    cross_band: bool,
-    last_n2adr_band: &mut Option<HamBand>,
-) {
-    amp_freq.store(rx_freq_hz, Ordering::Relaxed);
+/// Restore the receive band after a transmit.  The N2ADR LPF is in the RX path,
+/// so (cross-band only) force the per-loop tracker to reprogram the RX band on the
+/// next capture iteration.  The HR50 amp is bypassed on receive, so it is left on
+/// the (effective-TX) band — the capture loop's effective-TX tracking owns the amp
+/// FA mirror, so reverting here would only cause a needless per-over relay bounce.
+fn restore_rx_band(cross_band: bool, last_n2adr_band: &mut Option<HamBand>) {
     if cross_band {
         *last_n2adr_band = None;
     }
@@ -758,7 +754,6 @@ fn run_iq_worker_threads(
         stop_reason.clone(),
         fatal_tx.clone(),
         amp_cmd_tx,
-        amp_freq.clone(),
     );
 
     let capture_thread = spawn_capture_thread(
@@ -1056,7 +1051,6 @@ fn spawn_command_thread(
     stop_reason: Arc<Mutex<StopReason>>,
     fatal_tx: std_mpsc::Sender<WorkerExit>,
     amp_cmd_tx: std_mpsc::Sender<crate::amplifier::AmpCommand>,
-    amp_freq: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop_requested(&stop_flag) {
@@ -1066,8 +1060,10 @@ fn spawn_command_thread(
                         if let Ok(mut control_state) = control.lock() {
                             control_state.target_freq_hz = hz;
                         }
-                        // Mirror to the amplifier poller for FA band tracking.
-                        amp_freq.store(hz, Ordering::Relaxed);
+                        // The amplifier FA mirror (`amp_freq`) tracks the *effective
+                        // TX* frequency from the capture loop, not the RX dial — so a
+                        // VFO A retune is picked up there, and a split TX on VFO B
+                        // keeps the amp on the TX band (no per-over relay bounce).
                     }
                     WorkerCommand::SetCenterFrequency { hz } => {
                         if let Ok(mut control_state) = control.lock() {
@@ -1704,6 +1700,8 @@ fn spawn_capture_thread(
         // enable state so we only reprogram on band change or (re)enable.
         let mut last_n2adr_band: Option<HamBand> = None;
         let mut last_n2adr_enabled = false;
+        // Last value pushed to the amplifier FA mirror (effective-TX band tracking).
+        let mut last_amp_freq: u64 = 0;
         // FDX / TX Monitor Spectrum (HL2): mirror the enable state into the
         // source so it retains RX IQ during transmit.  Only pushed on change.
         let mut last_fdx_enabled = false;
@@ -1946,6 +1944,20 @@ fn spawn_capture_thread(
                 last_n2adr_enabled = current_source_control.n2adr_enabled;
             }
 
+            // HR50 amplifier band tracking (FA mirror for the poller): follow the
+            // *effective TX* frequency, not the RX dial.  The HR50 is bypassed on
+            // receive, so its band only matters for TX — tracking effective-TX means
+            // it follows the TX VFO in a split (switches once and holds, no per-over
+            // relay bounce) and is identical to the dial in simplex.  prepare_tx_band
+            // still confirms the band before RF; restore_rx_band no longer reverts it.
+            {
+                let etx = effective_tx_freq_hz(&control_snapshot);
+                if etx != last_amp_freq {
+                    amp_freq.store(etx, Ordering::Relaxed);
+                    last_amp_freq = etx;
+                }
+            }
+
             // FDX / TX Monitor Spectrum (HL2): push the enable flag into the
             // source on change so it knows whether to retain RX IQ during the
             // next Spot/SWR.  No-op on sources that don't support FDX.
@@ -2101,12 +2113,7 @@ fn spawn_capture_thread(
                         abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
                     }
 
-                    restore_rx_band(
-                        &amp_freq,
-                        control_snapshot.target_freq_hz,
-                        prep.cross_band,
-                        &mut last_n2adr_band,
-                    );
+                    restore_rx_band(prep.cross_band, &mut last_n2adr_band);
                 }
             }
 
@@ -2254,12 +2261,7 @@ fn spawn_capture_thread(
                             warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
                         }
                     }
-                    restore_rx_band(
-                        &amp_freq,
-                        control_snapshot.target_freq_hz,
-                        prep.cross_band,
-                        &mut last_n2adr_band,
-                    );
+                    restore_rx_band(prep.cross_band, &mut last_n2adr_band);
                 }
             }
 
@@ -2359,12 +2361,7 @@ fn spawn_capture_thread(
                                 cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
                             }
                         }
-                        restore_rx_band(
-                            &amp_freq,
-                            control_snapshot.target_freq_hz,
-                            prep.cross_band,
-                            &mut last_n2adr_band,
-                        );
+                        restore_rx_band(prep.cross_band, &mut last_n2adr_band);
                     }
                 }
             }
@@ -2491,12 +2488,7 @@ fn spawn_capture_thread(
                                 warn!("[radio-worker {}] mic TX error: {e}", descriptor.id.0);
                             }
                         }
-                        restore_rx_band(
-                            &amp_freq,
-                            control_snapshot.target_freq_hz,
-                            prep.cross_band,
-                            &mut last_n2adr_band,
-                        );
+                        restore_rx_band(prep.cross_band, &mut last_n2adr_band);
                     }
                 }
             }
