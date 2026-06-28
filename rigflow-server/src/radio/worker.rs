@@ -36,7 +36,7 @@ use crate::waterfall::generator::WaterfallGenerator;
 use rigflow_core::net::udp_framing::{
     STREAM_TYPE_AUDIO, STREAM_TYPE_AUDIO_VFO_B, STREAM_TYPE_WATERFALL, STREAM_TYPE_WATERFALL_VFO_B,
 };
-use rigflow_core::radio::amplifier::AmplifierStatus;
+use rigflow_core::radio::amplifier::{AmplifierKeyingMode, AmplifierStatus};
 use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
 use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
@@ -396,6 +396,11 @@ fn soft_clip(x: f32) -> f32 {
 /// RF, or RF would hit a switching/mismatched filter. Same-band TX adds nothing.
 const TX_CROSS_BAND_SETTLE_MS: u64 = 80;
 
+/// How long the SWR sweep waits for the HR50 to confirm it entered/left bypass
+/// (`HRMD0` = OFF), read back via the poller's ~1 Hz `HRRX`.  Covers the SET
+/// command + a couple of poll cycles.  On timeout the sweep is aborted (no RF).
+const AMP_BYPASS_TIMEOUT_MS: u64 = 3500;
+
 /// Outcome of [`prepare_tx_band`].  `cross_band` drives the RX-band restore;
 /// `ready` is false only when a cross-band amp band change is not yet confirmed
 /// — the caller must then abort the transmit (never key into a mismatched band).
@@ -423,6 +428,32 @@ fn abort_cross_band_tx(
             tx_freq_hz as f64 / 1_000_000.0
         ),
     });
+}
+
+/// Wait for the HR50's reported keying mode (`amplifier_status.mode`, from the
+/// poller's `HRRX` reads) to reach `want`.  Used by the SWR sweep to confirm the
+/// amp entered/left bypass (`HRMD0` = OFF) before transmitting.  No time pressure:
+/// the sweep settles fully before any RF.  Returns `false` on timeout.
+fn wait_for_keying_mode(
+    control: &Arc<Mutex<SharedControlState>>,
+    want: AmplifierKeyingMode,
+    timeout_ms: u64,
+) -> bool {
+    let started = Instant::now();
+    loop {
+        let reported = control
+            .lock()
+            .ok()
+            .and_then(|cs| cs.amplifier_status.mode.clone())
+            .and_then(|m| AmplifierKeyingMode::from_label(&m));
+        if reported == Some(want) {
+            return true;
+        }
+        if started.elapsed() >= Duration::from_millis(timeout_ms) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Effective transmit frequency from VFO / split / XIT state.
@@ -736,7 +767,7 @@ fn run_iq_worker_threads(
         stop_flag.clone(),
         stop_reason.clone(),
         fatal_tx.clone(),
-        amp_cmd_tx,
+        amp_cmd_tx.clone(),
     );
 
     let capture_thread = spawn_capture_thread(
@@ -757,6 +788,7 @@ fn run_iq_worker_threads(
         amp_freq.clone(),
         amp_fa_sent.clone(),
         tx_active.clone(),
+        amp_cmd_tx,
         events_tx.clone(),
         iq_audio_b_tx,
         iq_wf_b_tx,
@@ -1627,6 +1659,7 @@ fn spawn_capture_thread(
     amp_freq: Arc<AtomicU64>,
     amp_fa_sent: Arc<AtomicU64>,
     tx_active: Arc<AtomicBool>,
+    amp_cmd_tx: std_mpsc::Sender<crate::amplifier::AmpCommand>,
     events_tx: broadcast::Sender<WorkerEvent>,
     iq_audio_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
     iq_wf_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
@@ -2144,63 +2177,131 @@ fn spawn_capture_thread(
                             }
                         }
 
-                        if let Ok(mut cs) = control.lock() {
-                            cs.swr_sweep_progress = Some(SwrSweepProgress {
-                                running: true,
-                                done: 0,
-                                total,
-                            });
-                        }
-
-                        let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
-                        let mut cancelled = false;
-                        for i in 0..total {
-                            if control
-                                .lock()
-                                .map(|cs| cs.swr_sweep_cancel)
-                                .unwrap_or(false)
-                            {
-                                cancelled = true;
-                                break;
+                        // Bypass the HR50 (if present) for the sweep: measure the load
+                        // directly and don't radiate amplified power across the band.
+                        // Save the reported keying mode, set OFF (HRMD0), confirm, then
+                        // restore it after.  The amp's band is irrelevant while bypassed,
+                        // so it is left untouched.  No time pressure.
+                        let amp_present = control_snapshot.amplifier_status.model.is_some();
+                        let saved_keying_mode = control_snapshot
+                            .amplifier_status
+                            .mode
+                            .as_deref()
+                            .and_then(AmplifierKeyingMode::from_label);
+                        // We attempt (and must restore) bypass only with an amp whose
+                        // mode we know — otherwise defer rather than guess the restore.
+                        let attempted_bypass = amp_present && saved_keying_mode.is_some();
+                        let bypass_ready = if !amp_present {
+                            true
+                        } else if attempted_bypass {
+                            let _ = amp_cmd_tx.send(crate::amplifier::AmpCommand::SetKeyingMode(
+                                AmplifierKeyingMode::Off,
+                            ));
+                            let ok = wait_for_keying_mode(
+                                &control,
+                                AmplifierKeyingMode::Off,
+                                AMP_BYPASS_TIMEOUT_MS,
+                            );
+                            if !ok {
+                                warn!(
+                                    "[radio-worker {}] SWR sweep aborted: HR50 did not enter bypass",
+                                    descriptor.id.0
+                                );
                             }
-                            let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
-                            let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive, spot_level);
-                            // FDX: keep spectrum/waterfall alive between points.
-                            forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
-                            points.push(SwrSweepPoint {
-                                frequency_hz: freq,
-                                swr: r.swr,
-                                forward_raw: r.forward_raw,
-                                reverse_raw: r.reverse_raw,
+                            ok
+                        } else {
+                            warn!(
+                                "[radio-worker {}] SWR sweep deferred: HR50 keying mode not yet \
+                                 read — retry in a moment",
+                                descriptor.id.0
+                            );
+                            false
+                        };
+
+                        if !bypass_ready {
+                            let _ = events_tx.send(WorkerEvent::Error {
+                                code: "swr_sweep_amp".to_string(),
+                                message: "SWR sweep aborted: HR50 amplifier bypass not confirmed"
+                                    .to_string(),
                             });
                             if let Ok(mut cs) = control.lock() {
                                 cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                    running: false,
+                                    done: 0,
+                                    total,
+                                });
+                                cs.swr_sweep_cancel = false;
+                            }
+                        } else {
+                            if let Ok(mut cs) = control.lock() {
+                                cs.swr_sweep_progress = Some(SwrSweepProgress {
                                     running: true,
-                                    done: i + 1,
+                                    done: 0,
                                     total,
                                 });
                             }
-                        }
 
-                        let done = points.len() as u32;
-                        let result = SwrSweepResult {
-                            start_hz,
-                            stop_hz,
-                            points,
-                        };
-                        info!(
-                            "[radio-worker {}] SWR sweep {}: {done}/{total} points",
-                            descriptor.id.0,
-                            if cancelled { "cancelled" } else { "complete" }
-                        );
-                        if let Ok(mut cs) = control.lock() {
-                            cs.last_swr_sweep_result = Some(result);
-                            cs.swr_sweep_progress = Some(SwrSweepProgress {
-                                running: false,
-                                done,
-                                total,
-                            });
-                            cs.swr_sweep_cancel = false;
+                            let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
+                            let mut cancelled = false;
+                            for i in 0..total {
+                                if control
+                                    .lock()
+                                    .map(|cs| cs.swr_sweep_cancel)
+                                    .unwrap_or(false)
+                                {
+                                    cancelled = true;
+                                    break;
+                                }
+                                let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
+                                let r =
+                                    source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive, spot_level);
+                                // FDX: keep spectrum/waterfall alive between points.
+                                forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+                                points.push(SwrSweepPoint {
+                                    frequency_hz: freq,
+                                    swr: r.swr,
+                                    forward_raw: r.forward_raw,
+                                    reverse_raw: r.reverse_raw,
+                                });
+                                if let Ok(mut cs) = control.lock() {
+                                    cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                        running: true,
+                                        done: i + 1,
+                                        total,
+                                    });
+                                }
+                            }
+
+                            let done = points.len() as u32;
+                            let result = SwrSweepResult {
+                                start_hz,
+                                stop_hz,
+                                points,
+                            };
+                            info!(
+                                "[radio-worker {}] SWR sweep {}: {done}/{total} points",
+                                descriptor.id.0,
+                                if cancelled { "cancelled" } else { "complete" }
+                            );
+                            if let Ok(mut cs) = control.lock() {
+                                cs.last_swr_sweep_result = Some(result);
+                                cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                    running: false,
+                                    done,
+                                    total,
+                                });
+                                cs.swr_sweep_cancel = false;
+                            }
+                        } // end: amp bypassed for the sweep
+
+                        // Restore the HR50 keying mode on every path where we set OFF
+                        // (aborted-after-bypass and completed).  Fire-and-forget — the
+                        // poller applies it and the next HRRX read reflects it.
+                        if attempted_bypass {
+                            if let Some(prev) = saved_keying_mode {
+                                let _ = amp_cmd_tx
+                                    .send(crate::amplifier::AmpCommand::SetKeyingMode(prev));
+                            }
                         }
                     }
                 }
