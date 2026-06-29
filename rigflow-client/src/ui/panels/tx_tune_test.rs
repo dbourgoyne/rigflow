@@ -89,7 +89,7 @@ impl RigflowApp {
             }
 
             ui.label(super::note_text(
-                "Carrier amplitude for Spot/SWR (Quisk default 50%) · \
+                "Carrier amplitude for Spot/SWR (default 50%) · \
                  adjust transmitter power via TX Drive in Source Control",
             ));
             ui.add_space(4.0);

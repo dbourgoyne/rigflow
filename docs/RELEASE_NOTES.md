@@ -150,7 +150,7 @@ path is unaffected.
 
 The S-meter / dBm, TX forward/reverse power (watts), and SWR are **approximate
 indications**, not lab-calibrated measurements. They use sensible default scaling
-(like Quisk's defaults) and are good for *relative* judgements — comparing signals,
+and are good for *relative* judgements — comparing signals,
 spotting a high-SWR condition, peaking a tune — but should not be treated as
 absolute, instrument-grade values. No user calibration is required (or currently
 offered); a per-rig calibration option may come in a future release.
