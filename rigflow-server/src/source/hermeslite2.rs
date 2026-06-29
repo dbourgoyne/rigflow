@@ -1480,8 +1480,13 @@ impl IqSource for HermesLite2Source {
         // ── Safety constants ─────────────────────────────────────────────
         const PTT_GRACE_MS: u128 = 60;
         // Hard ceiling: even if no Stop arrives (e.g. client vanished) the tone
-        // auto-keys-down so a stuck PTT cannot cook the PA.
-        const HARD_MAX_TONE_MS: u128 = 30_000;
+        // auto-keys-down so a stuck PTT cannot cook the PA.  Kept short (5 s) — the
+        // single tone is a 100%-duty continuous carrier, the most thermally
+        // stressful case for the HL2's small PA, and the built-in sideband
+        // diagnostic only needs a fraction of a second of samples.  Re-key for a
+        // longer look.  (Local to this fn: does not affect the two-tone test,
+        // which runs through the mic-TX path, nor Spot/SWR/CW/mic SSB.)
+        const HARD_MAX_TONE_MS: u128 = 5_000;
         const HF_MIN_HZ: u64 = 1_800_000;
         const HF_MAX_HZ: u64 = 30_000_000;
 
