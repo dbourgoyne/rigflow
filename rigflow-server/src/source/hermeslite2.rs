@@ -2552,6 +2552,7 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         gain_values_db: (-12..=48).map(|i| i as f32).collect(),
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
+        supports_transmit: true,
         supports_tx_tune_test: true,
         supports_band_control: true,
         supports_fdx: true,

@@ -310,7 +310,7 @@ impl RigflowApp {
             self.set_keyer_error("busy: stop other TX / recording first".to_string());
             return;
         }
-        if !snapshot.radio_acquired || !snapshot.source_capabilities.supports_tx_tune_test {
+        if !snapshot.radio_acquired || !snapshot.source_capabilities.supports_transmit {
             self.set_keyer_error("no TX-capable radio acquired".to_string());
             return;
         }

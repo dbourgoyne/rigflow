@@ -127,6 +127,13 @@ pub struct SourceCapabilities {
     pub tuner_freq_hz_min: u32,
     pub tuner_freq_hz_max: u32,
 
+    /// Whether the source can transmit at all.  This is the master gate for ALL
+    /// transmit UI (Radio Control → Transmit, the Dual-VFO split/TX controls, TX
+    /// latency, two-tone / TX-audio diagnostics, mic/CW keying).  Receive-only
+    /// sources (RTL-SDR, WAV playback, fake tone) advertise `false`.
+    #[serde(default)]
+    pub supports_transmit: bool,
+
     /// Whether the source supports a TX tune test (short low-power carrier
     /// pulse used to measure forward/reverse power and SWR).
     ///
@@ -165,6 +172,7 @@ impl SourceCapabilities {
             tuner_freq_hz_min: 0,
             tuner_freq_hz_max: 0,
 
+            supports_transmit: false,
             supports_tx_tune_test: false,
             supports_band_control: false,
             supports_fdx: false,

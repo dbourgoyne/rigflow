@@ -376,11 +376,11 @@ impl RigflowApp {
         // -----------------------------
         // TX Drive (%) — operator transmit power.  Part of source control:
         // applies to all transmit operations (Spot now; CW/SSB/digital/sweep
-        // later).  Gated on TX support.  Flows through the source-control plane
-        // like gain (SetSourceTxDrive); the server uses it when a Spot/SWR
-        // measurement runs.
+        // later), so it's gated on general transmit support (not the Spot/SWR-
+        // specific tune-test flag).  Flows through the source-control plane like
+        // gain (SetSourceTxDrive).
         // -----------------------------
-        if state.source_capabilities.supports_tx_tune_test {
+        if state.source_capabilities.supports_transmit {
             let mut tx_drive = state.source_control.tx_drive_percent;
             let mut resp = ui.add(
                 egui::Slider::new(&mut tx_drive, 0.0..=100.0)
@@ -403,9 +403,10 @@ impl RigflowApp {
         }
 
         // -----------------------------
-        // TX Sequencing (HL2 PTT lead/tail delays).
+        // TX Sequencing (HL2 PTT lead/tail delays) — applies to all transmit
+        // paths, so gated on general transmit support.
         // -----------------------------
-        if state.source_capabilities.supports_tx_tune_test {
+        if state.source_capabilities.supports_transmit {
             save |= self.draw_tx_sequencing_section(ui, state);
         }
 

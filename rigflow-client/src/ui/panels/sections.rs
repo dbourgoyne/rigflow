@@ -110,16 +110,17 @@ impl RigflowApp {
     fn present_sections(&self, panel: Panel, snapshot: &UiState) -> Vec<Section> {
         match panel {
             Panel::RadioControl => {
-                // Advanced is always present (it holds the always-available WSJT-X
-                // setup button plus TX Processing for USB/LSB).  Diagnostics only
-                // has content (two-tone, TX-audio meters) in USB/LSB.
-                let mut v = vec![
-                    Section::Audio,
-                    Section::Receive,
-                    Section::Transmit,
-                    Section::Advanced,
-                ];
-                if matches!(snapshot.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
+                let tx = snapshot.source_capabilities.supports_transmit;
+                // Transmit + Diagnostics (two-tone / TX-audio meters) are TX UI —
+                // shown only on a transmit-capable source.  Advanced is always
+                // present (the WSJT-X setup button is useful for RX-only digital
+                // too; its TX-Processing row gates itself on `supports_transmit`).
+                let mut v = vec![Section::Audio, Section::Receive];
+                if tx {
+                    v.push(Section::Transmit);
+                }
+                v.push(Section::Advanced);
+                if tx && matches!(snapshot.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
                     v.push(Section::Diagnostics);
                 }
                 v

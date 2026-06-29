@@ -268,7 +268,7 @@ impl RigflowApp {
             focused && !typing && !needs_fresh && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let cw_ready = snapshot.radio_acquired
-            && snapshot.source_capabilities.supports_tx_tune_test
+            && snapshot.source_capabilities.supports_transmit
             && matches!(
                 Self::effective_tx_mode(snapshot),
                 DemodMode::Cwu | DemodMode::Cwl
@@ -334,7 +334,7 @@ impl RigflowApp {
 
         if ctx.wants_keyboard_input()
             || !snapshot.radio_acquired
-            || !snapshot.source_capabilities.supports_tx_tune_test
+            || !snapshot.source_capabilities.supports_transmit
             || !matches!(
                 Self::effective_tx_mode(snapshot),
                 DemodMode::Cwu | DemodMode::Cwl
@@ -392,7 +392,7 @@ impl RigflowApp {
             focused && !typing && !needs_fresh && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let ssb_ready = snapshot.radio_acquired
-            && snapshot.source_capabilities.supports_tx_tune_test
+            && snapshot.source_capabilities.supports_transmit
             && matches!(
                 Self::effective_tx_mode(snapshot),
                 DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
