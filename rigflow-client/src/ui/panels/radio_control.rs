@@ -1640,6 +1640,9 @@ impl RigflowApp {
                     _ => state.vfo_b_ssb_pitch_hz = prefs.pitch_hz,
                 }
                 state.vfo_b_deemphasis_mode = prefs.deemphasis_mode;
+                // Seed VFO B's (independent) grid-snap step from the operator's
+                // per-mode default for the new mode.
+                state.vfo_b_tuning_step_hz = state.tuning_step_preferences.get(selected);
                 (bw, prefs.pitch_hz, prefs.deemphasis_mode)
             } else {
                 return false;

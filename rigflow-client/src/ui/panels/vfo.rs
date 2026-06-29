@@ -344,6 +344,9 @@ impl RigflowApp {
                 }
             }
             s.vfo_b_deemphasis_mode = s.deemphasis_mode;
+            // Grid-snap step: copy VFO A's current per-mode step to VFO B's
+            // independent (session) step.
+            s.vfo_b_tuning_step_hz = s.tuning_step_preferences.get(s.demod_mode);
             s.vfo_b_squelch_enabled = s.squelch_enabled;
             s.vfo_b_squelch_threshold_db = s.squelch_threshold_db;
             s.vfo_b_nr2_enabled = s.nr2_enabled;

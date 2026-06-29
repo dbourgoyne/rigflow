@@ -286,9 +286,14 @@ pub struct UiState {
     // =====================================================================
     pub demod_preferences: DemodPreferenceSetFile,
 
-    /// Per-mode grid-snap / tuning-step sizes (Hz); UI-only, persisted per
-    /// operator.  Looked up by the active VFO's mode at tuning time.
+    /// Per-mode grid-snap / tuning-step sizes (Hz) for VFO A; UI-only, persisted
+    /// per operator.  Looked up by VFO A's mode at tuning time.
     pub tuning_step_preferences: TuningStepPreferencesFile,
+
+    /// VFO B's grid-snap step (Hz) — independent of VFO A and session-only (not
+    /// persisted, matching VFO B's other receive controls).  Seeded from the
+    /// per-mode default on a B mode change / copy.
+    pub vfo_b_tuning_step_hz: f32,
 
     // =====================================================================
     // BOOKMARKS
@@ -586,6 +591,7 @@ impl Default for UiState {
 
             demod_preferences: DemodPreferenceSetFile::default(),
             tuning_step_preferences: TuningStepPreferencesFile::default(),
+            vfo_b_tuning_step_hz: 1_000.0,
             pitch_hz: 0.0,
             filter_bandwidth_hz: 3000.0,
             deemphasis_mode: DeemphasisMode::Off,

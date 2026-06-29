@@ -852,7 +852,7 @@ impl RigflowApp {
         //    arrow tuning for this VFO.  UI-only: nothing extra is sent — tuning
         //    paths read this step and snap the Hz they already send. ──
         let mode = vfo.demod_mode(&state_snapshot);
-        let cur_step = state_snapshot.tuning_step_preferences.get(mode);
+        let cur_step = vfo.tuning_step_hz(&state_snapshot);
         let mut chosen = cur_step;
         let snap_rect = egui::Rect::from_min_size(
             egui::Pos2::new(strip_rect.left() + 12.0 + 200.0, lo_y - 1.0),
@@ -877,8 +877,15 @@ impl RigflowApp {
         });
         if chosen != cur_step {
             if let Ok(mut state) = self.state.lock() {
-                state.tuning_step_preferences.set(mode, chosen);
-                state.pending_save_tuning_steps = true;
+                match vfo {
+                    // VFO A's step is per-mode and persisted per operator.
+                    TuneVfo::A => {
+                        state.tuning_step_preferences.set(mode, chosen);
+                        state.pending_save_tuning_steps = true;
+                    }
+                    // VFO B's step is independent + session-only (not persisted).
+                    TuneVfo::B => state.vfo_b_tuning_step_hz = chosen,
+                }
             }
         }
     }
@@ -938,10 +945,13 @@ impl TuneVfo {
             TuneVfo::B => s.vfo_b_demod_mode,
         }
     }
-    /// Grid-snap / tuning-step size (Hz) for this VFO, from the per-mode
-    /// preferences keyed on the VFO's own mode.
+    /// Grid-snap / tuning-step size (Hz) for this VFO.  VFO A uses the persisted
+    /// per-mode preferences; VFO B has its own independent (session) step.
     fn tuning_step_hz(self, s: &UiState) -> f32 {
-        s.tuning_step_preferences.get(self.demod_mode(s))
+        match self {
+            TuneVfo::A => s.tuning_step_preferences.get(s.demod_mode),
+            TuneVfo::B => s.vfo_b_tuning_step_hz,
+        }
     }
     fn center_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
         use rigflow_protocol::ClientRadioMessage as M;
