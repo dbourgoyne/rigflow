@@ -638,6 +638,15 @@ pub fn apply_radio_server_message(
             vfo_b_filter_bandwidth_hz,
             vfo_b_ssb_pitch_hz,
             vfo_b_cw_pitch_hz,
+            vfo_b_deemphasis_mode,
+            vfo_b_squelch_enabled,
+            vfo_b_squelch_threshold_db,
+            vfo_b_nr2_enabled,
+            vfo_b_nr2_strength,
+            vfo_b_agc_enabled,
+            vfo_b_agc_strength,
+            vfo_b_rit_enabled,
+            vfo_b_rit_offset_hz,
             rit_enabled,
             rit_offset_hz,
             xit_enabled,
@@ -659,6 +668,15 @@ pub fn apply_radio_server_message(
             state.vfo_b_filter_bandwidth_hz = vfo_b_filter_bandwidth_hz;
             state.vfo_b_ssb_pitch_hz = vfo_b_ssb_pitch_hz;
             state.vfo_b_cw_pitch_hz = vfo_b_cw_pitch_hz;
+            state.vfo_b_deemphasis_mode = vfo_b_deemphasis_mode;
+            state.vfo_b_squelch_enabled = vfo_b_squelch_enabled;
+            state.vfo_b_squelch_threshold_db = vfo_b_squelch_threshold_db;
+            state.vfo_b_nr2_enabled = vfo_b_nr2_enabled;
+            state.vfo_b_nr2_strength = vfo_b_nr2_strength;
+            state.vfo_b_agc_enabled = vfo_b_agc_enabled;
+            state.vfo_b_agc_strength = vfo_b_agc_strength;
+            state.vfo_b_rit_enabled = vfo_b_rit_enabled;
+            state.vfo_b_rit_offset_hz = vfo_b_rit_offset_hz;
             state.vfo_b_signal_dbm = vfo_b_signal_dbm;
             state.vfo_b_signal_s_units = vfo_b_signal_s_units;
             state.rit_enabled = rit_enabled;
@@ -779,6 +797,15 @@ pub fn apply_radio_server_message(
             vfo_b_filter_bandwidth_hz,
             vfo_b_ssb_pitch_hz,
             vfo_b_cw_pitch_hz,
+            vfo_b_deemphasis_mode,
+            vfo_b_squelch_enabled,
+            vfo_b_squelch_threshold_db,
+            vfo_b_nr2_enabled,
+            vfo_b_nr2_strength,
+            vfo_b_agc_enabled,
+            vfo_b_agc_strength,
+            vfo_b_rit_enabled,
+            vfo_b_rit_offset_hz,
             rit_enabled,
             rit_offset_hz,
             xit_enabled,
@@ -817,6 +844,33 @@ pub fn apply_radio_server_message(
             }
             if let Some(v) = vfo_b_cw_pitch_hz {
                 state.vfo_b_cw_pitch_hz = v;
+            }
+            if let Some(v) = vfo_b_deemphasis_mode {
+                state.vfo_b_deemphasis_mode = v;
+            }
+            if let Some(v) = vfo_b_squelch_enabled {
+                state.vfo_b_squelch_enabled = v;
+            }
+            if let Some(v) = vfo_b_squelch_threshold_db {
+                state.vfo_b_squelch_threshold_db = v;
+            }
+            if let Some(v) = vfo_b_nr2_enabled {
+                state.vfo_b_nr2_enabled = v;
+            }
+            if let Some(v) = vfo_b_nr2_strength {
+                state.vfo_b_nr2_strength = v;
+            }
+            if let Some(v) = vfo_b_agc_enabled {
+                state.vfo_b_agc_enabled = v;
+            }
+            if let Some(v) = vfo_b_agc_strength {
+                state.vfo_b_agc_strength = v;
+            }
+            if let Some(v) = vfo_b_rit_enabled {
+                state.vfo_b_rit_enabled = v;
+            }
+            if let Some(v) = vfo_b_rit_offset_hz {
+                state.vfo_b_rit_offset_hz = v;
             }
             if let Some(v) = vfo_b_signal_dbm {
                 state.vfo_b_signal_dbm = v;

@@ -177,10 +177,16 @@ impl RigflowApp {
             ui.separator();
 
             // ── RIT / XIT ─────────────────────────────────────────────────
+            // RIT is per-VFO: VFO A always shown; VFO B's own RIT appears under
+            // dual-watch (offsets only VFO B's receive).
             self.draw_offset_row(
                 ui,
                 acquired,
-                "RIT",
+                if snapshot.dual_watch_enabled {
+                    "RIT A"
+                } else {
+                    "RIT"
+                },
                 snapshot.rit_enabled,
                 snapshot.rit_offset_hz,
                 |enabled, offset_hz| ClientRadioMessage::SetRit { enabled, offset_hz },
@@ -189,6 +195,20 @@ impl RigflowApp {
                     s.rit_offset_hz = off;
                 },
             );
+            if snapshot.dual_watch_enabled {
+                self.draw_offset_row(
+                    ui,
+                    acquired,
+                    "RIT B",
+                    snapshot.vfo_b_rit_enabled,
+                    snapshot.vfo_b_rit_offset_hz,
+                    |enabled, offset_hz| ClientRadioMessage::SetVfoBRit { enabled, offset_hz },
+                    |s, en, off| {
+                        s.vfo_b_rit_enabled = en;
+                        s.vfo_b_rit_offset_hz = off;
+                    },
+                );
+            }
             self.draw_offset_row(
                 ui,
                 acquired,

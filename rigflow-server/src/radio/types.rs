@@ -89,6 +89,23 @@ pub struct VfoSplitState {
     pub vfo_b_filter_bandwidth_hz: f32,
     pub vfo_b_ssb_pitch_hz: f32,
     pub vfo_b_cw_pitch_hz: f32,
+    /// VFO B independent receive processing (own DSP pipeline under dual-watch).
+    /// Mirrors the like-named `SharedControlState` fields; copied into `control_b`
+    /// each loop so the reused DSP-B thread honours them. `nb_*` / `notch_auto`
+    /// are control-only (not echoed in the protocol snapshot, matching VFO A).
+    pub vfo_b_deemphasis_mode: DeemphasisMode,
+    pub vfo_b_squelch_enabled: bool,
+    pub vfo_b_squelch_threshold_db: f32,
+    pub vfo_b_nr2_enabled: bool,
+    pub vfo_b_nr2_strength: f32,
+    pub vfo_b_nb_enabled: bool,
+    pub vfo_b_nb_threshold: f32,
+    pub vfo_b_notch_auto_enabled: bool,
+    pub vfo_b_agc_enabled: bool,
+    pub vfo_b_agc_strength: f32,
+    /// RIT for VFO B (independent of VFO A's `rit_*`); offsets only VFO B's RX NCO.
+    pub vfo_b_rit_enabled: bool,
+    pub vfo_b_rit_offset_hz: i32,
     pub vfo_b_signal_dbm: f32,
     pub vfo_b_signal_s_units: i32,
     pub rit_enabled: bool,
@@ -113,6 +130,18 @@ impl Default for VfoSplitState {
             vfo_b_filter_bandwidth_hz: 2700.0,
             vfo_b_ssb_pitch_hz: 0.0,
             vfo_b_cw_pitch_hz: 600.0,
+            vfo_b_deemphasis_mode: DeemphasisMode::Off,
+            vfo_b_squelch_enabled: false,
+            vfo_b_squelch_threshold_db: -90.0,
+            vfo_b_nr2_enabled: false,
+            vfo_b_nr2_strength: 0.5,
+            vfo_b_nb_enabled: false,
+            vfo_b_nb_threshold: 0.5,
+            vfo_b_notch_auto_enabled: false,
+            vfo_b_agc_enabled: true,
+            vfo_b_agc_strength: 0.5,
+            vfo_b_rit_enabled: false,
+            vfo_b_rit_offset_hz: 0,
             vfo_b_signal_dbm: -140.0,
             vfo_b_signal_s_units: 0,
             rit_enabled: false,
@@ -277,6 +306,41 @@ pub enum WorkerCommand {
     },
     SetVfoBPitch {
         pitch_hz: f32,
+    },
+    /// VFO B independent receive controls (mirror the VFO-A setters).
+    SetVfoBDeemphasisMode {
+        mode: DeemphasisMode,
+    },
+    SetVfoBSquelchEnabled {
+        enabled: bool,
+    },
+    SetVfoBSquelchThreshold {
+        threshold_db: f32,
+    },
+    SetVfoBNr2Enabled {
+        enabled: bool,
+    },
+    SetVfoBNr2Strength {
+        strength: f32,
+    },
+    SetVfoBNoiseBlankerEnabled {
+        enabled: bool,
+    },
+    SetVfoBNoiseBlankerThreshold {
+        threshold: f32,
+    },
+    SetVfoBNotchAutoEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcStrength {
+        strength: f32,
+    },
+    SetVfoBRit {
+        enabled: bool,
+        offset_hz: i32,
     },
     SetRit {
         enabled: bool,

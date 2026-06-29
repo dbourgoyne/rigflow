@@ -286,9 +286,13 @@ impl RigflowApp {
 
     /// Persist the receive-audio volume (%) for the current operator.
     pub(crate) fn save_volume_to_current_operator(&mut self) {
-        let (operator_id, volume_percent) = {
+        let (operator_id, volume_percent, volume_percent_b) = {
             let state = self.state.lock().unwrap();
-            (state.operator_id.clone(), state.volume_percent)
+            (
+                state.operator_id.clone(),
+                state.volume_percent,
+                state.volume_percent_b,
+            )
         };
 
         if operator_id.trim().is_empty() {
@@ -301,6 +305,7 @@ impl RigflowApp {
         {
             Ok(mut operator_settings) => {
                 operator_settings.volume_percent = volume_percent;
+                operator_settings.volume_percent_b = volume_percent_b;
 
                 if let Err(err) = self
                     .persistence_store

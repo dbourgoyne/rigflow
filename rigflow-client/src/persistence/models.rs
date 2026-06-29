@@ -231,6 +231,11 @@ pub struct OperatorSettingsFile {
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
 
+    /// VFO B receive-audio volume in percent (0–100) for dual-watch, persisted
+    /// per operator.  Serde default so older settings files load unchanged.
+    #[serde(default = "default_volume_percent")]
+    pub volume_percent_b: u8,
+
     /// Show the Advanced & Diagnostics controls in Radio Control.  Serde default
     /// (false) so older settings files load without migration.
     #[serde(default)]
@@ -310,6 +315,7 @@ impl OperatorSettingsFile {
             source_control_preferences: HashMap::new(),
             radio_settings: HashMap::new(),
             volume_percent: default_volume_percent(),
+            volume_percent_b: default_volume_percent(),
             show_advanced: false,
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),

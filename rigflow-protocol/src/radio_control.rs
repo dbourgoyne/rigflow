@@ -60,6 +60,9 @@ pub fn default_sideband() -> Sideband {
 pub fn default_filter_bandwidth_hz() -> f32 {
     2700.0
 }
+pub fn default_deemphasis_mode() -> DeemphasisMode {
+    DeemphasisMode::Off
+}
 
 /// Messages sent from client → server over WebSocket.
 ///
@@ -374,6 +377,43 @@ pub enum ClientRadioMessage {
     SetVfoBPitch {
         pitch_hz: f32,
     },
+    /// VFO B independent receive controls (mirror the VFO-A `Set*` setters; each
+    /// targets VFO B's own DSP pipeline under dual-watch).
+    SetVfoBDeemphasisMode {
+        mode: DeemphasisMode,
+    },
+    SetVfoBSquelchEnabled {
+        enabled: bool,
+    },
+    SetVfoBSquelchThreshold {
+        threshold_db: f32,
+    },
+    SetVfoBNr2Enabled {
+        enabled: bool,
+    },
+    SetVfoBNr2Strength {
+        strength: f32,
+    },
+    SetVfoBNoiseBlankerEnabled {
+        enabled: bool,
+    },
+    SetVfoBNoiseBlankerThreshold {
+        threshold: f32,
+    },
+    SetVfoBNotchAutoEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcStrength {
+        strength: f32,
+    },
+    /// RIT for VFO B (independent of VFO A's RIT) — offsets only VFO B's receive.
+    SetVfoBRit {
+        enabled: bool,
+        offset_hz: i32,
+    },
     /// RIT (Receive Increment Tuning): a small offset applied to the *receiving*
     /// VFO only, leaving transmit unchanged.
     SetRit {
@@ -541,6 +581,27 @@ pub enum ServerRadioMessage {
         vfo_b_ssb_pitch_hz: f32,
         #[serde(default)]
         vfo_b_cw_pitch_hz: f32,
+        // VFO B independent receive controls (echoed back like the VFO-A fields).
+        // Noise blanker + auto-notch are fire-and-forget (not echoed, matching
+        // VFO A), so they are absent here by design.
+        #[serde(default = "default_deemphasis_mode")]
+        vfo_b_deemphasis_mode: DeemphasisMode,
+        #[serde(default)]
+        vfo_b_squelch_enabled: bool,
+        #[serde(default = "default_squelch_threshold_db")]
+        vfo_b_squelch_threshold_db: f32,
+        #[serde(default)]
+        vfo_b_nr2_enabled: bool,
+        #[serde(default = "default_nr2_strength")]
+        vfo_b_nr2_strength: f32,
+        #[serde(default = "default_agc_enabled")]
+        vfo_b_agc_enabled: bool,
+        #[serde(default = "default_agc_strength")]
+        vfo_b_agc_strength: f32,
+        #[serde(default)]
+        vfo_b_rit_enabled: bool,
+        #[serde(default)]
+        vfo_b_rit_offset_hz: i32,
         #[serde(default)]
         rit_enabled: bool,
         #[serde(default)]
@@ -649,6 +710,25 @@ pub enum ServerRadioMessage {
         vfo_b_ssb_pitch_hz: Option<f32>,
         #[serde(default)]
         vfo_b_cw_pitch_hz: Option<f32>,
+        // VFO B independent receive controls (echoed; nb/notch fire-and-forget).
+        #[serde(default)]
+        vfo_b_deemphasis_mode: Option<DeemphasisMode>,
+        #[serde(default)]
+        vfo_b_squelch_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_squelch_threshold_db: Option<f32>,
+        #[serde(default)]
+        vfo_b_nr2_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_nr2_strength: Option<f32>,
+        #[serde(default)]
+        vfo_b_agc_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_agc_strength: Option<f32>,
+        #[serde(default)]
+        vfo_b_rit_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_rit_offset_hz: Option<i32>,
         #[serde(default)]
         rit_enabled: Option<bool>,
         #[serde(default)]

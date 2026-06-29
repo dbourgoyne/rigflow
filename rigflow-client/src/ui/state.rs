@@ -68,6 +68,23 @@ pub struct UiState {
     pub vfo_b_filter_bandwidth_hz: f32,
     pub vfo_b_ssb_pitch_hz: f32,
     pub vfo_b_cw_pitch_hz: f32,
+    /// VFO B independent receive processing (mirror of the like-named VFO-A
+    /// fields below).  The Receive panel edits these when the active control VFO
+    /// is B.  `nb_*` / `notch_auto` are local-only (server never echoes them,
+    /// matching VFO A); the rest round-trip via the runtime snapshot/delta.
+    pub vfo_b_deemphasis_mode: DeemphasisMode,
+    pub vfo_b_squelch_enabled: bool,
+    pub vfo_b_squelch_threshold_db: f32,
+    pub vfo_b_nr2_enabled: bool,
+    pub vfo_b_nr2_strength: f32,
+    pub vfo_b_nb_enabled: bool,
+    pub vfo_b_nb_threshold: f32,
+    pub vfo_b_notch_auto_enabled: bool,
+    pub vfo_b_agc_enabled: bool,
+    pub vfo_b_agc_strength: f32,
+    /// VFO B independent RIT (separate from VFO A's `rit_*`).
+    pub vfo_b_rit_enabled: bool,
+    pub vfo_b_rit_offset_hz: i32,
     pub vfo_b_signal_dbm: f32,
     pub vfo_b_signal_s_units: i32,
     pub rit_enabled: bool,
@@ -80,6 +97,12 @@ pub struct UiState {
     pub dual_watch_enabled: bool,
     /// True when the source has a second hardware receiver (HL2). Gates the UI.
     pub dual_watch_supported: bool,
+    /// Which VFO the Receive-panel controls edit (client-local; only meaningful
+    /// under dual-watch — the panel forces A otherwise).
+    pub active_control_vfo: VfoSelect,
+    /// VFO B receive-audio volume percent (client-side; applied to the right
+    /// channel under dual-watch).  VFO A uses `volume_percent` below.
+    pub volume_percent_b: u8,
 
     /// Current demodulation mode
     pub demod_mode: DemodMode,
@@ -509,6 +532,18 @@ impl Default for UiState {
             vfo_b_filter_bandwidth_hz: 2700.0,
             vfo_b_ssb_pitch_hz: 0.0,
             vfo_b_cw_pitch_hz: 600.0,
+            vfo_b_deemphasis_mode: DeemphasisMode::Off,
+            vfo_b_squelch_enabled: false,
+            vfo_b_squelch_threshold_db: -90.0,
+            vfo_b_nr2_enabled: false,
+            vfo_b_nr2_strength: 0.5,
+            vfo_b_nb_enabled: false,
+            vfo_b_nb_threshold: 0.5,
+            vfo_b_notch_auto_enabled: false,
+            vfo_b_agc_enabled: true,
+            vfo_b_agc_strength: 0.5,
+            vfo_b_rit_enabled: false,
+            vfo_b_rit_offset_hz: 0,
             vfo_b_signal_dbm: -140.0,
             vfo_b_signal_s_units: 0,
             rit_enabled: false,
@@ -519,6 +554,8 @@ impl Default for UiState {
             tx_vfo: VfoSelect::A,
             dual_watch_enabled: false,
             dual_watch_supported: false,
+            active_control_vfo: VfoSelect::A,
+            volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,
 

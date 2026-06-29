@@ -130,6 +130,7 @@ pub fn apply_operator_settings_to_ui_state(
     state.radio_settings = operator.radio_settings.clone();
 
     state.volume_percent = operator.volume_percent;
+    state.volume_percent_b = operator.volume_percent_b;
     state.show_advanced = operator.show_advanced;
 
     // Text-to-CW: restore the last-used message and speed.
@@ -180,6 +181,7 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
     operator.radio_settings = state.radio_settings.clone();
 
     operator.volume_percent = state.volume_percent;
+    operator.volume_percent_b = state.volume_percent_b;
     operator.show_advanced = state.show_advanced;
 
     operator.cw_message = state.cw_message.clone();

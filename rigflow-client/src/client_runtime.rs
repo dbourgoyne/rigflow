@@ -142,6 +142,9 @@ pub fn start_media_runtime(
     // thread mirrors `UiState.volume_percent` into this lock-free atomic; the
     // real-time audio callback reads it without locking.
     let rx_volume = Arc::new(AtomicU8::new(50));
+    // VFO B's independent receive volume (right channel under dual-watch).  Like
+    // `rx_volume`, mirrored from `UiState.volume_percent_b` by the media thread.
+    let rx_volume_b = Arc::new(AtomicU8::new(50));
 
     // Dual-watch flag for the (always-stereo) output callback: off → VFO A to
     // both L+R (centered mono); on → VFO A left, VFO B right.  Mirrored from
@@ -172,6 +175,7 @@ pub fn start_media_runtime(
         &stats_logger,
         &sidetone,
         &rx_volume,
+        &rx_volume_b,
         &dual_watch_audio,
         &rx_rec_slot,
         &clip_preview,
@@ -342,6 +346,7 @@ pub fn start_media_runtime(
             // audio callback reads (volume is applied client-side, speaker only).
             if let Ok(s) = ui_state.lock() {
                 rx_volume.store(s.volume_percent, Ordering::Relaxed);
+                rx_volume_b.store(s.volume_percent_b, Ordering::Relaxed);
                 dual_watch_audio.store(s.dual_watch_enabled, Ordering::Relaxed);
             }
 
@@ -537,6 +542,7 @@ fn open_audio_output(
     stats_logger: &Arc<Mutex<ClientStatsLogger>>,
     sidetone: &Arc<SidetoneShared>,
     rx_volume: &Arc<AtomicU8>,
+    rx_volume_b: &Arc<AtomicU8>,
     dual_watch: &Arc<AtomicBool>,
     rx_rec_slot: &Arc<Mutex<Option<AudioRecorderSink>>>,
     clip_preview: &Arc<ClipPreview>,
@@ -558,6 +564,7 @@ fn open_audio_output(
                         stats_logger,
                         sidetone,
                         rx_volume,
+                        rx_volume_b,
                         dual_watch,
                         rx_rec_slot,
                         clip_preview,
@@ -578,6 +585,7 @@ fn open_audio_output(
             stats_logger,
             sidetone,
             rx_volume,
+            rx_volume_b,
             dual_watch,
             rx_rec_slot,
             clip_preview,
@@ -601,6 +609,7 @@ fn open_audio_output(
                 stats_logger,
                 sidetone,
                 rx_volume,
+                rx_volume_b,
                 dual_watch,
                 rx_rec_slot,
                 clip_preview,
@@ -622,6 +631,7 @@ fn try_open_output(
     stats_logger: &Arc<Mutex<ClientStatsLogger>>,
     sidetone: &Arc<SidetoneShared>,
     rx_volume: &Arc<AtomicU8>,
+    rx_volume_b: &Arc<AtomicU8>,
     dual_watch: &Arc<AtomicBool>,
     rx_rec_slot: &Arc<Mutex<Option<AudioRecorderSink>>>,
     clip_preview: &Arc<ClipPreview>,
@@ -646,6 +656,7 @@ fn try_open_output(
         Arc::clone(stats_logger),
         Arc::clone(sidetone),
         Arc::clone(rx_volume),
+        Arc::clone(rx_volume_b),
         Arc::clone(dual_watch),
         Arc::clone(rx_rec_slot),
         Arc::clone(clip_preview),
@@ -680,6 +691,7 @@ fn build_output_stream(
     stats_logger: Arc<Mutex<ClientStatsLogger>>,
     sidetone: Arc<SidetoneShared>,
     rx_volume: Arc<AtomicU8>,
+    rx_volume_b: Arc<AtomicU8>,
     dual_watch: Arc<AtomicBool>,
     rx_rec_slot: Arc<Mutex<Option<AudioRecorderSink>>>,
     clip_preview: Arc<ClipPreview>,
@@ -749,7 +761,9 @@ fn build_output_stream(
     let mut phase: f32 = 0.0;
     let mut env: f32 = 0.0;
     // Client-side receive-Volume gain, ramped across each callback (click-free).
+    // VFO A drives the left/centered channel; VFO B its own gain on the right.
     let mut applied_gain: f32 = 1.0;
+    let mut applied_gain_b: f32 = 1.0;
     // Per-callback scratch for the popped VFO A / B mono frames (reused to avoid
     // real-time allocation).
     let mut buf_a: Vec<f32> = Vec::new();
@@ -800,18 +814,26 @@ fn build_output_stream(
             // (no clicks) and soft-limited so a boost can't hard-clip.  Dual-watch
             // off → VFO A to both channels (centered mono).
             let target_gain = volume_gain(rx_volume.load(Ordering::Relaxed));
+            let target_gain_b = volume_gain(rx_volume_b.load(Ordering::Relaxed));
             let step = if frames > 0 {
                 (target_gain - applied_gain) / frames as f32
             } else {
                 0.0
             };
+            let step_b = if frames > 0 {
+                (target_gain_b - applied_gain_b) / frames as f32
+            } else {
+                0.0
+            };
             let mut g = applied_gain;
+            let mut g_b = applied_gain_b;
             for i in 0..frames {
                 g += step;
+                g_b += step_b;
                 let l = soft_clip(buf_a[i] * g);
                 let base = i * channels;
                 if channels >= 2 {
-                    let r = if dual { soft_clip(buf_b[i] * g) } else { l };
+                    let r = if dual { soft_clip(buf_b[i] * g_b) } else { l };
                     data[base] = l;
                     data[base + 1] = r;
                     for s in data[base + 2..base + channels].iter_mut() {
@@ -819,13 +841,14 @@ fn build_output_stream(
                     }
                 } else {
                     data[base] = if dual {
-                        soft_clip(0.5 * (buf_a[i] + buf_b[i]) * g)
+                        soft_clip(0.5 * (buf_a[i] * g + buf_b[i] * g_b))
                     } else {
                         l
                     };
                 }
             }
             applied_gain = target_gain;
+            applied_gain_b = target_gain_b;
 
             // --- Mix in the local CW sidetone (centered; per FRAME) ---------
             // The oscillator phase/env advance per frame and the tone is added to

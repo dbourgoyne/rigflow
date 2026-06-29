@@ -475,6 +475,37 @@ fn effective_tx_freq_hz(cs: &SharedControlState) -> u64 {
     (base as i64 + off).max(0) as u64
 }
 
+/// Apply VFO B's independent settings onto a `control_b` that has just been
+/// cloned from VFO A's control state.  Overrides every VFO-B-independent field —
+/// freq/mode/filter/pitch plus the receive processing (deemphasis/squelch/NR2/
+/// NB/notch/AGC) — so the reused DSP-B thread, which reads these from its own
+/// lock each loop, honours VFO B's own settings.  Volume is intentionally NOT
+/// overridden (it is applied client-side).  RIT is written onto `cb.vfo.rit_*`
+/// because the DSP-B thread derives its NCO target via `effective_rx_freq_hz`,
+/// which reads those fields.  Centralised here so the override list lives in one
+/// place and is unit-tested.
+fn mirror_vfo_b_controls(cb: &mut SharedControlState, vfo: &VfoSplitState) {
+    cb.center_freq_hz = vfo.vfo_b_center_freq_hz;
+    cb.target_freq_hz = vfo.vfo_b_target_freq_hz;
+    cb.demod_mode = vfo.vfo_b_demod_mode;
+    cb.sideband = vfo.vfo_b_sideband;
+    cb.filter_bandwidth_hz = vfo.vfo_b_filter_bandwidth_hz;
+    cb.ssb_pitch_hz = vfo.vfo_b_ssb_pitch_hz;
+    cb.cw_pitch_hz = vfo.vfo_b_cw_pitch_hz;
+    cb.deemphasis_mode = vfo.vfo_b_deemphasis_mode;
+    cb.squelch_enabled = vfo.vfo_b_squelch_enabled;
+    cb.squelch_threshold_db = vfo.vfo_b_squelch_threshold_db;
+    cb.nr2_enabled = vfo.vfo_b_nr2_enabled;
+    cb.nr2_strength = vfo.vfo_b_nr2_strength;
+    cb.nb_enabled = vfo.vfo_b_nb_enabled;
+    cb.nb_threshold = vfo.vfo_b_nb_threshold;
+    cb.notch_auto_enabled = vfo.vfo_b_notch_auto_enabled;
+    cb.agc_enabled = vfo.vfo_b_agc_enabled;
+    cb.agc_strength = vfo.vfo_b_agc_strength;
+    cb.vfo.rit_enabled = vfo.vfo_b_rit_enabled;
+    cb.vfo.rit_offset_hz = vfo.vfo_b_rit_offset_hz;
+}
+
 /// Effective VFO-A receive frequency: the tuned frequency plus the RIT offset
 /// (RIT shifts only what you hear, not the dial or transmit).
 fn effective_rx_freq_hz(cs: &SharedControlState) -> u64 {
@@ -1335,6 +1366,62 @@ fn spawn_command_thread(
                             }
                         }
                     }
+                    WorkerCommand::SetVfoBDeemphasisMode { mode } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_deemphasis_mode = mode;
+                        }
+                    }
+                    WorkerCommand::SetVfoBSquelchEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_squelch_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBSquelchThreshold { threshold_db } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBNr2Enabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nr2_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBNr2Strength { strength } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nr2_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBNoiseBlankerEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nb_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBNoiseBlankerThreshold { threshold } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nb_threshold = threshold.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBNotchAutoEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_notch_auto_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBAgcEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_agc_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBAgcStrength { strength } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_agc_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBRit { enabled, offset_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_rit_enabled = enabled;
+                            cs.vfo.vfo_b_rit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
                     WorkerCommand::SetRit { enabled, offset_hz } => {
                         if let Ok(mut cs) = control.lock() {
                             cs.vfo.rit_enabled = enabled;
@@ -1834,20 +1921,17 @@ fn spawn_capture_thread(
                         }
                         last_vfo_b_freq = vfo.vfo_b_center_freq_hz;
                     }
-                    // Mirror into control_b in VFO-A shape: inherit all of VFO A's
-                    // RX processing (AGC/NR2/NB/notch/squelch/volume), then override
-                    // the VFO-B-independent freq/mode/filter.  Read VFO B's S-meter
-                    // back into the main control for the snapshot.
+                    // Mirror into control_b in VFO-A shape: clone VFO A's state, then
+                    // override every VFO-B-independent field (freq/mode/filter/pitch
+                    // AND the receive processing: deemphasis/squelch/NR2/NB/notch/AGC),
+                    // so the reused DSP-B thread — which reads these from its own lock
+                    // each loop — honours VFO B's own settings.  Volume stays out (it's
+                    // applied client-side).  Read VFO B's S-meter back into the main
+                    // control for the snapshot.
                     if let Ok(mut cb) = control_b.lock() {
                         let (b_dbm, b_su) = (cb.signal_dbm, cb.signal_s_units);
                         *cb = control_snapshot.clone();
-                        cb.center_freq_hz = vfo.vfo_b_center_freq_hz;
-                        cb.target_freq_hz = vfo.vfo_b_target_freq_hz;
-                        cb.demod_mode = vfo.vfo_b_demod_mode;
-                        cb.sideband = vfo.vfo_b_sideband;
-                        cb.filter_bandwidth_hz = vfo.vfo_b_filter_bandwidth_hz;
-                        cb.ssb_pitch_hz = vfo.vfo_b_ssb_pitch_hz;
-                        cb.cw_pitch_hz = vfo.vfo_b_cw_pitch_hz;
+                        mirror_vfo_b_controls(&mut cb, &vfo);
                         drop(cb);
                         if let Ok(mut a) = control.lock() {
                             a.vfo.vfo_b_signal_dbm = b_dbm;
@@ -3357,5 +3441,139 @@ mod volume_tests {
         }
         // Continuity-ish: just above threshold stays close to threshold.
         assert!((soft_clip(0.96) - 0.95).abs() < 0.02);
+    }
+}
+
+#[cfg(test)]
+mod vfo_b_mirror_tests {
+    use super::*;
+
+    /// A `SharedControlState` standing in for VFO A, with deliberately "A-side"
+    /// receive-processing values so the mirror's overrides are observable.
+    fn vfo_a_control() -> SharedControlState {
+        SharedControlState {
+            center_freq_hz: 14_000_000,
+            target_freq_hz: 14_074_000,
+            vfo: VfoSplitState::default(),
+            demod_mode: DemodMode::Usb,
+            sideband: Sideband::Usb,
+            ssb_pitch_hz: 0.0,
+            cw_pitch_hz: 600.0,
+            filter_bandwidth_hz: 2700.0,
+            deemphasis_mode: DeemphasisMode::Off,
+            squelch_enabled: false,
+            squelch_threshold_db: -90.0,
+            squelch_open: true,
+            nr2_enabled: false,
+            nr2_strength: 0.5,
+            nb_enabled: false,
+            nb_threshold: 0.5,
+            notch_auto_enabled: false,
+            agc_enabled: true,
+            agc_strength: 0.5,
+            signal_dbm: -140.0,
+            signal_s_units: 0,
+            volume_percent: 50,
+            waterfall_frame_rate_hz: 10.0,
+            source_control: SourceControlState::default(),
+            source_status: SourceStatus::default(),
+            amplifier_status: AmplifierStatus::default(),
+            pending_tx_tune_test: None,
+            last_tx_tune_result: None,
+            pending_swr_sweep: None,
+            swr_sweep_cancel: false,
+            last_swr_sweep_result: None,
+            swr_sweep_progress: None,
+            pending_tx_tone: None,
+            tx_tone_stop: Arc::new(AtomicBool::new(false)),
+            pending_cw_key: false,
+            cw_key_held: Arc::new(AtomicBool::new(false)),
+            cw_hang_ms: 300,
+            pending_mic_tx: false,
+            mic_tx_active: Arc::new(AtomicBool::new(false)),
+            two_tone_enabled: false,
+            two_tone_a_hz: 700.0,
+            two_tone_b_hz: 1900.0,
+            two_tone_level: 0.5,
+            tx_limiter_enabled: true,
+            tx_limiter_threshold: 0.9,
+            compressor_enabled: false,
+            compressor_level: 3,
+            pending_iq_record_start: false,
+            pending_iq_record_stop: false,
+            iq_recording_status: IqRecordingStatus::default(),
+        }
+    }
+
+    /// A VFO-B settings block whose every receive control differs from VFO A's.
+    fn distinct_vfo_b() -> VfoSplitState {
+        VfoSplitState {
+            vfo_b_target_freq_hz: 7_074_000,
+            vfo_b_center_freq_hz: 7_000_000,
+            vfo_b_demod_mode: DemodMode::Lsb,
+            vfo_b_sideband: Sideband::Lsb,
+            vfo_b_filter_bandwidth_hz: 500.0,
+            vfo_b_ssb_pitch_hz: 200.0,
+            vfo_b_cw_pitch_hz: 700.0,
+            vfo_b_deemphasis_mode: DeemphasisMode::Tau75us,
+            vfo_b_squelch_enabled: true,
+            vfo_b_squelch_threshold_db: -40.0,
+            vfo_b_nr2_enabled: true,
+            vfo_b_nr2_strength: 0.9,
+            vfo_b_nb_enabled: true,
+            vfo_b_nb_threshold: 0.8,
+            vfo_b_notch_auto_enabled: true,
+            vfo_b_agc_enabled: false,
+            vfo_b_agc_strength: 0.1,
+            vfo_b_rit_enabled: true,
+            vfo_b_rit_offset_hz: 250,
+            ..VfoSplitState::default()
+        }
+    }
+
+    #[test]
+    fn mirror_overrides_every_independent_control() {
+        let mut cb = vfo_a_control(); // already a clone of VFO A's state
+        let vfo = distinct_vfo_b();
+        mirror_vfo_b_controls(&mut cb, &vfo);
+
+        assert_eq!(cb.center_freq_hz, 7_000_000);
+        assert_eq!(cb.target_freq_hz, 7_074_000);
+        assert_eq!(cb.demod_mode, DemodMode::Lsb);
+        assert_eq!(cb.sideband, Sideband::Lsb);
+        assert_eq!(cb.filter_bandwidth_hz, 500.0);
+        assert_eq!(cb.ssb_pitch_hz, 200.0);
+        assert_eq!(cb.cw_pitch_hz, 700.0);
+        assert_eq!(cb.deemphasis_mode, DeemphasisMode::Tau75us);
+        assert!(cb.squelch_enabled);
+        assert_eq!(cb.squelch_threshold_db, -40.0);
+        assert!(cb.nr2_enabled);
+        assert_eq!(cb.nr2_strength, 0.9);
+        assert!(cb.nb_enabled);
+        assert_eq!(cb.nb_threshold, 0.8);
+        assert!(cb.notch_auto_enabled);
+        assert!(!cb.agc_enabled);
+        assert_eq!(cb.agc_strength, 0.1);
+    }
+
+    #[test]
+    fn mirror_keeps_volume_shared_not_overridden() {
+        // Volume is applied client-side, so the mirror must leave control_b's
+        // volume as VFO A's clone — never a VFO-B value.
+        let mut cb = vfo_a_control();
+        cb.volume_percent = 73;
+        mirror_vfo_b_controls(&mut cb, &distinct_vfo_b());
+        assert_eq!(cb.volume_percent, 73);
+    }
+
+    #[test]
+    fn mirror_applies_vfo_b_rit_to_effective_rx_freq() {
+        // RIT-B reaches the DSP-B NCO through effective_rx_freq_hz(&control_b),
+        // which reads cb.vfo.rit_*; the mirror must point those at VFO B's RIT.
+        let mut cb = vfo_a_control();
+        mirror_vfo_b_controls(&mut cb, &distinct_vfo_b());
+        assert!(cb.vfo.rit_enabled);
+        assert_eq!(cb.vfo.rit_offset_hz, 250);
+        assert_eq!(effective_rx_freq_hz(&cb), 7_074_000 + 250);
     }
 }

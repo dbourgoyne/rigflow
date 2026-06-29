@@ -664,10 +664,18 @@ impl RigflowApp {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
         };
 
-        // Any explicit tune / zoom / click cancels an in-flight momentum sweep.
+        // Any explicit tune / zoom / click cancels an in-flight momentum sweep,
+        // and — under dual-watch — focuses this view's VFO so the Receive-panel
+        // controls follow the spectrum the operator is working on.
         if r.tune_dir != 0 || r.tune_to_hz.is_some() || r.center_on_target || r.zoom_steps != 0 {
             if let Ok(mut state) = self.state.lock() {
                 state.pan_velocity_hz_per_s = 0.0;
+                if state.dual_watch_enabled {
+                    state.active_control_vfo = match vfo {
+                        TuneVfo::A => rigflow_core::radio::vfo::VfoSelect::A,
+                        TuneVfo::B => rigflow_core::radio::vfo::VfoSelect::B,
+                    };
+                }
             }
         }
 
