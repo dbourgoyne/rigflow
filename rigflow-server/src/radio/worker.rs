@@ -552,10 +552,44 @@ fn prepare_tx_band(
 /// next capture iteration.  The HR50 amp is bypassed on receive, so it is left on
 /// the (effective-TX) band — the capture loop's effective-TX tracking owns the amp
 /// FA mirror, so reverting here would only cause a needless per-over relay bounce.
-fn restore_rx_band(cross_band: bool, last_n2adr_band: &mut Option<HamBand>) {
+fn restore_rx_band(cross_band: bool, last_n2adr_value: &mut Option<u8>) {
     if cross_band {
-        *last_n2adr_band = None;
+        *last_n2adr_value = None;
     }
+}
+
+/// N2ADR filter value for the current RECEIVE configuration.
+///
+/// Single-VFO: the tuned band's value (the 3 MHz HPF bit is already correct per
+/// band — set for 80m–10m, clear for 160m).  Dual-watch: the LPF must pass the
+/// HIGHEST active RX band (a higher-cutoff LPF passes the lower band too), and the
+/// HPF (bit 6) must be OFF if either RX is on 160m, otherwise the higher band's
+/// HPF would block the 160m receiver.  `None` = no VFO in a supported band → leave
+/// the filter unchanged.
+fn n2adr_value_for_rx(cs: &SharedControlState) -> Option<u8> {
+    let b = cs
+        .vfo
+        .dual_watch_enabled
+        .then_some(cs.vfo.vfo_b_target_freq_hz);
+    n2adr_rx_value(cs.target_freq_hz, b)
+}
+
+/// Pure core of [`n2adr_value_for_rx`].  `freq_b = Some` means dual-watch (two
+/// active receivers); `None` means single-VFO.
+fn n2adr_rx_value(freq_a: u64, freq_b: Option<u64>) -> Option<u8> {
+    let band_a = band_from_frequency(freq_a);
+    let Some(freq_b) = freq_b else {
+        return band_a.map(n2adr_filter_value_for_band);
+    };
+    let band_b = band_from_frequency(freq_b);
+    let hi = match (band_a, band_b) {
+        (Some(_), Some(_)) => band_from_frequency(freq_a.max(freq_b)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }?;
+    let any_160 = band_a == Some(HamBand::B160) || band_b == Some(HamBand::B160);
+    // Highest band's LPF band-select bits (lower 6) + HPF (0x40) unless 160m.
+    Some((n2adr_filter_value_for_band(hi) & 0x3F) | if any_160 { 0 } else { 0x40 })
 }
 
 fn build_runtime_state(
@@ -719,7 +753,14 @@ fn run_iq_worker_threads(
     // off (the capture thread only feeds them when enabled), so idle cost is
     // ~zero.  `control_b` presents VFO B's settings in VFO-A shape so the
     // existing DSP/waterfall threads are reused verbatim.
-    let (iq_audio_b_tx, iq_audio_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
+    //
+    // VFO A's audio channel is depth-2 but the capture thread *blocks* on it
+    // (paced by DSP-A, never dropped).  VFO B is fed by `try_send` (so a stalled
+    // B can never block A), so it needs real slack — a depth-2 channel drops B IQ
+    // on any brief DSP-B scheduling hiccup, starving the right-channel jitter
+    // buffer.  Depth 16 absorbs that jitter; it still drops (not blocks) under a
+    // sustained B stall, and runs near-empty when DSP-B keeps up (low latency).
+    let (iq_audio_b_tx, iq_audio_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(16);
     let (iq_wf_b_tx, iq_wf_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
     let control_b = Arc::new(Mutex::new(
         control
@@ -1729,7 +1770,7 @@ fn spawn_capture_thread(
         let mut last_cc_sent = Instant::now();
         // N2ADR HF filter board (HL2): track the last band we programmed and the
         // enable state so we only reprogram on band change or (re)enable.
-        let mut last_n2adr_band: Option<HamBand> = None;
+        let mut last_n2adr_value: Option<u8> = None;
         let mut last_n2adr_enabled = false;
         // Last value pushed to the amplifier FA mirror (effective-TX band tracking).
         let mut last_amp_freq: u64 = 0;
@@ -1944,26 +1985,25 @@ fn spawn_capture_thread(
                 last_cc_sent = Instant::now();
             }
 
-            // N2ADR HF filter board (HL2): when enabled, follow the tuned band.
-            // Reprogram only when the band changes or N2ADR was just enabled.
-            // Outside the supported bands the filter is left unchanged and no
-            // update is sent (per spec).  No-op on sources without N2ADR.
+            // N2ADR HF filter board (HL2): when enabled, follow the receive
+            // configuration — the tuned band single-VFO, or the highest active RX
+            // band (HPF off if 160m is in use) under dual-watch.  Reprogram only
+            // when the value changes or N2ADR was just enabled.  Outside the
+            // supported bands the filter is left unchanged.  No-op without N2ADR.
             {
                 let just_enabled = current_source_control.n2adr_enabled && !last_n2adr_enabled;
                 if current_source_control.n2adr_enabled {
-                    if let Some(band) = band_from_frequency(control_snapshot.target_freq_hz) {
-                        if last_n2adr_band != Some(band) || just_enabled {
-                            let value = n2adr_filter_value_for_band(band);
+                    if let Some(value) = n2adr_value_for_rx(&control_snapshot) {
+                        if last_n2adr_value != Some(value) || just_enabled {
                             match source.set_n2adr_filter(value) {
                                 Ok(()) => {
                                     info!(
-                                        "[hl2] band={} freq={} mode={:?} n2adr={}",
-                                        band.label(),
+                                        "[hl2] n2adr={value} rx_a={} rx_b={} dual={}",
                                         control_snapshot.target_freq_hz,
-                                        control_snapshot.demod_mode,
-                                        value
+                                        control_snapshot.vfo.vfo_b_target_freq_hz,
+                                        control_snapshot.vfo.dual_watch_enabled,
                                     );
-                                    last_n2adr_band = Some(band);
+                                    last_n2adr_value = Some(value);
                                 }
                                 Err(e) => warn!("HL2: N2ADR filter program failed: {e}"),
                             }
@@ -1972,7 +2012,7 @@ fn spawn_capture_thread(
                 } else if last_n2adr_enabled {
                     // Just disabled: leave the hardware filter as-is; reset
                     // tracking so a later re-enable reprograms.
-                    last_n2adr_band = None;
+                    last_n2adr_value = None;
                 }
                 last_n2adr_enabled = current_source_control.n2adr_enabled;
             }
@@ -2144,7 +2184,7 @@ fn spawn_capture_thread(
                         abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
                     }
 
-                    restore_rx_band(prep.cross_band, &mut last_n2adr_band);
+                    restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                 }
             }
 
@@ -2179,8 +2219,9 @@ fn spawn_capture_thread(
                         // Single validated band → program its N2ADR filter once.
                         if n2adr_enabled {
                             if let Some(band) = band_from_frequency(start_hz) {
-                                let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
-                                last_n2adr_band = Some(band);
+                                let value = n2adr_filter_value_for_band(band);
+                                let _ = source.set_n2adr_filter(value);
+                                last_n2adr_value = Some(value);
                             }
                         }
 
@@ -2358,7 +2399,7 @@ fn spawn_capture_thread(
                             warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
                         }
                     }
-                    restore_rx_band(prep.cross_band, &mut last_n2adr_band);
+                    restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                 }
             }
 
@@ -2456,7 +2497,7 @@ fn spawn_capture_thread(
                                 cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
                             }
                         }
-                        restore_rx_band(prep.cross_band, &mut last_n2adr_band);
+                        restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                     }
                 }
             }
@@ -2581,7 +2622,7 @@ fn spawn_capture_thread(
                                 warn!("[radio-worker {}] mic TX error: {e}", descriptor.id.0);
                             }
                         }
-                        restore_rx_band(prep.cross_band, &mut last_n2adr_band);
+                        restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                     }
                 }
             }
@@ -3243,6 +3284,52 @@ mod hr50_path_tests {
             parse_hr50_path_baud("/dev/serial/by-id/usb-FTDI"),
             ("/dev/serial/by-id/usb-FTDI".to_string(), HR50_DEFAULT_BAUD)
         );
+    }
+}
+
+#[cfg(test)]
+mod n2adr_tests {
+    use super::*;
+
+    // Band reference frequencies (Hz).
+    const M160: u64 = 1_900_000;
+    const M40: u64 = 7_100_000;
+    const M20: u64 = 14_100_000;
+    const M10: u64 = 28_400_000;
+
+    #[test]
+    fn single_vfo_uses_the_tuned_band_value() {
+        // HPF bit (0x40) already correct per band: set for 80–10m, clear for 160m.
+        assert_eq!(n2adr_rx_value(M20, None), Some(72)); // 20m: 0b1001000
+        assert_eq!(n2adr_rx_value(M40, None), Some(68)); // 40m: 0b1000100
+        assert_eq!(n2adr_rx_value(M160, None), Some(1)); // 160m: 0b0000001 (HPF off)
+        assert_eq!(n2adr_rx_value(5_000_000, None), None); // out of band → unchanged
+    }
+
+    #[test]
+    fn dual_watch_uses_the_highest_band_lpf() {
+        // 40m + 20m → 20m LPF (passes both), HPF on.  Order-independent.
+        assert_eq!(n2adr_rx_value(M40, Some(M20)), Some(72));
+        assert_eq!(n2adr_rx_value(M20, Some(M40)), Some(72));
+        // 40m + 10m → 10m LPF, HPF on.
+        assert_eq!(n2adr_rx_value(M40, Some(M10)), Some(96));
+    }
+
+    #[test]
+    fn dual_watch_with_160m_drops_the_hpf() {
+        // 160m + 20m → 20m LPF band-select (8) but HPF (0x40) OFF so 160m passes.
+        assert_eq!(n2adr_rx_value(M160, Some(M20)), Some(8));
+        assert_eq!(n2adr_rx_value(M20, Some(M160)), Some(8));
+        // Both 160m → 160m value (HPF already off).
+        assert_eq!(n2adr_rx_value(M160, Some(M160)), Some(1));
+    }
+
+    #[test]
+    fn dual_watch_falls_back_when_one_vfo_is_out_of_band() {
+        // One out of band → use the in-band VFO's band.
+        assert_eq!(n2adr_rx_value(M20, Some(5_000_000)), Some(72));
+        assert_eq!(n2adr_rx_value(5_000_000, Some(M20)), Some(72));
+        assert_eq!(n2adr_rx_value(5_000_000, Some(5_000_000)), None);
     }
 }
 

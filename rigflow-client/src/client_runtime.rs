@@ -2,8 +2,7 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-//use std::time::{Duration, Instant}; // Instant is needed for periodic jitter logging
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use log::{error, info};
 
@@ -336,7 +335,7 @@ pub fn start_media_runtime(
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
 
-        // let mut last_stats_log = Instant::now();  // Needed for periodic jitter logging
+        let mut last_stats_log = Instant::now();
 
         loop {
             // Mirror the current receive volume into the lock-free atomic the
@@ -351,43 +350,44 @@ pub fn start_media_runtime(
             let current = audio_session_generation_for_thread.load(Ordering::Relaxed);
 
             if current != last_audio_session_generation {
+                // Reset BOTH receivers' jitter buffers — otherwise VFO B's buffer
+                // keeps a stale `next_sequence` from the old session and drops the
+                // new session's packets as "late" until the sequence catches up.
                 if let Ok(mut jb) = jitter.lock() {
+                    jb.reset();
+                }
+                if let Ok(mut jb) = jitter_b_for_thread.lock() {
                     jb.reset();
                 }
 
                 last_audio_session_generation = current;
-                info!("[client] jitter buffer reset for new radio session");
+                info!("[client] jitter buffers reset for new radio session");
             }
 
-            // --- Existing ad hoc jitter diagnostics -----------------------
-
-            /*
-                if last_stats_log.elapsed() >= Duration::from_secs(2) {
-                    if let Ok(jb) = jitter.lock() {
-                        let current_samples = jb.buffered_samples();
-                        let max_samples = jb.max_buffered_samples();
-
-                        let sr = 48_000.0;
-
-                        let current_ms = current_samples as f32 / sr * 1000.0;
-                        let max_ms = max_samples as f32 / sr * 1000.0;
-
-                        println!(
-                            "[client-audio] jitter: current={:.1} ms max={:.1} ms \
-                             started={} rx={} inserted={} late={} overflow={}",
-                            current_ms,
-                            max_ms,
-                            jb.started(),
-                            jb.packets_received,
-                            jb.packets_inserted,
-                            jb.packets_dropped_late,
-                            jb.packets_dropped_overflow,
-                        );
-                    }
-
-                    last_stats_log = Instant::now();
+            // --- Periodic jitter diagnostics (A + B) -----------------------
+            if last_stats_log.elapsed() >= Duration::from_secs(5) {
+                let sr = 48_000.0;
+                let fmt = |jb: &JitterBuffer| {
+                    format!(
+                        "started={} cur={:.0}ms rx={} ins={} late={} ovf={} bad={} resync={}",
+                        jb.started(),
+                        jb.buffered_samples() as f32 / sr * 1000.0,
+                        jb.packets_received,
+                        jb.packets_inserted,
+                        jb.packets_dropped_late,
+                        jb.packets_dropped_overflow,
+                        jb.packets_dropped_invalid_size,
+                        jb.resync_count,
+                    )
+                };
+                if let Ok(jb) = jitter.lock() {
+                    info!("[client-audio] jitter A: {}", fmt(&jb));
                 }
-            */
+                if let Ok(jb) = jitter_b_for_thread.lock() {
+                    info!("[client-audio] jitter B: {}", fmt(&jb));
+                }
+                last_stats_log = Instant::now();
+            }
 
             // --- Additional interval-based stats logger -------------------
 
