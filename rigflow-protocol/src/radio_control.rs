@@ -573,6 +573,11 @@ pub enum ServerRadioMessage {
         #[serde(default)]
         swr_sweep_progress: Option<SwrSweepProgress>,
 
+        /// Live TX-test-tone status (true while transmitting).  Lets the client
+        /// clear its Start/Stop buttons when the server hard-timeout auto-stops.
+        #[serde(default)]
+        tx_tone_running: bool,
+
         // ── Dual-VFO / split / RIT-XIT (VFO B is independent: own mode + filter) ──
         #[serde(default)]
         vfo_b_target_freq_hz: u64,
@@ -704,6 +709,8 @@ pub enum ServerRadioMessage {
         swr_sweep_result: Option<SwrSweepResult>,
         #[serde(default)]
         swr_sweep_progress: Option<SwrSweepProgress>,
+        #[serde(default)]
+        tx_tone_running: Option<bool>,
 
         // ── Dual-VFO / split / RIT-XIT deltas (None = unchanged) ──
         #[serde(default)]

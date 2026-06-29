@@ -631,6 +631,7 @@ pub fn apply_radio_server_message(
             tx_tune_result,
             swr_sweep_result,
             swr_sweep_progress,
+            tx_tone_running,
             vfo_b_target_freq_hz,
             vfo_b_center_freq_hz,
             vfo_b_demod_mode,
@@ -692,6 +693,7 @@ pub fn apply_radio_server_message(
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.swr_sweep_result = swr_sweep_result;
             state.swr_sweep_progress = swr_sweep_progress;
+            state.tx_tone_running = tx_tone_running;
             state.demod_mode = demod_mode;
             state.sideband = sideband;
             state.squelch_enabled = squelch_enabled;
@@ -792,6 +794,7 @@ pub fn apply_radio_server_message(
             tx_tune_result,
             swr_sweep_result,
             swr_sweep_progress,
+            tx_tone_running,
             vfo_b_target_freq_hz,
             vfo_b_center_freq_hz,
             vfo_b_demod_mode,
@@ -910,6 +913,9 @@ pub fn apply_radio_server_message(
             }
             if let Some(progress) = swr_sweep_progress {
                 state.swr_sweep_progress = Some(progress);
+            }
+            if let Some(v) = tx_tone_running {
+                state.tx_tone_running = v;
             }
             if let Some(result) = swr_sweep_result {
                 state.swr_sweep_result = Some(result);

@@ -203,6 +203,9 @@ pub struct WorkerRuntimeState {
     /// Result of the most recent SWR sweep, and live progress.
     pub last_swr_sweep_result: Option<SwrSweepResult>,
     pub swr_sweep_progress: Option<SwrSweepProgress>,
+    /// Live TX-test-tone status (true while transmitting); reflects the server's
+    /// hard-timeout auto-stop so the client can clear its Start/Stop buttons.
+    pub tx_tone_running: bool,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,

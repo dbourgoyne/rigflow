@@ -1664,6 +1664,8 @@ fn runtime_changed_from_runtime(
     } else {
         None
     };
+    let tx_tone_running =
+        (current.tx_tone_running != previous.tx_tone_running).then_some(current.tx_tone_running);
 
     let has_change = center_freq_hz.is_some()
         || input_sample_rate_hz.is_some()
@@ -1692,6 +1694,7 @@ fn runtime_changed_from_runtime(
         || tx_tune_result.is_some()
         || swr_sweep_result.is_some()
         || swr_sweep_progress.is_some()
+        || tx_tone_running.is_some()
         || vfo_b_target_freq_hz.is_some()
         || vfo_b_center_freq_hz.is_some()
         || vfo_b_demod_mode.is_some()
@@ -1749,6 +1752,7 @@ fn runtime_changed_from_runtime(
         tx_tune_result,
         swr_sweep_result,
         swr_sweep_progress,
+        tx_tone_running,
         vfo_b_target_freq_hz,
         vfo_b_center_freq_hz,
         vfo_b_demod_mode,
@@ -1818,6 +1822,7 @@ fn runtime_snapshot_from_status(
             tx_tune_result: runtime.last_tx_tune_result.clone(),
             swr_sweep_result: runtime.last_swr_sweep_result.clone(),
             swr_sweep_progress: runtime.swr_sweep_progress,
+            tx_tone_running: runtime.tx_tone_running,
             vfo_b_target_freq_hz: runtime.vfo.vfo_b_target_freq_hz,
             vfo_b_center_freq_hz: runtime.vfo.vfo_b_center_freq_hz,
             vfo_b_demod_mode: runtime.vfo.vfo_b_demod_mode,

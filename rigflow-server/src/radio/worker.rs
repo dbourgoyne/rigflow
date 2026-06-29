@@ -132,6 +132,11 @@ struct SharedControlState {
     /// stop signal the capture thread polls while the (open-ended) tone runs.
     pending_tx_tone: Option<(f32, bool)>,
     tx_tone_stop: Arc<AtomicBool>,
+    /// Live "tone is transmitting" status, set true by the capture thread around
+    /// the (blocking) tone loop and false when it ends — including the server's
+    /// hard-timeout auto-stop.  Published in the runtime snapshot so the client's
+    /// Start/Stop buttons reflect an auto-stop the client didn't request.
+    tx_tone_running: bool,
 
     /// CW keying: `pending_cw_key` starts a keying session; `cw_key_held` is the
     /// live key state the session polls.  `cw_hang_ms` is the semi-break-in hang
@@ -712,6 +717,7 @@ fn build_runtime_state(
         last_tx_tune_result: control.last_tx_tune_result.clone(),
         last_swr_sweep_result: control.last_swr_sweep_result.clone(),
         swr_sweep_progress: control.swr_sweep_progress,
+        tx_tone_running: control.tx_tone_running,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -815,6 +821,7 @@ fn run_iq_worker_threads(
         swr_sweep_progress: None,
         pending_tx_tone: None,
         tx_tone_stop: Arc::new(AtomicBool::new(false)),
+        tx_tone_running: false,
         pending_cw_key: false,
         cw_key_held: Arc::new(AtomicBool::new(false)),
         cw_hang_ms: 300,
@@ -922,6 +929,7 @@ fn run_iq_worker_threads(
         iq_audio_b_tx,
         iq_wf_b_tx,
         control_b.clone(),
+        status_tx.clone(),
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -1869,6 +1877,7 @@ fn spawn_capture_thread(
     iq_audio_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
     iq_wf_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
     control_b: Arc<Mutex<SharedControlState>>,
+    status_tx: watch::Sender<WorkerStatus>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut source = match create_worker_source(
@@ -2555,6 +2564,22 @@ fn spawn_capture_thread(
                         let mut forward = |iq: Vec<Complex32>| {
                             let _ = iq_wf_tx.try_send(iq);
                         };
+                        // Publish "tone on" so the client's Start/Stop buttons track
+                        // the real TX state; cleared below when the tone ends — by a
+                        // Stop *or* the source's hard-timeout auto-key-down.  The
+                        // capture thread publishes the status itself (build + send on
+                        // both edges): during the tone it stops feeding the audio IQ
+                        // channel, so the DSP thread — the usual publisher — is blocked
+                        // and would never see the true→false transition.
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_tone_running = true;
+                        }
+                        let _ = status_tx.send(WorkerStatus::Running {
+                            runtime: build_runtime_state(
+                                &current_control(&control),
+                                source.sample_rate(),
+                            ),
+                        });
                         if let Err(e) = source.tx_test_tone(
                             target_freq_hz,
                             tone_hz,
@@ -2566,6 +2591,15 @@ fn spawn_capture_thread(
                         ) {
                             warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
                         }
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_tone_running = false;
+                        }
+                        let _ = status_tx.send(WorkerStatus::Running {
+                            runtime: build_runtime_state(
+                                &current_control(&control),
+                                source.sample_rate(),
+                            ),
+                        });
                     }
                     restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                 }
@@ -3570,6 +3604,7 @@ mod vfo_b_mirror_tests {
             swr_sweep_progress: None,
             pending_tx_tone: None,
             tx_tone_stop: Arc::new(AtomicBool::new(false)),
+            tx_tone_running: false,
             pending_cw_key: false,
             cw_key_held: Arc::new(AtomicBool::new(false)),
             cw_hang_ms: 300,
