@@ -1989,16 +1989,28 @@ fn spawn_capture_thread(
                     // AND the receive processing: deemphasis/squelch/NR2/NB/notch/AGC),
                     // so the reused DSP-B thread — which reads these from its own lock
                     // each loop — honours VFO B's own settings.  Volume stays out (it's
-                    // applied client-side).  Read VFO B's S-meter back into the main
-                    // control for the snapshot.
+                    // applied client-side).  Read VFO B's S-meter + squelch gate
+                    // back into the main control for the snapshot (the DSP-B thread
+                    // wrote them on its previous cycle, before this clone overwrites
+                    // them with VFO A's values).
                     if let Ok(mut cb) = control_b.lock() {
-                        let (b_dbm, b_su) = (cb.signal_dbm, cb.signal_s_units);
+                        let (b_dbm, b_su, b_sq_open) =
+                            (cb.signal_dbm, cb.signal_s_units, cb.squelch_open);
                         *cb = control_snapshot.clone();
                         mirror_vfo_b_controls(&mut cb, &vfo);
+                        // The clone above also copied VFO A's DSP *outputs* (S-meter,
+                        // squelch gate) into control_b.  Restore VFO B's own — else
+                        // they fight the DSP-B thread (which only rewrites the gate
+                        // on change), making B's gate/S-meter flicker between A's and
+                        // B's values every loop.
+                        cb.signal_dbm = b_dbm;
+                        cb.signal_s_units = b_su;
+                        cb.squelch_open = b_sq_open;
                         drop(cb);
                         if let Ok(mut a) = control.lock() {
                             a.vfo.vfo_b_signal_dbm = b_dbm;
                             a.vfo.vfo_b_signal_s_units = b_su;
+                            a.vfo.vfo_b_squelch_open = b_sq_open;
                         }
                     }
                 }

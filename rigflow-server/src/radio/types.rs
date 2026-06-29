@@ -96,6 +96,9 @@ pub struct VfoSplitState {
     pub vfo_b_deemphasis_mode: DeemphasisMode,
     pub vfo_b_squelch_enabled: bool,
     pub vfo_b_squelch_threshold_db: f32,
+    /// Live VFO-B squelch gate (open = audio passing); written by the DSP-B
+    /// thread and read back into the snapshot, like `vfo_b_signal_*`.
+    pub vfo_b_squelch_open: bool,
     pub vfo_b_nr2_enabled: bool,
     pub vfo_b_nr2_strength: f32,
     pub vfo_b_nb_enabled: bool,
@@ -133,6 +136,7 @@ impl Default for VfoSplitState {
             vfo_b_deemphasis_mode: DeemphasisMode::Off,
             vfo_b_squelch_enabled: false,
             vfo_b_squelch_threshold_db: -90.0,
+            vfo_b_squelch_open: true,
             vfo_b_nr2_enabled: false,
             vfo_b_nr2_strength: 0.5,
             vfo_b_nb_enabled: false,

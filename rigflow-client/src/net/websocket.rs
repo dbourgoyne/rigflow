@@ -641,6 +641,7 @@ pub fn apply_radio_server_message(
             vfo_b_deemphasis_mode,
             vfo_b_squelch_enabled,
             vfo_b_squelch_threshold_db,
+            vfo_b_squelch_open,
             vfo_b_nr2_enabled,
             vfo_b_nr2_strength,
             vfo_b_agc_enabled,
@@ -671,6 +672,7 @@ pub fn apply_radio_server_message(
             state.vfo_b_deemphasis_mode = vfo_b_deemphasis_mode;
             state.vfo_b_squelch_enabled = vfo_b_squelch_enabled;
             state.vfo_b_squelch_threshold_db = vfo_b_squelch_threshold_db;
+            state.vfo_b_squelch_open = vfo_b_squelch_open;
             state.vfo_b_nr2_enabled = vfo_b_nr2_enabled;
             state.vfo_b_nr2_strength = vfo_b_nr2_strength;
             state.vfo_b_agc_enabled = vfo_b_agc_enabled;
@@ -800,6 +802,7 @@ pub fn apply_radio_server_message(
             vfo_b_deemphasis_mode,
             vfo_b_squelch_enabled,
             vfo_b_squelch_threshold_db,
+            vfo_b_squelch_open,
             vfo_b_nr2_enabled,
             vfo_b_nr2_strength,
             vfo_b_agc_enabled,
@@ -853,6 +856,9 @@ pub fn apply_radio_server_message(
             }
             if let Some(v) = vfo_b_squelch_threshold_db {
                 state.vfo_b_squelch_threshold_db = v;
+            }
+            if let Some(v) = vfo_b_squelch_open {
+                state.vfo_b_squelch_open = v;
             }
             if let Some(v) = vfo_b_nr2_enabled {
                 state.vfo_b_nr2_enabled = v;

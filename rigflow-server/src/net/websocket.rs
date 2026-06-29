@@ -1606,6 +1606,8 @@ fn runtime_changed_from_runtime(
     let vfo_b_squelch_threshold_db = (cv.vfo_b_squelch_threshold_db
         != pv.vfo_b_squelch_threshold_db)
         .then_some(cv.vfo_b_squelch_threshold_db);
+    let vfo_b_squelch_open =
+        (cv.vfo_b_squelch_open != pv.vfo_b_squelch_open).then_some(cv.vfo_b_squelch_open);
     let vfo_b_nr2_enabled =
         (cv.vfo_b_nr2_enabled != pv.vfo_b_nr2_enabled).then_some(cv.vfo_b_nr2_enabled);
     let vfo_b_nr2_strength =
@@ -1690,6 +1692,7 @@ fn runtime_changed_from_runtime(
         || vfo_b_deemphasis_mode.is_some()
         || vfo_b_squelch_enabled.is_some()
         || vfo_b_squelch_threshold_db.is_some()
+        || vfo_b_squelch_open.is_some()
         || vfo_b_nr2_enabled.is_some()
         || vfo_b_nr2_strength.is_some()
         || vfo_b_agc_enabled.is_some()
@@ -1746,6 +1749,7 @@ fn runtime_changed_from_runtime(
         vfo_b_deemphasis_mode,
         vfo_b_squelch_enabled,
         vfo_b_squelch_threshold_db,
+        vfo_b_squelch_open,
         vfo_b_nr2_enabled,
         vfo_b_nr2_strength,
         vfo_b_agc_enabled,
@@ -1814,6 +1818,7 @@ fn runtime_snapshot_from_status(
             vfo_b_deemphasis_mode: runtime.vfo.vfo_b_deemphasis_mode,
             vfo_b_squelch_enabled: runtime.vfo.vfo_b_squelch_enabled,
             vfo_b_squelch_threshold_db: runtime.vfo.vfo_b_squelch_threshold_db,
+            vfo_b_squelch_open: runtime.vfo.vfo_b_squelch_open,
             vfo_b_nr2_enabled: runtime.vfo.vfo_b_nr2_enabled,
             vfo_b_nr2_strength: runtime.vfo.vfo_b_nr2_strength,
             vfo_b_agc_enabled: runtime.vfo.vfo_b_agc_enabled,

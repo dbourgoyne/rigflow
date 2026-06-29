@@ -418,11 +418,15 @@ impl RigflowApp {
                 self.send_radio_msg(t.squelch_enabled_msg(enabled));
             }
 
-            // Live gate indicator from the server-reported open state — VFO A
-            // only (the server does not report a VFO-B gate state).
-            let (text, color) = if t.is_b() || !*t.squelch_enabled(state) {
+            // Live gate indicator from the server-reported open state (per VFO).
+            let gate_open = if t.is_b() {
+                state.vfo_b_squelch_open
+            } else {
+                state.squelch_open
+            };
+            let (text, color) = if !*t.squelch_enabled(state) {
                 ("—", egui::Color32::GRAY)
-            } else if state.squelch_open {
+            } else if gate_open {
                 ("● open", egui::Color32::from_rgb(100, 220, 100))
             } else {
                 ("muted", egui::Color32::from_rgb(210, 130, 130))

@@ -593,6 +593,9 @@ pub enum ServerRadioMessage {
         vfo_b_squelch_enabled: bool,
         #[serde(default = "default_squelch_threshold_db")]
         vfo_b_squelch_threshold_db: f32,
+        /// Live VFO-B squelch gate (open = audio passing).
+        #[serde(default = "default_squelch_open")]
+        vfo_b_squelch_open: bool,
         #[serde(default)]
         vfo_b_nr2_enabled: bool,
         #[serde(default = "default_nr2_strength")]
@@ -720,6 +723,8 @@ pub enum ServerRadioMessage {
         vfo_b_squelch_enabled: Option<bool>,
         #[serde(default)]
         vfo_b_squelch_threshold_db: Option<f32>,
+        #[serde(default)]
+        vfo_b_squelch_open: Option<bool>,
         #[serde(default)]
         vfo_b_nr2_enabled: Option<bool>,
         #[serde(default)]
