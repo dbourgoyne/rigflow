@@ -41,10 +41,6 @@ fn mode_label(m: DemodMode) -> &'static str {
     }
 }
 
-fn fmt_mhz(hz: u64) -> String {
-    format!("{:.6} MHz", hz as f64 / 1_000_000.0)
-}
-
 impl RigflowApp {
     pub(crate) fn draw_vfo_panel(&self, ui: &mut egui::Ui, snapshot: &UiState) {
         ui.collapsing(super::panel_header("Dual VFO / Split"), |ui| {
@@ -57,10 +53,53 @@ impl RigflowApp {
                 .num_columns(3)
                 .spacing([8.0, 4.0])
                 .show(ui, |ui| {
-                    // VFO A (read-only here; tuned by the spectrum/LO).
+                    // VFO A: editable frequency like VFO B (type an exact MHz
+                    // value, or roll the wheel over the field — mode-aware steps).
+                    // Mode stays a read-only label: VFO A's mode is set by the
+                    // prominent demod selector in Radio Control.  An edit QSYs the
+                    // LO window onto the new frequency (target == center), same as
+                    // VFO B; the LO / spectrum controls remain the live source.
                     let a_tx = snapshot.split_enabled && snapshot.tx_vfo == VfoSelect::A;
                     ui.label(if a_tx { "A ▶TX" } else { "A" });
-                    ui.label(egui::RichText::new(fmt_mhz(vfo_a_hz)).strong());
+                    let mut a_hz = vfo_a_hz as i64;
+                    let mut a_resp = ui.add_enabled(
+                        acquired,
+                        egui::DragValue::new(&mut a_hz)
+                            .speed(100.0)
+                            .range(0..=470_000_000i64)
+                            .custom_formatter(|n, _| format!("{:.6}", n / 1_000_000.0))
+                            .custom_parser(|s| s.parse::<f64>().ok().map(|mhz| mhz * 1_000_000.0))
+                            .update_while_editing(false)
+                            .suffix(" MHz"),
+                    );
+                    if acquired && a_resp.hovered() {
+                        let raw_y = ui.input(|i| i.raw_scroll_delta.y);
+                        if raw_y != 0.0 {
+                            let tier = ui.input(|i| {
+                                if i.modifiers.alt {
+                                    TuneTier::Coarse
+                                } else if i.modifiers.shift {
+                                    TuneTier::Medium
+                                } else {
+                                    TuneTier::Fine
+                                }
+                            });
+                            let step = target_step_hz(snapshot.demod_mode, tier);
+                            let next =
+                                (a_hz as f32 + step * raw_y.signum()).clamp(0.0, 470_000_000.0);
+                            if next as i64 != a_hz {
+                                a_hz = next as i64;
+                                a_resp.mark_changed();
+                            }
+                        }
+                        ui.ctx().input_mut(|i| {
+                            i.raw_scroll_delta = egui::Vec2::ZERO;
+                            i.smooth_scroll_delta = egui::Vec2::ZERO;
+                        });
+                    }
+                    if a_resp.changed() {
+                        self.set_vfo_a_freq_centered(a_hz.max(0) as u64);
+                    }
                     ui.label(mode_label(snapshot.demod_mode));
                     ui.end_row();
 
@@ -305,6 +344,19 @@ impl RigflowApp {
         });
         self.send_radio_msg(ClientRadioMessage::SetVfoBDemodMode { mode: m });
         self.send_radio_msg(ClientRadioMessage::SetVfoBSideband { sideband: sb });
+    }
+
+    /// Set VFO A's frequency and centre its LO window on it (target == center),
+    /// the same "QSY here" behaviour as [`Self::set_vfo_b_freq_centered`].  Used by
+    /// the editable VFO-A field in the Dual-VFO panel; the LO / spectrum controls
+    /// remain the live tuning source and pan / offset within the window from here.
+    fn set_vfo_a_freq_centered(&self, hz: u64) {
+        self.set_local(|s| {
+            s.target_freq_hz = hz as f32;
+            s.center_freq_hz = hz as f32;
+        });
+        self.send_radio_msg(ClientRadioMessage::SetTargetFrequency { target_freq_hz: hz });
+        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz });
     }
 
     /// Set VFO B's frequency and centre its LO window on it (RX1 NCO = target),
