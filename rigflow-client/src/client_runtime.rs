@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use log::{error, info};
+use log::{debug, error, info};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::mpsc;
@@ -364,7 +364,9 @@ pub fn start_media_runtime(
                 info!("[client] jitter buffers reset for new radio session");
             }
 
-            // --- Periodic jitter diagnostics (A + B) -----------------------
+            // --- Periodic jitter diagnostics (A + B), at debug level so they're
+            // silent by default (enable with RUST_LOG=…=debug to chase a jitter
+            // issue) -------------------------------------------------------------
             if last_stats_log.elapsed() >= Duration::from_secs(5) {
                 let sr = 48_000.0;
                 let fmt = |jb: &JitterBuffer| {
@@ -381,10 +383,10 @@ pub fn start_media_runtime(
                     )
                 };
                 if let Ok(jb) = jitter.lock() {
-                    info!("[client-audio] jitter A: {}", fmt(&jb));
+                    debug!("[client-audio] jitter A: {}", fmt(&jb));
                 }
                 if let Ok(jb) = jitter_b_for_thread.lock() {
-                    info!("[client-audio] jitter B: {}", fmt(&jb));
+                    debug!("[client-audio] jitter B: {}", fmt(&jb));
                 }
                 last_stats_log = Instant::now();
             }
