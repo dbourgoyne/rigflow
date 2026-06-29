@@ -111,22 +111,34 @@ impl RigflowApp {
         match panel {
             Panel::RadioControl => {
                 let tx = snapshot.source_capabilities.supports_transmit;
-                // Transmit + Diagnostics (two-tone / TX-audio meters) are TX UI —
-                // shown only on a transmit-capable source.  Advanced is always
-                // present (the WSJT-X setup button is useful for RX-only digital
-                // too; its TX-Processing row gates itself on `supports_transmit`).
+                // Transmit, Advanced (TX Processing + WSJT-X/FT8 setup), and
+                // Diagnostics (two-tone / TX-audio meters) are all TX UI — shown
+                // only on a transmit-capable source.
                 let mut v = vec![Section::Audio, Section::Receive];
                 if tx {
                     v.push(Section::Transmit);
-                }
-                v.push(Section::Advanced);
-                if tx && matches!(snapshot.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
-                    v.push(Section::Diagnostics);
+                    v.push(Section::Advanced);
+                    if matches!(snapshot.demod_mode, DemodMode::Usb | DemodMode::Lsb) {
+                        v.push(Section::Diagnostics);
+                    }
                 }
                 v
             }
             Panel::SourceControl => {
-                let mut v = vec![Section::Configuration, Section::Recording, Section::Status];
+                let mut v = Vec::new();
+                // Configuration is empty for fixed sources that expose no
+                // adjustable parameters (WAV playback, fake tone) — list it only
+                // when the source has at least one configurable control.
+                if snapshot.source_capabilities.has_configuration_controls() {
+                    v.push(Section::Configuration);
+                }
+                v.push(Section::Recording);
+                // Status is read-only telemetry; list it only when the source
+                // actually reports something (RTL-SDR leaves all fields None, so
+                // the section would otherwise be an empty header).
+                if snapshot.source_status.has_any() {
+                    v.push(Section::Status);
+                }
                 if snapshot.source_capabilities.supports_tx_tune_test
                     || snapshot.source_capabilities.supports_fdx
                 {

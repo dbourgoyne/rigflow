@@ -361,14 +361,13 @@ impl RigflowApp {
             // Advanced: normal-operation controls rarely changed.  TX Processing
             // (limiter/compressor) + the one-time WSJT-X / FT8 setup helper.
             Section::Advanced => {
-                // TX Processing (limiter/compressor) is transmit-only; the WSJT-X
-                // setup helper is useful for RX-only digital too, so it stays.
-                if snapshot.source_capabilities.supports_transmit {
-                    if let Ok(mut state) = self.state.lock() {
-                        self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
-                    }
-                    ui.separator();
+                // The whole Advanced section is TX-gated by the composer
+                // (`present_sections`): both TX Processing and the WSJT-X/FT8
+                // setup helper are part of the transmit workflow.
+                if let Ok(mut state) = self.state.lock() {
+                    self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                 }
+                ui.separator();
                 if ui.button("WSJT-X / FT8 Setup…").clicked() {
                     if let Ok(mut state) = self.state.lock() {
                         state.show_wsjtx_setup_window = true;

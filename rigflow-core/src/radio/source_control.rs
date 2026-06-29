@@ -155,6 +155,22 @@ pub struct SourceCapabilities {
 }
 
 impl SourceCapabilities {
+    /// True if the source exposes any adjustable parameter that the Source
+    /// Control "Configuration" section would draw (sample rate, gain/gain-mode,
+    /// PPM, direct sampling, band control, or transmit controls).  Used to hide
+    /// the section entirely for fixed sources that expose nothing — e.g. WAV
+    /// playback and the fake-tone generator.  Keep in sync with
+    /// `source_control::draw_configuration_section`.
+    pub fn has_configuration_controls(&self) -> bool {
+        self.supports_sample_rate
+            || self.supports_gain_mode
+            || self.supports_gain
+            || self.supports_ppm_correction
+            || self.supports_direct_sampling
+            || self.supports_band_control
+            || self.supports_transmit
+    }
+
     pub fn none() -> Self {
         Self {
             supports_sample_rate: false,
