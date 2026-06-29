@@ -12,6 +12,37 @@
 
 use rigflow_core::dsp::modes::DemodMode;
 
+/// The fixed set of grid-snap / tuning-step sizes (Hz) offered in the LO-strip
+/// "Snap" dropdown.  These govern every target tuning action (wheel, spectrum/
+/// waterfall click, ←/→ arrows) — purely client-side; the server still receives
+/// the resulting Hz integer.
+pub const TUNING_STEP_OPTIONS_HZ: [f32; 8] =
+    [1.0, 10.0, 50.0, 100.0, 500.0, 1_000.0, 5_000.0, 10_000.0];
+
+// Sensible per-mode defaults (SSB 1 kHz, CW 50 Hz, AM/NFM 5 kHz, Digital 1 Hz,
+// WFM 10 kHz) live in `persistence::models::TuningStepPreferencesFile::default`
+// (persistence can't depend on this UI module).
+
+/// Snap a frequency (Hz) to the nearest multiple of `step_hz` (the grid).  A
+/// non-positive step disables snapping (returns the input unchanged).
+pub fn snap_to_step_hz(hz: f32, step_hz: f32) -> f32 {
+    if step_hz <= 0.0 {
+        hz
+    } else {
+        (hz / step_hz).round() * step_hz
+    }
+}
+
+/// Human label for a step size, e.g. `1 Hz`, `500 Hz`, `1 kHz`, `10 kHz`.
+pub fn tuning_step_label(step_hz: f32) -> String {
+    let hz = step_hz.round() as i64;
+    if hz >= 1_000 && hz % 1_000 == 0 {
+        format!("{} kHz", hz / 1_000)
+    } else {
+        format!("{hz} Hz")
+    }
+}
+
 /// Which step tier the modifier keys selected.
 ///
 /// `Fine` = no modifier, `Medium` = Shift, `Coarse` = Alt.  Applies to *target*

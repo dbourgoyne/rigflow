@@ -284,6 +284,42 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the per-mode grid-snap / tuning-step sizes for the current operator.
+    pub(crate) fn save_tuning_step_preferences_to_current_operator(&mut self) {
+        let (operator_id, tuning_step_preferences) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.tuning_step_preferences)
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(mut operator_settings) => {
+                operator_settings.tuning_step_preferences = tuning_step_preferences;
+                if let Err(err) = self
+                    .persistence_store
+                    .save_operator_settings(&operator_settings)
+                {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.persistence_status = format!("failed to save tuning step: {err}");
+                    }
+                } else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+                }
+            }
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator settings: {err}");
+                }
+            }
+        }
+    }
+
     /// Persist the receive-audio volume (%) for the current operator.
     pub(crate) fn save_volume_to_current_operator(&mut self) {
         let (operator_id, volume_percent, volume_percent_b) = {

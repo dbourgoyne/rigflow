@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::persistence::models::{DemodPreferenceSetFile, RadioSettingsFile};
+use crate::persistence::models::{
+    DemodPreferenceSetFile, RadioSettingsFile, TuningStepPreferencesFile,
+};
 use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
@@ -183,6 +185,10 @@ pub struct UiState {
     /// server on connect (the server starts at its own default).
     pub pending_apply_waterfall_rate: bool,
 
+    /// Set by the LO-strip "Snap" dropdown (which only has `&self`) when the
+    /// per-mode tuning step changes; the main loop persists it and clears this.
+    pub pending_save_tuning_steps: bool,
+
     // =====================================================================
     // CONNECTION / SERVER STATE
     // =====================================================================
@@ -279,6 +285,10 @@ pub struct UiState {
     // PER-DEMOD OPERATOR PREFERENCES
     // =====================================================================
     pub demod_preferences: DemodPreferenceSetFile,
+
+    /// Per-mode grid-snap / tuning-step sizes (Hz); UI-only, persisted per
+    /// operator.  Looked up by the active VFO's mode at tuning time.
+    pub tuning_step_preferences: TuningStepPreferencesFile,
 
     // =====================================================================
     // BOOKMARKS
@@ -575,6 +585,7 @@ impl Default for UiState {
             sideband: Sideband::Lsb,
 
             demod_preferences: DemodPreferenceSetFile::default(),
+            tuning_step_preferences: TuningStepPreferencesFile::default(),
             pitch_hz: 0.0,
             filter_bandwidth_hz: 3000.0,
             deemphasis_mode: DeemphasisMode::Off,
@@ -609,6 +620,7 @@ impl Default for UiState {
 
             waterfall_rate_debounce: DebounceState::new(20.0),
             pending_apply_waterfall_rate: false,
+            pending_save_tuning_steps: false,
 
             // =================================================================
             // CONNECTION / SERVER STATE

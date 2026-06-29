@@ -420,7 +420,7 @@ impl RigflowApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        use crate::ui::tuning_steps::{TuneTier, center_step_hz, target_step_hz};
+        use crate::ui::tuning_steps::center_step_hz;
 
         // VFO hotkeys — ignored while a text field has focus (so typing a
         // callsign/frequency never triggers them).  `X` = TX-focus swap,
@@ -445,15 +445,16 @@ impl RigflowApp {
             }
         }
 
-        // Gather arrow presses + modifiers in one input pass.
-        let (up, down, left, right, shift, alt) = ctx.input(|i| {
+        // Gather arrow presses + the Shift modifier (coarse center step) in one
+        // input pass.  Target tuning (←/→) now uses the grid-snap step, so Alt is
+        // no longer read here.
+        let (up, down, left, right, shift) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowUp),
                 i.key_pressed(egui::Key::ArrowDown),
                 i.key_pressed(egui::Key::ArrowLeft),
                 i.key_pressed(egui::Key::ArrowRight),
                 i.modifiers.shift,
-                i.modifiers.alt,
             )
         });
 
@@ -488,18 +489,13 @@ impl RigflowApp {
             }
         }
 
-        // ←/→ — target step, identical to the wheel (mode-aware; Shift = medium,
-        // Alt = coarse) including soft-edge LO panning.
+        // ←/→ — target step, identical to the wheel: one grid-snap step per press
+        // (the LO-strip "Snap" dropdown), with soft-edge LO panning.  VFO A's step
+        // comes from the per-mode tuning-step preferences.
         let target_dir = (right as i32) - (left as i32);
         if target_dir != 0 {
-            let tier = if shift {
-                TuneTier::Medium
-            } else if alt {
-                TuneTier::Coarse
-            } else {
-                TuneTier::Fine
-            };
-            let delta = target_dir as f32 * target_step_hz(mode, tier);
+            let step = snapshot.tuning_step_preferences.get(mode);
+            let delta = target_dir as f32 * step;
             self.tune_target_relative(&snapshot, delta, crate::ui::app_center::TuneVfo::A);
         }
     }
@@ -581,6 +577,16 @@ impl eframe::App for RigflowApp {
         // slider/frequency drag doesn't thrash the file, and catches every change
         // path (tuning, band, all controls).
         self.autosave_radio_settings();
+
+        // Persist a tuning-step change requested by the LO-strip "Snap" dropdown
+        // (it only has `&self`, so it flags the change for us to save here).
+        let save_steps = {
+            let mut state = self.state.lock().unwrap();
+            std::mem::take(&mut state.pending_save_tuning_steps)
+        };
+        if save_steps {
+            self.save_tuning_step_preferences_to_current_operator();
+        }
 
         self.handle_exit(ctx, &snapshot);
 

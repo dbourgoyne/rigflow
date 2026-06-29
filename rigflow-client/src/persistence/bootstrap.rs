@@ -111,6 +111,7 @@ pub fn apply_operator_settings_to_ui_state(
 
     // --- NEW: load per-demod preferences ---
     state.demod_preferences = operator.demod_preferences.clone();
+    state.tuning_step_preferences = operator.tuning_step_preferences;
 
     let prefs = state.demod_preferences.get(state.demod_mode);
 
@@ -164,6 +165,7 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
 
     // --- NEW: persist per-demod preferences ---
     operator.demod_preferences = state.demod_preferences.clone();
+    operator.tuning_step_preferences = state.tuning_step_preferences;
 
     operator.waterfall_display_preferences.display_zoom = state.display_zoom;
     operator

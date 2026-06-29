@@ -496,9 +496,14 @@ impl RigflowApp {
         let limits = active_freq_limits(snapshot);
         let cur_center = vfo.center(snapshot);
 
-        // Move the target by the step, clamped only to the RF range (NOT the
-        // visible band) so it can cross the soft edge; the LO follows it.
-        let desired_target = clamp_center(vfo.target(snapshot) + delta_hz, &limits);
+        // Move the target by the step, then grid-snap to the VFO's tuning step so
+        // wheel/arrow tuning always lands on the grid (req: universal snapping).
+        // Clamped only to the RF range (NOT the visible band) so it can cross the
+        // soft edge; the LO follows it.
+        let step = vfo.tuning_step_hz(snapshot);
+        let snapped =
+            crate::ui::tuning_steps::snap_to_step_hz(vfo.target(snapshot) + delta_hz, step);
+        let desired_target = clamp_center(snapped, &limits);
 
         // Soft threshold = 80% of the visible half-span (zoom-aware: the visible
         // span is sample_rate / display_zoom, centered on the LO).
@@ -699,21 +704,24 @@ impl RigflowApp {
             }
         }
 
-        // Wheel fine-tune: resolve the mode-aware Hz step here (this code has the
-        // demod mode; the shared mouse handler does not) and apply it through the
-        // common relative-tune path, which also handles soft-edge LO panning.
+        // Wheel tune: each notch moves by exactly one grid-snap step (the LO-strip
+        // "Snap" dropdown), applied through the common relative-tune path (which
+        // grid-snaps the result and handles soft-edge LO panning).  The mouse
+        // handler's tier is ignored — the dropdown is the single source of step.
         if r.tune_dir != 0 && snapshot.radio_acquired {
-            let step =
-                crate::ui::tuning_steps::target_step_hz(vfo.demod_mode(snapshot), r.tune_tier);
+            let step = vfo.tuning_step_hz(snapshot);
             self.tune_target_relative(snapshot, r.tune_dir as f32 * step, vfo);
         }
 
-        // Single-click → tune target to the clicked frequency.
+        // Single-click → tune target to the clicked frequency, grid-snapped to the
+        // VFO's tuning step.
         if let Some(freq_hz) = r.tune_to_hz {
             if snapshot.radio_acquired {
                 let limits = active_freq_limits(snapshot);
+                let snapped =
+                    crate::ui::tuning_steps::snap_to_step_hz(freq_hz, vfo.tuning_step_hz(snapshot));
                 let new_target = clamp_target(
-                    freq_hz,
+                    snapped,
                     vfo.center(snapshot),
                     snapshot.input_sample_rate_hz,
                     &limits,
@@ -838,6 +846,41 @@ impl RigflowApp {
                 vfo.target_msg(new_target_hz as u64),
             ));
         }
+
+        // ── "Snap" (grid-snap / tuning-step) dropdown, just right of the LO spin
+        //    widget. Per-mode (req: operator+mode memory); governs wheel / click /
+        //    arrow tuning for this VFO.  UI-only: nothing extra is sent — tuning
+        //    paths read this step and snap the Hz they already send. ──
+        let mode = vfo.demod_mode(&state_snapshot);
+        let cur_step = state_snapshot.tuning_step_preferences.get(mode);
+        let mut chosen = cur_step;
+        let snap_rect = egui::Rect::from_min_size(
+            egui::Pos2::new(strip_rect.left() + 12.0 + 200.0, lo_y - 1.0),
+            egui::Vec2::new(150.0, 22.0),
+        );
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(snap_rect), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Snap").size(12.0));
+                egui::ComboBox::from_id_salt(("snap_step", matches!(vfo, TuneVfo::B)))
+                    .selected_text(crate::ui::tuning_steps::tuning_step_label(cur_step))
+                    .width(72.0)
+                    .show_ui(ui, |ui| {
+                        for opt in crate::ui::tuning_steps::TUNING_STEP_OPTIONS_HZ {
+                            ui.selectable_value(
+                                &mut chosen,
+                                opt,
+                                crate::ui::tuning_steps::tuning_step_label(opt),
+                            );
+                        }
+                    });
+            });
+        });
+        if chosen != cur_step {
+            if let Ok(mut state) = self.state.lock() {
+                state.tuning_step_preferences.set(mode, chosen);
+                state.pending_save_tuning_steps = true;
+            }
+        }
     }
 
     fn update_waterfall_texture(&mut self, ctx: &egui::Context, wf_width: usize, wf_height: usize) {
@@ -894,6 +937,11 @@ impl TuneVfo {
             TuneVfo::A => s.demod_mode,
             TuneVfo::B => s.vfo_b_demod_mode,
         }
+    }
+    /// Grid-snap / tuning-step size (Hz) for this VFO, from the per-mode
+    /// preferences keyed on the VFO's own mode.
+    fn tuning_step_hz(self, s: &UiState) -> f32 {
+        s.tuning_step_preferences.get(self.demod_mode(s))
     }
     fn center_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
         use rigflow_protocol::ClientRadioMessage as M;

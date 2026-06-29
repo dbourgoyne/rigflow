@@ -130,6 +130,61 @@ impl DemodPreferenceSetFile {
     }
 }
 
+/// Per-mode grid-snap / tuning-step size (Hz), persisted per operator.  UI-only:
+/// it constrains how target tuning is rounded before the Hz integer is sent to
+/// the server.  CWU/CWL share one entry (like `DemodPreferenceSetFile`).
+/// Defaults: SSB 1 kHz, CW 50 Hz, AM/NFM 5 kHz, Digital 1 Hz, WFM 10 kHz.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TuningStepPreferencesFile {
+    pub wfm: f32,
+    pub nfm: f32,
+    pub am: f32,
+    pub usb: f32,
+    pub lsb: f32,
+    pub cw: f32,
+    pub dgt_u: f32,
+}
+
+impl Default for TuningStepPreferencesFile {
+    fn default() -> Self {
+        Self {
+            wfm: 10_000.0,
+            nfm: 5_000.0,
+            am: 5_000.0,
+            usb: 1_000.0,
+            lsb: 1_000.0,
+            cw: 50.0,
+            dgt_u: 1.0,
+        }
+    }
+}
+
+impl TuningStepPreferencesFile {
+    pub fn get(&self, mode: DemodMode) -> f32 {
+        match mode {
+            DemodMode::Wfm => self.wfm,
+            DemodMode::Nfm => self.nfm,
+            DemodMode::Am => self.am,
+            DemodMode::Usb => self.usb,
+            DemodMode::Lsb => self.lsb,
+            DemodMode::Cwu | DemodMode::Cwl => self.cw,
+            DemodMode::DgtU => self.dgt_u,
+        }
+    }
+
+    pub fn set(&mut self, mode: DemodMode, step_hz: f32) {
+        match mode {
+            DemodMode::Wfm => self.wfm = step_hz,
+            DemodMode::Nfm => self.nfm = step_hz,
+            DemodMode::Am => self.am = step_hz,
+            DemodMode::Usb => self.usb = step_hz,
+            DemodMode::Lsb => self.lsb = step_hz,
+            DemodMode::Cwu | DemodMode::Cwl => self.cw = step_hz,
+            DemodMode::DgtU => self.dgt_u = step_hz,
+        }
+    }
+}
+
 /// Per-(operator, radio) operating state — restored when the radio is acquired
 /// and saved on change, so an operator resumes each radio exactly where they
 /// left off.  Lives in `OperatorSettingsFile.radio_settings` keyed by radio ID,
@@ -200,6 +255,11 @@ pub struct OperatorSettingsFile {
     pub server_ip: String,
 
     pub demod_preferences: DemodPreferenceSetFile,
+
+    /// Per-mode grid-snap / tuning-step sizes (Hz).  Serde default so older files
+    /// load with the sensible per-mode defaults.
+    #[serde(default)]
+    pub tuning_step_preferences: TuningStepPreferencesFile,
 
     pub default_bookmark_id: Option<String>,
     pub auto_apply_default_bookmark_on_acquire: bool,
@@ -308,6 +368,7 @@ impl OperatorSettingsFile {
             // a remote/Pi server.  Persisted per-operator thereafter.
             server_ip: "127.0.0.1".to_string(),
             demod_preferences: DemodPreferenceSetFile::default(),
+            tuning_step_preferences: TuningStepPreferencesFile::default(),
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
             bookmarks: Vec::new(),
