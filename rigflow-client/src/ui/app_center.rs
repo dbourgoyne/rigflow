@@ -65,22 +65,9 @@ impl RigflowApp {
                     let dual = snapshot.dual_watch_enabled;
                     let spectrum_height = if dual { 140.0 } else { 220.0 };
                     let spectrum_b_height = 120.0;
-                    let fixed = lo_strip_height
-                        + spectrum_height
-                        + gap * 2.0
-                        + 2.0
-                        + if dual {
-                            spectrum_b_height + gap + lo_strip_height
-                        } else {
-                            0.0
-                        };
-                    let waterfall_total = (ui.available_height() - fixed).max(120.0);
-                    let waterfall_height = if dual {
-                        (waterfall_total / 2.0).max(60.0)
-                    } else {
-                        waterfall_total
-                    };
-                    let waterfall_b_height = waterfall_height;
+                    // The waterfall heights are computed later, from the *actual*
+                    // remaining height just before they are drawn, so the VFO A and
+                    // VFO B waterfalls come out exactly equal.
 
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), lo_strip_height),
@@ -175,6 +162,27 @@ impl RigflowApp {
                     ui.separator();
                     ui.add_space(gap);
 
+                    // Split the remaining height equally between the VFO A and VFO B
+                    // waterfalls.  Measured here (after the spectra are laid out) so
+                    // both halves are exactly equal regardless of what the panels
+                    // above consumed; the `between` reserve covers the separator +
+                    // gaps that sit between the two waterfalls so B is never clipped.
+                    let waterfall_height;
+                    let waterfall_b_height;
+                    {
+                        let remaining = ui.available_height();
+                        if dual {
+                            let item_sp = ui.spacing().item_spacing.y;
+                            let between = gap * 2.0 + 2.0 + item_sp * 4.0;
+                            let each = ((remaining - between) / 2.0).max(60.0);
+                            waterfall_height = each;
+                            waterfall_b_height = each;
+                        } else {
+                            waterfall_height = remaining.max(120.0);
+                            waterfall_b_height = 0.0;
+                        }
+                    }
+
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), waterfall_height),
                         egui::Layout::top_down(egui::Align::Min),
@@ -242,8 +250,11 @@ impl RigflowApp {
                         },
                     );
 
-                    // ── VFO B waterfall (dual-watch): stacked below A's ───────
+                    // ── VFO B waterfall (dual-watch): stacked below A's, with a
+                    //    separator between the two waterfalls ───────────────────
                     if dual {
+                        ui.add_space(gap);
+                        ui.separator();
                         ui.add_space(gap);
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), waterfall_b_height),
