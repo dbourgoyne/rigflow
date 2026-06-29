@@ -17,4 +17,4 @@ pub use model::{
 pub use source_status::SourceStatus;
 pub use tx_audio_diag::TxAudioDiag;
 pub use tx_tune::{TxTuneResult, TxTuneState, TxTuneStatus, compute_swr};
-pub use vfo::VfoSelect;
+pub use vfo::{VfoSelect, VfoState};

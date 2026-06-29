@@ -422,6 +422,29 @@ impl RigflowApp {
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         use crate::ui::tuning_steps::{TuneTier, center_step_hz, target_step_hz};
 
+        // VFO hotkeys — ignored while a text field has focus (so typing a
+        // callsign/frequency never triggers them).  `X` = TX-focus swap,
+        // `=` = copy VFO A onto VFO B.
+        if !ctx.wants_keyboard_input() {
+            let (swap_tx, copy_ab) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::X),
+                    i.key_pressed(egui::Key::Equals),
+                )
+            });
+            if swap_tx || copy_ab {
+                let snapshot = self.snapshot_state();
+                if snapshot.radio_acquired {
+                    if swap_tx {
+                        self.swap_tx_focus(&snapshot);
+                    }
+                    if copy_ab {
+                        self.copy_a_to_b(&snapshot);
+                    }
+                }
+            }
+        }
+
         // Gather arrow presses + modifiers in one input pass.
         let (up, down, left, right, shift, alt) = ctx.input(|i| {
             (

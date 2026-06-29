@@ -133,18 +133,23 @@ impl RigflowApp {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(acquired, egui::Button::new("Copy A -> B"))
-                    .on_hover_text("Copy VFO A's frequency + mode to VFO B")
+                    .add_enabled(acquired, egui::Button::new("Copy A=B  (=)"))
+                    .on_hover_text(
+                        "Clone VFO A's entire state (freq, mode, filter, DSP) onto VFO B",
+                    )
                     .clicked()
                 {
                     self.copy_a_to_b(snapshot);
                 }
                 if ui
-                    .add_enabled(acquired, egui::Button::new("Swap A <-> B"))
-                    .on_hover_text("Swap VFO A and VFO B (frequency + mode)")
+                    .add_enabled(acquired, egui::Button::new("Swap TX  (X)"))
+                    .on_hover_text(
+                        "Swap TX focus between VFO A and B — frequencies stay put; only the \
+                         TX VFO (badge) changes",
+                    )
                     .clicked()
                 {
-                    self.swap_ab(snapshot);
+                    self.swap_tx_focus(snapshot);
                 }
             });
 
@@ -314,39 +319,59 @@ impl RigflowApp {
         self.send_radio_msg(ClientRadioMessage::SetVfoBCenterFrequency { center_freq_hz: hz });
     }
 
-    fn copy_a_to_b(&self, snapshot: &UiState) {
-        let hz = snapshot.target_freq_hz.max(0.0) as u64;
-        self.set_vfo_b_freq_centered(hz);
-        self.apply_vfo_b_mode(snapshot.demod_mode);
+    /// VFO Copy (A=B): clone VFO A's entire receiver state onto VFO B.  The server
+    /// does the wholesale `VfoState` clone (`CopyVfoAToB`); we also mirror every
+    /// VFO-B field locally for instant feedback (incl. the fire-and-forget nb/notch
+    /// and the client-only volume, which the server echo does not carry).
+    pub(crate) fn copy_a_to_b(&self, snapshot: &UiState) {
+        self.set_local(|s| {
+            s.vfo_b_target_freq_hz = s.target_freq_hz;
+            s.vfo_b_center_freq_hz = s.center_freq_hz;
+            s.vfo_b_demod_mode = s.demod_mode;
+            s.vfo_b_sideband = s.sideband;
+            s.vfo_b_filter_bandwidth_hz = s.filter_bandwidth_hz;
+            // VFO A keeps a single `pitch_hz` for its current mode; route it into
+            // VFO B's matching slot, mirroring the per-mode default into the other.
+            let prefs = s.demod_preferences.get(s.demod_mode);
+            match s.demod_mode {
+                DemodMode::Cwu | DemodMode::Cwl => {
+                    s.vfo_b_cw_pitch_hz = s.pitch_hz;
+                    s.vfo_b_ssb_pitch_hz = prefs.pitch_hz;
+                }
+                _ => {
+                    s.vfo_b_ssb_pitch_hz = s.pitch_hz;
+                    s.vfo_b_cw_pitch_hz = prefs.pitch_hz;
+                }
+            }
+            s.vfo_b_deemphasis_mode = s.deemphasis_mode;
+            s.vfo_b_squelch_enabled = s.squelch_enabled;
+            s.vfo_b_squelch_threshold_db = s.squelch_threshold_db;
+            s.vfo_b_nr2_enabled = s.nr2_enabled;
+            s.vfo_b_nr2_strength = s.nr2_strength;
+            s.vfo_b_nb_enabled = s.nb_enabled;
+            s.vfo_b_nb_threshold = s.nb_threshold;
+            s.vfo_b_notch_auto_enabled = s.notch_auto_enabled;
+            s.vfo_b_agc_enabled = s.agc_enabled;
+            s.vfo_b_agc_strength = s.agc_strength;
+            s.vfo_b_rit_enabled = s.rit_enabled;
+            s.vfo_b_rit_offset_hz = s.rit_offset_hz;
+            s.volume_percent_b = s.volume_percent;
+        });
+        let _ = snapshot;
+        self.send_radio_msg(ClientRadioMessage::CopyVfoAToB);
     }
 
-    fn swap_ab(&self, snapshot: &UiState) {
-        let a_hz = snapshot.target_freq_hz.max(0.0) as u64;
-        let b_hz = snapshot.vfo_b_target_freq_hz.max(0.0) as u64;
-        let a_mode = snapshot.demod_mode;
-        let a_sb = snapshot.sideband;
-        let b_mode = snapshot.vfo_b_demod_mode;
-        let b_sb = snapshot.vfo_b_sideband;
-        // VFO A ⇄ VFO B: swap frequency + mode/sideband, re-centring each VFO's
-        // LO window on its new frequency.
+    /// TX Focus Swap: flip which VFO transmits (and turn split on so the choice is
+    /// honoured).  Deliberately lightweight — VFO frequencies and the waterfall
+    /// layout stay anchored; only the TX VFO (and its badge) changes.
+    pub(crate) fn swap_tx_focus(&self, snapshot: &UiState) {
+        let new_tx = snapshot.tx_vfo.other();
         self.set_local(|s| {
-            s.target_freq_hz = b_hz as f32;
-            s.center_freq_hz = b_hz as f32;
-            s.demod_mode = b_mode;
-            s.sideband = b_sb;
+            s.tx_vfo = new_tx;
+            s.split_enabled = true;
         });
-        self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
-            target_freq_hz: b_hz,
-        });
-        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
-            center_freq_hz: b_hz,
-        });
-        self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode: b_mode });
-        self.send_radio_msg(ClientRadioMessage::SetSideband { sideband: b_sb });
-        // VFO B ← A's freq + mode (centred).
-        self.set_vfo_b_freq_centered(a_hz);
-        self.send_radio_msg(ClientRadioMessage::SetVfoBDemodMode { mode: a_mode });
-        self.send_radio_msg(ClientRadioMessage::SetVfoBSideband { sideband: a_sb });
+        self.send_radio_msg(ClientRadioMessage::SetTxVfo { vfo: new_tx });
+        self.send_radio_msg(ClientRadioMessage::SetSplit { enabled: true });
     }
 
     /// Briefly lock `UiState` to apply a local edit for snappy feedback.

@@ -342,6 +342,8 @@ pub enum WorkerCommand {
         enabled: bool,
         offset_hz: i32,
     },
+    /// Clone VFO A's entire receiver state onto VFO B (the "A=B" copy).
+    CopyVfoAToB,
     SetRit {
         enabled: bool,
         offset_hz: i32,

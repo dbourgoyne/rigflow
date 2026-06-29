@@ -12,7 +12,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use rigflow_core::dsp::modes::{default_deemphasis_mode, DeemphasisMode};
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
-use rigflow_core::radio::vfo::VfoSelect;
+use rigflow_core::radio::vfo::{VfoSelect, VfoState};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::config::{
@@ -171,6 +171,60 @@ struct SharedControlState {
     pending_iq_record_start: bool,
     pending_iq_record_stop: bool,
     iq_recording_status: IqRecordingStatus,
+}
+
+impl SharedControlState {
+    /// Project VFO A's (flat) receiver settings as a `VfoState`.  VFO A's RIT
+    /// lives in `vfo.rit_*`; everything else is the top-level flat fields.
+    fn vfo_a_state(&self) -> VfoState {
+        VfoState {
+            target_freq_hz: self.target_freq_hz,
+            center_freq_hz: self.center_freq_hz,
+            demod_mode: self.demod_mode,
+            sideband: self.sideband,
+            filter_bandwidth_hz: self.filter_bandwidth_hz,
+            ssb_pitch_hz: self.ssb_pitch_hz,
+            cw_pitch_hz: self.cw_pitch_hz,
+            deemphasis_mode: self.deemphasis_mode,
+            squelch_enabled: self.squelch_enabled,
+            squelch_threshold_db: self.squelch_threshold_db,
+            nr2_enabled: self.nr2_enabled,
+            nr2_strength: self.nr2_strength,
+            nb_enabled: self.nb_enabled,
+            nb_threshold: self.nb_threshold,
+            notch_auto_enabled: self.notch_auto_enabled,
+            agc_enabled: self.agc_enabled,
+            agc_strength: self.agc_strength,
+            rit_enabled: self.vfo.rit_enabled,
+            rit_offset_hz: self.vfo.rit_offset_hz,
+            volume_percent: self.volume_percent,
+        }
+    }
+
+    /// Write a `VfoState` wholesale into VFO B's (flat `vfo_b_*`) fields.  The
+    /// `control_b` mirror then carries these onto the DSP-B pipeline.  Volume is
+    /// applied client-side, so it is not stored for VFO B here.
+    fn apply_vfo_b_state(&mut self, v: &VfoState) {
+        self.vfo.vfo_b_target_freq_hz = v.target_freq_hz;
+        self.vfo.vfo_b_center_freq_hz = v.center_freq_hz;
+        self.vfo.vfo_b_demod_mode = v.demod_mode;
+        self.vfo.vfo_b_sideband = v.sideband;
+        self.vfo.vfo_b_filter_bandwidth_hz = v.filter_bandwidth_hz;
+        self.vfo.vfo_b_ssb_pitch_hz = v.ssb_pitch_hz;
+        self.vfo.vfo_b_cw_pitch_hz = v.cw_pitch_hz;
+        self.vfo.vfo_b_deemphasis_mode = v.deemphasis_mode;
+        self.vfo.vfo_b_squelch_enabled = v.squelch_enabled;
+        self.vfo.vfo_b_squelch_threshold_db = v.squelch_threshold_db;
+        self.vfo.vfo_b_nr2_enabled = v.nr2_enabled;
+        self.vfo.vfo_b_nr2_strength = v.nr2_strength;
+        self.vfo.vfo_b_nb_enabled = v.nb_enabled;
+        self.vfo.vfo_b_nb_threshold = v.nb_threshold;
+        self.vfo.vfo_b_notch_auto_enabled = v.notch_auto_enabled;
+        self.vfo.vfo_b_agc_enabled = v.agc_enabled;
+        self.vfo.vfo_b_agc_strength = v.agc_strength;
+        self.vfo.vfo_b_rit_enabled = v.rit_enabled;
+        self.vfo.vfo_b_rit_offset_hz = v.rit_offset_hz;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1420,6 +1474,15 @@ fn spawn_command_thread(
                         if let Ok(mut cs) = control.lock() {
                             cs.vfo.vfo_b_rit_enabled = enabled;
                             cs.vfo.vfo_b_rit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::CopyVfoAToB => {
+                        // Wholesale clone of VFO A's receiver state onto VFO B, in
+                        // one locked transaction (the `control_b` mirror then carries
+                        // it to the DSP-B pipeline).
+                        if let Ok(mut cs) = control.lock() {
+                            let a = cs.vfo_a_state();
+                            cs.apply_vfo_b_state(&a);
                         }
                     }
                     WorkerCommand::SetRit { enabled, offset_hz } => {
@@ -3575,5 +3638,51 @@ mod vfo_b_mirror_tests {
         assert!(cb.vfo.rit_enabled);
         assert_eq!(cb.vfo.rit_offset_hz, 250);
         assert_eq!(effective_rx_freq_hz(&cb), 7_074_000 + 250);
+    }
+
+    #[test]
+    fn copy_a_to_b_clones_entire_vfo_state() {
+        // CopyVfoAToB does `apply_vfo_b_state(&vfo_a_state())` — a wholesale clone
+        // of VFO A's receiver settings onto VFO B.  Give A some non-default values,
+        // start B different, then copy and assert B == A across the board.
+        let mut cs = vfo_a_control();
+        cs.target_freq_hz = 14_074_000;
+        cs.center_freq_hz = 14_000_000;
+        cs.demod_mode = DemodMode::Cwu;
+        cs.sideband = Sideband::Usb;
+        cs.filter_bandwidth_hz = 300.0;
+        cs.cw_pitch_hz = 650.0;
+        cs.squelch_enabled = true;
+        cs.squelch_threshold_db = -55.0;
+        cs.nr2_enabled = true;
+        cs.nr2_strength = 0.7;
+        cs.agc_enabled = false;
+        cs.agc_strength = 0.2;
+        cs.vfo.rit_enabled = true;
+        cs.vfo.rit_offset_hz = -120;
+        // Make B clearly different up front.
+        cs.vfo = VfoSplitState {
+            vfo_b_demod_mode: DemodMode::Lsb,
+            vfo_b_filter_bandwidth_hz: 3000.0,
+            vfo_b_squelch_enabled: false,
+            ..cs.vfo.clone()
+        };
+
+        let a = cs.vfo_a_state();
+        cs.apply_vfo_b_state(&a);
+
+        assert_eq!(cs.vfo.vfo_b_target_freq_hz, 14_074_000);
+        assert_eq!(cs.vfo.vfo_b_center_freq_hz, 14_000_000);
+        assert_eq!(cs.vfo.vfo_b_demod_mode, DemodMode::Cwu);
+        assert_eq!(cs.vfo.vfo_b_filter_bandwidth_hz, 300.0);
+        assert_eq!(cs.vfo.vfo_b_cw_pitch_hz, 650.0);
+        assert!(cs.vfo.vfo_b_squelch_enabled);
+        assert_eq!(cs.vfo.vfo_b_squelch_threshold_db, -55.0);
+        assert!(cs.vfo.vfo_b_nr2_enabled);
+        assert_eq!(cs.vfo.vfo_b_nr2_strength, 0.7);
+        assert!(!cs.vfo.vfo_b_agc_enabled);
+        assert_eq!(cs.vfo.vfo_b_agc_strength, 0.2);
+        assert!(cs.vfo.vfo_b_rit_enabled);
+        assert_eq!(cs.vfo.vfo_b_rit_offset_hz, -120);
     }
 }

@@ -414,6 +414,9 @@ pub enum ClientRadioMessage {
         enabled: bool,
         offset_hz: i32,
     },
+    /// Clone VFO A's entire receiver state (frequency, mode, filter, DSP utils,
+    /// RIT) onto VFO B — the "A=B" copy.  Establishes an identical baseline.
+    CopyVfoAToB,
     /// RIT (Receive Increment Tuning): a small offset applied to the *receiving*
     /// VFO only, leaving transmit unchanged.
     SetRit {

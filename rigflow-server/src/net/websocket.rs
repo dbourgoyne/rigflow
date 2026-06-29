@@ -1388,6 +1388,16 @@ async fn handle_radio_message(
             )
             .await;
         }
+        ClientRadioMessage::CopyVfoAToB => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::CopyVfoAToB,
+                "copy_vfo_a_to_b_failed",
+            )
+            .await;
+        }
         ClientRadioMessage::SetRit { enabled, offset_hz } => {
             forward_worker_command(
                 app_state,
