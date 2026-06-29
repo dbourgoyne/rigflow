@@ -414,6 +414,10 @@ pub enum ClientRadioMessage {
         enabled: bool,
         offset_hz: i32,
     },
+    /// Set VFO B's waterfall frame rate (Hz, 0 = off) — independent of VFO A.
+    SetVfoBWaterfallFrameRate {
+        rate_hz: f32,
+    },
     /// Clone VFO A's entire receiver state (frequency, mode, filter, DSP utils,
     /// RIT) onto VFO B — the "A=B" copy.  Establishes an identical baseline.
     CopyVfoAToB,

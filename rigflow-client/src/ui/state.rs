@@ -248,6 +248,18 @@ pub struct UiState {
     /// other waterfall display prefs; range 0–30 (matches the server clamp).
     pub waterfall_frame_rate_hz: f32,
 
+    // VFO B independent waterfall display (mirror of the VFO-A fields above).
+    // Edited when the active control VFO is B; session-only (not persisted). The
+    // adaptive estimates are computed from VFO B's own spectrum rows.
+    pub vfo_b_adaptive_waterfall_normalization: bool,
+    pub vfo_b_manual_waterfall_top_db: f32,
+    pub vfo_b_manual_waterfall_range_db: f32,
+    pub vfo_b_adaptive_top_db_estimate: f32,
+    pub vfo_b_adaptive_floor_db_estimate: f32,
+    pub vfo_b_adaptive_range_db_estimate: f32,
+    pub vfo_b_display_zoom: f32,
+    pub vfo_b_waterfall_frame_rate_hz: f32,
+
     // =====================================================================
     // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
     // =====================================================================
@@ -635,6 +647,15 @@ impl Default for UiState {
 
             display_zoom: 1.0,
             waterfall_frame_rate_hz: 20.0,
+
+            vfo_b_adaptive_waterfall_normalization: true,
+            vfo_b_manual_waterfall_top_db: -35.0,
+            vfo_b_manual_waterfall_range_db: 80.0,
+            vfo_b_adaptive_top_db_estimate: -35.0,
+            vfo_b_adaptive_floor_db_estimate: -140.0,
+            vfo_b_adaptive_range_db_estimate: 100.0,
+            vfo_b_display_zoom: 1.0,
+            vfo_b_waterfall_frame_rate_hz: 20.0,
 
             pan_velocity_hz_per_s: 0.0,
             last_pan_send: Instant::now(),

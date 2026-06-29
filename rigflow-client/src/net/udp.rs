@@ -6,6 +6,7 @@ use rigflow_core::{
         STREAM_TYPE_AUDIO, STREAM_TYPE_AUDIO_VFO_B, STREAM_TYPE_WATERFALL,
         STREAM_TYPE_WATERFALL_VFO_B, audio_samples_offset, is_valid_header, parse_media_header,
     },
+    radio::vfo::VfoSelect,
 };
 
 use crate::ui::{
@@ -190,6 +191,7 @@ pub fn handle_media_packet(
                 waterfall_buffer,
                 spectrum_db,
                 ui_state,
+                VfoSelect::A,
             );
         }
 
@@ -210,6 +212,7 @@ pub fn handle_media_packet(
                 waterfall_buffer_b,
                 spectrum_db_b,
                 ui_state,
+                VfoSelect::B,
             );
         }
 
@@ -300,28 +303,46 @@ fn handle_audio_packet(
     }
 }
 
-fn update_adaptive_waterfall_display(row_db: &[f32], ui_state: &Arc<Mutex<UiState>>) {
+fn update_adaptive_waterfall_display(
+    row_db: &[f32],
+    ui_state: &Arc<Mutex<UiState>>,
+    vfo: VfoSelect,
+) {
     let Some((row_floor_db, row_top_db)) = estimate_row_floor_and_top_db(row_db) else {
         return;
     };
 
     if let Ok(mut state) = ui_state.lock() {
-        if !state.adaptive_waterfall_normalization {
+        // Reborrow the inner UiState so the disjoint field borrows below are seen
+        // as distinct (a MutexGuard's Deref would otherwise borrow the whole guard).
+        let state = &mut *state;
+        // Each VFO keeps its own adaptive estimates, computed from its own rows.
+        let adaptive = match vfo {
+            VfoSelect::A => state.adaptive_waterfall_normalization,
+            VfoSelect::B => state.vfo_b_adaptive_waterfall_normalization,
+        };
+        if !adaptive {
             return;
         }
 
         let alpha = ADAPTIVE_NORMALIZATION_ALPHA;
+        let (top_est, floor_est, range_est) = match vfo {
+            VfoSelect::A => (
+                &mut state.adaptive_top_db_estimate,
+                &mut state.adaptive_floor_db_estimate,
+                &mut state.adaptive_range_db_estimate,
+            ),
+            VfoSelect::B => (
+                &mut state.vfo_b_adaptive_top_db_estimate,
+                &mut state.vfo_b_adaptive_floor_db_estimate,
+                &mut state.vfo_b_adaptive_range_db_estimate,
+            ),
+        };
 
-        state.adaptive_top_db_estimate =
-            (1.0 - alpha) * state.adaptive_top_db_estimate + alpha * row_top_db;
-
-        state.adaptive_floor_db_estimate =
-            (1.0 - alpha) * state.adaptive_floor_db_estimate + alpha * row_floor_db;
-
-        let adaptive_display_top_db = state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB;
-
-        state.adaptive_range_db_estimate = (adaptive_display_top_db
-            - state.adaptive_floor_db_estimate)
+        *top_est = (1.0 - alpha) * *top_est + alpha * row_top_db;
+        *floor_est = (1.0 - alpha) * *floor_est + alpha * row_floor_db;
+        let adaptive_display_top_db = *top_est + ADAPTIVE_TOP_HEADROOM_DB;
+        *range_est = (adaptive_display_top_db - *floor_est)
             .clamp(ADAPTIVE_MIN_RANGE_DB, ADAPTIVE_MAX_RANGE_DB);
     }
 }
@@ -332,6 +353,7 @@ fn handle_waterfall_packet(
     waterfall_buffer: &Arc<Mutex<Vec<u32>>>,
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
     ui_state: &Arc<Mutex<UiState>>,
+    vfo: VfoSelect,
 ) {
     // Accumulate this chunk; only proceed once the full row has been reassembled.
     let Some(row_db) = reasm.push_chunk(payload) else {
@@ -343,24 +365,34 @@ fn handle_waterfall_packet(
         update_spectrum_db(&mut spectrum, row_db);
     }
 
-    // If adaptive mode is enabled, update the display controls from
+    // If adaptive mode is enabled, update this VFO's display controls from
     // the incoming spectral row using slow smoothing.
-    update_adaptive_waterfall_display(row_db, ui_state);
+    update_adaptive_waterfall_display(row_db, ui_state, vfo);
 
-    // Read current display mapping controls.
+    // Read this VFO's current display mapping controls.
     let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
-        if state.adaptive_waterfall_normalization {
-            (
-                state.adaptive_top_db_estimate + ADAPTIVE_TOP_HEADROOM_DB,
+        let (adaptive, top_est, range_est, manual_top, manual_range, zoom) = match vfo {
+            VfoSelect::A => (
+                state.adaptive_waterfall_normalization,
+                state.adaptive_top_db_estimate,
                 state.adaptive_range_db_estimate,
-                state.display_zoom,
-            )
-        } else {
-            (
                 state.manual_waterfall_top_db,
                 state.manual_waterfall_range_db,
                 state.display_zoom,
-            )
+            ),
+            VfoSelect::B => (
+                state.vfo_b_adaptive_waterfall_normalization,
+                state.vfo_b_adaptive_top_db_estimate,
+                state.vfo_b_adaptive_range_db_estimate,
+                state.vfo_b_manual_waterfall_top_db,
+                state.vfo_b_manual_waterfall_range_db,
+                state.vfo_b_display_zoom,
+            ),
+        };
+        if adaptive {
+            (top_est + ADAPTIVE_TOP_HEADROOM_DB, range_est, zoom)
+        } else {
+            (manual_top, manual_range, zoom)
         }
     } else {
         (-35.0, 70.0, 1.0)

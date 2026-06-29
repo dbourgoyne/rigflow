@@ -1388,6 +1388,16 @@ async fn handle_radio_message(
             )
             .await;
         }
+        ClientRadioMessage::SetVfoBWaterfallFrameRate { rate_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBWaterfallFrameRate { rate_hz },
+                "set_vfo_b_waterfall_rate_failed",
+            )
+            .await;
+        }
         ClientRadioMessage::CopyVfoAToB => {
             forward_worker_command(
                 app_state,

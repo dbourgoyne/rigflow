@@ -558,6 +558,9 @@ fn mirror_vfo_b_controls(cb: &mut SharedControlState, vfo: &VfoSplitState) {
     cb.agc_strength = vfo.vfo_b_agc_strength;
     cb.vfo.rit_enabled = vfo.vfo_b_rit_enabled;
     cb.vfo.rit_offset_hz = vfo.vfo_b_rit_offset_hz;
+    // The DSP-B waterfall thread paces off `waterfall_frame_rate_hz`; give it
+    // VFO B's own rate (the clone copied VFO A's).
+    cb.waterfall_frame_rate_hz = vfo.vfo_b_waterfall_frame_rate_hz;
 }
 
 /// Effective VFO-A receive frequency: the tuned frequency plus the RIT offset
@@ -1474,6 +1477,12 @@ fn spawn_command_thread(
                         if let Ok(mut cs) = control.lock() {
                             cs.vfo.vfo_b_rit_enabled = enabled;
                             cs.vfo.vfo_b_rit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::SetVfoBWaterfallFrameRate { rate_hz } => {
+                        let applied = rate_hz.clamp(0.0, WATERFALL_FRAME_RATE_MAX_HZ);
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_waterfall_frame_rate_hz = applied;
                         }
                     }
                     WorkerCommand::CopyVfoAToB => {

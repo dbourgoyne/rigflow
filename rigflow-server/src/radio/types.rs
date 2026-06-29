@@ -109,6 +109,9 @@ pub struct VfoSplitState {
     /// RIT for VFO B (independent of VFO A's `rit_*`); offsets only VFO B's RX NCO.
     pub vfo_b_rit_enabled: bool,
     pub vfo_b_rit_offset_hz: i32,
+    /// VFO B waterfall frame rate (Hz, 0 = off); paces the DSP-B waterfall thread
+    /// independently of VFO A.
+    pub vfo_b_waterfall_frame_rate_hz: f32,
     pub vfo_b_signal_dbm: f32,
     pub vfo_b_signal_s_units: i32,
     pub rit_enabled: bool,
@@ -146,6 +149,7 @@ impl Default for VfoSplitState {
             vfo_b_agc_strength: 0.5,
             vfo_b_rit_enabled: false,
             vfo_b_rit_offset_hz: 0,
+            vfo_b_waterfall_frame_rate_hz: 20.0,
             vfo_b_signal_dbm: -140.0,
             vfo_b_signal_s_units: 0,
             rit_enabled: false,
@@ -345,6 +349,9 @@ pub enum WorkerCommand {
     SetVfoBRit {
         enabled: bool,
         offset_hz: i32,
+    },
+    SetVfoBWaterfallFrameRate {
+        rate_hz: f32,
     },
     /// Clone VFO A's entire receiver state onto VFO B (the "A=B" copy).
     CopyVfoAToB,

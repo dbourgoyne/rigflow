@@ -922,6 +922,14 @@ fn vfo_b_view(snapshot: &UiState) -> UiState {
     v.filter_bandwidth_hz = snapshot.vfo_b_filter_bandwidth_hz;
     v.signal_dbm = snapshot.vfo_b_signal_dbm;
     v.signal_s_units = snapshot.vfo_b_signal_s_units;
+    // VFO B's own waterfall display settings (zoom / normalization / estimates),
+    // so the B spectrum + waterfall render independently of VFO A.
+    v.display_zoom = snapshot.vfo_b_display_zoom;
+    v.adaptive_waterfall_normalization = snapshot.vfo_b_adaptive_waterfall_normalization;
+    v.manual_waterfall_top_db = snapshot.vfo_b_manual_waterfall_top_db;
+    v.manual_waterfall_range_db = snapshot.vfo_b_manual_waterfall_range_db;
+    v.adaptive_top_db_estimate = snapshot.vfo_b_adaptive_top_db_estimate;
+    v.adaptive_range_db_estimate = snapshot.vfo_b_adaptive_range_db_estimate;
     v
 }
 
