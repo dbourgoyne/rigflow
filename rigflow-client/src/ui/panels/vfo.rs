@@ -356,9 +356,23 @@ impl RigflowApp {
             s.vfo_b_rit_enabled = s.rit_enabled;
             s.vfo_b_rit_offset_hz = s.rit_offset_hz;
             s.volume_percent_b = s.volume_percent;
+            // Waterfall display settings (client-side) — copy so B's panadapter
+            // looks identical to A's; the adaptive estimates seed B before it
+            // re-adapts to its own spectrum.
+            s.vfo_b_display_zoom = s.display_zoom;
+            s.vfo_b_adaptive_waterfall_normalization = s.adaptive_waterfall_normalization;
+            s.vfo_b_manual_waterfall_top_db = s.manual_waterfall_top_db;
+            s.vfo_b_manual_waterfall_range_db = s.manual_waterfall_range_db;
+            s.vfo_b_adaptive_top_db_estimate = s.adaptive_top_db_estimate;
+            s.vfo_b_adaptive_floor_db_estimate = s.adaptive_floor_db_estimate;
+            s.vfo_b_adaptive_range_db_estimate = s.adaptive_range_db_estimate;
+            s.vfo_b_waterfall_frame_rate_hz = s.waterfall_frame_rate_hz;
         });
-        let _ = snapshot;
+        let rate_hz = snapshot.waterfall_frame_rate_hz;
         self.send_radio_msg(ClientRadioMessage::CopyVfoAToB);
+        // Frame rate is server-side (paces the DSP-B waterfall thread); CopyVfoAToB
+        // only clones the receiver VfoState, so sync B's rate explicitly.
+        self.send_radio_msg(ClientRadioMessage::SetVfoBWaterfallFrameRate { rate_hz });
     }
 
     /// TX Focus Swap: flip which VFO transmits (and turn split on so the choice is
