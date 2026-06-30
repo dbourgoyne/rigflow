@@ -1638,8 +1638,6 @@ fn runtime_changed_from_runtime(
     let tx_vfo = (cv.tx_vfo != pv.tx_vfo).then_some(cv.tx_vfo);
     let dual_watch_enabled =
         (cv.dual_watch_enabled != pv.dual_watch_enabled).then_some(cv.dual_watch_enabled);
-    let dual_watch_supported =
-        (cv.dual_watch_supported != pv.dual_watch_supported).then_some(cv.dual_watch_supported);
     let vfo_b_signal_dbm =
         (cv.vfo_b_signal_dbm != pv.vfo_b_signal_dbm).then_some(cv.vfo_b_signal_dbm);
     let vfo_b_signal_s_units =
@@ -1719,7 +1717,6 @@ fn runtime_changed_from_runtime(
         || split_enabled.is_some()
         || tx_vfo.is_some()
         || dual_watch_enabled.is_some()
-        || dual_watch_supported.is_some()
         || vfo_b_signal_dbm.is_some()
         || vfo_b_signal_s_units.is_some();
 
@@ -1777,7 +1774,6 @@ fn runtime_changed_from_runtime(
         split_enabled,
         tx_vfo,
         dual_watch_enabled,
-        dual_watch_supported,
         vfo_b_signal_dbm,
         vfo_b_signal_s_units,
     })
@@ -1847,7 +1843,6 @@ fn runtime_snapshot_from_status(
             split_enabled: runtime.vfo.split_enabled,
             tx_vfo: runtime.vfo.tx_vfo,
             dual_watch_enabled: runtime.vfo.dual_watch_enabled,
-            dual_watch_supported: runtime.vfo.dual_watch_supported,
             vfo_b_signal_dbm: runtime.vfo.vfo_b_signal_dbm,
             vfo_b_signal_s_units: runtime.vfo.vfo_b_signal_s_units,
         }),

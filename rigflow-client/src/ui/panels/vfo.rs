@@ -270,10 +270,11 @@ impl RigflowApp {
             ui.separator();
 
             // ── Dual-watch (second receiver) ──────────────────────────────
+            let dual_watch_supported = snapshot.source_capabilities.supports_dual_watch;
             let mut dw = snapshot.dual_watch_enabled;
             let resp = ui
                 .add_enabled(
-                    acquired && snapshot.dual_watch_supported,
+                    acquired && dual_watch_supported,
                     egui::Checkbox::new(&mut dw, "Dual-watch — hear + show VFO B"),
                 )
                 .on_disabled_hover_text("Requires a multi-receiver Hermes Lite 2");
@@ -281,7 +282,7 @@ impl RigflowApp {
                 self.set_local(|s| s.dual_watch_enabled = dw);
                 self.send_radio_msg(ClientRadioMessage::SetDualWatch { enabled: dw });
             }
-            if !snapshot.dual_watch_supported {
+            if !dual_watch_supported {
                 ui.label(
                     egui::RichText::new("Dual-watch needs an HL2 (second receiver).")
                         .small()

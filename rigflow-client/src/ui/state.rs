@@ -99,8 +99,8 @@ pub struct UiState {
     /// Which VFO transmits while split is on.
     pub tx_vfo: VfoSelect,
     pub dual_watch_enabled: bool,
-    /// True when the source has a second hardware receiver (HL2). Gates the UI.
-    pub dual_watch_supported: bool,
+    // Dual-watch support is a static capability: read it from
+    // `source_capabilities.supports_dual_watch`, not a mirrored runtime field.
     /// Which VFO the Receive-panel controls edit (client-local; only meaningful
     /// under dual-watch — the panel forces A otherwise).
     pub active_control_vfo: VfoSelect,
@@ -583,7 +583,6 @@ impl Default for UiState {
             split_enabled: false,
             tx_vfo: VfoSelect::A,
             dual_watch_enabled: false,
-            dual_watch_supported: false,
             active_control_vfo: VfoSelect::A,
             volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,

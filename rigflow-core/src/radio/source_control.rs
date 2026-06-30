@@ -134,6 +134,12 @@ pub struct SourceCapabilities {
     #[serde(default)]
     pub supports_transmit: bool,
 
+    /// Whether the source has a second hardware receiver, so dual-watch (VFO B
+    /// received in stereo with its own spectrum) is available.  Static per source
+    /// (HL2 = true); gates the dual-watch UI.
+    #[serde(default)]
+    pub supports_dual_watch: bool,
+
     /// Whether the source supports a TX tune test (short low-power carrier
     /// pulse used to measure forward/reverse power and SWR).
     ///
@@ -189,6 +195,7 @@ impl SourceCapabilities {
             tuner_freq_hz_max: 0,
 
             supports_transmit: false,
+            supports_dual_watch: false,
             supports_tx_tune_test: false,
             supports_band_control: false,
             supports_fdx: false,

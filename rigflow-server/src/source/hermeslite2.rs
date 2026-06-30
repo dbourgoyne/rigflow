@@ -2553,6 +2553,7 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
         supports_transmit: true,
+        supports_dual_watch: true,
         supports_tx_tune_test: true,
         supports_band_control: true,
         supports_fdx: true,

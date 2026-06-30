@@ -631,10 +631,8 @@ pub enum ServerRadioMessage {
         tx_vfo: VfoSelect,
         #[serde(default)]
         dual_watch_enabled: bool,
-        /// True when the source has a second hardware receiver (HL2): gates the
-        /// dual-watch control in the UI.
-        #[serde(default)]
-        dual_watch_supported: bool,
+        // `dual_watch_supported` is a static capability — carried in
+        // `SourceCapabilities` (RadioInfo), not here.
         /// VFO B S-meter (read-only status).
         #[serde(default = "default_signal_dbm")]
         vfo_b_signal_dbm: f32,
@@ -762,8 +760,8 @@ pub enum ServerRadioMessage {
         tx_vfo: Option<VfoSelect>,
         #[serde(default)]
         dual_watch_enabled: Option<bool>,
-        #[serde(default)]
-        dual_watch_supported: Option<bool>,
+        // `dual_watch_supported` is a static capability (SourceCapabilities), not
+        // a runtime delta.
         #[serde(default)]
         vfo_b_signal_dbm: Option<f32>,
         #[serde(default)]

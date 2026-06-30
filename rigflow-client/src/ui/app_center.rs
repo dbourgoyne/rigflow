@@ -65,6 +65,10 @@ impl RigflowApp {
                     let dual = snapshot.dual_watch_enabled;
                     let spectrum_height = if dual { 140.0 } else { 220.0 };
                     let spectrum_b_height = 120.0;
+                    // VFO B's render view (VFO-A-shaped) — built once per frame and
+                    // reused by both the B spectrum and B waterfall, instead of
+                    // cloning the whole UiState twice.
+                    let b_view = dual.then(|| vfo_b_view(snapshot));
                     // The waterfall heights are computed later, from the *actual*
                     // remaining height just before they are drawn, so the VFO A and
                     // VFO B waterfalls come out exactly equal.
@@ -119,7 +123,7 @@ impl RigflowApp {
                     );
 
                     // ── VFO B spectrum (dual-watch): stacked below VFO A ──────
-                    if dual {
+                    if let Some(b_view) = b_view.as_ref() {
                         ui.add_space(gap);
                         // VFO B's own LO + LO-Offset spinner strip.
                         ui.allocate_ui_with_layout(
@@ -131,7 +135,6 @@ impl RigflowApp {
                             egui::vec2(ui.available_width(), spectrum_b_height),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
-                                let b_view = vfo_b_view(snapshot);
                                 let spectrum_b = {
                                     let g = self.spectrum_db_b.lock().unwrap();
                                     g.clone()
@@ -149,7 +152,7 @@ impl RigflowApp {
                                     &spectrum_b,
                                     db_min,
                                     db_max,
-                                    &b_view,
+                                    b_view,
                                 );
                                 // Full VFO B tuning — click / drag / wheel / recenter,
                                 // identical to VFO A but on VFO B's centre/target.
@@ -252,7 +255,7 @@ impl RigflowApp {
 
                     // ── VFO B waterfall (dual-watch): stacked below A's, with a
                     //    separator between the two waterfalls ───────────────────
-                    if dual {
+                    if let Some(b_view) = b_view.as_ref() {
                         ui.add_space(gap);
                         ui.separator();
                         ui.add_space(gap);
@@ -272,7 +275,6 @@ impl RigflowApp {
                                     let image_width =
                                         (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER)
                                             .max(100.0);
-                                    let b_view = vfo_b_view(snapshot);
                                     let spectrum_len = {
                                         let s = self.spectrum_db_b.lock().unwrap();
                                         s.len()
@@ -296,11 +298,11 @@ impl RigflowApp {
                                                     .clamp(0.0, 1.0);
                                                 if let Some((l, r)) = zoomed_visible_freq_range_hz(
                                                     spectrum_len,
-                                                    &b_view,
+                                                    b_view,
                                                 ) {
                                                     l + frac * (r - l)
                                                 } else {
-                                                    x_frac_to_frequency_hz(frac, &b_view)
+                                                    x_frac_to_frequency_hz(frac, b_view)
                                                 }
                                             },
                                         );

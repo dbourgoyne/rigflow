@@ -135,7 +135,7 @@ impl RigflowApp {
                         // "Dual VFO / Split" only applies to a rig with a second
                         // receiver (dual-watch) or transmit (split) — hidden for
                         // receive-only single-receiver sources (RTL-SDR, WAV, …).
-                        if snapshot.dual_watch_supported
+                        if snapshot.source_capabilities.supports_dual_watch
                             || snapshot.source_capabilities.supports_transmit
                         {
                             self.draw_vfo_panel(ui, snapshot);

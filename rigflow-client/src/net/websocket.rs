@@ -656,7 +656,6 @@ pub fn apply_radio_server_message(
             split_enabled,
             tx_vfo,
             dual_watch_enabled,
-            dual_watch_supported,
             vfo_b_signal_dbm,
             vfo_b_signal_s_units,
             ..
@@ -689,7 +688,6 @@ pub fn apply_radio_server_message(
             state.split_enabled = split_enabled;
             state.tx_vfo = tx_vfo;
             state.dual_watch_enabled = dual_watch_enabled;
-            state.dual_watch_supported = dual_watch_supported;
             state.input_sample_rate_hz = input_sample_rate_hz;
             state.swr_sweep_result = swr_sweep_result;
             state.swr_sweep_progress = swr_sweep_progress;
@@ -819,7 +817,6 @@ pub fn apply_radio_server_message(
             split_enabled,
             tx_vfo,
             dual_watch_enabled,
-            dual_watch_supported,
             vfo_b_signal_dbm,
             vfo_b_signal_s_units,
             ..
@@ -907,9 +904,6 @@ pub fn apply_radio_server_message(
             }
             if let Some(v) = dual_watch_enabled {
                 state.dual_watch_enabled = v;
-            }
-            if let Some(v) = dual_watch_supported {
-                state.dual_watch_supported = v;
             }
             if let Some(progress) = swr_sweep_progress {
                 state.swr_sweep_progress = Some(progress);
