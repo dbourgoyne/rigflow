@@ -506,9 +506,11 @@ impl RigflowApp {
         let desired_target = clamp_center(snapped, &limits);
 
         // Soft threshold = 80% of the visible half-span (zoom-aware: the visible
-        // span is sample_rate / display_zoom, centered on the LO).
+        // span is sample_rate / display_zoom, centered on the LO).  Use *this*
+        // VFO's own zoom (VFO B has its own) so B's auto-pan point isn't computed
+        // from VFO A's zoom.
         let half_span =
-            (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
+            (snapshot.input_sample_rate_hz / (2.0 * vfo.display_zoom(snapshot).max(1.0))).max(0.0);
         let soft = 0.8 * half_span;
 
         // Pan the LO by the excess past the threshold so the target settles back
@@ -571,9 +573,10 @@ impl RigflowApp {
         let cur_target = vfo.target(snapshot);
         let desired_target = clamp_center(cur_target + delta_hz, &limits);
 
-        // Soft-edge LO pan — identical math to `tune_target_relative`.
+        // Soft-edge LO pan — identical math to `tune_target_relative`, using this
+        // VFO's own zoom.
         let half_span =
-            (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
+            (snapshot.input_sample_rate_hz / (2.0 * vfo.display_zoom(snapshot).max(1.0))).max(0.0);
         let soft = 0.8 * half_span;
         let mut new_center = cur_center;
         let offset = desired_target - new_center;
@@ -953,6 +956,14 @@ impl TuneVfo {
             TuneVfo::B => s.vfo_b_tuning_step_hz,
         }
     }
+    /// Display zoom for this VFO's panadapter (drives the soft-edge LO-pan
+    /// threshold).  VFO B has its own independent zoom.
+    fn display_zoom(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.display_zoom,
+            TuneVfo::B => s.vfo_b_display_zoom,
+        }
+    }
     fn center_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
         use rigflow_protocol::ClientRadioMessage as M;
         match self {
@@ -987,6 +998,7 @@ fn vfo_b_view(snapshot: &UiState) -> UiState {
     v.manual_waterfall_top_db = snapshot.vfo_b_manual_waterfall_top_db;
     v.manual_waterfall_range_db = snapshot.vfo_b_manual_waterfall_range_db;
     v.adaptive_top_db_estimate = snapshot.vfo_b_adaptive_top_db_estimate;
+    v.adaptive_floor_db_estimate = snapshot.vfo_b_adaptive_floor_db_estimate;
     v.adaptive_range_db_estimate = snapshot.vfo_b_adaptive_range_db_estimate;
     v
 }

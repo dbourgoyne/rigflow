@@ -14,6 +14,7 @@ use rigflow_protocol::radio_control::ClientRadioMessage;
 
 use crate::UiState;
 use crate::ui::app::RigflowApp;
+use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 use crate::ui::tuning_steps::{TuneTier, target_step_hz};
 
 /// Modes offered for VFO B (same set the demod selector uses).
@@ -351,24 +352,52 @@ impl RigflowApp {
     /// the editable VFO-A field in the Dual-VFO panel; the LO / spectrum controls
     /// remain the live tuning source and pan / offset within the window from here.
     fn set_vfo_a_freq_centered(&self, hz: u64) {
+        // Route through the freq_limits clamp helpers (CLAUDE.md: every tuning
+        // path must) so a typed value can't drive the LO out of the radio's RF
+        // range.  QSY-here → centre == target == the clamped frequency.
+        let Some((center, target)) = self.clamped_centered_freq(hz) else {
+            return;
+        };
         self.set_local(|s| {
-            s.target_freq_hz = hz as f32;
-            s.center_freq_hz = hz as f32;
+            s.center_freq_hz = center;
+            s.target_freq_hz = target;
         });
-        self.send_radio_msg(ClientRadioMessage::SetTargetFrequency { target_freq_hz: hz });
-        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz });
+        self.send_radio_msg(ClientRadioMessage::SetCenterFrequency {
+            center_freq_hz: center as u64,
+        });
+        self.send_radio_msg(ClientRadioMessage::SetTargetFrequency {
+            target_freq_hz: target as u64,
+        });
     }
 
     /// Set VFO B's frequency and centre its LO window on it (RX1 NCO = target),
     /// so the tuned freq is always inside the window — the "QSY here" behaviour.
-    /// Spectrum / spinner tuning then pans / offsets within the window from there.
+    /// Clamped to the active RF range via the freq_limits helpers.
     fn set_vfo_b_freq_centered(&self, hz: u64) {
+        let Some((center, target)) = self.clamped_centered_freq(hz) else {
+            return;
+        };
         self.set_local(|s| {
-            s.vfo_b_target_freq_hz = hz as f32;
-            s.vfo_b_center_freq_hz = hz as f32;
+            s.vfo_b_center_freq_hz = center;
+            s.vfo_b_target_freq_hz = target;
         });
-        self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency { target_freq_hz: hz });
-        self.send_radio_msg(ClientRadioMessage::SetVfoBCenterFrequency { center_freq_hz: hz });
+        self.send_radio_msg(ClientRadioMessage::SetVfoBCenterFrequency {
+            center_freq_hz: center as u64,
+        });
+        self.send_radio_msg(ClientRadioMessage::SetVfoBFrequency {
+            target_freq_hz: target as u64,
+        });
+    }
+
+    /// Clamp a "QSY here" frequency to the active RF range (and the visible band)
+    /// using the shared `freq_limits` helpers.  Returns `(center, target)` with
+    /// `center == target == clamped freq`, or `None` if state can't be locked.
+    fn clamped_centered_freq(&self, hz: u64) -> Option<(f32, f32)> {
+        let s = self.state.lock().ok()?;
+        let limits = active_freq_limits(&s);
+        let center = clamp_center(hz as f32, &limits);
+        let target = clamp_target(center, center, s.input_sample_rate_hz, &limits);
+        Some((center, target))
     }
 
     /// VFO Copy (A=B): clone VFO A's entire receiver state onto VFO B.  The server

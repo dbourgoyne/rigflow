@@ -468,35 +468,65 @@ impl RigflowApp {
         if !snapshot.radio_acquired {
             return;
         }
-        let mode = snapshot.demod_mode;
+        // Under dual-watch the arrow keys tune the active control VFO (matching
+        // the wheel/click on each spectrum); otherwise they tune VFO A.
+        use crate::ui::app_center::TuneVfo;
+        let active_b = snapshot.dual_watch_enabled
+            && matches!(
+                snapshot.active_control_vfo,
+                rigflow_core::radio::vfo::VfoSelect::B
+            );
+        let active_vfo = if active_b { TuneVfo::B } else { TuneVfo::A };
+        let mode = if active_b {
+            snapshot.vfo_b_demod_mode
+        } else {
+            snapshot.demod_mode
+        };
 
-        // ↑/↓ — center / LO step (mode-aware; Shift = coarse).
+        // ↑/↓ — center / LO step (mode-aware; Shift = coarse) for the active VFO.
         let center_dir = (up as i32) - (down as i32);
         if center_dir != 0 {
             let delta = center_dir as f32 * center_step_hz(mode, shift);
             let mut send_center: Option<u64> = None;
             if let Ok(mut state) = self.state.lock() {
                 let limits = crate::ui::freq_limits::active_freq_limits(&state);
-                let new_center =
-                    crate::ui::freq_limits::clamp_center(state.center_freq_hz + delta, &limits);
-                state.center_freq_hz = new_center;
+                let cur = if active_b {
+                    state.vfo_b_center_freq_hz
+                } else {
+                    state.center_freq_hz
+                };
+                let new_center = crate::ui::freq_limits::clamp_center(cur + delta, &limits);
+                if active_b {
+                    state.vfo_b_center_freq_hz = new_center;
+                } else {
+                    state.center_freq_hz = new_center;
+                }
                 send_center = Some(new_center as u64);
             }
             if let Some(hz) = send_center {
-                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz },
-                ));
+                let msg = if active_b {
+                    rigflow_protocol::ClientRadioMessage::SetVfoBCenterFrequency {
+                        center_freq_hz: hz,
+                    }
+                } else {
+                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz }
+                };
+                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
             }
         }
 
         // ←/→ — target step, identical to the wheel: one grid-snap step per press
-        // (the LO-strip "Snap" dropdown), with soft-edge LO panning.  VFO A's step
-        // comes from the per-mode tuning-step preferences.
+        // (the LO-strip "Snap" dropdown), with soft-edge LO panning, for the
+        // active VFO (its own per-VFO step).
         let target_dir = (right as i32) - (left as i32);
         if target_dir != 0 {
-            let step = snapshot.tuning_step_preferences.get(mode);
+            let step = if active_b {
+                snapshot.vfo_b_tuning_step_hz
+            } else {
+                snapshot.tuning_step_preferences.get(mode)
+            };
             let delta = target_dir as f32 * step;
-            self.tune_target_relative(&snapshot, delta, crate::ui::app_center::TuneVfo::A);
+            self.tune_target_relative(&snapshot, delta, active_vfo);
         }
     }
 
