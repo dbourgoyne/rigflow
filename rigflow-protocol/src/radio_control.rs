@@ -9,7 +9,7 @@ use rigflow_core::{
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
-        vfo::VfoSelect,
+        vfo::{VfoSelect, VfoState},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -50,18 +50,19 @@ pub fn default_volume_percent() -> u8 {
 }
 
 /// VFO-B `#[serde(default)]` fallbacks (only used when an older peer omits the
-/// dual-VFO fields; the server always sends real values).
+/// dual-VFO fields; the server always sends real values).  Sourced from the
+/// canonical `VfoState::default()` so they can't drift from a fresh VFO B.
 pub fn default_demod_mode() -> DemodMode {
-    DemodMode::Usb
+    VfoState::default().demod_mode
 }
 pub fn default_sideband() -> Sideband {
-    Sideband::Usb
+    VfoState::default().sideband
 }
 pub fn default_filter_bandwidth_hz() -> f32 {
-    2700.0
+    VfoState::default().filter_bandwidth_hz
 }
 pub fn default_deemphasis_mode() -> DeemphasisMode {
-    DeemphasisMode::Off
+    VfoState::default().deemphasis_mode
 }
 
 /// Messages sent from client → server over WebSocket.
