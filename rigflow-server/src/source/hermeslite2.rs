@@ -1003,7 +1003,14 @@ impl IqSource for HermesLite2Source {
     }
 
     fn source_status(&self) -> SourceStatus {
-        let mut status = hl2_status_regs_to_source_status(&self.status_regs);
+        // The TX-FIFO recovery flag only matters while transmitting (see
+        // `hl2_status_regs_to_source_status`); pass our current keyed state so it
+        // stays hidden during RX.
+        let transmitting = self
+            .tx_active
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+        let mut status = hl2_status_regs_to_source_status(&self.status_regs, transmitting);
         // Surface a sustained RX gap as "not responding" (drives the on-screen
         // "HL2 not responding" indicator).
         status.device_responding = Some(self.last_rx.elapsed() < DEVICE_STALL_THRESHOLD);
@@ -2444,7 +2451,7 @@ fn hl2_temperature_c(temperature_raw: u16) -> f32 {
 ///   and the raw ADC values are logged at TRACE level for future calibration.
 ///   TODO: add calibration once forward-power detector and current-shunt
 ///   specs are confirmed for your HL2 board revision.
-fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
+fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs, transmitting: bool) -> SourceStatus {
     let firmware_version = if r.raddr0_valid {
         let major = r.firmware_version / 10;
         let minor = r.firmware_version % 10;
@@ -2455,29 +2462,24 @@ fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
 
     let adc_overload = r.raddr0_valid.then_some(r.adc_overload);
     let tx_inhibited = r.raddr0_valid.then_some(r.tx_inhibited);
-    let recovery_status = if r.raddr0_valid {
-        // Per Quisk, the TX-FIFO recovery/error is a SINGLE flag = bit 15 of the
-        // RADDR 0x00 word (the top bit of `recovery_bits`).  The low bit
-        // (word bit 14) belongs to the TX FIFO sample count, NOT recovery — so a
-        // raw value of 0b01 is benign (previously mislabeled "UNKNOWN").  During
-        // RX the TX FIFO is empty by design, so this flag being set is a normal
-        // idle condition; Quisk only treats it as a fault while transmitting, so
-        // we report it as benign here rather than as a severe RX fault.
-        // (NOTE: `recovery_bits` itself is left unchanged — the Spot/SWR TX path
-        // still uses its 2-bit value to flag in-pulse FIFO anomalies.)
+    // TX-FIFO recovery flag = bit 15 of the RADDR 0x00 word (top bit of
+    // `recovery_bits`).  It is only meaningful WHILE TRANSMITTING: during RX the
+    // TX FIFO is empty by design, so the flag sits permanently set — a benign
+    // idle artifact.  So we gate on `transmitting` and suppress it entirely
+    // during RX (otherwise Source Status shows a standing "TX underrun" false
+    // alarm), surfacing it only when a genuine anomaly is seen mid-transmit.
+    // (The low bit, word bit 14, is a TX FIFO sample-count bit, not recovery;
+    // `recovery_bits` keeps its 2-bit value for the Spot/SWR TX path's in-pulse
+    // anomaly checks.)
+    let recovery_status = if r.raddr0_valid && transmitting {
         let recovery_flag = (r.recovery_bits & 0b10) != 0;
         log::debug!(
-            "HL2 status: recovery_bits={:#04b} recovery_flag={} adc_overload={}",
+            "HL2 status (TX): recovery_bits={:#04b} recovery_flag={} adc_overload={}",
             r.recovery_bits,
             recovery_flag,
             r.adc_overload
         );
-        let label = if recovery_flag {
-            "TX underrun (recovered)"
-        } else {
-            "OK"
-        };
-        Some(label.to_string())
+        recovery_flag.then(|| "TX underrun (recovered)".to_string())
     } else {
         None
     };
@@ -2600,11 +2602,14 @@ mod tests {
             forward_power_raw: 5,
             ..Default::default()
         };
-        let status = hl2_status_regs_to_source_status(&regs);
+        let status = hl2_status_regs_to_source_status(&regs, false);
         let t = status.temperature_c.expect("temp present");
         assert!((t - 21.0).abs() < 1.0, "got {t}");
         regs.raddr1_valid = false;
-        assert_eq!(hl2_status_regs_to_source_status(&regs).temperature_c, None);
+        assert_eq!(
+            hl2_status_regs_to_source_status(&regs, false).temperature_c,
+            None
+        );
     }
 
     // ── RADDR 0x00: ADC overload (active high) ──────────────────────────────
@@ -2617,7 +2622,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            hl2_status_regs_to_source_status(&ok).adc_overload,
+            hl2_status_regs_to_source_status(&ok, false).adc_overload,
             Some(false)
         );
         let over = Hl2StatusRegs {
@@ -2626,32 +2631,40 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            hl2_status_regs_to_source_status(&over).adc_overload,
+            hl2_status_regs_to_source_status(&over, false).adc_overload,
             Some(true)
         );
     }
 
-    // ── RADDR 0x00: recovery flag = bit 15 only (low bit is FIFO count) ─────
+    // ── RADDR 0x00: recovery flag is TX-only (bit 15; hidden during RX) ─────
 
     #[test]
-    fn recovery_status_uses_only_bit15() {
-        let status_for = |bits: u8| {
+    fn recovery_status_only_during_tx() {
+        let status_for = |bits: u8, transmitting: bool| {
             let r = Hl2StatusRegs {
                 raddr0_valid: true,
                 recovery_bits: bits,
                 ..Default::default()
             };
-            hl2_status_regs_to_source_status(&r)
-                .recovery_status
-                .unwrap()
+            hl2_status_regs_to_source_status(&r, transmitting).recovery_status
         };
-        // bit15 clear → OK (incl. 0b01, which is a FIFO-count bit, not a fault).
-        assert_eq!(status_for(0b00), "OK");
-        assert_eq!(status_for(0b01), "OK");
-        // bit15 set → benign TX-underrun recovery (NOT a severe RX fault),
-        // regardless of bit14.
-        assert_eq!(status_for(0b10), "TX underrun (recovered)");
-        assert_eq!(status_for(0b11), "TX underrun (recovered)");
+        // RX: the flag is a benign idle artifact — never surfaced, whatever the
+        // bits (this is the standing "TX underrun" false alarm we suppress).
+        assert_eq!(status_for(0b00, false), None);
+        assert_eq!(status_for(0b10, false), None);
+        assert_eq!(status_for(0b11, false), None);
+        // TX: bit 15 (0b10) set = a genuine TX-FIFO anomaly → surfaced; clear =
+        // nothing shown.  Bit 14 (the FIFO-count low bit) is ignored.
+        assert_eq!(status_for(0b00, true), None);
+        assert_eq!(status_for(0b01, true), None);
+        assert_eq!(
+            status_for(0b10, true).as_deref(),
+            Some("TX underrun (recovered)")
+        );
+        assert_eq!(
+            status_for(0b11, true).as_deref(),
+            Some("TX underrun (recovered)")
+        );
     }
 
     #[test]
@@ -2661,7 +2674,11 @@ mod tests {
             recovery_bits: 0b10,
             ..Default::default()
         };
-        assert_eq!(hl2_status_regs_to_source_status(&r).recovery_status, None);
+        // Even while transmitting, an invalid RADDR0 read yields no status.
+        assert_eq!(
+            hl2_status_regs_to_source_status(&r, true).recovery_status,
+            None
+        );
     }
 
     // ── DDC packet deinterleave (multi-RX, the riskiest code) ──────────────
