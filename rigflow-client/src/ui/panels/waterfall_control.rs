@@ -114,6 +114,29 @@ impl RigflowApp {
                     }
                 });
 
+                // ── Smoothing (temporal EMA on the FFT rows) ──
+                // Reduces noise-floor scintillation.  0 = raw / off.
+                let mut smoothing = if active_b {
+                    state.vfo_b_waterfall_smoothing
+                } else {
+                    state.waterfall_smoothing
+                };
+                let mut smooth_response = ui.add(
+                    egui::Slider::new(&mut smoothing, 0.0..=1.0)
+                        .fixed_decimals(2)
+                        .text("Smoothing"),
+                );
+                let smooth_scrolled =
+                    super::slider_scroll(ui, &mut smooth_response, &mut smoothing, 0.0, 1.0, 0.05);
+                if active_b {
+                    state.vfo_b_waterfall_smoothing = smoothing;
+                } else {
+                    state.waterfall_smoothing = smoothing;
+                }
+                if (smooth_response.drag_stopped() || smooth_scrolled) && persist {
+                    save_waterfall_prefs = true;
+                }
+
                 // ── Waterfall frame rate (sent to the server; 0 = off) ──
                 let mut rate = if active_b {
                     state.vfo_b_waterfall_frame_rate_hz

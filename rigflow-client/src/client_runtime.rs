@@ -335,6 +335,9 @@ pub fn start_media_runtime(
         let mut waterfall_reasm = WaterfallReassembler::new();
         // Separate reassembler for VFO B's waterfall (independent chunk state).
         let mut waterfall_reasm_b = WaterfallReassembler::new();
+        // Per-VFO smoothed-row EMA state (waterfall scintillation reducer).
+        let mut waterfall_smooth: Vec<f32> = Vec::new();
+        let mut waterfall_smooth_b: Vec<f32> = Vec::new();
 
         let mut last_audio_session_generation =
             audio_session_generation_for_thread.load(Ordering::Relaxed);
@@ -495,10 +498,12 @@ pub fn start_media_runtime(
                             &digital_rx,
                             &tci_rx_audio,
                             &mut waterfall_reasm,
+                            &mut waterfall_smooth,
                             &jitter_b_for_thread,
                             &waterfall_b_for_thread,
                             &spectrum_b_for_thread,
                             &mut waterfall_reasm_b,
+                            &mut waterfall_smooth_b,
                         );
                     }
                 }

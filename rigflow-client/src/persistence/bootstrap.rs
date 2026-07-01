@@ -90,6 +90,9 @@ pub fn apply_operator_settings_to_ui_state(
     state.waterfall_frame_rate_hz = operator
         .waterfall_display_preferences
         .waterfall_frame_rate_hz;
+    state.waterfall_smoothing = operator.waterfall_display_preferences.waterfall_smoothing;
+    // VFO B's session smoothing seeds from VFO A's persisted value.
+    state.vfo_b_waterfall_smoothing = state.waterfall_smoothing;
 
     // Keep selection stable if possible, otherwise clear it.
     let selected_still_exists = state

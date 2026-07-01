@@ -36,10 +36,19 @@ pub struct WaterfallDisplayPreferencesFile {
     /// files (written before this field existed) loading cleanly.
     #[serde(default = "default_waterfall_frame_rate_hz")]
     pub waterfall_frame_rate_hz: f32,
+    /// Waterfall temporal smoothing strength [0..1] (0 = raw/off) — a per-bin EMA
+    /// on the FFT rows that reduces noise-floor scintillation.  Serde default for
+    /// older operator files.
+    #[serde(default = "default_waterfall_smoothing")]
+    pub waterfall_smoothing: f32,
 }
 
 fn default_waterfall_frame_rate_hz() -> f32 {
     20.0
+}
+
+pub fn default_waterfall_smoothing() -> f32 {
+    0.5
 }
 
 impl Default for WaterfallDisplayPreferencesFile {
@@ -50,6 +59,7 @@ impl Default for WaterfallDisplayPreferencesFile {
             manual_waterfall_top_db: -35.0,
             manual_waterfall_range_db: 70.0,
             waterfall_frame_rate_hz: default_waterfall_frame_rate_hz(),
+            waterfall_smoothing: default_waterfall_smoothing(),
         }
     }
 }

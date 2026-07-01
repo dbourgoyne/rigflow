@@ -137,11 +137,15 @@ pub fn handle_media_packet(
     digital_rx: &crate::digital_rx::DigitalRxOutput,
     tci_rx_audio: &crate::tci_server::TciRxAudio,
     waterfall_reasm: &mut WaterfallReassembler,
+    // Per-VFO smoothed-row EMA state (persists across packets, owned by the media
+    // thread).  Reduces waterfall noise-floor scintillation.
+    waterfall_smooth: &mut Vec<f32>,
     // VFO B (dual-watch) sinks — second receiver's audio + spectrum/waterfall.
     jitter_b: &Arc<Mutex<JitterBuffer>>,
     waterfall_buffer_b: &Arc<Mutex<Vec<u32>>>,
     spectrum_db_b: &Arc<Mutex<Vec<f32>>>,
     waterfall_reasm_b: &mut WaterfallReassembler,
+    waterfall_smooth_b: &mut Vec<f32>,
 ) {
     let Some(header) = parse_media_header(packet) else {
         return;
@@ -192,6 +196,7 @@ pub fn handle_media_packet(
                 spectrum_db,
                 ui_state,
                 VfoSelect::A,
+                waterfall_smooth,
             );
         }
 
@@ -213,6 +218,7 @@ pub fn handle_media_packet(
                 spectrum_db_b,
                 ui_state,
                 VfoSelect::B,
+                waterfall_smooth_b,
             );
         }
 
@@ -354,24 +360,25 @@ fn handle_waterfall_packet(
     spectrum_db: &Arc<Mutex<Vec<f32>>>,
     ui_state: &Arc<Mutex<UiState>>,
     vfo: VfoSelect,
+    smooth: &mut Vec<f32>,
 ) {
     // Accumulate this chunk; only proceed once the full row has been reassembled.
     let Some(row_db) = reasm.push_chunk(payload) else {
         return;
     };
 
-    // Update smoothed spectrum trace.
+    // Update smoothed spectrum trace (its own EMA; kept on the RAW row).
     if let Ok(mut spectrum) = spectrum_db.lock() {
         update_spectrum_db(&mut spectrum, row_db);
     }
 
     // If adaptive mode is enabled, update this VFO's display controls from
-    // the incoming spectral row using slow smoothing.
+    // the incoming (RAW) spectral row using slow smoothing.
     update_adaptive_waterfall_display(row_db, ui_state, vfo);
 
-    // Read this VFO's current display mapping controls.
-    let (top_db, range_db, zoom) = if let Ok(state) = ui_state.lock() {
-        let (adaptive, top_est, range_est, manual_top, manual_range, zoom) = match vfo {
+    // Read this VFO's current display mapping controls + smoothing strength.
+    let (top_db, range_db, zoom, smoothing) = if let Ok(state) = ui_state.lock() {
+        let (adaptive, top_est, range_est, manual_top, manual_range, zoom, smoothing) = match vfo {
             VfoSelect::A => (
                 state.adaptive_waterfall_normalization,
                 state.adaptive_top_db_estimate,
@@ -379,6 +386,7 @@ fn handle_waterfall_packet(
                 state.manual_waterfall_top_db,
                 state.manual_waterfall_range_db,
                 state.display_zoom,
+                state.waterfall_smoothing,
             ),
             VfoSelect::B => (
                 state.vfo_b_adaptive_waterfall_normalization,
@@ -387,24 +395,39 @@ fn handle_waterfall_packet(
                 state.vfo_b_manual_waterfall_top_db,
                 state.vfo_b_manual_waterfall_range_db,
                 state.vfo_b_display_zoom,
+                state.vfo_b_waterfall_smoothing,
             ),
         };
-        if adaptive {
-            (top_est + ADAPTIVE_TOP_HEADROOM_DB, range_est, zoom)
+        let (top, range) = if adaptive {
+            (top_est + ADAPTIVE_TOP_HEADROOM_DB, range_est)
         } else {
-            (manual_top, manual_range, zoom)
-        }
+            (manual_top, manual_range)
+        };
+        (top, range, zoom, smoothing)
     } else {
-        (-35.0, 70.0, 1.0)
+        (-35.0, 70.0, 1.0, 0.0)
     };
 
-    // Update waterfall image buffer using client-side dB mapping.
+    // Temporal per-bin EMA on the FFT row to reduce noise-floor scintillation.
+    // `smoothing` is a strength in [0..1]; map to a new-sample weight (1.0 = raw,
+    // smaller = heavier smoothing).  A size change resets the running buffer.
+    let new_w = 1.0 - 0.9 * smoothing.clamp(0.0, 1.0);
+    if smooth.len() != row_db.len() || new_w >= 1.0 {
+        smooth.clear();
+        smooth.extend_from_slice(row_db);
+    } else {
+        for (s, &r) in smooth.iter_mut().zip(row_db.iter()) {
+            *s += new_w * (r - *s);
+        }
+    }
+
+    // Update waterfall image buffer from the smoothed row.
     if let Ok(mut fb) = waterfall_buffer.lock() {
         draw_row_db(
             &mut fb,
             WATERFALL_IMAGE_WIDTH,
             WATERFALL_IMAGE_HEIGHT,
-            row_db,
+            smooth,
             top_db,
             range_db,
             zoom,

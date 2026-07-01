@@ -253,6 +253,9 @@ pub struct UiState {
     /// Waterfall frame rate in Hz sent to the server (0 = off). Persisted with the
     /// other waterfall display prefs; range 0–30 (matches the server clamp).
     pub waterfall_frame_rate_hz: f32,
+    /// Waterfall temporal smoothing strength [0..1] (0 = raw) — a client-side
+    /// per-bin EMA on the FFT rows that reduces noise-floor scintillation.
+    pub waterfall_smoothing: f32,
 
     // VFO B independent waterfall display (mirror of the VFO-A fields above).
     // Edited when the active control VFO is B; session-only (not persisted). The
@@ -265,6 +268,7 @@ pub struct UiState {
     pub vfo_b_adaptive_range_db_estimate: f32,
     pub vfo_b_display_zoom: f32,
     pub vfo_b_waterfall_frame_rate_hz: f32,
+    pub vfo_b_waterfall_smoothing: f32,
 
     // =====================================================================
     // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
@@ -664,6 +668,7 @@ impl Default for UiState {
 
             display_zoom: 1.0,
             waterfall_frame_rate_hz: 20.0,
+            waterfall_smoothing: crate::persistence::models::default_waterfall_smoothing(),
 
             vfo_b_adaptive_waterfall_normalization: true,
             vfo_b_manual_waterfall_top_db: -35.0,
@@ -673,6 +678,7 @@ impl Default for UiState {
             vfo_b_adaptive_range_db_estimate: 100.0,
             vfo_b_display_zoom: 1.0,
             vfo_b_waterfall_frame_rate_hz: 20.0,
+            vfo_b_waterfall_smoothing: crate::persistence::models::default_waterfall_smoothing(),
 
             pan_velocity_hz_per_s: 0.0,
             last_pan_send: Instant::now(),
