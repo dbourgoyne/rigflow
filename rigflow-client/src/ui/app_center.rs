@@ -498,14 +498,11 @@ impl RigflowApp {
         let limits = active_freq_limits(snapshot);
         let cur_center = vfo.center(snapshot);
 
-        // Move the target by the step, then grid-snap to the VFO's tuning step so
-        // wheel/arrow tuning always lands on the grid (req: universal snapping).
-        // Clamped only to the RF range (NOT the visible band) so it can cross the
-        // soft edge; the LO follows it.
-        let step = vfo.tuning_step_hz(snapshot);
-        let snapped =
-            crate::ui::tuning_steps::snap_to_step_hz(vfo.target(snapshot) + delta_hz, step);
-        let desired_target = clamp_center(snapped, &limits);
+        // Move the target by exactly `delta_hz` (the caller already scaled the
+        // active Snap value by the modifier keys).  Relative move — no re-snap, so
+        // Shift/Alt scaling isn't rounded away.  Clamped only to the RF range (NOT
+        // the visible band) so it can cross the soft edge; the LO follows it.
+        let desired_target = clamp_center(vfo.target(snapshot) + delta_hz, &limits);
 
         // Soft threshold = 80% of the visible half-span (zoom-aware: the visible
         // span is sample_rate / display_zoom, centered on the LO).  Use *this*
@@ -709,12 +706,15 @@ impl RigflowApp {
             }
         }
 
-        // Wheel tune: each notch moves by exactly one grid-snap step (the LO-strip
-        // "Snap" dropdown), applied through the common relative-tune path (which
-        // grid-snaps the result and handles soft-edge LO panning).  The mouse
-        // handler's tier is ignored — the dropdown is the single source of step.
+        // Wheel tune: each notch moves the target by the active Snap value scaled
+        // by the modifier keys (Shift ×10, Alt ×0.1, else ×1; 1 Hz floor), through
+        // the common relative-tune path (soft-edge LO panning).
         if r.tune_dir != 0 && snapshot.radio_acquired {
-            let step = vfo.tuning_step_hz(snapshot);
+            let step = crate::ui::tuning_steps::scaled_snap_step_hz(
+                vfo.tuning_step_hz(snapshot),
+                r.tune_shift,
+                r.tune_alt,
+            );
             self.tune_target_relative(snapshot, r.tune_dir as f32 * step, vfo);
         }
 

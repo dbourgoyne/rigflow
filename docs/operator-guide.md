@@ -34,22 +34,27 @@ controls"** at the bottom of Radio Control (and Source Control) to reveal them.
 
 You can tune several ways, and they all respect each radio's frequency limits:
 
-- **Click** anywhere on the spectrum or waterfall to jump there.
-- **Mouse wheel** over the spectrum/waterfall — steps the dial; **Ctrl+wheel zooms** the display.
-- **Arrow keys** — **← / →** step the dial; **↑ / ↓** move the LO (the center of the display).
+- **Click** anywhere on the spectrum or waterfall to jump there (snapped to the Snap grid).
+- **Mouse wheel** over the spectrum/waterfall — steps the **dial** by the **Snap** value; **Ctrl+wheel zooms** the display.
+- **Arrow keys** — **← / →** step the **dial** by the Snap value (same as the wheel); **↑ / ↓** move the **LO** (the center of the display) in larger, mode-appropriate steps. Arrow keys are ignored while you're typing in a text field.
 - **`C`** (cursor over the spectrum/waterfall) — re-center the display on the current signal.
 - The **LO dial / LO offset** widgets above the spectrum — scroll a digit to set it directly.
 
-The step size **adapts to the mode** (and modifier keys), so it's sensible on every band:
+### Tuning step ("Snap")
 
-| Mode | Wheel / ←→ | with **Shift** | with **Alt** |
-|---|---|---|---|
-| CW / SSB / Data | 10 Hz | 100 Hz | 1 kHz |
-| AM | 100 Hz | 1 kHz | 10 kHz |
-| NFM | 1 kHz | 5 kHz | 25 kHz |
-| WFM (broadcast) | 10 kHz | 100 kHz | 1 MHz |
+The **Snap** dropdown next to the LO dial sets the base **dial** step — the amount every mouse-wheel notch and **← / →** press moves. Pick from **1 Hz … 10 kHz**. Each mode remembers its own Snap value (defaults: SSB 1 kHz, CW 50 Hz, AM/NFM 5 kHz, Digital 1 Hz), saved per operator; under dual-watch VFO B keeps its own Snap.
 
-(↑/↓ move the LO in larger, mode-appropriate steps.)
+The wheel and **← / →** use the same relative model, scaled by the modifier keys:
+
+| Modifier | Step |
+|---|---|
+| (none) | **×1** the Snap value |
+| **Shift** | **×10** the Snap value (accelerate) |
+| **Alt** | **×0.1** the Snap value (decelerate) |
+
+The step never drops below **1 Hz** (so Alt on a small Snap won't attempt fractional-Hz tuning). Example: with Snap = 1 kHz, the wheel and ←/→ move 1 kHz per step, **Shift** → 10 kHz, **Alt** → 100 Hz.
+
+**↑ / ↓ are different:** they move the whole display window (the LO) in coarse, mode-appropriate steps so you can sweep across a band quickly — **1 kHz** on CW/SSB/Data (25 kHz with **Shift**), 10 kHz on AM, 25 kHz on NFM, 200 kHz on WFM. These are independent of the Snap value.
 
 ### Bands
 

@@ -1,21 +1,25 @@
-//! Mode-aware tuning step sizes, shared by the mouse wheel and the arrow keys.
+//! Tuning-step model for the target dial and the LO.
 //!
-//! Both the wheel applier (`app_center::apply_view_interaction`) and the keyboard
-//! handler (`app::handle_keyboard_shortcuts`) resolve their step from here, so the
-//! two input paths can never drift apart again.  Steps scale with the current
-//! [`DemodMode`], which 1:1 covers the bands we care about: `Wfm` = FM broadcast,
-//! `Am` = AM broadcast / airband, SSB/CW = HF.  (FM broadcast is only reachable on
-//! RTL-SDR + direct sampling — the HL2 caps at 30 MHz — so the large WFM steps are
-//! safe everywhere they apply.)
+//! **Target tuning** (mouse wheel, ←/→, and the Dual-VFO frequency fields) moves
+//! by a *relative* multiple of the currently selected UI "Snap" value (the
+//! LO-strip dropdown), scaled by the modifier keys with a factor-of-10 model:
 //!
-//! All values are named consts grouped by tier so they are trivial to tweak.
+//! - **no modifier** → ×1 the active Snap value,
+//! - **Shift** → ×10 (accelerate),
+//! - **Alt** → ×0.1 (decelerate),
+//!
+//! clamped to a 1 Hz floor — see [`scaled_snap_step_hz`].
+//!
+//! **LO / centre tuning** (↑/↓) is deliberately coarser and mode-appropriate so
+//! the whole display window can be swept across a band quickly — see
+//! [`center_step_hz`] (Shift selects the coarse column).
 
 use rigflow_core::dsp::modes::DemodMode;
 
 /// The fixed set of grid-snap / tuning-step sizes (Hz) offered in the LO-strip
-/// "Snap" dropdown.  These govern every target tuning action (wheel, spectrum/
-/// waterfall click, ←/→ arrows) — purely client-side; the server still receives
-/// the resulting Hz integer.
+/// "Snap" dropdown.  This is the ×1 base for every tuning action (wheel,
+/// spectrum/waterfall click, ←/→, ↑/↓) — purely client-side; the server still
+/// receives the resulting Hz integer.
 pub const TUNING_STEP_OPTIONS_HZ: [f32; 8] =
     [1.0, 10.0, 50.0, 100.0, 500.0, 1_000.0, 5_000.0, 10_000.0];
 
@@ -24,7 +28,9 @@ pub const TUNING_STEP_OPTIONS_HZ: [f32; 8] =
 // (persistence can't depend on this UI module).
 
 /// Snap a frequency (Hz) to the nearest multiple of `step_hz` (the grid).  A
-/// non-positive step disables snapping (returns the input unchanged).
+/// non-positive step disables snapping (returns the input unchanged).  Used to
+/// grid-align a *click*-to-tune; incremental tuning is relative (see
+/// [`scaled_snap_step_hz`]).
 pub fn snap_to_step_hz(hz: f32, step_hz: f32) -> f32 {
     if step_hz <= 0.0 {
         hz
@@ -43,40 +49,29 @@ pub fn tuning_step_label(step_hz: f32) -> String {
     }
 }
 
-/// Which step tier the modifier keys selected.
-///
-/// `Fine` = no modifier, `Medium` = Shift, `Coarse` = Alt.  Applies to *target*
-/// tuning (wheel + ←/→).  Center tuning (↑/↓) only distinguishes Shift, so it
-/// takes a plain `bool` instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TuneTier {
-    #[default]
-    Fine,
-    Medium,
-    Coarse,
+/// Relative modifier multiplier shared by ALL tuning inputs (mouse wheel, ←/→,
+/// ↑/↓): **Shift = ×10** (accelerate), **Alt = ×0.1** (decelerate), neither =
+/// ×1.  Shift wins if both are held.
+pub fn snap_multiplier(shift: bool, alt: bool) -> f32 {
+    if shift {
+        10.0
+    } else if alt {
+        0.1
+    } else {
+        1.0
+    }
 }
 
-// --- Target step table (wheel + ←/→) ------------------------------------------
-// Rows: CW/SSB/Data, AM, NFM, WFM.  Columns: Fine / Medium / Coarse.
+/// The tuning step (Hz) for one input event: the active Snap value scaled by the
+/// modifier multiplier ([`snap_multiplier`]), clamped to a **1 Hz floor** so
+/// Alt-decelerated tuning never attempts a fractional-Hz step.
+pub fn scaled_snap_step_hz(snap_hz: f32, shift: bool, alt: bool) -> f32 {
+    (snap_hz * snap_multiplier(shift, alt)).max(1.0)
+}
 
-const TARGET_SSB_FINE: f32 = 10.0;
-const TARGET_SSB_MEDIUM: f32 = 100.0;
-const TARGET_SSB_COARSE: f32 = 1_000.0;
-
-const TARGET_AM_FINE: f32 = 100.0;
-const TARGET_AM_MEDIUM: f32 = 1_000.0;
-const TARGET_AM_COARSE: f32 = 10_000.0; // US AM broadcast channel spacing
-
-const TARGET_NFM_FINE: f32 = 1_000.0;
-const TARGET_NFM_MEDIUM: f32 = 5_000.0;
-const TARGET_NFM_COARSE: f32 = 25_000.0; // land-mobile channel spacing
-
-const TARGET_WFM_FINE: f32 = 10_000.0;
-const TARGET_WFM_MEDIUM: f32 = 100_000.0; // EU FM broadcast channel spacing
-const TARGET_WFM_COARSE: f32 = 1_000_000.0;
-
-// --- Center / LO step table (↑/↓) ---------------------------------------------
-// Columns: none / Shift.
+// --- Centre / LO step table (↑/↓) --------------------------------------------
+// The LO step is coarse + mode-appropriate (not the Snap value) so the whole
+// window can be swept across a band quickly.  Columns: none / Shift.
 
 const CENTER_SSB_FINE: f32 = 1_000.0;
 const CENTER_SSB_SHIFT: f32 = 25_000.0;
@@ -90,8 +85,8 @@ const CENTER_NFM_SHIFT: f32 = 250_000.0;
 const CENTER_WFM_FINE: f32 = 200_000.0; // US FM broadcast channel spacing
 const CENTER_WFM_SHIFT: f32 = 2_000_000.0;
 
-/// Group a mode into one of the four step families.  CWU/CWL, USB/LSB and DgtU
-/// all behave identically here.
+/// Group a mode into one of the four LO-step families.  CWU/CWL, USB/LSB and
+/// DgtU all behave identically here.
 enum Family {
     Ssb,
     Am,
@@ -110,26 +105,8 @@ fn family(mode: DemodMode) -> Family {
     }
 }
 
-/// Target-frequency step (Hz) for one wheel notch / arrow press, by mode + tier.
-pub fn target_step_hz(mode: DemodMode, tier: TuneTier) -> f32 {
-    match (family(mode), tier) {
-        (Family::Ssb, TuneTier::Fine) => TARGET_SSB_FINE,
-        (Family::Ssb, TuneTier::Medium) => TARGET_SSB_MEDIUM,
-        (Family::Ssb, TuneTier::Coarse) => TARGET_SSB_COARSE,
-        (Family::Am, TuneTier::Fine) => TARGET_AM_FINE,
-        (Family::Am, TuneTier::Medium) => TARGET_AM_MEDIUM,
-        (Family::Am, TuneTier::Coarse) => TARGET_AM_COARSE,
-        (Family::Nfm, TuneTier::Fine) => TARGET_NFM_FINE,
-        (Family::Nfm, TuneTier::Medium) => TARGET_NFM_MEDIUM,
-        (Family::Nfm, TuneTier::Coarse) => TARGET_NFM_COARSE,
-        (Family::Wfm, TuneTier::Fine) => TARGET_WFM_FINE,
-        (Family::Wfm, TuneTier::Medium) => TARGET_WFM_MEDIUM,
-        (Family::Wfm, TuneTier::Coarse) => TARGET_WFM_COARSE,
-    }
-}
-
-/// Center/LO step (Hz) for one ↑/↓ press, by mode.  `shift` selects the coarse
-/// column.
+/// Centre/LO step (Hz) for one ↑/↓ press, by mode.  `shift` selects the coarse
+/// column.  Independent of the Snap value (which governs target tuning only).
 pub fn center_step_hz(mode: DemodMode, shift: bool) -> f32 {
     match (family(mode), shift) {
         (Family::Ssb, false) => CENTER_SSB_FINE,

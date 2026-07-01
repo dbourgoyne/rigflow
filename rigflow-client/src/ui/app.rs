@@ -420,7 +420,8 @@ impl RigflowApp {
     }
 
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        use crate::ui::tuning_steps::center_step_hz;
+        use crate::ui::app_center::TuneVfo;
+        use crate::ui::tuning_steps::{center_step_hz, scaled_snap_step_hz};
 
         // VFO hotkeys — ignored while a text field has focus (so typing a
         // callsign/frequency never triggers them).  `X` = TX-focus swap,
@@ -445,16 +446,21 @@ impl RigflowApp {
             }
         }
 
-        // Gather arrow presses + the Shift modifier (coarse center step) in one
-        // input pass.  Target tuning (←/→) now uses the grid-snap step, so Alt is
-        // no longer read here.
-        let (up, down, left, right, shift) = ctx.input(|i| {
+        // Arrow-key tuning also respects input focus — ignored while typing in a
+        // text field (frequency/callsign entry, etc.).
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+
+        // Gather arrow presses + the Shift/Alt modifiers in one input pass.
+        let (up, down, left, right, shift, alt) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowUp),
                 i.key_pressed(egui::Key::ArrowDown),
                 i.key_pressed(egui::Key::ArrowLeft),
                 i.key_pressed(egui::Key::ArrowRight),
                 i.modifiers.shift,
+                i.modifiers.alt,
             )
         });
 
@@ -462,15 +468,12 @@ impl RigflowApp {
             return;
         }
 
-        // Steps are mode-aware and only apply to an acquired radio (matches the
-        // mouse wheel).
         let snapshot = self.snapshot_state();
         if !snapshot.radio_acquired {
             return;
         }
         // Under dual-watch the arrow keys tune the active control VFO (matching
         // the wheel/click on each spectrum); otherwise they tune VFO A.
-        use crate::ui::app_center::TuneVfo;
         let active_b = snapshot.dual_watch_enabled
             && matches!(
                 snapshot.active_control_vfo,
@@ -483,7 +486,18 @@ impl RigflowApp {
             snapshot.demod_mode
         };
 
-        // ↑/↓ — center / LO step (mode-aware; Shift = coarse) for the active VFO.
+        // ←/→ target step = the active VFO's Snap value scaled by the modifiers
+        // (Shift ×10, Alt ×0.1, else ×1; 1 Hz floor) — identical model to the
+        // mouse wheel.
+        let snap = if active_b {
+            snapshot.vfo_b_tuning_step_hz
+        } else {
+            snapshot.tuning_step_preferences.get(mode)
+        };
+        let target_step = scaled_snap_step_hz(snap, shift, alt);
+
+        // ↑/↓ — move the LO / centre of the active VFO.  Coarse + mode-appropriate
+        // (Shift = coarser), independent of Snap, so a whole band sweeps quickly.
         let center_dir = (up as i32) - (down as i32);
         if center_dir != 0 {
             let delta = center_dir as f32 * center_step_hz(mode, shift);
@@ -515,18 +529,11 @@ impl RigflowApp {
             }
         }
 
-        // ←/→ — target step, identical to the wheel: one grid-snap step per press
-        // (the LO-strip "Snap" dropdown), with soft-edge LO panning, for the
-        // active VFO (its own per-VFO step).
+        // ←/→ — move the target of the active VFO by one Snap step (same soft-edge
+        // LO pan as the wheel).
         let target_dir = (right as i32) - (left as i32);
         if target_dir != 0 {
-            let step = if active_b {
-                snapshot.vfo_b_tuning_step_hz
-            } else {
-                snapshot.tuning_step_preferences.get(mode)
-            };
-            let delta = target_dir as f32 * step;
-            self.tune_target_relative(&snapshot, delta, active_vfo);
+            self.tune_target_relative(&snapshot, target_dir as f32 * target_step, active_vfo);
         }
     }
 

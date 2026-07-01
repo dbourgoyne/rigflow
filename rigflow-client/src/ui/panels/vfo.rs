@@ -15,7 +15,7 @@ use rigflow_protocol::radio_control::ClientRadioMessage;
 use crate::UiState;
 use crate::ui::app::RigflowApp;
 use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
-use crate::ui::tuning_steps::{TuneTier, target_step_hz};
+use crate::ui::tuning_steps::scaled_snap_step_hz;
 
 /// Modes offered for VFO B (same set the demod selector uses).
 const VFO_MODES: [DemodMode; 8] = [
@@ -76,16 +76,9 @@ impl RigflowApp {
                     if acquired && a_resp.hovered() {
                         let raw_y = ui.input(|i| i.raw_scroll_delta.y);
                         if raw_y != 0.0 {
-                            let tier = ui.input(|i| {
-                                if i.modifiers.alt {
-                                    TuneTier::Coarse
-                                } else if i.modifiers.shift {
-                                    TuneTier::Medium
-                                } else {
-                                    TuneTier::Fine
-                                }
-                            });
-                            let step = target_step_hz(snapshot.demod_mode, tier);
+                            let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+                            let snap = snapshot.tuning_step_preferences.get(snapshot.demod_mode);
+                            let step = scaled_snap_step_hz(snap, shift, alt);
                             let next =
                                 (a_hz as f32 + step * raw_y.signum()).clamp(0.0, 470_000_000.0);
                             if next as i64 != a_hz {
@@ -105,10 +98,10 @@ impl RigflowApp {
                     ui.end_row();
 
                     // VFO B (editable).  Click to type an exact value in MHz, or
-                    // roll the mouse wheel over the field to nudge — mode-aware
-                    // steps, same table as VFO A tuning (wheel = fine, Shift =
-                    // medium, Alt = coarse).  The custom_parser reads the typed
-                    // text as MHz; without it egui would treat "14.055" as 14 Hz.
+                    // roll the mouse wheel over the field to nudge by the active
+                    // Snap value (Shift ×10, Alt ×0.1, else ×1; same model as the
+                    // spectrum wheel / arrow keys).  The custom_parser reads the
+                    // typed text as MHz; without it egui would treat "14.055" as 14 Hz.
                     let b_tx = snapshot.split_enabled && snapshot.tx_vfo == VfoSelect::B;
                     ui.label(if b_tx { "B ▶TX" } else { "B" });
                     let mut b_hz = vfo_b_hz as i64;
@@ -131,16 +124,9 @@ impl RigflowApp {
                     if acquired && resp.hovered() {
                         let raw_y = ui.input(|i| i.raw_scroll_delta.y);
                         if raw_y != 0.0 {
-                            let tier = ui.input(|i| {
-                                if i.modifiers.alt {
-                                    TuneTier::Coarse
-                                } else if i.modifiers.shift {
-                                    TuneTier::Medium
-                                } else {
-                                    TuneTier::Fine
-                                }
-                            });
-                            let step = target_step_hz(snapshot.vfo_b_demod_mode, tier);
+                            let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+                            let step =
+                                scaled_snap_step_hz(snapshot.vfo_b_tuning_step_hz, shift, alt);
                             let next =
                                 (b_hz as f32 + step * raw_y.signum()).clamp(0.0, 470_000_000.0);
                             if next as i64 != b_hz {
