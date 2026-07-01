@@ -1036,9 +1036,20 @@ fn render_waterfall_texture(
             (rgb & 0xff) as u8,
         );
     }
+    // Nearest magnification keeps the rows/frequency bins crisp when the window
+    // is enlarged (the common case).  Linear minification box-blends adjacent
+    // rows when the image is scaled *down* — e.g. dual-watch's ~2:1 half-height
+    // panes — which removes the nearest-neighbour row-dropping shimmer
+    // (scintillation).  No mipmaps: backend-agnostic and zero per-frame cost.
+    const WATERFALL_TEX_OPTS: egui::TextureOptions = egui::TextureOptions {
+        magnification: egui::TextureFilter::Nearest,
+        minification: egui::TextureFilter::Linear,
+        wrap_mode: egui::TextureWrapMode::ClampToEdge,
+        mipmap_mode: None,
+    };
     match texture {
-        Some(t) => t.set(image, egui::TextureOptions::NEAREST),
-        None => *texture = Some(ctx.load_texture(name, image, egui::TextureOptions::NEAREST)),
+        Some(t) => t.set(image, WATERFALL_TEX_OPTS),
+        None => *texture = Some(ctx.load_texture(name, image, WATERFALL_TEX_OPTS)),
     }
 }
 
