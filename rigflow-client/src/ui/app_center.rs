@@ -378,70 +378,129 @@ impl RigflowApp {
             return;
         }
 
-        // Frequency (operating / target) — prominent.
+        // ── VFO accent colours + TX routing + shared helpers ──────────────────
+        let a_color = ui.visuals().strong_text_color();
+        // VFO B is always its blue accent (shared by the B freq + B S-meter); the
+        // transmitting VFO is flagged inline with a red ▶TX marker instead.
+        let vfo_b_color = egui::Color32::from_rgb(160, 200, 235);
+        // TX routing: A transmits in simplex or split-to-A; B only in split-to-B.
+        // XIT is a single transmit offset that acts on whichever VFO transmits, so
+        // it's shown in that VFO's group.  The ▶TX marker shows whenever both VFOs
+        // are on screen (split OR dual-watch) so the operator always knows which
+        // VFO PTT keys; a plain simplex single-VFO view needs no marker.
+        let split = snapshot.split_enabled;
+        let a_is_tx = !split || snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::A;
+        let b_is_tx = split && snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B;
+        let show_tx_marker = split || snapshot.dual_watch_enabled;
+        let xit =
+            (snapshot.xit_enabled && snapshot.xit_offset_hz != 0).then_some(snapshot.xit_offset_hz);
+
+        // S-meter cell: S-unit label (size 20) + fixed-width monospace dBm (right-
+        // aligned 4-char field) so a 2↔3 digit change never shifts the row.  No
+        // A/B prefix — identity comes from grouping beside each VFO's frequency.
+        let draw_meter = |ui: &mut egui::Ui, dbm: f32, color: egui::Color32| {
+            ui.label(
+                egui::RichText::new(s_meter_label(dbm))
+                    .size(20.0)
+                    .color(color),
+            );
+            ui.label(
+                egui::RichText::new(format!("{:>4} dBm", dbm.round() as i32))
+                    .font(egui::FontId::monospace(15.0))
+                    .color(color),
+            );
+        };
+        // Inline per-VFO flags drawn right after the freq/mode: ▶TX (this VFO is
+        // the split transmit VFO), RIT (this VFO's own receive offset), XIT (the
+        // transmit offset, shown on the TX VFO only).
+        let draw_flags =
+            |ui: &mut egui::Ui, tx_marker: bool, rit: Option<i32>, xit: Option<i32>| {
+                if tx_marker {
+                    ui.label(
+                        egui::RichText::new("▶TX")
+                            .strong()
+                            .color(egui::Color32::from_rgb(235, 80, 80)),
+                    );
+                }
+                if let Some(off) = rit {
+                    ui.label(
+                        egui::RichText::new(format!("RIT {off:+} Hz"))
+                            .strong()
+                            .color(egui::Color32::from_rgb(120, 210, 255)),
+                    );
+                }
+                if let Some(off) = xit {
+                    ui.label(
+                        egui::RichText::new(format!("XIT {off:+} Hz"))
+                            .strong()
+                            .color(egui::Color32::from_rgb(235, 180, 70)),
+                    );
+                }
+            };
+
+        // ── VFO A group: frequency + mode + flags + S-meter ───────────────────
         ui.label(
             egui::RichText::new(format_freq_dotted(snapshot.target_freq_hz.max(0.0) as u64))
                 .size(18.0)
                 .strong(),
         );
-        // Mode.
         ui.label(egui::RichText::new(mode_label(snapshot.demod_mode)).strong());
-
-        // VFO B + split / RIT / XIT badges (only when relevant).
-        if snapshot.split_enabled || snapshot.dual_watch_enabled {
-            ui.separator();
-            let b_tx =
-                snapshot.split_enabled && snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B;
-            ui.label(
-                egui::RichText::new(format!(
-                    "B {}  {}",
-                    format_freq_dotted(snapshot.vfo_b_target_freq_hz.max(0.0) as u64),
-                    mode_label(snapshot.vfo_b_demod_mode)
-                ))
-                .color(if b_tx {
-                    egui::Color32::from_rgb(235, 80, 80)
-                } else {
-                    egui::Color32::from_rgb(160, 200, 235)
-                }),
-            );
-        }
-        if snapshot.split_enabled {
-            let tx_letter = if snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B {
-                "B"
-            } else {
-                "A"
-            };
-            ui.label(
-                egui::RichText::new(format!("SPLIT▶{tx_letter}"))
-                    .strong()
-                    .color(egui::Color32::from_rgb(235, 180, 70)),
-            );
-        }
-        if snapshot.rit_enabled && snapshot.rit_offset_hz != 0 {
-            ui.label(
-                egui::RichText::new(format!("RIT {:+} Hz", snapshot.rit_offset_hz))
-                    .strong()
-                    .color(egui::Color32::from_rgb(120, 210, 255)),
-            );
-        }
-        if snapshot.xit_enabled && snapshot.xit_offset_hz != 0 {
-            ui.label(
-                egui::RichText::new(format!("XIT {:+} Hz", snapshot.xit_offset_hz))
-                    .strong()
-                    .color(egui::Color32::from_rgb(235, 180, 70)),
-            );
-        }
-
-        ui.separator();
-
-        // S-meter — the most prominent item (largest text, coloured).
-        ui.label(
-            egui::RichText::new(s_meter_label(snapshot.signal_dbm))
-                .size(20.0)
-                .strong()
-                .color(egui::Color32::from_rgb(120, 230, 120)),
+        draw_flags(
+            ui,
+            show_tx_marker && a_is_tx,
+            (snapshot.rit_enabled && snapshot.rit_offset_hz != 0).then_some(snapshot.rit_offset_hz),
+            a_is_tx.then_some(xit).flatten(),
         );
-        ui.label(egui::RichText::new(format!("{:.0} dBm", snapshot.signal_dbm)).size(15.0));
+        ui.separator();
+        // A meter matches the A freq (white) in dual-watch; the lone green meter
+        // otherwise.
+        let a_meter_color = if snapshot.dual_watch_enabled {
+            a_color
+        } else {
+            egui::Color32::from_rgb(120, 230, 120)
+        };
+        draw_meter(ui, snapshot.signal_dbm, a_meter_color);
+
+        // ── VFO B group: frequency + mode + flags (split or dual-watch) + meter ─
+        // (meter is dual-watch only — split alone has no second receiver).  B's
+        // freq/mode match VFO A's size + weight, tinted with the B accent colour.
+        if split || snapshot.dual_watch_enabled {
+            ui.separator();
+            ui.label(
+                egui::RichText::new("B")
+                    .size(18.0)
+                    .strong()
+                    .color(vfo_b_color),
+            );
+            ui.label(
+                egui::RichText::new(format_freq_dotted(
+                    snapshot.vfo_b_target_freq_hz.max(0.0) as u64
+                ))
+                .size(18.0)
+                .strong()
+                .color(vfo_b_color),
+            );
+            ui.label(
+                egui::RichText::new(mode_label(snapshot.vfo_b_demod_mode))
+                    .strong()
+                    .color(vfo_b_color),
+            );
+            // B RIT only when dual-watch (B is only received then); B XIT only when
+            // B is the split TX VFO.
+            draw_flags(
+                ui,
+                show_tx_marker && b_is_tx,
+                (snapshot.dual_watch_enabled
+                    && snapshot.vfo_b_rit_enabled
+                    && snapshot.vfo_b_rit_offset_hz != 0)
+                    .then_some(snapshot.vfo_b_rit_offset_hz),
+                b_is_tx.then_some(xit).flatten(),
+            );
+            if snapshot.dual_watch_enabled {
+                ui.separator();
+                draw_meter(ui, snapshot.vfo_b_signal_dbm, vfo_b_color);
+            }
+        }
 
         ui.separator();
 
