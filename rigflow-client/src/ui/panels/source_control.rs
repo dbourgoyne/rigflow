@@ -403,7 +403,7 @@ impl RigflowApp {
             // behind its own inline lock — locked by default, auto-re-locking
             // after an idle period (see `auto_relock_controls`).
             ui.horizontal(|ui| {
-                if super::lock_button(ui, &mut state.tx_drive_locked) {
+                if super::lock_button(ui, &mut state.tx_drive_locked, super::LOCK_SMALL) {
                     state.tx_drive_unlocked_at = Some(std::time::Instant::now());
                 }
                 let locked = state.tx_drive_locked;

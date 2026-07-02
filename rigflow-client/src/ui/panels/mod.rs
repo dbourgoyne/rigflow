@@ -134,14 +134,19 @@ pub(crate) fn slider_scroll<Num: egui::emath::Numeric>(
 ///
 /// (Glyph note: the lock emoji comes from egui's bundled emoji font — if it ever
 /// renders as tofu, swap for a drawn icon or `[L]`/`[U]` text.)
-pub(crate) fn lock_button(ui: &mut egui::Ui, locked: &mut bool) -> bool {
+/// Padlock glyph sizes: small for the inline per-slider damage locks, larger for
+/// the prominent global toggles (settings lock + dial lock).
+pub(crate) const LOCK_SMALL: f32 = 12.0;
+pub(crate) const LOCK_LARGE: f32 = 18.0;
+
+pub(crate) fn lock_button(ui: &mut egui::Ui, locked: &mut bool, size: f32) -> bool {
     let (glyph, hover) = if *locked {
         ("🔒", "Locked — click to unlock")
     } else {
         ("🔓", "Unlocked — click to lock")
     };
     if ui
-        .add(egui::Button::new(glyph).small())
+        .add(egui::Button::new(egui::RichText::new(glyph).size(size)))
         .on_hover_text(hover)
         .clicked()
     {
@@ -188,7 +193,7 @@ impl RigflowApp {
                 // locks and are NOT affected by this one.
                 let mut config_locked = snapshot.config_locked;
                 ui.horizontal(|ui| {
-                    lock_button(ui, &mut config_locked);
+                    lock_button(ui, &mut config_locked, LOCK_LARGE);
                     ui.label(if config_locked {
                         "Settings locked"
                     } else {

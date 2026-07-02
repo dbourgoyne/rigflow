@@ -359,7 +359,7 @@ impl RigflowApp {
         // Dial lock — global (freezes tuning for BOTH VFOs), so it sits at the far
         // left next to the status light rather than beside VFO A's frequency.
         let mut dial_locked = snapshot.dial_locked;
-        if crate::ui::panels::lock_button(ui, &mut dial_locked)
+        if crate::ui::panels::lock_button(ui, &mut dial_locked, crate::ui::panels::LOCK_LARGE)
             || dial_locked != snapshot.dial_locked
         {
             if let Ok(mut s) = self.state.lock() {

@@ -75,7 +75,7 @@ impl RigflowApp {
             let mut toggle_to: Option<bool> = None;
             let mut new_spot: Option<f32> = None;
             ui.horizontal(|ui| {
-                super::lock_button(ui, &mut locked);
+                super::lock_button(ui, &mut locked, super::LOCK_SMALL);
                 if locked != snapshot.spot_level_locked {
                     toggle_to = Some(locked);
                 }
