@@ -76,7 +76,8 @@ impl RigflowApp {
                             .update_while_editing(false)
                             .suffix(" MHz"),
                     );
-                    if freq_editable && a_resp.hovered() {
+                    if freq_editable && a_resp.hovered() && super::wheel_dwell_ready(ui, a_resp.id)
+                    {
                         let raw_y = ui.input(|i| i.raw_scroll_delta.y);
                         if raw_y != 0.0 {
                             let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
@@ -124,7 +125,7 @@ impl RigflowApp {
                     );
                     // Mouse-wheel-over-field nudge (and swallow the scroll so the
                     // side-panel ScrollArea doesn't move while the pointer is here).
-                    if freq_editable && resp.hovered() {
+                    if freq_editable && resp.hovered() && super::wheel_dwell_ready(ui, resp.id) {
                         let raw_y = ui.input(|i| i.raw_scroll_delta.y);
                         if raw_y != 0.0 {
                             let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));

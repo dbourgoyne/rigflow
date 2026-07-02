@@ -19,12 +19,66 @@ pub(crate) fn note_text(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).color(egui::Color32::from_rgb(230, 200, 120))
 }
 
+/// True once the pointer has *rested* on the widget `id` for the dwell period.
+///
+/// This distinguishes "parked on a control to wheel-adjust it" from "a control
+/// scrolled under the pointer during a panel scroll": in the latter case each
+/// control is under the cursor only briefly (the content is moving), so it never
+/// dwells and the wheel falls through to the surrounding `ScrollArea`.  Shared by
+/// [`slider_scroll`] and the Dual-VFO frequency-field wheel nudges, all of which
+/// funnel the one hovered control through a single tracked (id, first-hover-time)
+/// slot in egui memory.
+pub(crate) fn wheel_dwell_ready(ui: &egui::Ui, id: egui::Id) -> bool {
+    const DWELL_SECS: f64 = 0.2;
+    // While the left panel is actively scrolling, NOTHING grabs the wheel — so a
+    // multi-notch scroll can't be hijacked by a slider that happens to linger
+    // under the pointer.  Cooldown outlives the gaps between notches.
+    const PANEL_SCROLL_COOLDOWN_SECS: f64 = 0.35;
+    let now = ui.input(|i| i.time);
+    let scrolled_at = ui
+        .ctx()
+        .data(|d| d.get_temp::<f64>(egui::Id::new("panel_scroll_at")))
+        .unwrap_or(f64::NEG_INFINITY);
+    if now - scrolled_at < PANEL_SCROLL_COOLDOWN_SECS {
+        return false;
+    }
+    let age = ui.ctx().data_mut(|d| {
+        let e: &mut (egui::Id, f64) =
+            d.get_temp_mut_or_insert_with(egui::Id::new("wheel_dwell"), || (id, now));
+        if e.0 != id {
+            *e = (id, now);
+        }
+        now - e.1
+    });
+    age >= DWELL_SECS
+}
+
+/// Record left-panel scroll activity: if the `ScrollArea` offset moved since the
+/// last frame, stamp "now" so [`wheel_dwell_ready`] suppresses wheel-grab for a
+/// short cooldown.  Call once per frame with the panel ScrollArea's offset.
+pub(crate) fn note_panel_scroll(ui: &egui::Ui, offset: egui::Vec2) {
+    let now = ui.input(|i| i.time);
+    ui.ctx().data_mut(|d| {
+        let prev = d
+            .get_temp::<egui::Vec2>(egui::Id::new("panel_scroll_prev"))
+            .unwrap_or(offset);
+        if (prev - offset).length() > 0.5 {
+            d.insert_temp(egui::Id::new("panel_scroll_at"), now);
+        }
+        d.insert_temp(egui::Id::new("panel_scroll_prev"), offset);
+    });
+}
+
 /// Let the mouse wheel adjust a slider while the pointer is over it: scroll up
 /// increases, scroll down decreases, by `step` (clamped to `min..=max`). Marks the
 /// response changed so the caller's existing `.changed()` handling runs. Returns
 /// `true` if the wheel changed the value (useful when the caller persists on
 /// `drag_stopped()` rather than `changed()`). Call right after
 /// `ui.add(Slider::new(&mut value, min..=max)…)`.
+///
+/// Wheel-adjust only engages once the pointer has *dwelled* on the slider (see
+/// [`wheel_dwell_ready`]) so a slider that scrolls under the pointer mid-panel-
+/// scroll isn't grabbed; until then the scroll passes through to the ScrollArea.
 ///
 /// While the pointer is over the slider this **swallows all wheel scroll** so the
 /// surrounding panel `ScrollArea` never scrolls and the slider stays under the
@@ -41,6 +95,11 @@ pub(crate) fn slider_scroll<Num: egui::emath::Numeric>(
     step: f64,
 ) -> bool {
     if !response.hovered() {
+        return false;
+    }
+    // Not armed until the pointer has rested here — let the wheel scroll the
+    // panel (don't swallow) while a slider merely passes under the cursor.
+    if !wheel_dwell_ready(ui, response.id) {
         return false;
     }
 
@@ -153,7 +212,7 @@ impl RigflowApp {
                     .exact_height(row_h * 5.0 + 10.0)
                     .show_inside(ui, |ui| self.draw_status_console(ui, snapshot));
 
-                egui::ScrollArea::vertical()
+                let scroll_out = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         // First-run / not-connected cue: point a new user at the
@@ -194,6 +253,9 @@ impl RigflowApp {
                         self.draw_bookmarks_panel(ui);
                         ui.separator();
                     });
+                // Feed the scroll offset to the wheel-dwell logic so controls
+                // don't grab the wheel while the panel is being scrolled.
+                note_panel_scroll(ui, scroll_out.state.offset);
             });
     }
 }
