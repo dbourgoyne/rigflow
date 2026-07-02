@@ -68,22 +68,50 @@ impl RigflowApp {
             // Spot RF power ≈ TX Drive × Spot Level.  Affects ONLY Spot/SWR
             // (and the SWR sweep) — not voice/CW/digital TX.  Persisted via
             // the source-control prefs.
-            let mut spot_level = snapshot.source_control.spot_level_percent;
-            let mut resp = ui.add(
-                egui::Slider::new(&mut spot_level, 0.0..=100.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .suffix("%")
-                    .text("Spot Level"),
-            );
-            super::slider_scroll(ui, &mut resp, &mut spot_level, 0.0, 100.0, 1.0);
-            if resp.changed() {
-                let snapped = spot_level.clamp(0.0, 100.0).round();
+            // Damage-adjacent (TX carrier amplitude), so gate it behind its own
+            // inline lock — independent of TX Drive.  `self` is kept out of the
+            // horizontal closure; the lock toggle + value change are applied after.
+            let mut locked = snapshot.spot_level_locked;
+            let mut toggle_to: Option<bool> = None;
+            let mut new_spot: Option<f32> = None;
+            ui.horizontal(|ui| {
+                super::lock_button(ui, &mut locked);
+                if locked != snapshot.spot_level_locked {
+                    toggle_to = Some(locked);
+                }
+                let mut spot_level = snapshot.source_control.spot_level_percent;
+                let mut resp = ui.add_enabled(
+                    !locked,
+                    egui::Slider::new(&mut spot_level, 0.0..=100.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .suffix("%")
+                        .text("Spot Level"),
+                );
+                if locked {
+                    resp = resp.on_hover_text("Locked — click the padlock to change Spot Level");
+                } else {
+                    super::slider_scroll(ui, &mut resp, &mut spot_level, 0.0, 100.0, 1.0);
+                }
+                if resp.changed() {
+                    new_spot = Some(spot_level.clamp(0.0, 100.0).round());
+                }
+            });
+            if let Some(l) = toggle_to {
+                if let Ok(mut state) = self.state.lock() {
+                    state.spot_level_locked = l;
+                    if !l {
+                        state.spot_level_unlocked_at = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            if let Some(snapped) = new_spot {
                 self.send_radio_msg(ClientRadioMessage::SetSourceSpotLevel {
                     spot_level_percent: snapped,
                 });
                 if let Ok(mut state) = self.state.lock() {
                     state.source_control.spot_level_percent = snapped;
+                    state.spot_level_unlocked_at = Some(std::time::Instant::now());
                 }
                 self.save_source_control_prefs_to_current_operator();
             }

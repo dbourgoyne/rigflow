@@ -434,6 +434,14 @@ impl RigflowApp {
                 state.tx_drive_locked = true;
                 state.tx_drive_unlocked_at = None;
             }
+            if !state.spot_level_locked
+                && state
+                    .spot_level_unlocked_at
+                    .map_or(true, |t| t.elapsed() >= RELOCK_IDLE)
+            {
+                state.spot_level_locked = true;
+                state.spot_level_unlocked_at = None;
+            }
         }
     }
 

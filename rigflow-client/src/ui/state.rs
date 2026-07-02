@@ -111,6 +111,10 @@ pub struct UiState {
     /// when it was unlocked so it auto-re-locks after an idle period.
     pub tx_drive_locked: bool,
     pub tx_drive_unlocked_at: Option<Instant>,
+    /// Spot Level is damage-adjacent (TX carrier amplitude); its own independent
+    /// inline lock, same default-locked + auto-re-lock behaviour as TX Drive.
+    pub spot_level_locked: bool,
+    pub spot_level_unlocked_at: Option<Instant>,
     /// VFO B receive-audio volume percent (client-side; applied to the right
     /// channel under dual-watch).  VFO A uses `volume_percent` below.
     pub volume_percent_b: u8,
@@ -597,6 +601,8 @@ impl Default for UiState {
             active_control_vfo: VfoSelect::A,
             tx_drive_locked: true,
             tx_drive_unlocked_at: None,
+            spot_level_locked: true,
+            spot_level_unlocked_at: None,
             volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,
