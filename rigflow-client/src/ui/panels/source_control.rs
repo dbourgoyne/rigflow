@@ -152,15 +152,19 @@ impl RigflowApp {
         // Global settings lock greys the set-once config controls below (NOT the
         // TX Drive slider, which keeps its own separate damage lock).
         let config_locked = state.config_locked;
+        // Band selection is a frequency jump, so it's also frozen by the dial lock.
+        let dial_locked = state.dial_locked;
 
         // -----------------------------
         // Band Control + N2ADR (HL2).
         // -----------------------------
         if state.source_capabilities.supports_band_control {
-            // Band Control is a wrong-frequency / disruptive change → gated by the
-            // global settings lock as well.
+            // Band Control is a wrong-frequency / disruptive change → frozen by the
+            // settings lock AND the dial lock (it's a frequency jump).
             save |= ui
-                .add_enabled_ui(!config_locked, |ui| self.draw_band_control(ui, state))
+                .add_enabled_ui(!config_locked && !dial_locked, |ui| {
+                    self.draw_band_control(ui, state)
+                })
                 .inner;
         }
 

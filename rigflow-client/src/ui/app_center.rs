@@ -355,6 +355,17 @@ impl RigflowApp {
         ui.painter()
             .circle_filled(rect.center(), diameter * 0.45, color);
         response.on_hover_text(hover);
+
+        // Dial lock — global (freezes tuning for BOTH VFOs), so it sits at the far
+        // left next to the status light rather than beside VFO A's frequency.
+        let mut dial_locked = snapshot.dial_locked;
+        if crate::ui::panels::lock_button(ui, &mut dial_locked)
+            || dial_locked != snapshot.dial_locked
+        {
+            if let Ok(mut s) = self.state.lock() {
+                s.dial_locked = dial_locked;
+            }
+        }
         ui.separator();
 
         // Operator + license first (shown whenever an operator is selected,
@@ -438,17 +449,7 @@ impl RigflowApp {
                 }
             };
 
-        // ── VFO A group: dial lock + frequency + mode + flags + S-meter ───────
-        // Dial lock padlock next to the (always-bright) frequency; freezes every
-        // tuning path.  Session-only toggle.
-        let mut dial_locked = snapshot.dial_locked;
-        if crate::ui::panels::lock_button(ui, &mut dial_locked)
-            || dial_locked != snapshot.dial_locked
-        {
-            if let Ok(mut s) = self.state.lock() {
-                s.dial_locked = dial_locked;
-            }
-        }
+        // ── VFO A group: frequency + mode + flags + S-meter ───────────────────
         ui.label(
             egui::RichText::new(format_freq_dotted(snapshot.target_freq_hz.max(0.0) as u64))
                 .size(18.0)
