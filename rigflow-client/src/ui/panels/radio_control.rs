@@ -397,7 +397,7 @@ impl RigflowApp {
             ui.label(RichText::new("Active VFO").size(11.0).strong());
             ui.selectable_value(&mut sel, VfoSelect::A, "A");
             ui.selectable_value(&mut sel, VfoSelect::B, "B");
-            ui.label(RichText::new("(controls below)").small().weak());
+            ui.label(RichText::new("(controls below)").size(11.0));
         });
         if sel != snapshot.active_control_vfo {
             if let Ok(mut state) = self.state.lock() {

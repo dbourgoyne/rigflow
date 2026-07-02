@@ -30,7 +30,7 @@ impl RigflowApp {
                     state.dual_watch_enabled && matches!(state.active_control_vfo, VfoSelect::B);
                 let persist = !active_b;
                 if active_b {
-                    ui.label(RichText::new("Editing VFO B").small().weak());
+                    ui.label(RichText::new("Editing VFO B").size(11.0));
                 }
 
                 // ── Zoom ──
