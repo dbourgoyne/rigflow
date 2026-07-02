@@ -438,7 +438,17 @@ impl RigflowApp {
                 }
             };
 
-        // ── VFO A group: frequency + mode + flags + S-meter ───────────────────
+        // ── VFO A group: dial lock + frequency + mode + flags + S-meter ───────
+        // Dial lock padlock next to the (always-bright) frequency; freezes every
+        // tuning path.  Session-only toggle.
+        let mut dial_locked = snapshot.dial_locked;
+        if crate::ui::panels::lock_button(ui, &mut dial_locked)
+            || dial_locked != snapshot.dial_locked
+        {
+            if let Ok(mut s) = self.state.lock() {
+                s.dial_locked = dial_locked;
+            }
+        }
         ui.label(
             egui::RichText::new(format_freq_dotted(snapshot.target_freq_hz.max(0.0) as u64))
                 .size(18.0)
@@ -765,6 +775,12 @@ impl RigflowApp {
             }
         }
 
+        // Dial lock: freeze every frequency change (wheel / click / C-key /
+        // drag / momentum).  Zoom and VFO-focus above still work.
+        if snapshot.dial_locked {
+            return;
+        }
+
         // Wheel tune: each notch moves the target by the active Snap value scaled
         // by the modifier keys (Shift ×10, Alt ×0.1, else ×1; 1 Hz floor), through
         // the common relative-tune path (soft-edge LO panning).
@@ -864,10 +880,12 @@ impl RigflowApp {
         let mut new_center_freq_hz = None;
         let mut new_target_freq_hz = None;
 
+        let dial_locked = state_snapshot.dial_locked;
         if let Some(new_center_hz) = crate::widgets::lo_frequency_widget::draw_lo_widget(
             ui,
             lo_pos,
             cur_center.max(0.0) as u64,
+            !dial_locked,
         ) {
             let limits = active_freq_limits(&state_snapshot);
             let clamped_center = clamp_center(new_center_hz as f32, &limits);
@@ -888,6 +906,7 @@ impl RigflowApp {
             ui,
             lo_offset_pos,
             lo_offset_hz,
+            !dial_locked,
         ) {
             // Reuse the soft-edge LO pan (LO follows the target at the edge).
             let delta = (new_offset_hz - lo_offset_hz) as f32;

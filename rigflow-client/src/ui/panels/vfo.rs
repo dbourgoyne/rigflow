@@ -46,6 +46,9 @@ impl RigflowApp {
     pub(crate) fn draw_vfo_panel(&self, ui: &mut egui::Ui, snapshot: &UiState) {
         ui.collapsing(super::panel_header("Dual VFO / Split"), |ui| {
             let acquired = snapshot.radio_acquired;
+            // The A/B frequency fields are a tuning path → also gated by the dial
+            // lock (mode combos etc. stay on `acquired` only).
+            let freq_editable = acquired && !snapshot.dial_locked;
             let vfo_a_hz = snapshot.target_freq_hz.max(0.0) as u64;
             let vfo_b_hz = snapshot.vfo_b_target_freq_hz.max(0.0) as u64;
 
@@ -64,7 +67,7 @@ impl RigflowApp {
                     ui.label(if a_tx { "A ▶TX" } else { "A" });
                     let mut a_hz = vfo_a_hz as i64;
                     let mut a_resp = ui.add_enabled(
-                        acquired,
+                        freq_editable,
                         egui::DragValue::new(&mut a_hz)
                             .speed(100.0)
                             .range(0..=470_000_000i64)
@@ -73,7 +76,7 @@ impl RigflowApp {
                             .update_while_editing(false)
                             .suffix(" MHz"),
                     );
-                    if acquired && a_resp.hovered() {
+                    if freq_editable && a_resp.hovered() {
                         let raw_y = ui.input(|i| i.raw_scroll_delta.y);
                         if raw_y != 0.0 {
                             let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
@@ -106,7 +109,7 @@ impl RigflowApp {
                     ui.label(if b_tx { "B ▶TX" } else { "B" });
                     let mut b_hz = vfo_b_hz as i64;
                     let mut resp = ui.add_enabled(
-                        acquired,
+                        freq_editable,
                         egui::DragValue::new(&mut b_hz)
                             .speed(100.0)
                             .range(0..=470_000_000i64)
@@ -121,7 +124,7 @@ impl RigflowApp {
                     );
                     // Mouse-wheel-over-field nudge (and swallow the scroll so the
                     // side-panel ScrollArea doesn't move while the pointer is here).
-                    if acquired && resp.hovered() {
+                    if freq_editable && resp.hovered() {
                         let raw_y = ui.input(|i| i.raw_scroll_delta.y);
                         if raw_y != 0.0 {
                             let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));

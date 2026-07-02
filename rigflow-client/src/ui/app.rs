@@ -495,7 +495,9 @@ impl RigflowApp {
         }
 
         let snapshot = self.snapshot_state();
-        if !snapshot.radio_acquired {
+        // Dial lock freezes arrow-key tuning too (the X/= VFO hotkeys above are
+        // unaffected — they're deliberate, not accidental dial movement).
+        if !snapshot.radio_acquired || snapshot.dial_locked {
             return;
         }
         // Under dual-watch the arrow keys tune the active control VFO (matching

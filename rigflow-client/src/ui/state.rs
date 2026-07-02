@@ -120,6 +120,10 @@ pub struct UiState {
     /// so a single shared lock (unlike the per-control damage locks).  Manual
     /// toggle (no auto-re-lock); persisted per operator.  Default unlocked.
     pub config_locked: bool,
+    /// Dedicated dial lock: freezes ALL frequency-tuning paths (wheel, click,
+    /// drag, arrows, LO spinners, freq fields, bookmark apply).  Session-only
+    /// (transient — lock for a net, unlock after); default unlocked.
+    pub dial_locked: bool,
     /// VFO B receive-audio volume percent (client-side; applied to the right
     /// channel under dual-watch).  VFO A uses `volume_percent` below.
     pub volume_percent_b: u8,
@@ -609,6 +613,7 @@ impl Default for UiState {
             spot_level_locked: true,
             spot_level_unlocked_at: None,
             config_locked: false,
+            dial_locked: false,
             volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,

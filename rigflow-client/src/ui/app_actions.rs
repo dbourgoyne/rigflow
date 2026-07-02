@@ -743,6 +743,13 @@ impl RigflowApp {
     }
 
     pub(crate) fn apply_bookmark(&mut self, bookmark_id: &str) {
+        // A bookmark QSYs, so it's gated by the dial lock too.
+        if let Ok(mut state) = self.state.lock() {
+            if state.dial_locked {
+                state.server_status = "dial locked: unlock to recall a bookmark".to_string();
+                return;
+            }
+        }
         let (bookmark, rejection) = {
             let state = self.state.lock().unwrap();
             let bookmark = state
