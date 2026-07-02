@@ -406,14 +406,29 @@ impl RigflowApp {
         let xit =
             (snapshot.xit_enabled && snapshot.xit_offset_hz != 0).then_some(snapshot.xit_offset_hz);
 
-        // S-meter cell: S-unit label (size 20) + fixed-width monospace dBm (right-
-        // aligned 4-char field) so a 2↔3 digit change never shifts the row.  No
-        // A/B prefix — identity comes from grouping beside each VFO's frequency.
+        // S-meter cell: fixed-width S-unit label + fixed-width monospace dBm
+        // (right-aligned 4-char field) so neither the S9+ readings nor a 2↔3 digit
+        // dBm change shifts the row.  No A/B prefix — identity comes from grouping
+        // beside each VFO's frequency.  Reserve the S-unit width for the widest
+        // reading ("S9+60 dB") so "S6" and "S9+10 dB" occupy the same slot.
+        let s_meter_w = ui.fonts(|f| {
+            f.layout_no_wrap(
+                "S9+60 dB".to_owned(),
+                egui::FontId::proportional(20.0),
+                egui::Color32::WHITE,
+            )
+            .size()
+            .x
+        }) + 6.0;
         let draw_meter = |ui: &mut egui::Ui, dbm: f32, color: egui::Color32| {
-            ui.label(
-                egui::RichText::new(s_meter_label(dbm))
-                    .size(20.0)
-                    .color(color),
+            ui.add_sized(
+                [s_meter_w, ui.available_height()],
+                egui::Label::new(
+                    egui::RichText::new(s_meter_label(dbm))
+                        .size(20.0)
+                        .color(color),
+                )
+                .wrap_mode(egui::TextWrapMode::Extend),
             );
             ui.label(
                 egui::RichText::new(format!("{:>4} dBm", dbm.round() as i32))
