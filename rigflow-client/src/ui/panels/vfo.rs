@@ -182,10 +182,12 @@ impl RigflowApp {
             ui.separator();
 
             // ── Split + TX VFO ────────────────────────────────────────────
+            // Split + TX-VFO are wrong-frequency controls → gated by the global
+            // settings lock (as well as needing an acquired radio).
             let mut split = snapshot.split_enabled;
             if ui
                 .add_enabled(
-                    acquired,
+                    acquired && !snapshot.config_locked,
                     egui::Checkbox::new(&mut split, "Split (transmit on the TX VFO)"),
                 )
                 .changed()
@@ -194,14 +196,16 @@ impl RigflowApp {
                 self.send_radio_msg(ClientRadioMessage::SetSplit { enabled: split });
             }
             if split {
-                ui.horizontal(|ui| {
-                    ui.label("TX on:");
-                    for (label, v) in [("A", VfoSelect::A), ("B", VfoSelect::B)] {
-                        if ui.selectable_label(snapshot.tx_vfo == v, label).clicked() {
-                            self.set_local(|s| s.tx_vfo = v);
-                            self.send_radio_msg(ClientRadioMessage::SetTxVfo { vfo: v });
+                ui.add_enabled_ui(!snapshot.config_locked, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("TX on:");
+                        for (label, v) in [("A", VfoSelect::A), ("B", VfoSelect::B)] {
+                            if ui.selectable_label(snapshot.tx_vfo == v, label).clicked() {
+                                self.set_local(|s| s.tx_vfo = v);
+                                self.send_radio_msg(ClientRadioMessage::SetTxVfo { vfo: v });
+                            }
                         }
-                    }
+                    });
                 });
             }
 

@@ -149,6 +149,9 @@ impl RigflowApp {
     /// (so the caller persists it).
     fn draw_configuration_section(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
         let mut save = false;
+        // Global settings lock greys the set-once config controls below (NOT the
+        // TX Drive slider, which keeps its own separate damage lock).
+        let config_locked = state.config_locked;
 
         // -----------------------------
         // Band Control + N2ADR (HL2).
@@ -166,17 +169,19 @@ impl RigflowApp {
             if !sample_rates.is_empty() {
                 let mut selected_sample_rate = state.source_control.sample_rate_hz;
 
-                egui::ComboBox::from_id_salt("source_sample_rate_combo")
-                    .selected_text(format_sample_rate(selected_sample_rate))
-                    .show_ui(ui, |ui| {
-                        for sample_rate_hz in sample_rates {
-                            ui.selectable_value(
-                                &mut selected_sample_rate,
-                                sample_rate_hz,
-                                format_sample_rate(sample_rate_hz),
-                            );
-                        }
-                    });
+                ui.add_enabled_ui(!config_locked, |ui| {
+                    egui::ComboBox::from_id_salt("source_sample_rate_combo")
+                        .selected_text(format_sample_rate(selected_sample_rate))
+                        .show_ui(ui, |ui| {
+                            for sample_rate_hz in sample_rates {
+                                ui.selectable_value(
+                                    &mut selected_sample_rate,
+                                    sample_rate_hz,
+                                    format_sample_rate(sample_rate_hz),
+                                );
+                            }
+                        });
+                });
 
                 if selected_sample_rate != state.source_control.sample_rate_hz {
                     state.source_control.sample_rate_hz = selected_sample_rate;
@@ -211,7 +216,7 @@ impl RigflowApp {
         let ds_active = state.source_control.direct_sampling != DirectSamplingMode::Off;
 
         if state.source_capabilities.supports_gain_mode {
-            ui.add_enabled_ui(!ds_active, |ui| {
+            ui.add_enabled_ui(!ds_active && !config_locked, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Gain Mode");
 
@@ -242,7 +247,7 @@ impl RigflowApp {
         if state.source_capabilities.supports_gain {
             let manual_gain = !ds_active && state.source_control.gain_mode == GainMode::Manual;
 
-            ui.add_enabled_ui(manual_gain, |ui| {
+            ui.add_enabled_ui(manual_gain && !config_locked, |ui| {
                 let gains = &state.source_capabilities.gain_values_db;
 
                 if !gains.is_empty() {
@@ -306,25 +311,28 @@ impl RigflowApp {
 
             ui.label("PPM Correction");
             ui.horizontal(|ui| {
-                let mut slider = ui.add(
+                let mut slider = ui.add_enabled(
+                    !config_locked,
                     egui::Slider::new(&mut ppm, ppm_min..=ppm_max)
                         .integer()
                         .show_value(false),
                 );
-                super::slider_scroll(
-                    ui,
-                    &mut slider,
-                    &mut ppm,
-                    ppm_min as f64,
-                    ppm_max as f64,
-                    1.0,
-                );
+                if !config_locked {
+                    super::slider_scroll(
+                        ui,
+                        &mut slider,
+                        &mut ppm,
+                        ppm_min as f64,
+                        ppm_max as f64,
+                        1.0,
+                    );
+                }
 
                 let sign = if ppm > 0 { "+" } else { "" };
                 ui.label(format!("{sign}{ppm} ppm"));
 
                 let reset = ui
-                    .add_enabled(ppm != 0, egui::Button::new("Reset"))
+                    .add_enabled(ppm != 0 && !config_locked, egui::Button::new("Reset"))
                     .clicked();
 
                 if slider.changed() || reset {
@@ -350,17 +358,19 @@ impl RigflowApp {
                 ui.horizontal(|ui| {
                     ui.label("Direct Sampling");
 
-                    egui::ComboBox::from_id_salt("source_direct_sampling_combo")
-                        .selected_text(format_direct_sampling_mode(selected))
-                        .show_ui(ui, |ui| {
-                            for mode in modes {
-                                ui.selectable_value(
-                                    &mut selected,
-                                    mode,
-                                    format_direct_sampling_mode(mode),
-                                );
-                            }
-                        });
+                    ui.add_enabled_ui(!config_locked, |ui| {
+                        egui::ComboBox::from_id_salt("source_direct_sampling_combo")
+                            .selected_text(format_direct_sampling_mode(selected))
+                            .show_ui(ui, |ui| {
+                                for mode in modes {
+                                    ui.selectable_value(
+                                        &mut selected,
+                                        mode,
+                                        format_direct_sampling_mode(mode),
+                                    );
+                                }
+                            });
+                    });
                 });
 
                 if selected != state.source_control.direct_sampling {

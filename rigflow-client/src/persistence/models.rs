@@ -310,6 +310,10 @@ pub struct OperatorSettingsFile {
     /// (false) so older settings files load without migration.
     #[serde(default)]
     pub show_advanced: bool,
+    /// Global settings lock (sample rate, gain, PPM, direct sampling, demod mode,
+    /// split/TX-VFO).  Serde-default false so older files load unlocked.
+    #[serde(default)]
+    pub config_locked: bool,
 
     /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
     #[serde(default)]
@@ -388,6 +392,7 @@ impl OperatorSettingsFile {
             volume_percent: default_volume_percent(),
             volume_percent_b: default_volume_percent(),
             show_advanced: false,
+            config_locked: false,
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
             cw_macros: default_cw_macros(),

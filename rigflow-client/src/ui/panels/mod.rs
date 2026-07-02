@@ -123,6 +123,27 @@ impl RigflowApp {
                 ui.heading("rigflow");
                 ui.separator();
 
+                // Global settings lock — gates the set-once / wrong-frequency
+                // config controls (they grey out while locked).  The damage
+                // controls (TX Drive, Spot Level) have their own separate inline
+                // locks and are NOT affected by this one.
+                let mut config_locked = snapshot.config_locked;
+                ui.horizontal(|ui| {
+                    lock_button(ui, &mut config_locked);
+                    ui.label(if config_locked {
+                        "Settings locked"
+                    } else {
+                        "Settings unlocked"
+                    });
+                });
+                if config_locked != snapshot.config_locked {
+                    if let Ok(mut s) = self.state.lock() {
+                        s.config_locked = config_locked;
+                    }
+                    self.save_config_lock_to_current_operator();
+                }
+                ui.separator();
+
                 // Status console docked at the bottom of the side panel (fixed
                 // height, internally scrollable).  Reserved here, before the
                 // settings scroll area, so that area fills the space above it.

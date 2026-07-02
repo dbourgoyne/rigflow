@@ -115,6 +115,11 @@ pub struct UiState {
     /// inline lock, same default-locked + auto-re-lock behaviour as TX Drive.
     pub spot_level_locked: bool,
     pub spot_level_unlocked_at: Option<Instant>,
+    /// Global lock for the set-once / wrong-frequency config controls (sample
+    /// rate, gain, PPM, direct sampling, demod mode, split/TX-VFO).  Non-damaging,
+    /// so a single shared lock (unlike the per-control damage locks).  Manual
+    /// toggle (no auto-re-lock); persisted per operator.  Default unlocked.
+    pub config_locked: bool,
     /// VFO B receive-audio volume percent (client-side; applied to the right
     /// channel under dual-watch).  VFO A uses `volume_percent` below.
     pub volume_percent_b: u8,
@@ -603,6 +608,7 @@ impl Default for UiState {
             tx_drive_unlocked_at: None,
             spot_level_locked: true,
             spot_level_unlocked_at: None,
+            config_locked: false,
             volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,

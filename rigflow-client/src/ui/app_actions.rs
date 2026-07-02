@@ -370,6 +370,24 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the global settings-lock toggle to the current operator.
+    pub(crate) fn save_config_lock_to_current_operator(&mut self) {
+        let (operator_id, config_locked) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.config_locked)
+        };
+        if operator_id.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut op) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            op.config_locked = config_locked;
+            let _ = self.persistence_store.save_operator_settings(&op);
+        }
+    }
+
     /// Persist the "Show advanced & diagnostics" toggle to the current operator.
     pub(crate) fn save_show_advanced_to_current_operator(&mut self) {
         let (operator_id, show_advanced) = {

@@ -321,8 +321,13 @@ impl RigflowApp {
                     VfoSelect::B => snapshot.vfo_b_demod_mode,
                 };
                 // Demod mode buttons first (locks state internally → must be
-                // outside the lock below to avoid a deadlock).
-                let mut save_demod_prefs = self.draw_demod_selector(ui, snapshot, t);
+                // outside the lock below to avoid a deadlock).  Gated by the
+                // global settings lock (demod mode affects TX sideband/mode).
+                let mut save_demod_prefs = ui
+                    .add_enabled_ui(!snapshot.config_locked, |ui| {
+                        self.draw_demod_selector(ui, snapshot, t)
+                    })
+                    .inner;
                 if let Ok(mut state) = self.state.lock() {
                     save_demod_prefs |= self.draw_filter_bandwidth_row(ui, &mut state, eff_mode, t);
                     save_demod_prefs |= self.draw_pitch_row(ui, &mut state, eff_mode, t);

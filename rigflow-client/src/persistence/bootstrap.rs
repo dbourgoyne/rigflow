@@ -136,6 +136,7 @@ pub fn apply_operator_settings_to_ui_state(
     state.volume_percent = operator.volume_percent;
     state.volume_percent_b = operator.volume_percent_b;
     state.show_advanced = operator.show_advanced;
+    state.config_locked = operator.config_locked;
 
     // Text-to-CW: restore the last-used message and speed.
     state.cw_message = operator.cw_message.clone();
@@ -188,6 +189,7 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
     operator.volume_percent = state.volume_percent;
     operator.volume_percent_b = state.volume_percent_b;
     operator.show_advanced = state.show_advanced;
+    operator.config_locked = state.config_locked;
 
     operator.cw_message = state.cw_message.clone();
     operator.cw_speed_wpm = state.cw_speed_wpm;
