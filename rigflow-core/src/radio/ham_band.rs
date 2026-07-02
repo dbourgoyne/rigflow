@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::dsp::modes::DemodMode;
 
 /// A supported amateur HF band (160m–10m, no 6m).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HamBand {
     B160,

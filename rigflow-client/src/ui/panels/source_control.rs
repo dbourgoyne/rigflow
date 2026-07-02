@@ -570,16 +570,39 @@ impl RigflowApp {
 
         if let Some(band) = selected {
             if Some(band) != current_band {
-                // Tune to the band default through the existing tuning path
-                // (clamped, server-validated).  Move both the LO (center) and
-                // the target so the band is actually received.
-                let freq = default_frequency_for_band(band) as f32;
-                let mode = default_mode_for_band(band);
+                // Band memory (single-slot band-stacking): save where we're
+                // leaving the OUTGOING band, then restore the INCOMING band's
+                // last freq/mode — or its default the first time we visit it.
+                if let Some(from) = current_band {
+                    state.band_memory.insert(
+                        from,
+                        crate::persistence::models::BandMemoryEntry {
+                            center_freq_hz: state.center_freq_hz.max(0.0) as u64,
+                            target_freq_hz: state.target_freq_hz.max(0.0) as u64,
+                            demod_mode: state.demod_mode,
+                        },
+                    );
+                }
+                let (freq_center, freq_target, mode) = match state.band_memory.get(&band).copied() {
+                    Some(m) => (
+                        m.center_freq_hz as f32,
+                        m.target_freq_hz as f32,
+                        m.demod_mode,
+                    ),
+                    None => {
+                        let f = default_frequency_for_band(band) as f32;
+                        (f, f, default_mode_for_band(band))
+                    }
+                };
+                state.pending_save_band_memory = true;
 
+                // Apply through the existing tuning path (clamped to the current
+                // limits, server-validated) — sample rate may differ from when
+                // the memory was saved.
                 let limits = crate::ui::freq_limits::active_freq_limits(state);
-                let new_center = crate::ui::freq_limits::clamp_center(freq, &limits);
+                let new_center = crate::ui::freq_limits::clamp_center(freq_center, &limits);
                 let new_target = crate::ui::freq_limits::clamp_target(
-                    freq,
+                    freq_target,
                     new_center,
                     state.input_sample_rate_hz,
                     &limits,

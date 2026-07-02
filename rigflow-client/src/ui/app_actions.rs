@@ -370,6 +370,24 @@ impl RigflowApp {
         }
     }
 
+    /// Persist per-band tuning memory to the current operator.
+    pub(crate) fn save_band_memory_to_current_operator(&mut self) {
+        let (operator_id, band_memory) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.band_memory.clone())
+        };
+        if operator_id.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut op) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            op.band_memory = band_memory;
+            let _ = self.persistence_store.save_operator_settings(&op);
+        }
+    }
+
     /// Persist the global settings-lock toggle to the current operator.
     pub(crate) fn save_config_lock_to_current_operator(&mut self) {
         let (operator_id, config_locked) = {

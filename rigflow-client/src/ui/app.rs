@@ -654,6 +654,16 @@ impl eframe::App for RigflowApp {
             self.save_tuning_step_preferences_to_current_operator();
         }
 
+        // Persist per-band tuning memory when a band change updated it
+        // (`draw_band_control` only has `&self`, so it flags us here).
+        let save_band_mem = {
+            let mut state = self.state.lock().unwrap();
+            std::mem::take(&mut state.pending_save_band_memory)
+        };
+        if save_band_mem {
+            self.save_band_memory_to_current_operator();
+        }
+
         self.handle_exit(ctx, &snapshot);
 
         ctx.request_repaint();

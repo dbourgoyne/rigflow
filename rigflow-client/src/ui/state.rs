@@ -209,6 +209,16 @@ pub struct UiState {
     /// per-mode tuning step changes; the main loop persists it and clears this.
     pub pending_save_tuning_steps: bool,
 
+    /// Single-slot per-band tuning memory (band → last freq/mode there), restored
+    /// on band change like a radio's band-stacking register.  Persisted per
+    /// operator.  `pending_save_band_memory` flags the main loop to persist it
+    /// (set from `draw_band_control`, which only has `&self`).
+    pub band_memory: HashMap<
+        rigflow_core::radio::ham_band::HamBand,
+        crate::persistence::models::BandMemoryEntry,
+    >,
+    pub pending_save_band_memory: bool,
+
     // =====================================================================
     // CONNECTION / SERVER STATE
     // =====================================================================
@@ -656,6 +666,8 @@ impl Default for UiState {
             waterfall_rate_debounce: DebounceState::new(20.0),
             pending_apply_waterfall_rate: false,
             pending_save_tuning_steps: false,
+            band_memory: HashMap::new(),
+            pending_save_band_memory: false,
 
             // =================================================================
             // CONNECTION / SERVER STATE

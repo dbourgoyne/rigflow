@@ -4,7 +4,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DeemphasisMode, DemodMode, Sideband};
+use rigflow_core::radio::ham_band::HamBand;
 use rigflow_core::radio::source_control::SourceControlState;
+
+/// One band's remembered tuning (single-slot band memory): where you left off on
+/// that band, restored when you return to it (like a radio's band-stacking
+/// register).  Stores the LO/center + tuned target + mode so the whole display
+/// returns to where it was.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct BandMemoryEntry {
+    pub center_freq_hz: u64,
+    pub target_freq_hz: u64,
+    pub demod_mode: DemodMode,
+}
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
 pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 3;
@@ -314,6 +326,11 @@ pub struct OperatorSettingsFile {
     /// split/TX-VFO).  Serde-default false so older files load unlocked.
     #[serde(default)]
     pub config_locked: bool,
+    /// Per-band tuning memory (band → last freq/mode there).  Serde-default empty
+    /// so older files load with no memory (first visit to each band uses the
+    /// band default).
+    #[serde(default)]
+    pub band_memory: HashMap<HamBand, BandMemoryEntry>,
 
     /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
     #[serde(default)]
@@ -393,6 +410,7 @@ impl OperatorSettingsFile {
             volume_percent_b: default_volume_percent(),
             show_advanced: false,
             config_locked: false,
+            band_memory: HashMap::new(),
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
             cw_macros: default_cw_macros(),
