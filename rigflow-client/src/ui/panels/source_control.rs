@@ -157,7 +157,11 @@ impl RigflowApp {
         // Band Control + N2ADR (HL2).
         // -----------------------------
         if state.source_capabilities.supports_band_control {
-            save |= self.draw_band_control(ui, state);
+            // Band Control is a wrong-frequency / disruptive change → gated by the
+            // global settings lock as well.
+            save |= ui
+                .add_enabled_ui(!config_locked, |ui| self.draw_band_control(ui, state))
+                .inner;
         }
 
         // -----------------------------
