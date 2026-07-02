@@ -157,7 +157,7 @@ impl RigflowApp {
                 });
 
             ui.label(super::note_text(
-                "One-way is measured server→client and applied to both directions \
+                "One-way is measured server»client and applied to both directions \
                  (symmetric estimate). CPAL device buffers are not included. For \
                  FT8/digital (PipeWire or TCI) the network and TX figures apply, but \
                  FT8 bypasses the jitter buffer and WSJT-X's own audio buffering isn't \

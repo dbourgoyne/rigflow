@@ -53,7 +53,7 @@ impl RigflowApp {
                 // macOS has no virtual audio device, so digital is TCI-only there.
                 // Linux offers both: virtual audio (any app) or TCI (TCI-capable apps).
                 if cfg!(target_os = "macos") {
-                    ui.label("Set these in WSJT-X (File → Settings) to talk to Rigflow over TCI:");
+                    ui.label("Set these in WSJT-X (File » Settings) to talk to Rigflow over TCI:");
                     ui.add_space(6.0);
                     tci_grid(ui, &tci_server, tci_status.as_deref());
                     ui.add_space(6.0);
@@ -64,7 +64,7 @@ impl RigflowApp {
                     return;
                 }
 
-                ui.label("Pick one method and set it in WSJT-X (File → Settings):");
+                ui.label("Pick one method and set it in WSJT-X (File » Settings):");
                 ui.add_space(8.0);
 
                 // ── Method 1: PipeWire/Pulse virtual audio (any digital app) ──
@@ -80,20 +80,20 @@ impl RigflowApp {
                     .show(ui, |ui| {
                         value_row(
                             ui,
-                            "Audio → Input",
+                            "Audio » Input",
                             DIGITAL_RX_NAME,
                             Some((rx_avail, rx_reason.as_deref(), "Available")),
                         );
                         value_row(
                             ui,
-                            "Audio → Output",
+                            "Audio » Output",
                             DIGITAL_INPUT_NAME,
                             Some((in_avail, in_reason.as_deref(), "Available")),
                         );
-                        info_row(ui, "Radio → Rig", "Hamlib NET rigctl");
+                        info_row(ui, "Radio » Rig", "Hamlib NET rigctl");
                         value_row(
                             ui,
-                            "Radio → Network Server",
+                            "Radio » Network Server",
                             &network_server,
                             Some((
                                 rigctl_status.is_none(),
@@ -101,8 +101,8 @@ impl RigflowApp {
                                 "Listening",
                             )),
                         );
-                        info_row(ui, "Radio → PTT Method", "CAT");
-                        info_row(ui, "Radio → Mode", "Data/Pkt");
+                        info_row(ui, "Radio » PTT Method", "CAT");
+                        info_row(ui, "Radio » Mode", "Data/Pkt");
                     });
 
                 ui.add_space(6.0);
@@ -151,16 +151,16 @@ fn tci_grid(ui: &mut egui::Ui, server: &str, tci_status: Option<&str>) {
         .num_columns(4)
         .spacing([10.0, 6.0])
         .show(ui, |ui| {
-            info_row(ui, "Radio → Rig", "TCI");
+            info_row(ui, "Radio » Rig", "TCI");
             value_row(
                 ui,
-                "Radio → TCI Server",
+                "Radio » TCI Server",
                 server,
                 Some((tci_status.is_none(), tci_status, "Listening")),
             );
-            info_row(ui, "Radio → Use TCI Audio", "✓ (checked)");
-            info_row(ui, "Audio → Input / Output", "TCI");
-            info_row(ui, "Radio → Mode", "Data/Pkt");
+            info_row(ui, "Radio » Use TCI Audio", "✓ (checked)");
+            info_row(ui, "Audio » Input / Output", "TCI");
+            info_row(ui, "Radio » Mode", "Data/Pkt");
         });
 }
 
