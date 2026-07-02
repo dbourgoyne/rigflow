@@ -104,6 +104,13 @@ pub struct UiState {
     /// Which VFO the Receive-panel controls edit (client-local; only meaningful
     /// under dual-watch — the panel forces A otherwise).
     pub active_control_vfo: VfoSelect,
+
+    // ── Accidental-change locks (client-local safety) ─────────────────────────
+    /// TX Drive is a damage-capable control (overdrives the PA/amp), so it has
+    /// its own inline lock, default LOCKED each session.  `*_unlocked_at` stamps
+    /// when it was unlocked so it auto-re-locks after an idle period.
+    pub tx_drive_locked: bool,
+    pub tx_drive_unlocked_at: Option<Instant>,
     /// VFO B receive-audio volume percent (client-side; applied to the right
     /// channel under dual-watch).  VFO A uses `volume_percent` below.
     pub volume_percent_b: u8,
@@ -588,6 +595,8 @@ impl Default for UiState {
             tx_vfo: VfoSelect::A,
             dual_watch_enabled: false,
             active_control_vfo: VfoSelect::A,
+            tx_drive_locked: true,
+            tx_drive_unlocked_at: None,
             volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,

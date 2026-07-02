@@ -69,6 +69,29 @@ pub(crate) fn slider_scroll<Num: egui::emath::Numeric>(
     changed
 }
 
+/// A small padlock toggle for "accidental-change" locks.  Shows 🔒 when locked,
+/// 🔓 when unlocked; clicking flips `*locked`.  Returns `true` only on the click
+/// that *unlocked* it, so the caller can stamp an unlock time for auto-re-lock.
+///
+/// (Glyph note: the lock emoji comes from egui's bundled emoji font — if it ever
+/// renders as tofu, swap for a drawn icon or `[L]`/`[U]` text.)
+pub(crate) fn lock_button(ui: &mut egui::Ui, locked: &mut bool) -> bool {
+    let (glyph, hover) = if *locked {
+        ("🔒", "Locked — click to unlock")
+    } else {
+        ("🔓", "Unlocked — click to lock")
+    };
+    if ui
+        .add(egui::Button::new(glyph).small())
+        .on_hover_text(hover)
+        .clicked()
+    {
+        *locked = !*locked;
+        return !*locked;
+    }
+    false
+}
+
 mod bookmarks;
 mod latency;
 mod operator;

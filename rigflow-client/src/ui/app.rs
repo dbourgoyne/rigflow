@@ -419,6 +419,24 @@ impl RigflowApp {
         }
     }
 
+    /// Auto-re-lock the damage-capable controls after an idle period, so an
+    /// unlocked control (e.g. TX Drive) can't be left exposed to an accidental
+    /// change.  Runs every frame; the unlock window is refreshed while the
+    /// operator is actively adjusting the control.
+    fn auto_relock_controls(&self) {
+        const RELOCK_IDLE: Duration = Duration::from_secs(8);
+        if let Ok(mut state) = self.state.lock() {
+            if !state.tx_drive_locked
+                && state
+                    .tx_drive_unlocked_at
+                    .map_or(true, |t| t.elapsed() >= RELOCK_IDLE)
+            {
+                state.tx_drive_locked = true;
+                state.tx_drive_unlocked_at = None;
+            }
+        }
+    }
+
     fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         use crate::ui::app_center::TuneVfo;
         use crate::ui::tuning_steps::{center_step_hz, scaled_snap_step_hz};
@@ -589,6 +607,7 @@ impl eframe::App for RigflowApp {
         let config_mode = !snapshot.server_connected;
 
         self.ensure_mic();
+        self.auto_relock_controls();
         self.handle_keyboard_shortcuts(ctx);
         self.update_ptt_focus_latch(ctx);
         self.handle_cw_keying(ctx, &snapshot);

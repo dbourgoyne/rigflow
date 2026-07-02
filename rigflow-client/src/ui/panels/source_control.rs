@@ -381,25 +381,43 @@ impl RigflowApp {
         // gain (SetSourceTxDrive).
         // -----------------------------
         if state.source_capabilities.supports_transmit {
-            let mut tx_drive = state.source_control.tx_drive_percent;
-            let mut resp = ui.add(
-                egui::Slider::new(&mut tx_drive, 0.0..=100.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .suffix("%")
-                    .text("TX Drive"),
-            );
-            super::slider_scroll(ui, &mut resp, &mut tx_drive, 0.0, 100.0, 1.0);
-            if resp.changed() {
-                let snapped = tx_drive.clamp(0.0, 100.0).round();
-                if (snapped - state.source_control.tx_drive_percent).abs() > f32::EPSILON {
-                    state.source_control.tx_drive_percent = snapped;
-                    self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
-                        tx_drive_percent: snapped,
-                    });
-                    save = true;
+            // TX Drive is damage-capable (overdrives the PA/amp), so it sits
+            // behind its own inline lock — locked by default, auto-re-locking
+            // after an idle period (see `auto_relock_controls`).
+            ui.horizontal(|ui| {
+                if super::lock_button(ui, &mut state.tx_drive_locked) {
+                    state.tx_drive_unlocked_at = Some(std::time::Instant::now());
                 }
-            }
+                let locked = state.tx_drive_locked;
+                let mut tx_drive = state.source_control.tx_drive_percent;
+                let mut resp = ui.add_enabled(
+                    !locked,
+                    egui::Slider::new(&mut tx_drive, 0.0..=100.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .suffix("%")
+                        .text("TX Drive"),
+                );
+                if locked {
+                    resp = resp.on_hover_text("Locked — click the padlock to change TX Drive");
+                } else {
+                    super::slider_scroll(ui, &mut resp, &mut tx_drive, 0.0, 100.0, 1.0);
+                }
+                if resp.changed() {
+                    let snapped = tx_drive.clamp(0.0, 100.0).round();
+                    if (snapped - state.source_control.tx_drive_percent).abs() > f32::EPSILON {
+                        state.source_control.tx_drive_percent = snapped;
+                        self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
+                            tx_drive_percent: snapped,
+                        });
+                        save = true;
+                    }
+                }
+                // Keep the unlock window alive while actively adjusting.
+                if resp.dragged() || resp.changed() {
+                    state.tx_drive_unlocked_at = Some(std::time::Instant::now());
+                }
+            });
         }
 
         // -----------------------------
