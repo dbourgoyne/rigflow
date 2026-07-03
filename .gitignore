@@ -23,4 +23,3 @@ quisk
 *.txt
 docs/release-review/
 test_results
-*.csv
