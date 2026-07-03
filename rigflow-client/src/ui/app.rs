@@ -453,13 +453,14 @@ impl RigflowApp {
         // callsign/frequency never triggers them).  `X` = TX-focus swap,
         // `=` = copy VFO A onto VFO B.
         if !ctx.wants_keyboard_input() {
-            let (swap_tx, copy_ab) = ctx.input(|i| {
+            let (swap_tx, copy_ab, bookmark) = ctx.input(|i| {
                 (
                     i.key_pressed(egui::Key::X),
                     i.key_pressed(egui::Key::Equals),
+                    i.key_pressed(egui::Key::B),
                 )
             });
-            if swap_tx || copy_ab {
+            if swap_tx || copy_ab || bookmark {
                 let snapshot = self.snapshot_state();
                 if snapshot.radio_acquired {
                     if swap_tx {
@@ -467,6 +468,15 @@ impl RigflowApp {
                     }
                     if copy_ab {
                         self.copy_a_to_b(&snapshot);
+                    }
+                    if bookmark {
+                        // Same as the "Save Current as Bookmark" button.
+                        if let Ok(mut state) = self.state.lock() {
+                            state.show_add_bookmark_dialog = true;
+                            state.pending_bookmark_name.clear();
+                            state.pending_bookmark_notes.clear();
+                            state.bookmark_status.clear();
+                        }
                     }
                 }
             }
