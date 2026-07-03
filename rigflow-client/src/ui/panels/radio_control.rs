@@ -548,52 +548,93 @@ impl RigflowApp {
 
     /// One labelled receive-volume slider (0–100%).  Returns the new value when
     /// the user moved it, else `None`.
-    fn volume_slider(&self, ui: &mut egui::Ui, label: &str, current: u8) -> Option<u8> {
-        let mut volume = current as i32;
-        let mut response = ui.add(
-            egui::Slider::new(&mut volume, 0..=100)
-                .integer()
-                .suffix("%")
-                .text(label),
-        );
-        super::slider_scroll(ui, &mut response, &mut volume, 0.0, 100.0, 1.0);
-        response.changed().then(|| volume.clamp(0, 100) as u8)
+    /// One volume control: `[slider %]  [mute button]  [label]`.  The slider shows
+    /// 0 while muted (the real level stays in `current`).  Returns the new volume
+    /// if the slider moved, and whether the mute button was clicked this frame.
+    /// (Glyph note: 🔊/🔇 come from the emoji font — swap for text if they tofu.)
+    fn volume_control(
+        &self,
+        ui: &mut egui::Ui,
+        label: &str,
+        current: u8,
+        muted: bool,
+    ) -> (Option<u8>, bool) {
+        let mut new_vol = None;
+        let mut toggled = false;
+        ui.horizontal(|ui| {
+            let mut volume = if muted { 0 } else { current as i32 };
+            let mut response = ui.add(
+                egui::Slider::new(&mut volume, 0..=100)
+                    .integer()
+                    .suffix("%"),
+            );
+            super::slider_scroll(ui, &mut response, &mut volume, 0.0, 100.0, 1.0);
+            if response.changed() {
+                new_vol = Some(volume.clamp(0, 100) as u8);
+            }
+            let (icon, hover) = if muted {
+                ("🔇", "Muted — click to unmute")
+            } else {
+                ("🔊", "Click to mute")
+            };
+            if ui
+                .add(egui::Button::new(icon).small())
+                .on_hover_text(hover)
+                .clicked()
+            {
+                toggled = true;
+            }
+            ui.label(label);
+        });
+        (new_vol, toggled)
     }
 
-    /// Receive-audio volume.  Off dual-watch this is the single "Volume" slider
+    /// Receive-audio volume.  Off dual-watch this is the single "Volume" control
     /// (sends `SetVolume`).  Under dual-watch it expands to always-visible
-    /// "VFO A" + "VFO B" sliders so both levels are mixed live; VFO B's volume is
-    /// applied client-side only (no server message).  Returns `true` on any change
-    /// so the caller persists both volumes.
+    /// "VFO A" + "VFO B" controls so both levels are mixed live; VFO B's volume is
+    /// applied client-side only (no server message).  Each has its own mute button
+    /// (client-side, remembers the level).  Returns `true` when a *volume* changed
+    /// (mute toggles are session-only and don't persist).
     fn draw_volume_row(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
         ui.separator();
 
         if !state.dual_watch_enabled {
-            if let Some(v) = self.volume_slider(ui, "Volume", state.volume_percent) {
-                if v != state.volume_percent {
-                    state.volume_percent = v;
-                    self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
-                    return true;
-                }
+            let (nv, tog) =
+                self.volume_control(ui, "Volume", state.volume_percent, state.volume_muted);
+            if tog {
+                state.volume_muted = !state.volume_muted;
+            }
+            if let Some(v) = nv {
+                state.volume_percent = v;
+                state.volume_muted = false; // dragging the slider unmutes
+                self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
+                return true;
             }
             return false;
         }
 
         let mut changed = false;
-        if let Some(v) = self.volume_slider(ui, "VFO A", state.volume_percent) {
-            if v != state.volume_percent {
-                state.volume_percent = v;
-                self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
-                changed = true;
-            }
+        let (nv, tog) = self.volume_control(ui, "VFO A", state.volume_percent, state.volume_muted);
+        if tog {
+            state.volume_muted = !state.volume_muted;
         }
-        if let Some(v) = self.volume_slider(ui, "VFO B", state.volume_percent_b) {
-            if v != state.volume_percent_b {
-                // Client-side only — applied to the right channel in the audio
-                // callback; the server streams full-level audio.
-                state.volume_percent_b = v;
-                changed = true;
-            }
+        if let Some(v) = nv {
+            state.volume_percent = v;
+            state.volume_muted = false;
+            self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
+            changed = true;
+        }
+        let (nvb, togb) =
+            self.volume_control(ui, "VFO B", state.volume_percent_b, state.volume_b_muted);
+        if togb {
+            state.volume_b_muted = !state.volume_b_muted;
+        }
+        if let Some(v) = nvb {
+            // Client-side only — applied to the right channel in the audio
+            // callback; the server streams full-level audio.
+            state.volume_percent_b = v;
+            state.volume_b_muted = false;
+            changed = true;
         }
         changed
     }

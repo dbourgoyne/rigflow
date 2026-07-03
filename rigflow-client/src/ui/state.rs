@@ -171,6 +171,12 @@ pub struct UiState {
     /// Receive-audio volume in percent (0–100).  Persisted per-operator.
     pub volume_percent: u8,
 
+    /// Mute flags (session-only, not persisted): while set, the audio is silenced
+    /// but `volume_percent` / `volume_percent_b` keep the remembered level, so
+    /// unmuting restores it.  The slider shows 0 while muted.
+    pub volume_muted: bool,
+    pub volume_b_muted: bool,
+
     /// Show the Advanced & Diagnostics controls (two-tone test, TX-audio
     /// diagnostics, limiter/compressor, digital interface).  Off by default for
     /// an uncluttered view; persisted per-operator.
@@ -647,6 +653,8 @@ impl Default for UiState {
             signal_dbm: -140.0,
             signal_s_units: 0,
             volume_percent: 50,
+            volume_muted: false,
+            volume_b_muted: false,
             show_advanced: false,
             input_sample_rate_hz: 0.0,
 

@@ -348,8 +348,20 @@ pub fn start_media_runtime(
             // Mirror the current receive volume into the lock-free atomic the
             // audio callback reads (volume is applied client-side, speaker only).
             if let Ok(s) = ui_state.lock() {
-                rx_volume.store(s.volume_percent, Ordering::Relaxed);
-                rx_volume_b.store(s.volume_percent_b, Ordering::Relaxed);
+                // Mute zeros the applied gain but leaves `volume_percent` (the
+                // remembered level) intact so unmuting restores it.
+                rx_volume.store(
+                    if s.volume_muted { 0 } else { s.volume_percent },
+                    Ordering::Relaxed,
+                );
+                rx_volume_b.store(
+                    if s.volume_b_muted {
+                        0
+                    } else {
+                        s.volume_percent_b
+                    },
+                    Ordering::Relaxed,
+                );
                 dual_watch_audio.store(s.dual_watch_enabled, Ordering::Relaxed);
             }
 
