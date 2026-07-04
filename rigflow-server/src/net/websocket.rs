@@ -155,7 +155,7 @@ async fn release_active_client(
     let mut guard = slot.lock().await;
     if guard.as_ref() == Some(client_id) {
         *guard = None;
-        *udp_audio_target.write().unwrap() = None;
+        *udp_audio_target.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 

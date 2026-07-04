@@ -1257,10 +1257,13 @@ fn spawn_waterfall_thread(
 			    avg_db
 			);
 
-                        // Send only once the client's reflexive address is known
-                        // (set by the UDP registration/time-sync listener); skip
-                        // the row otherwise rather than guessing a destination.
-                        if let Some(target) = *media.target.read().unwrap() {
+                        // Copy the target out so the lock is released before the
+                        // send (never held across I/O), tolerating a poisoned lock
+                        // since the value is always consistent.  Send only once the
+                        // reflexive address is known (set by the registration/time-
+                        // sync listener); skip the row otherwise.
+                        let target = *media.target.read().unwrap_or_else(|e| e.into_inner());
+                        if let Some(target) = target {
                             waterfall.send_row_db_to(target, &row_db);
                         }
                     }
@@ -2580,11 +2583,14 @@ fn spawn_dsp_thread(
                         audio_i16.push(value);
                     }
 
-                    // Send only once the client's reflexive address is known (set
-                    // by the UDP registration/time-sync listener); withhold audio
-                    // otherwise rather than guessing a destination.
+                    // Copy the target out so the lock is released before the send
+                    // (never held across I/O), tolerating a poisoned lock since the
+                    // value is always consistent.  Send only once the reflexive
+                    // address is known (set by the registration/time-sync
+                    // listener); withhold audio otherwise.
+                    let target = *media.target.read().unwrap_or_else(|e| e.into_inner());
                     if !audio_i16.is_empty() {
-                        if let Some(target) = *media.target.read().unwrap() {
+                        if let Some(target) = target {
                             audio.send_audio_to(target, &audio_i16);
                         }
                     }
