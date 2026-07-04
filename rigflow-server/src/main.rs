@@ -126,7 +126,7 @@ use rigflow_server::{
     radio::{
         discovery::{debug_print_discovered_radios, discover_radios},
         manager::RadioManager,
-        types::RadioManagerConfig,
+        types::{MediaEgress, RadioManagerConfig},
     },
 };
 
@@ -154,6 +154,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let descriptors = discover_radios(&cfg);
     debug_print_discovered_radios(&descriptors);
 
+    // Reflexive media target: the address the UDP registration listener observes
+    // the client's packets arriving from.  Shared (as `std` RwLock, so blocking
+    // worker threads can read it) between the listener that writes it and the
+    // workers that stream audio/waterfall to it.
+    let udp_audio_target: Arc<std::sync::RwLock<Option<SocketAddr>>> =
+        Arc::new(std::sync::RwLock::new(None));
+
+    // Bind the UDP registration/media port once and share it: the async listener
+    // receives registrations/keepalives on it, and every radio worker sends its
+    // audio + waterfall *from* it.  Sending from the registration 5-tuple means
+    // return media matches the NAT/conntrack mapping the client's keepalive keeps
+    // open, so it traverses NAT without any extra port-forward or masquerade.
+    let udp_std = bind_or_exit_in_use(
+        std::net::UdpSocket::bind(UDP_REGISTRATION_ADDR),
+        "UDP registration",
+        UDP_REGISTRATION_ADDR,
+    );
+    udp_std
+        .set_nonblocking(true)
+        .expect("set UDP socket non-blocking");
+    let media_socket = Arc::new(udp_std.try_clone().expect("clone UDP media socket"));
+    let udp_socket =
+        tokio::net::UdpSocket::from_std(udp_std).expect("adopt UDP socket into tokio");
+
+    let media_egress = MediaEgress {
+        socket: media_socket,
+        target: Arc::clone(&udp_audio_target),
+    };
+
     // Build the radio manager that owns worker lifecycle and leasing.
     let radio_manager = Arc::new(RadioManager::new(
         descriptors,
@@ -163,24 +192,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             shutdown_timeout: Duration::from_secs(SHUTDOWN_TIMEOUT_SECS),
         },
         cfg.clone(),
+        media_egress,
     ));
 
     // Periodically expire stale leases.
     tokio::spawn(RadioManager::lease_expiry_loop(Arc::clone(&radio_manager)));
 
-    // Build shared application state used by Axum handlers.
-    let app_state = build_app_state(Arc::clone(&radio_manager));
+    // Build shared application state used by Axum handlers.  It shares the same
+    // reflexive-target handle the workers hold, so the registration listener's
+    // writes are visible to the media senders.
+    let app_state = build_app_state(Arc::clone(&radio_manager), Arc::clone(&udp_audio_target));
 
-    // Bind both server ports up front.  A second rigflow-server on this host
-    // (the one-server-per-host policy) fails here with a clear message instead
-    // of a generic error or a silently half-started process.
+    // Bind the WS port up front (the UDP port was already bound above).  A second
+    // rigflow-server on this host (the one-server-per-host policy) fails here with
+    // a clear message instead of a generic error or a half-started process.
     let ws_addr: SocketAddr = WS_ADDR.parse()?;
     let listener = bind_or_exit_in_use(tokio::net::TcpListener::bind(ws_addr).await, "WS", WS_ADDR);
-    let udp_socket = bind_or_exit_in_use(
-        tokio::net::UdpSocket::bind(UDP_REGISTRATION_ADDR).await,
-        "UDP registration",
-        UDP_REGISTRATION_ADDR,
-    );
 
     // Start the (pre-bound) UDP registration listener in the background.
     spawn_udp_registration_listener(&app_state, udp_socket);
@@ -248,8 +275,11 @@ fn parse_config_or_exit() -> ServerConfig {
 /// Construct the shared Axum application state.
 ///
 /// This keeps startup wiring in one place and makes `main()` easier to scan.
-fn build_app_state(radio_manager: Arc<RadioManager>) -> AppState {
-    AppState::new(radio_manager)
+fn build_app_state(
+    radio_manager: Arc<RadioManager>,
+    udp_audio_target: Arc<std::sync::RwLock<Option<SocketAddr>>>,
+) -> AppState {
+    AppState::new(radio_manager, udp_audio_target)
 }
 
 /// Spawn the UDP registration listener (on a pre-bound socket) used by clients

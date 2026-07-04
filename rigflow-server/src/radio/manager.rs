@@ -10,7 +10,7 @@ use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 
 use crate::config::ServerConfig;
 use crate::radio::types::{
-    AcquireRadioResult, AcquireRequest, ClientId, LeaseRecord, RadioManagerConfig,
+    AcquireRadioResult, AcquireRequest, ClientId, LeaseRecord, MediaEgress, RadioManagerConfig,
     RadioManagerError, RadioState, RadioSummary, StopReason, WorkerCommand, WorkerExit,
     WorkerStartResult, WorkerStatus,
 };
@@ -50,6 +50,9 @@ pub struct RadioManager {
     radios: RwLock<HashMap<RadioId, ManagedRadio>>,
     config: RadioManagerConfig,
     server_cfg: ServerConfig,
+    /// Shared media socket + observed client address handed to every worker so
+    /// audio/waterfall egress from the registration port to the reflexive target.
+    media_egress: MediaEgress,
 }
 
 /// Decide whether a radio should be dropped on a rescan.
@@ -75,6 +78,7 @@ impl RadioManager {
         descriptors: Vec<RadioDescriptor>,
         config: RadioManagerConfig,
         server_cfg: ServerConfig,
+        media_egress: MediaEgress,
     ) -> Self {
         let radios = descriptors
             .into_iter()
@@ -95,6 +99,7 @@ impl RadioManager {
             radios: RwLock::new(radios),
             config,
             server_cfg,
+            media_egress,
         }
     }
 
@@ -279,6 +284,7 @@ impl RadioManager {
             descriptor,
             request,
             self.server_cfg.clone(),
+            self.media_egress.clone(),
             worker_rx,
             status_tx,
             stop_rx,

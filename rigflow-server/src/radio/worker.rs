@@ -25,8 +25,8 @@ use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::radio::types::{
-    AcquireRequest, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo, WorkerRuntimeState,
-    WorkerStartResult, WorkerStatus,
+    AcquireRequest, MediaEgress, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
+    WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
@@ -181,6 +181,7 @@ pub async fn run_radio_worker(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
     server_cfg: ServerConfig,
+    media: MediaEgress,
     mut worker_rx: mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
     mut stop_rx: oneshot::Receiver<()>,
@@ -218,6 +219,7 @@ pub async fn run_radio_worker(
         let thread_descriptor = descriptor.clone();
         let thread_request = request.clone();
         let thread_server_cfg = server_cfg.clone();
+        let thread_media = media.clone();
         let thread_status_tx = status_tx.clone();
         let thread_stop_flag = stop_flag.clone();
         let thread_stop_reason = stop_reason.clone();
@@ -229,6 +231,7 @@ pub async fn run_radio_worker(
                 thread_descriptor,
                 thread_request,
                 thread_server_cfg,
+                thread_media,
                 cmd_rx_std,
                 thread_status_tx,
                 startup_tx,
@@ -440,6 +443,7 @@ fn run_iq_worker_threads(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
     server_cfg: ServerConfig,
+    media: MediaEgress,
     cmd_rx: std_mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
@@ -609,7 +613,7 @@ fn run_iq_worker_threads(
         fatal_tx.clone(),
         status_tx.clone(),
         iq_audio_rx,
-        request.audio_udp_peer,
+        media.clone(),
         startup_info.clone(),
         confirmed_sample_rate_hz.clone(),
     );
@@ -619,7 +623,7 @@ fn run_iq_worker_threads(
         iq_wf_rx,
         stop_flag.clone(),
         fatal_tx.clone(),
-        request.waterfall_udp_peer,
+        media.clone(),
         startup_info.runtime.waterfall_bins as usize,
         control.clone(),
     );
@@ -1162,22 +1166,14 @@ fn spawn_waterfall_thread(
     iq_wf_rx: std_mpsc::Receiver<Vec<Complex32>>,
     stop_flag: Arc<AtomicBool>,
     fatal_tx: std_mpsc::Sender<WorkerExit>,
-    wf_target: std::net::SocketAddr,
+    media: MediaEgress,
     waterfall_window_len: usize,
     control: Arc<Mutex<SharedControlState>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
 
-        let mut waterfall = match UdpWaterfallSender::new() {
-            Ok(sender) => sender,
-            Err(error) => {
-                let reason = format!("failed to create UDP waterfall sender: {error}");
-                stop_flag.store(true, Ordering::Relaxed);
-                let _ = fatal_tx.send(WorkerExit::Failed { reason });
-                return;
-            }
-        };
+        let mut waterfall = UdpWaterfallSender::new(media.socket.clone());
 
         let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
         let waterfall_max_len = waterfall_window_len * 8;
@@ -1261,7 +1257,12 @@ fn spawn_waterfall_thread(
 			    avg_db
 			);
 
-                        waterfall.send_row_db_to(wf_target, &row_db);
+                        // Send only once the client's reflexive address is known
+                        // (set by the UDP registration/time-sync listener); skip
+                        // the row otherwise rather than guessing a destination.
+                        if let Some(target) = *media.target.read().unwrap() {
+                            waterfall.send_row_db_to(target, &row_db);
+                        }
                     }
                 }
 
@@ -2139,7 +2140,7 @@ fn spawn_dsp_thread(
     fatal_tx: std_mpsc::Sender<WorkerExit>,
     status_tx: watch::Sender<WorkerStatus>,
     iq_audio_rx: std_mpsc::Receiver<Vec<Complex32>>,
-    audio_target: std::net::SocketAddr,
+    media: MediaEgress,
     startup_info: StartupInfo,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
 ) -> thread::JoinHandle<()> {
@@ -2173,15 +2174,7 @@ fn spawn_dsp_thread(
             pipeline.client_output_sample_rate(),
         );
 
-        let mut audio = match UdpAudioSender::new(240) {
-            Ok(sender) => sender,
-            Err(error) => {
-                let reason = format!("failed to create UDP audio sender: {error}");
-                stop_flag.store(true, Ordering::Relaxed);
-                let _ = fatal_tx.send(WorkerExit::Failed { reason });
-                return;
-            }
-        };
+        let mut audio = UdpAudioSender::new(media.socket.clone(), 240);
 
         let mut applied = current_control(&control);
         // TX-audio diagnostics live in the process-global (written by the
@@ -2587,8 +2580,13 @@ fn spawn_dsp_thread(
                         audio_i16.push(value);
                     }
 
+                    // Send only once the client's reflexive address is known (set
+                    // by the UDP registration/time-sync listener); withhold audio
+                    // otherwise rather than guessing a destination.
                     if !audio_i16.is_empty() {
-                        audio.send_audio_to(audio_target, &audio_i16);
+                        if let Some(target) = *media.target.read().unwrap() {
+                            audio.send_audio_to(target, &audio_i16);
+                        }
                     }
                 }
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}

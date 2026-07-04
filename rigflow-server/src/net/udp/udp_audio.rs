@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
 
 use rigflow_core::net::udp_framing::{epoch_nanos, MAGIC, STREAM_TYPE_AUDIO, VERSION};
 
@@ -13,7 +14,7 @@ use rigflow_core::net::udp_framing::{epoch_nanos, MAGIC, STREAM_TYPE_AUDIO, VERS
 /// - u64 send_wall_ns (server send time, epoch nanoseconds) — v2 only
 /// - payload: i16 samples (little-endian)
 pub struct UdpAudioSender {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     sequence: u32,
     timestamp: u64,
     samples_per_packet: usize,
@@ -21,17 +22,16 @@ pub struct UdpAudioSender {
 }
 
 impl UdpAudioSender {
-    pub fn new(samples_per_packet: usize) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.set_nonblocking(true)?;
-
-        Ok(Self {
+    /// `socket` is the shared server socket bound to the registration port, so
+    /// audio egresses from the same 5-tuple the client registered against.
+    pub fn new(socket: Arc<UdpSocket>, samples_per_packet: usize) -> Self {
+        Self {
             socket,
             sequence: 0,
             timestamp: 0,
             samples_per_packet,
             pending: Vec::new(),
-        })
+        }
     }
 
     /// Queue audio samples and send full packets when enough data is accumulated.
