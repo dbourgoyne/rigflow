@@ -87,6 +87,20 @@ pub struct RigflowApp {
     /// Operator whose voice-keyer clip list is currently cached, so the list is
     /// refreshed (and the per-operator data dirs ensured) on an operator switch.
     pub(crate) clips_listed_for: Option<String>,
+
+    // ── Contact logging ──────────────────────────────────────────────────
+    /// The current operator's contact-log store (single-owner). `None` until an
+    /// operator is set. Reopened on operator switch by `sync_log_state`.
+    pub(crate) log: Option<rigflow_log::LogStore>,
+    /// Operator whose log store is currently open (drives reopen-on-switch).
+    pub(crate) log_open_for: Option<String>,
+    /// In-memory "worked before?" index for the open operator's log.
+    pub(crate) worked_before: rigflow_log::store::WorkedBefore,
+    /// Cached recent contacts for the contact-view window; refreshed when dirty.
+    pub(crate) contacts_cache: Vec<rigflow_log::store::LoggedQso>,
+    pub(crate) contacts_cache_dirty: bool,
+    /// Receiver for decoded WSJT-X `LoggedADIF` events from the UDP-2237 thread.
+    pub(crate) wsjtx_rx: std::sync::mpsc::Receiver<crate::logging::wsjtx_listener::LogEvent>,
 }
 
 impl RigflowApp {
@@ -100,6 +114,10 @@ impl RigflowApp {
         spectrum_db_b: Arc<Mutex<Vec<f32>>>,
         persistence_store: PersistenceStore,
     ) -> Self {
+        // Spawn the WSJT-X UDP listener (non-fatal bind); it forwards decoded
+        // LoggedADIF events we drain each frame.
+        let wsjtx_rx = crate::logging::wsjtx_listener::spawn_wsjtx_listener(Arc::clone(&state));
+
         // Create the virtual digital-audio endpoints once, at startup.
         let digital_audio = crate::digital_audio::DigitalAudio::start();
         let digital_output_available = digital_audio.output_available();
@@ -135,6 +153,12 @@ impl RigflowApp {
             rx_recorder: None,
             clip_recorder: None,
             clips_listed_for: None,
+            log: None,
+            log_open_for: None,
+            worked_before: rigflow_log::store::WorkedBefore::default(),
+            contacts_cache: Vec::new(),
+            contacts_cache_dirty: true,
+            wsjtx_rx,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -453,13 +477,27 @@ impl RigflowApp {
         // callsign/frequency never triggers them).  `X` = TX-focus swap,
         // `=` = copy VFO A onto VFO B.
         if !ctx.wants_keyboard_input() {
-            let (swap_tx, copy_ab, bookmark) = ctx.input(|i| {
+            let (swap_tx, copy_ab, bookmark, open_log, toggle_view) = ctx.input(|i| {
                 (
                     i.key_pressed(egui::Key::X),
                     i.key_pressed(egui::Key::Equals),
                     i.key_pressed(egui::Key::B),
+                    i.key_pressed(egui::Key::L),
+                    i.key_pressed(egui::Key::V),
                 )
             });
+            // Logging hotkeys don't require an acquired radio: `V` toggles the
+            // contact view; `L` opens the entry window (freezing whatever radio
+            // state is current).
+            if toggle_view {
+                if let Ok(mut s) = self.state.lock() {
+                    s.show_contact_view = !s.show_contact_view;
+                }
+            }
+            if open_log {
+                let snapshot = self.snapshot_state();
+                self.open_log_entry(&snapshot);
+            }
             if swap_tx || copy_ab || bookmark {
                 let snapshot = self.snapshot_state();
                 if snapshot.radio_acquired {
@@ -626,6 +664,9 @@ impl eframe::App for RigflowApp {
         let snapshot = self.snapshot_state();
         let config_mode = !snapshot.server_connected;
 
+        // Ingest any WSJT-X FT8 contacts that arrived since the last frame.
+        self.drain_wsjtx_events(ctx);
+
         self.ensure_mic();
         self.auto_relock_controls();
         self.handle_keyboard_shortcuts(ctx);
@@ -641,12 +682,31 @@ impl eframe::App for RigflowApp {
         self.draw_delete_operator_dialog(ctx);
         self.draw_swr_sweep_window(ctx);
         self.draw_wsjtx_setup_window(ctx);
+        self.draw_log_entry_window(ctx, &snapshot);
+        self.draw_contact_view_window(ctx, &snapshot);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
         // mirror live recorder status into UiState for the panels.
         self.sync_audio_recording_state(&snapshot);
         self.process_audio_requests(&snapshot);
+
+        // Contact logging: open/reopen the per-operator log store on an operator
+        // switch (mirrors the audio-recording sync above).
+        self.sync_log_state(&snapshot);
+
+        // Persist the global station profile when the Station panel flagged a
+        // committed edit (it only has `&self`, so it defers the save to here).
+        let save_station = {
+            let mut s = self.state.lock().unwrap();
+            std::mem::take(&mut s.pending_save_station_profile)
+        };
+        if save_station {
+            let profile = self.state.lock().unwrap().station_profile.clone();
+            if let Err(e) = self.persistence_store.save_station_profile(&profile) {
+                self.set_log_status(format!("station save failed: {e}"));
+            }
+        }
 
         // Persist per-radio settings: diff the live per-radio state against the
         // saved bucket and save ~600 ms after it stops changing.  Debounced so a

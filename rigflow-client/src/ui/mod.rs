@@ -17,6 +17,7 @@ mod app_actions;
 mod app_audio;
 mod app_center;
 mod app_dialogs;
+mod app_logging;
 mod app_swr_sweep;
 mod app_wsjtx_setup;
 mod panels;

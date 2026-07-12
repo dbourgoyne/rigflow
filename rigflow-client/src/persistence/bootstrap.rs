@@ -55,6 +55,8 @@ pub fn load_initial_ui_state(
 /// It should not assume that a last operator exists.
 pub fn apply_app_state_to_ui_state(state: &mut UiState, app_state: &AppStateFile) {
     state.known_operator_ids = app_state.known_operator_ids.clone();
+    // Global station location (shared across operators).
+    state.station_profile = app_state.station.clone();
 }
 
 /// Apply persisted operator settings to runtime UI state.
@@ -67,6 +69,7 @@ pub fn apply_operator_settings_to_ui_state(
     app_state: &AppStateFile,
 ) {
     state.operator_id = operator.operator_id.clone();
+    state.operator_name = operator.name.clone();
     state.known_operator_ids = app_state.known_operator_ids.clone();
 
     state.selected_license = operator.selected_license;
@@ -160,6 +163,7 @@ pub fn apply_operator_settings_to_ui_state(
 
 pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut OperatorSettingsFile) {
     operator.operator_id = state.operator_id.clone();
+    operator.name = state.operator_name.clone();
     operator.selected_license = state.selected_license;
     operator.server_ip = state.rigflow_server_ip.clone();
 

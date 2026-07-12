@@ -103,6 +103,19 @@ impl RigflowApp {
                     }
 
                     ui.add_space(8.0);
+                    ui.label("Operator name (logged as MY_NAME):");
+                    let mut operator_name = snapshot.operator_name.clone();
+                    let name_resp = ui.text_edit_singleline(&mut operator_name);
+                    if name_resp.changed() {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.operator_name = operator_name;
+                        }
+                    }
+                    if name_resp.lost_focus() {
+                        self.save_operator_name();
+                    }
+
+                    ui.add_space(8.0);
 
                     ui.horizontal(|ui| {
                         if ui.button("Add Operator").clicked() {

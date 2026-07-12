@@ -6,13 +6,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::persistence::models::StationProfileFile;
 use crate::persistence::{
     error::PersistenceError,
     migrations::migrate_operator_settings_value,
     models::{AppStateFile, OperatorSettingsFile},
     paths::{
-        app_state_path, normalize_operator_id, operator_file_path, operators_dir,
-        rx_recordings_dir, voice_keyer_clips_dir,
+        app_state_path, normalize_operator_id, operator_file_path, operators_dir, qso_log_db_path,
+        qso_log_journal_path, rx_recordings_dir, voice_keyer_clips_dir,
     },
 };
 
@@ -76,6 +77,26 @@ impl PersistenceStore {
     /// Directory holding this operator's SSB voice-keyer clips.
     pub fn voice_keyer_clips_dir(&self, operator_id: &str) -> PathBuf {
         voice_keyer_clips_dir(&self.config_dir, operator_id)
+    }
+
+    /// This operator's contact-log database path.
+    pub fn qso_log_db_path(&self, operator_id: &str) -> PathBuf {
+        qso_log_db_path(&self.config_dir, operator_id)
+    }
+
+    /// This operator's contact-log ADIF journal path.
+    pub fn qso_log_journal_path(&self, operator_id: &str) -> PathBuf {
+        qso_log_journal_path(&self.config_dir, operator_id)
+    }
+
+    /// Persist the global station profile into `app_state.json`.
+    pub fn save_station_profile(
+        &self,
+        station: &StationProfileFile,
+    ) -> Result<(), PersistenceError> {
+        let mut app_state = self.load_app_state()?;
+        app_state.station = station.clone();
+        self.save_app_state(&app_state)
     }
 
     pub fn load_app_state(&self) -> Result<AppStateFile, PersistenceError> {

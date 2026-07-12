@@ -596,6 +596,41 @@ impl RigflowApp {
         self.save_bookmarks_to_current_operator();
     }
 
+    pub(crate) fn save_operator_name(&mut self) {
+        let (operator_id, name) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.operator_name.clone())
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        let mut operator_settings = match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(settings) => settings,
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator: {err}");
+                }
+                return;
+            }
+        };
+
+        operator_settings.name = name;
+
+        if let Err(err) = self
+            .persistence_store
+            .save_operator_settings(&operator_settings)
+        {
+            if let Ok(mut state) = self.state.lock() {
+                state.persistence_status = format!("failed to save operator name: {err}");
+            }
+        }
+    }
+
     pub(crate) fn save_selected_operator_license(&mut self) {
         let (operator_id, selected_license) = {
             let state = self.state.lock().unwrap();

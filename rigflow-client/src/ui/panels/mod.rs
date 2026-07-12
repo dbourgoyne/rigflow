@@ -169,6 +169,7 @@ pub(crate) use radio_control::s_meter_label;
 mod server;
 mod source_control;
 mod source_status;
+mod station;
 mod tx_tune_test;
 mod vfo;
 mod waterfall_control;
@@ -234,6 +235,8 @@ impl RigflowApp {
                         }
 
                         self.draw_operator_panel(ui, snapshot, config_mode);
+                        ui.separator();
+                        self.draw_station_panel(ui, snapshot);
                         ui.separator();
                         self.draw_server_panel(ui, snapshot, config_mode);
                         ui.separator();

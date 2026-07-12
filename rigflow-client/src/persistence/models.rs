@@ -21,11 +21,54 @@ pub struct BandMemoryEntry {
 pub const APP_STATE_FILE_VERSION: u32 = 1;
 pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 3;
 
+/// The station's *physical location*, shared across all operators (one rig, one
+/// grid). The **callsign and operator name are per-operator** (they belong to a
+/// person, not the station), so this holds only location fields. Snapshotted
+/// onto each logged QSO's `MY_*` at log time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StationProfileFile {
+    #[serde(default)]
+    pub gridsquare: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub county: String,
+    #[serde(default)]
+    pub cq_zone: String,
+    #[serde(default)]
+    pub itu_zone: String,
+}
+
+impl StationProfileFile {
+    fn opt(s: &str) -> Option<String> {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_string())
+    }
+
+    /// Build the `rigflow_log::Station` for a QSO, pairing this global location
+    /// with the per-operator callsign and operator name (`MY_NAME`).
+    pub fn to_log_station(&self, station_call: &str, operator_name: &str) -> rigflow_log::Station {
+        rigflow_log::Station {
+            station_call: station_call.trim().to_ascii_uppercase(),
+            gridsquare: Self::opt(&self.gridsquare),
+            name: Self::opt(operator_name),
+            my_state: Self::opt(&self.state),
+            my_county: Self::opt(&self.county),
+            cq_zone: Self::opt(&self.cq_zone),
+            itu_zone: Self::opt(&self.itu_zone),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
     pub version: u32,
     pub last_operator_id: Option<String>,
     pub known_operator_ids: Vec<String>,
+    /// Global station location (grid, etc.). `serde(default)` so pre-existing
+    /// `app_state.json` files load unchanged.
+    #[serde(default)]
+    pub station: StationProfileFile,
 }
 
 impl Default for AppStateFile {
@@ -34,6 +77,7 @@ impl Default for AppStateFile {
             version: APP_STATE_FILE_VERSION,
             last_operator_id: None,
             known_operator_ids: Vec::new(),
+            station: StationProfileFile::default(),
         }
     }
 }
@@ -273,6 +317,12 @@ pub struct OperatorSettingsFile {
     pub version: u32,
     pub operator_id: String,
 
+    /// The operator's personal name (ADIF `MY_NAME`), per-operator because it
+    /// belongs to the person, not the shared station. Serde-default so older
+    /// settings files load with an empty name.
+    #[serde(default)]
+    pub name: String,
+
     pub selected_license: Option<LicenseClass>,
     pub server_ip: String,
 
@@ -393,6 +443,7 @@ impl OperatorSettingsFile {
         Self {
             version: OPERATOR_SETTINGS_FILE_VERSION,
             operator_id,
+            name: String::new(),
             selected_license: None,
             // Seed new operators with localhost so a single-box (client+server on
             // one machine) setup can Connect with no typing; the user edits it for
