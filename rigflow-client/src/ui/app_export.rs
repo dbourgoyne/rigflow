@@ -1,20 +1,23 @@
-//! The ADIF export window, opened from the contact view (`V`).
+//! The contact-view's query driver, the worker drain, and the **export window**.
 //!
-//! A floating `egui::Window` (non-blocking, like the log-entry window) with the
-//! filters grouped into collapsible sections, the output options, and a **live
-//! match count** so the operator sees "1,483 QSOs match" before committing to a
-//! file. That count is a real dry run through the same filter the export will
-//! use, debounced by [`COUNT_DEBOUNCE`].
+//! The export window is *output only* — File, Fields, sort, incremental, and the
+//! Export button. **Which** contacts get written is decided by the shared filter
+//! in the `Filter…` window (`app_filter.rs`) — the same filter the contact view
+//! lists — so the operator sees what they are exporting.
+//!
+//! The one thing that can make the written set differ from the visible list is
+//! **incremental** ("only what's new since the last run"), which is a fact about
+//! export progress, not about a contact. So the window spells out the arithmetic
+//! — *"1,483 match your filter · 12 new since the last export · exporting 12"* —
+//! rather than quietly writing a different set than the one on screen.
 
 use eframe::egui;
 
-use crate::logging::export::{COUNT_DEBOUNCE, ExportDraft, ExportEvent, ExportJob, ProfileChoice};
-use rigflow_log::export::GridPrecision;
-use rigflow_log::normalize::ModeClass;
+use crate::logging::export::{ExportDraft, ExportEvent, ExportJob, ProfileChoice, QUERY_DEBOUNCE};
 
 impl crate::ui::app::RigflowApp {
-    /// Open the export window, seeding the draft with a dated default path in
-    /// the current operator's data directory.
+    /// Open the export window, seeding a dated default path in the operator's
+    /// data directory.
     pub(crate) fn open_export(&mut self, operator_id: &str) {
         let (date, _) = rigflow_log::now_utc_adif();
         let default_path = self
@@ -22,31 +25,167 @@ impl crate::ui::app::RigflowApp {
             .qso_log_db_path(operator_id)
             .with_file_name(format!("export-{date}.adi"));
         self.export_draft = ExportDraft::new(default_path);
+        self.export_draft_last = None;
         self.export_count = None;
         self.export_status.clear();
-        self.export_count_due = Some(std::time::Instant::now());
         self.show_export = true;
     }
 
-    /// Drain the export worker's replies. Called at the top of `update()`.
+    /// Re-run the contact-view query when the filter (or the log) changes.
     ///
-    /// This is where an incremental export's bookmark advances — on the UI
+    /// Debounced: the filters that read the `extra` JSON blob are unindexed full
+    /// scans, so re-querying on every keystroke would stutter a large log. The
+    /// query runs on the worker's read-only connection, never on the UI thread
+    /// that owns the `LogStore`.
+    pub(crate) fn maybe_requery_contacts(&mut self, operator_id: &str, ctx: &egui::Context) {
+        if self.log.is_none() {
+            return;
+        }
+
+        // An edit to the shared filter re-arms the debounce and stales the
+        // export's count (which is derived from the same filter).
+        if self.qso_filter_last.as_ref() != Some(&self.qso_filter) {
+            self.qso_filter_last = Some(self.qso_filter.clone());
+            self.contacts_query_due = Some(std::time::Instant::now() + QUERY_DEBOUNCE);
+            self.export_count = None;
+        }
+        // A newly logged contact (or Refresh) invalidates immediately — there is
+        // nothing to settle, so no debounce.
+        if self.contacts_cache_dirty {
+            self.contacts_cache_dirty = false;
+            self.contacts_query_due = Some(std::time::Instant::now());
+        }
+
+        let now = std::time::Instant::now();
+
+        if let Some(due) = self.contacts_query_due {
+            if now < due {
+                ctx.request_repaint_after(QUERY_DEBOUNCE);
+            } else {
+                self.contacts_query_due = None;
+                self.dispatch_contacts_query(operator_id);
+            }
+        }
+
+        // The call lookup has its own debounce and its own (filter-independent)
+        // query.
+        if let Some(due) = self.call_lookup_due {
+            if now < due {
+                ctx.request_repaint_after(QUERY_DEBOUNCE);
+            } else {
+                self.call_lookup_due = None;
+                self.dispatch_call_lookup(operator_id);
+            }
+        }
+    }
+
+    /// Send the contact-view page query — and, when an incremental export is
+    /// being set up, its separate count.
+    fn dispatch_contacts_query(&mut self, operator_id: &str) {
+        let db_path = self.persistence_store.qso_log_db_path(operator_id);
+
+        // The view always asks for the plain shared filter — never incremental.
+        match self.qso_filter.to_filter(None) {
+            Ok(filter) => {
+                self.filter_error.clear();
+                self.contacts_query_seq += 1;
+                let _ = self.export_tx.send(ExportJob::Query {
+                    db_path: db_path.clone(),
+                    filter: Box::new(filter),
+                    seq: self.contacts_query_seq,
+                });
+            }
+            // A malformed filter is shown, not run — and the existing list is
+            // left alone rather than silently emptied.
+            Err(e) => {
+                self.filter_error = e.to_string();
+                return;
+            }
+        }
+
+        // An incremental export writes a *subset* of the visible list, so it
+        // needs its own count for the window to show the arithmetic honestly.
+        if self.show_export
+            && let Some(profile) = self.export_draft.incremental_profile()
+            && let Ok(filter) = self.qso_filter.to_filter(Some(profile))
+        {
+            let _ = self.export_tx.send(ExportJob::Count {
+                db_path,
+                filter: Box::new(filter),
+                seq: self.contacts_query_seq,
+            });
+        }
+    }
+
+    fn dispatch_call_lookup(&mut self, operator_id: &str) {
+        let call = self.call_lookup.trim().to_string();
+        if call.is_empty() {
+            self.call_lookup_hits = None;
+            return;
+        }
+        let Ok(filter) = crate::logging::export::call_lookup_filter(&call) else {
+            return;
+        };
+        self.call_lookup_seq += 1;
+        let _ = self.export_tx.send(ExportJob::CallLookup {
+            db_path: self.persistence_store.qso_log_db_path(operator_id),
+            call,
+            filter: Box::new(filter),
+            seq: self.call_lookup_seq,
+        });
+    }
+
+    /// Drain the worker's replies.
+    ///
+    /// This is also where an incremental export's bookmark advances — on the UI
     /// thread, on the read-write `LogStore`, and only after the worker reports a
-    /// **successful write** of an export that actually was incremental. The
-    /// worker itself runs on a read-only connection and cannot do it.
+    /// successful write of an export that actually *was* incremental. The worker
+    /// runs on a read-only connection and cannot do it itself.
     pub(crate) fn drain_export_events(&mut self, ctx: &egui::Context) {
         let mut got = false;
         while let Ok(evt) = self.export_rx.try_recv() {
             got = true;
             match evt {
-                ExportEvent::Count(Ok(n)) => {
-                    self.export_count = Some(n);
-                    self.export_status.clear();
+                // Replies for a filter the operator has already typed past are
+                // dropped — otherwise the list flashes stale rows.
+                ExportEvent::Contacts { seq, result } => {
+                    if seq != self.contacts_query_seq {
+                        continue;
+                    }
+                    match result {
+                        Ok(page) => {
+                            self.contacts_cache = page.rows;
+                            self.contacts_total = page.total;
+                            self.filter_error.clear();
+                        }
+                        Err(e) => self.filter_error = e,
+                    }
                 }
-                ExportEvent::Count(Err(e)) => {
-                    self.export_count = None;
-                    self.export_status = e;
+
+                ExportEvent::Count { seq, result } => {
+                    if seq != self.contacts_query_seq {
+                        continue;
+                    }
+                    self.export_count = result.ok();
                 }
+
+                ExportEvent::CallMatches { seq, call, result } => {
+                    // Two guards, because showing one station's contacts under
+                    // another station's name would be worse than showing none:
+                    // the sequence catches a reply the operator has typed past,
+                    // and the echoed callsign catches any way the two could still
+                    // disagree.
+                    if seq != self.call_lookup_seq
+                        || !call.eq_ignore_ascii_case(self.call_lookup.trim())
+                    {
+                        continue;
+                    }
+                    match result {
+                        Ok(page) => self.call_lookup_hits = Some(*page),
+                        Err(e) => self.set_log_status(format!("call lookup: {e}")),
+                    }
+                }
+
                 ExportEvent::Done(Ok(summary)) => {
                     self.export_busy = false;
 
@@ -58,7 +197,7 @@ impl crate::ui::app::RigflowApp {
                     //
                     // A failed advance is reported, not swallowed: the file is on
                     // disk but the position didn't move, so the next incremental
-                    // run would re-export these contacts. The operator has to know.
+                    // run would re-export these contacts. The operator must know.
                     let mut warning = String::new();
                     if let (Some(profile), Some(max_id)) = (
                         summary.filter.incremental_profile().map(str::to_string),
@@ -77,6 +216,11 @@ impl crate::ui::app::RigflowApp {
                         warning,
                     );
                     self.set_log_status(self.export_status.clone());
+
+                    // The bookmark just moved, so "what's still unexported" has
+                    // changed: re-count.
+                    self.export_count = None;
+                    self.contacts_query_due = Some(std::time::Instant::now());
                 }
                 ExportEvent::Done(Err(e)) => {
                     self.export_busy = false;
@@ -89,37 +233,7 @@ impl crate::ui::app::RigflowApp {
         }
     }
 
-    /// Run the debounced dry-run count when the draft has settled.
-    fn maybe_request_count(&mut self, operator_id: &str, ctx: &egui::Context) {
-        // Any edit re-arms the timer.
-        if self.export_draft_last.as_ref() != Some(&self.export_draft) {
-            self.export_draft_last = Some(self.export_draft.clone());
-            self.export_count_due = Some(std::time::Instant::now() + COUNT_DEBOUNCE);
-            self.export_count = None;
-        }
-        let Some(due) = self.export_count_due else {
-            return;
-        };
-        if std::time::Instant::now() < due {
-            // Make sure we come back to fire it even if nothing else repaints.
-            ctx.request_repaint_after(COUNT_DEBOUNCE);
-            return;
-        }
-        self.export_count_due = None;
-
-        match self.export_draft.to_filter() {
-            Ok(filter) => {
-                let db_path = self.persistence_store.qso_log_db_path(operator_id);
-                let _ = self.export_tx.send(ExportJob::Count {
-                    db_path,
-                    filter: Box::new(filter),
-                });
-            }
-            // A malformed filter is shown, not run.
-            Err(e) => self.export_status = e.to_string(),
-        }
-    }
-
+    /// The export window: **output options only**.
     pub(crate) fn draw_export_window(
         &mut self,
         ctx: &egui::Context,
@@ -134,215 +248,40 @@ impl crate::ui::app::RigflowApp {
             return;
         }
 
-        self.maybe_request_count(&operator_id, ctx);
+        // Toggling incremental changes what gets written — re-run the counts.
+        if self.export_draft_last.as_ref() != Some(&self.export_draft) {
+            self.export_draft_last = Some(self.export_draft.clone());
+            self.export_count = None;
+            self.contacts_query_due = Some(std::time::Instant::now());
+        }
 
         let mut open = true;
         let mut do_export = false;
         let mut pick_path = false;
+        let mut open_filter = false;
 
         egui::Window::new("Export ADIF")
             .open(&mut open)
-            .default_width(460.0)
+            .default_width(470.0)
             .show(ctx, |ui| {
-                let d = &mut self.export_draft;
-
-                egui::CollapsingHeader::new("Date")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("From");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.date_from)
-                                    .hint_text("YYYYMMDD")
-                                    .desired_width(90.0),
-                            );
-                            ui.label("To");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.date_to)
-                                    .hint_text("YYYYMMDD")
-                                    .desired_width(90.0),
-                            );
-                        });
-                    });
-
-                egui::CollapsingHeader::new("Band & mode")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        ui.label("Bands (none = all)");
-                        egui::Grid::new("export_bands")
-                            .num_columns(6)
-                            .show(ui, |ui| {
-                                for (i, band) in ExportDraft::all_bands().into_iter().enumerate() {
-                                    let mut on = d.bands.contains(band);
-                                    if ui.checkbox(&mut on, band).changed() {
-                                        if on {
-                                            d.bands.insert(band.to_string());
-                                        } else {
-                                            d.bands.remove(band);
-                                        }
-                                    }
-                                    if i % 6 == 5 {
-                                        ui.end_row();
-                                    }
-                                }
-                            });
-                        ui.add_enabled(
-                            !d.bands.is_empty(),
-                            egui::Checkbox::new(
-                                &mut d.match_either_band,
-                                "also match the RX band (split across bands)",
-                            ),
-                        );
-
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label("Mode class");
-                            for c in ModeClass::ALL {
-                                let mut on = d.mode_classes.contains(c);
-                                if ui.checkbox(&mut on, c.as_str()).changed() {
-                                    if on {
-                                        d.mode_classes.insert(*c);
-                                    } else {
-                                        d.mode_classes.remove(c);
-                                    }
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Modes");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.modes)
-                                    .hint_text("SSB, CW, FT8")
-                                    .desired_width(150.0),
-                            );
-                            ui.label("Submodes");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.submodes)
-                                    .hint_text("FT4")
-                                    .desired_width(100.0),
-                            );
-                        });
-                    });
-
-                egui::CollapsingHeader::new("Station").show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Call");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.call_pattern)
-                                .hint_text("W1* or K?ZD")
-                                .desired_width(120.0),
-                        );
-                        ui.label("DXCC");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.dxcc)
-                                .hint_text("291, 339")
-                                .desired_width(90.0),
-                        );
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Their grid");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.gridsquare)
-                                .hint_text("EM12")
-                                .desired_width(80.0),
-                        );
-                        egui::ComboBox::from_id_salt("grid_precision")
-                            .selected_text(match d.grid_precision {
-                                GridPrecision::Field => "field (2)",
-                                GridPrecision::Square => "square (4)",
-                                GridPrecision::Full => "exact",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut d.grid_precision,
-                                    GridPrecision::Field,
-                                    "field (2)",
-                                );
-                                ui.selectable_value(
-                                    &mut d.grid_precision,
-                                    GridPrecision::Square,
-                                    "square (4)",
-                                );
-                                ui.selectable_value(
-                                    &mut d.grid_precision,
-                                    GridPrecision::Full,
-                                    "exact",
-                                );
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("My grid");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.my_gridsquare)
-                                .hint_text("the grid you worked FROM")
-                                .desired_width(160.0),
-                        );
-                    })
-                    .response
-                    .on_hover_text(
-                        "Matches the grid recorded on each contact, so QSOs made \
-                             from a previous QTH are still found after you move.",
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Contest");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.contest_id)
-                                .hint_text("CQ-WW-SSB")
-                                .desired_width(140.0),
-                        );
-                    });
-                });
-
-                egui::CollapsingHeader::new("Confirmation").show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "Online-service state isn't tracked yet, so these match \
-                                 nothing (or everything) until service sync lands.",
-                        )
-                        .small()
-                        .weak(),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Not uploaded to");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.not_uploaded_to)
-                                .hint_text("lotw")
-                                .desired_width(80.0),
-                        );
-                        ui.label("Confirmed by");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut d.confirmed_by)
-                                .hint_text("lotw")
-                                .desired_width(80.0),
-                        );
-                    });
-                    ui.checkbox(&mut d.qsl_rcvd_yes, "QSL received (QSL_RCVD = Y)");
-                });
-
-                egui::CollapsingHeader::new("Incremental").show(ui, |ui| {
-                    ui.checkbox(&mut d.incremental, "Only contacts new since the last run");
-                    ui.add_enabled_ui(d.incremental, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Stream");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut d.profile)
-                                    .hint_text("default")
-                                    .desired_width(120.0),
-                            );
-                        });
-                    });
-                    ui.label(
-                        egui::RichText::new(
-                            "Each named stream keeps its own position. Only an \
-                                 incremental export moves it — an ordinary filtered \
-                                 export never does.",
-                        )
-                        .small()
-                        .weak(),
-                    );
+                // ── what will be written: an echo of the shared filter ──
+                // Without this, opening Export from a filtered view and getting a
+                // filtered file would be a surprise.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("Contacts:").strong());
+                    if self.qso_filter.is_active() {
+                        ui.label(self.qso_filter.summary());
+                    } else {
+                        ui.label("the whole log (no filter)");
+                    }
+                    if ui.small_button("Filter…").clicked() {
+                        open_filter = true;
+                    }
                 });
 
                 ui.separator();
+
+                let d = &mut self.export_draft;
 
                 // ── output ──
                 ui.horizontal(|ui| {
@@ -375,30 +314,65 @@ impl crate::ui::app::RigflowApp {
 
                 ui.separator();
 
-                // ── the live count + commit ──
+                // ── incremental ──
+                ui.checkbox(&mut d.incremental, "Only contacts new since the last run");
+                if d.incremental {
+                    ui.horizontal(|ui| {
+                        ui.label("Stream");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut d.profile)
+                                .hint_text("default")
+                                .desired_width(120.0),
+                        );
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "Each named stream keeps its own position, and only an \
+                             incremental export moves it — an ordinary filtered export \
+                             never does.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+
+                ui.separator();
+
+                // ── the arithmetic, then the button ──
+                // With incremental on, the written set is a SUBSET of the visible
+                // list. Say so in numbers, rather than letting the operator find
+                // out by opening the file.
+                let matching = self.contacts_total;
+                if self.export_draft.incremental {
+                    match self.export_count {
+                        Some(n) => ui.label(format!(
+                            "{matching} match your filter · {n} new since the last export \
+                             · exporting {n}"
+                        )),
+                        None => ui.label(egui::RichText::new("counting…").weak()),
+                    };
+                } else {
+                    ui.label(format!(
+                        "exporting {matching} contact{}",
+                        if matching == 1 { "" } else { "s" }
+                    ));
+                }
+
                 ui.horizontal(|ui| {
                     let ready =
                         !self.export_busy && !self.export_draft.output_path.trim().is_empty();
                     if ui.add_enabled(ready, egui::Button::new("Export")).clicked() {
                         do_export = true;
                     }
-                    match self.export_count {
-                        Some(n) => ui.label(format!(
-                            "{n} contact{} match",
-                            if n == 1 { "" } else { "es" }
-                        )),
-                        None => ui.label(
-                            egui::RichText::new(if self.export_busy {
-                                "exporting…"
-                            } else {
-                                "counting…"
-                            })
-                            .weak(),
-                        ),
-                    };
+                    if self.export_busy {
+                        ui.label(egui::RichText::new("exporting…").weak());
+                    }
                 });
                 if !self.export_status.is_empty() {
                     ui.label(&self.export_status);
+                }
+                if !self.filter_error.is_empty() {
+                    ui.colored_label(egui::Color32::LIGHT_RED, &self.filter_error);
                 }
             });
 
@@ -420,9 +394,14 @@ impl crate::ui::app::RigflowApp {
             }
         }
 
+        if open_filter {
+            self.show_filter = true;
+        }
+
         if do_export {
+            let incremental = self.export_draft.incremental_profile();
             match (
-                self.export_draft.to_filter(),
+                self.qso_filter.to_filter(incremental),
                 self.export_draft.to_options(),
             ) {
                 (Ok(filter), Ok(options)) => {

@@ -86,6 +86,23 @@ impl Exporter {
         read_bookmark(&self.conn, profile)
     }
 
+    /// A page of matching contacts for the contact view, plus the total match
+    /// count so the view can say "showing 500 of 1,483".
+    ///
+    /// Counting and paging run against the same filter in one call, so the two
+    /// numbers are always consistent with each other (and with what an export of
+    /// the same filter would write).
+    pub fn page(
+        &self,
+        filter: &ExportFilter,
+        limit: usize,
+        sort: super::filter::Sort,
+    ) -> Result<ContactPage, LogError> {
+        let total = count_with(&self.conn, filter)?;
+        let rows = query_with(&self.conn, filter, limit, sort)?;
+        Ok(ContactPage { rows, total })
+    }
+
     /// Test-only handle, used to prove SQLite itself refuses a write here.
     #[cfg(test)]
     pub(crate) fn conn_for_test(&self) -> &Connection {
@@ -124,6 +141,52 @@ pub(crate) fn count_with(conn: &Connection, filter: &ExportFilter) -> Result<usi
     let sql = format!("SELECT COUNT(*) FROM qso WHERE {}", q.where_sql);
     let n: i64 = conn.query_row(&sql, params_from_iter(q.params.iter()), |r| r.get(0))?;
     Ok(n as usize)
+}
+
+/// One page of matching QSOs, plus how many matched in total.
+///
+/// The contact view shows `rows` (capped by its limit) but reports `total`, so
+/// "showing 500 of 1,483 matching" is honest about the cap. Without `total` the
+/// view would silently imply it was showing everything the export will write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactPage {
+    pub rows: Vec<crate::store::LoggedQso>,
+    /// Total matches, ignoring `limit`. This is the number the export writes.
+    pub total: usize,
+}
+
+/// Read a page of matching QSOs.
+///
+/// Goes through [`query::build`] — the same WHERE clause [`export_with`] and
+/// [`count_with`] use — so what the contact view lists, what the count promises,
+/// and what the export writes cannot drift apart. That single-builder property
+/// is the whole point of filtering the view and the export with one type.
+pub(crate) fn query_with(
+    conn: &Connection,
+    filter: &ExportFilter,
+    limit: usize,
+    sort: super::filter::Sort,
+) -> Result<Vec<crate::store::LoggedQso>, LogError> {
+    filter.validate()?;
+    let bookmark = resolve_bookmark(conn, filter)?;
+    let q = query::build(filter, bookmark);
+    let sql = format!(
+        "SELECT {} FROM qso WHERE {} {} LIMIT ?",
+        store::QSO_COLUMNS,
+        q.where_sql,
+        query::order_by(sort),
+    );
+
+    let mut params = q.params;
+    params.push(rusqlite::types::Value::Integer(limit as i64));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(store::row_to_logged_qso(row)??);
+    }
+    Ok(out)
 }
 
 /// Write the matching QSOs to `opts.output_path` as ADIF.

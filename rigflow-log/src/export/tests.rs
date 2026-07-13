@@ -404,6 +404,136 @@ fn filter_by_explicit_qso_ids_and_it_ands() {
     assert_eq!(exported_calls(&dir, &f), ["JA1XYZ"]);
 }
 
+// ------------------------------------------------- the view IS the export --
+
+#[test]
+fn the_page_the_view_shows_is_the_set_the_export_writes() {
+    // The contact view and the export share one WHERE builder, so for any filter
+    // the listed calls and the exported calls must be the same set. This is the
+    // property the shared-filter UI promises the operator ("you see what you are
+    // exporting"); if it ever breaks, it breaks silently, so pin it.
+    let dir = TmpDir::new();
+    let _s = store_with(&dir, fleet());
+    let ex = Exporter::open(dir.db()).unwrap();
+
+    let filters = [
+        ExportFilter::default(),
+        ExportFilter {
+            bands: Some(vec!["20m".into()]),
+            ..Default::default()
+        },
+        ExportFilter {
+            modes: Some(vec!["SSB".into()]),
+            ..Default::default()
+        },
+        ExportFilter {
+            call_pattern: Some("*1*".into()),
+            ..Default::default()
+        },
+        ExportFilter {
+            call_exact: Some("NOBODY".into()), // empty set
+            ..Default::default()
+        },
+    ];
+
+    for f in filters {
+        let page = ex.page(&f, 500, Sort::Reverse).unwrap();
+        let exported = exported_calls(&dir, &f);
+
+        assert_eq!(
+            page.total,
+            exported.len(),
+            "view total disagrees with what the export wrote, filter {f:?}"
+        );
+
+        let mut listed: Vec<String> = page.rows.iter().map(|r| r.qso.call.clone()).collect();
+        let mut written = exported.clone();
+        listed.sort();
+        written.sort();
+        assert_eq!(listed, written, "view rows != exported rows, filter {f:?}");
+    }
+}
+
+#[test]
+fn the_page_total_is_honest_about_the_row_cap() {
+    // The view caps its rows; the export does not. So `total` must report the
+    // real match count, not the number of rows returned — otherwise a capped view
+    // silently implies it is showing everything the export will write.
+    let dir = TmpDir::new();
+    let _s = store_with(&dir, fleet()); // 4 QSOs
+    let ex = Exporter::open(dir.db()).unwrap();
+
+    let page = ex.page(&ExportFilter::default(), 2, Sort::Reverse).unwrap();
+    assert_eq!(page.rows.len(), 2, "capped by limit");
+    assert_eq!(page.total, 4, "but the total is the whole match set");
+}
+
+#[test]
+fn view_page_is_newest_first() {
+    let dir = TmpDir::new();
+    let _s = store_with(&dir, fleet());
+    let ex = Exporter::open(dir.db()).unwrap();
+    let page = ex
+        .page(&ExportFilter::default(), 500, Sort::Reverse)
+        .unwrap();
+    let calls: Vec<&str> = page.rows.iter().map(|r| r.qso.call.as_str()).collect();
+    assert_eq!(calls, ["VK3ABC", "JA1XYZ", "K5ZD", "W1AW"]);
+}
+
+#[test]
+fn call_lookup_searches_the_whole_log_ignoring_any_view_filter() {
+    // The call-lookup popup answers "have I EVER worked this station?", so it is
+    // built from a filter of its own (call_exact alone) rather than from the view
+    // filter. A 20m-only view must not hide the 40m QSO with the same station.
+    let dir = TmpDir::new();
+    let mut a = qso("DX1ABC");
+    a.qso_date = "20260701".into();
+    let mut b = qso("DX1ABC");
+    b.qso_date = "20260702".into();
+    b.band = "40m".into();
+    b.mode = "CW".into();
+    b.freq_hz = Some(7_030_000);
+    let _s = store_with(&dir, vec![a, b, qso("OTHER")]);
+
+    let lookup = ExportFilter {
+        call_exact: Some("dx1abc".into()),
+        ..Default::default()
+    };
+    let ex = Exporter::open(dir.db()).unwrap();
+    let page = ex.page(&lookup, 100, Sort::Reverse).unwrap();
+
+    assert_eq!(page.total, 2, "both bands, regardless of any view filter");
+    let bands: Vec<&str> = page.rows.iter().map(|r| r.qso.band.as_str()).collect();
+    assert_eq!(bands, ["40m", "20m"]);
+}
+
+#[test]
+fn store_filtered_query_matches_the_exporter() {
+    // The read-write store and the read-only exporter must agree — they are two
+    // connections onto one builder.
+    let dir = TmpDir::new();
+    let s = store_with(&dir, fleet());
+    let f = ExportFilter {
+        bands: Some(vec!["20m".into()]),
+        ..Default::default()
+    };
+    let via_store: Vec<String> = s
+        .query_contacts_filtered(&f, 500)
+        .unwrap()
+        .iter()
+        .map(|r| r.qso.call.clone())
+        .collect();
+    let via_exporter: Vec<String> = Exporter::open(dir.db())
+        .unwrap()
+        .page(&f, 500, Sort::Reverse)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| r.qso.call.clone())
+        .collect();
+    assert_eq!(via_store, via_exporter);
+}
+
 // --------------------------------------------------------- my-station (D) --
 
 #[test]

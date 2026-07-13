@@ -247,36 +247,94 @@ impl RigflowApp {
         }
     }
 
-    /// Draw the contact-view window: a table of logged contacts, most recent
-    /// first. Built to grow a filter bar in a later phase.
+    /// Draw the contact-view window: the toolbar (call lookup, filter, export,
+    /// refresh), the active-filter summary, and the table of matching contacts.
+    ///
+    /// The list is produced by the **same filter the export writes**, so the
+    /// operator can see what they are about to export. The row count is capped
+    /// (`VIEW_ROW_LIMIT`) but the *total* is always shown alongside — a capped
+    /// list that didn't say so would quietly break that promise.
     pub(crate) fn draw_contact_view_window(&mut self, ctx: &egui::Context, snapshot: &UiState) {
         if !snapshot.show_contact_view {
             return;
         }
-        if self.contacts_cache_dirty {
-            self.refresh_contacts_cache();
-        }
+        let operator_id = snapshot.operator_id.clone();
+        self.maybe_requery_contacts(&operator_id, ctx);
 
         let mut open = true;
         let mut open_export = false;
+        let mut open_filter = false;
+        let mut clear_filter = false;
+
         egui::Window::new("Contacts")
             .open(&mut open)
-            .default_width(560.0)
-            .default_height(400.0)
+            .default_width(620.0)
+            .default_height(440.0)
             .show(ctx, |ui| {
                 if self.log.is_none() {
                     ui.label("Set an operator to view its contact log.");
                     return;
                 }
+
+                // ── toolbar ──
                 ui.horizontal(|ui| {
-                    ui.label(format!("{} contacts", self.contacts_cache.len()));
-                    if ui.button("Refresh").clicked() {
-                        self.contacts_cache_dirty = true;
+                    ui.label("Call:");
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut self.call_lookup)
+                            .hint_text("worked before?")
+                            .desired_width(110.0),
+                    );
+                    if r.changed() {
+                        // Live as you type: mid-QSO the operator needs a yes/no
+                        // now, not after finding and pressing a button.
+                        self.call_lookup_due = Some(
+                            std::time::Instant::now() + crate::logging::export::QUERY_DEBOUNCE,
+                        );
+                        if self.call_lookup.trim().is_empty() {
+                            self.call_lookup_hits = None;
+                        }
+                    }
+                    if ui.button("Filter…").clicked() {
+                        open_filter = true;
                     }
                     if ui.button("Export…").clicked() {
                         open_export = true;
                     }
+                    if ui.button("Refresh").clicked() {
+                        self.contacts_cache_dirty = true;
+                    }
                 });
+
+                // ── active-filter summary ──
+                // Always visible when filtering. A short list with no visible
+                // reason is the single most confusing thing this window could do.
+                if self.qso_filter.is_active() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(egui::RichText::new("Filtered:").strong());
+                        ui.label(self.qso_filter.summary());
+                        if ui
+                            .small_button("✕ clear")
+                            .on_hover_text("Remove all filters")
+                            .clicked()
+                        {
+                            clear_filter = true;
+                        }
+                    });
+                }
+
+                if !self.filter_error.is_empty() {
+                    ui.colored_label(egui::Color32::LIGHT_RED, &self.filter_error);
+                } else {
+                    let shown = self.contacts_cache.len();
+                    let total = self.contacts_total;
+                    ui.label(if shown < total {
+                        // The cap is load-bearing information, not a detail.
+                        format!("showing {shown} of {total} matching")
+                    } else {
+                        format!("{total} contact{}", if total == 1 { "" } else { "s" })
+                    });
+                }
+
                 ui.separator();
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -304,13 +362,120 @@ impl RigflowApp {
                         });
                 });
             });
-        if open_export {
-            self.open_export(&snapshot.operator_id);
+
+        self.draw_call_lookup_popup(ctx);
+
+        if clear_filter {
+            self.qso_filter = Default::default();
         }
-        if !open {
-            if let Ok(mut s) = self.state.lock() {
-                s.show_contact_view = false;
-            }
+        if open_filter {
+            self.show_filter = true;
+        }
+        if open_export {
+            self.open_export(&operator_id);
+        }
+        if !open && let Ok(mut s) = self.state.lock() {
+            s.show_contact_view = false;
+        }
+    }
+
+    /// The quick "have I worked this station?" popup.
+    ///
+    /// Leads with the **verdict**, not the data: mid-QSO the operator needs
+    /// "new call" or "worked 3×" in under a second, and only then the rows. The
+    /// headline comes from the in-memory worked-before index (no query at all);
+    /// the rows come from the worker.
+    ///
+    /// It searches the **whole log** and never touches the view filter — "have I
+    /// ever worked this station" is a question about the log, not about whatever
+    /// the operator happens to be looking at.
+    fn draw_call_lookup_popup(&mut self, ctx: &egui::Context) {
+        let call = self.call_lookup.trim().to_ascii_uppercase();
+        if call.is_empty() {
+            return;
+        }
+        // Escape dismisses — a popup you can only close by aiming at a button is
+        // an annoyance when you're in the middle of a contact.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.call_lookup.clear();
+            self.call_lookup_hits = None;
+            return;
+        }
+
+        let is_new = self.worked_before.is_new_call(&call);
+        let mut dismiss = false;
+
+        egui::Window::new(format!("Worked {call}?"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 64.0])
+            .show(ctx, |ui| {
+                // Verdict first, from the in-memory index — instant, no DB hit.
+                if is_new {
+                    ui.label(
+                        egui::RichText::new("NEW CALL")
+                            .heading()
+                            .color(egui::Color32::LIGHT_GREEN),
+                    );
+                } else {
+                    match &self.call_lookup_hits {
+                        Some(page) if page.total > 0 => {
+                            let last = &page.rows[0].qso; // newest-first
+                            ui.label(
+                                egui::RichText::new(format!("Worked {}×", page.total))
+                                    .heading()
+                                    .color(egui::Color32::LIGHT_YELLOW),
+                            );
+                            ui.label(format!(
+                                "last {} · {} {}",
+                                last.qso_date, last.band, last.mode
+                            ));
+                        }
+                        // The index says worked, the rows haven't landed yet.
+                        _ => {
+                            ui.label(egui::RichText::new("Worked before").heading());
+                            ui.label(egui::RichText::new("looking up…").weak());
+                        }
+                    }
+                }
+
+                if let Some(page) = &self.call_lookup_hits
+                    && page.total > 0
+                {
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .max_height(160.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("call_lookup_table")
+                                .num_columns(4)
+                                .striped(true)
+                                .spacing([10.0, 2.0])
+                                .show(ui, |ui| {
+                                    for h in ["Date", "Time", "Band", "Mode"] {
+                                        ui.strong(h);
+                                    }
+                                    ui.end_row();
+                                    for row in &page.rows {
+                                        let q = &row.qso;
+                                        ui.label(&q.qso_date);
+                                        ui.label(q.time_on.get(..4).unwrap_or(&q.time_on));
+                                        ui.label(&q.band);
+                                        ui.label(&q.mode);
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                }
+
+                ui.separator();
+                if ui.button("Dismiss").clicked() {
+                    dismiss = true;
+                }
+            });
+
+        if dismiss {
+            self.call_lookup.clear();
+            self.call_lookup_hits = None;
         }
     }
 }

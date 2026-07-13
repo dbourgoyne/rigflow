@@ -1,17 +1,22 @@
-//! Client-side ADIF export: the dialog's draft state and the worker thread.
+//! Client-side contact filtering and ADIF export: the drafts and the worker.
 //!
-//! Export runs **off the UI thread**. `rigflow_log::Exporter` opens its own
-//! read-only SQLite connection, so a 200k-QSO export streams to disk on a worker
-//! while the app's read-write `LogStore` keeps logging contacts on the UI thread
-//! — WAL gives concurrent readers for free. The worker never writes, so it also
-//! cannot advance an incremental bookmark: it reports `max_qso_id` back and the
-//! UI thread advances the bookmark on the store it owns (and only for an
-//! incremental, non-dry-run export). See `rigflow_log::export`.
+//! **One filter, two consumers.** [`QsoFilterDraft`] builds the `ExportFilter`
+//! that drives *both* the contact-view list and the export file, so what the
+//! operator sees listed is what they get written. The filter lives with the
+//! contact view (the `Filter…` window); the export window only chooses the
+//! *output* shape.
 //!
-//! The live match count in the dialog is a *dry run* through the same filter, so
-//! the number the operator sees is the number they get. Those counts are
-//! debounced (see [`COUNT_DEBOUNCE`]) because the `extra`-JSON-backed filters
-//! (continent, zones, contest id, the `MY_*` snapshot) are unindexed full scans.
+//! **Incremental is not a filter.** [`ExportDraft::incremental`] answers "what
+//! haven't I exported yet", which is a fact about export progress, not about a
+//! contact — so it lives in the export window and is ANDed onto the shared
+//! filter at export time only. It would make no sense as a view filter (the list
+//! would start hiding contacts for reasons unrelated to the contacts). The export
+//! window shows the arithmetic, so the operator still knows what they're getting.
+//!
+//! All database work runs on the worker thread ([`spawn_export_worker`]) against
+//! a read-only connection. The filters read the `extra` JSON blob, which is
+//! unindexed — a full scan on every keystroke would stutter the UI thread that
+//! owns the `LogStore`.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -19,16 +24,21 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use rigflow_log::export::{
-    ExportFilter, ExportOptions, ExportSummary, Exporter, FieldProfile, FilterError, GridPrecision,
-    QslStatusFilter, Sort,
+    ContactPage, ExportFilter, ExportOptions, ExportSummary, Exporter, FieldProfile, FilterError,
+    GridPrecision, QslStatusFilter, Sort,
 };
 use rigflow_log::normalize::{self, ModeClass};
 
-/// How long the dialog waits after the last edit before running a count.
-pub const COUNT_DEBOUNCE: Duration = Duration::from_millis(250);
+/// How long the UI waits after the last edit before re-querying.
+pub const QUERY_DEBOUNCE: Duration = Duration::from_millis(250);
 
-/// Which set of fields a record carries — the draft's flattened form of
-/// [`FieldProfile`] (egui radio buttons want a `Copy` discriminant).
+/// Rows the contact view holds. The view reports the *total* match count
+/// separately, so this cap is visible ("showing 500 of 1,483") rather than a
+/// silent truncation that would quietly break the see-what-you-export promise.
+pub const VIEW_ROW_LIMIT: usize = 500;
+
+/// Which set of fields an exported record carries — the draft's flattened form
+/// of [`FieldProfile`] (egui radio buttons want a `Copy` discriminant).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProfileChoice {
     #[default]
@@ -37,13 +47,12 @@ pub enum ProfileChoice {
     Custom,
 }
 
-/// The export dialog's editable state.
+/// The shared contact filter: what the contact view lists, and what an export
+/// writes. Edited in the `Filter…` window, owned by the contact view.
 ///
-/// This lives on `RigflowApp`, **not** in `UiState`: only the export window
-/// touches it, and `UiState` is cloned every frame by `snapshot_state()`.
+/// Deliberately does **not** carry `since_last_export` — see the module docs.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ExportDraft {
-    // ── filters ──────────────────────────────────────────────────────────
+pub struct QsoFilterDraft {
     pub date_from: String,
     pub date_to: String,
     /// Selected ADIF bands (checkbox grid over `normalize::known_bands`).
@@ -66,56 +75,76 @@ pub struct ExportDraft {
     pub not_uploaded_to: String,
     /// Service name for "confirmed by …". Empty = off.
     pub confirmed_by: String,
-    /// Only QSOs I haven't yet received a QSL for (`QSL_RCVD` != Y).
+    /// Only contacts whose QSL has come back (`QSL_RCVD` = Y).
     pub qsl_rcvd_yes: bool,
-
-    // ── incremental ──────────────────────────────────────────────────────
-    /// Export only what's new since this profile's bookmark.
-    pub incremental: bool,
-    /// Bookmark profile name (blank → the default profile).
-    pub profile: String,
-
-    // ── output ───────────────────────────────────────────────────────────
-    pub output_path: String,
-    pub profile_choice: ProfileChoice,
-    /// Comma-separated ADIF fields for [`ProfileChoice::Custom`].
-    pub custom_fields: String,
-    pub include_extra: bool,
-    pub sort_reverse: bool,
 }
 
-impl ExportDraft {
-    /// A fresh draft, pre-filled with a sensible destination.
-    pub fn new(default_path: PathBuf) -> ExportDraft {
-        ExportDraft {
-            output_path: default_path.to_string_lossy().into_owned(),
-            include_extra: true,
-            ..Default::default()
-        }
+impl QsoFilterDraft {
+    /// Whether any constraint is set. Drives the "filters are active" summary —
+    /// a filtered list that doesn't *say* it's filtered is a footgun.
+    pub fn is_active(&self) -> bool {
+        *self != QsoFilterDraft::default()
     }
 
-    /// The bookmark profile this draft names (blank → the default).
-    pub fn profile_name(&self) -> String {
-        let p = self.profile.trim();
-        if p.is_empty() {
-            rigflow_log::export::DEFAULT_EXPORT_PROFILE.to_string()
-        } else {
-            p.to_string()
+    /// Short human summary of the active constraints, for the chip under the
+    /// contact-view toolbar (e.g. `20m, 40m · SSB · from 20260701`).
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.bands.is_empty() {
+            let mut b = self.bands.iter().cloned().collect::<Vec<_>>();
+            b.sort();
+            parts.push(b.join(", "));
         }
+        if !self.mode_classes.is_empty() {
+            parts.push(
+                self.mode_classes
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        }
+        for (label, v) in [
+            ("", &self.modes),
+            ("submode ", &self.submodes),
+            ("call ", &self.call_pattern),
+            ("dxcc ", &self.dxcc),
+            ("grid ", &self.gridsquare),
+            ("my grid ", &self.my_gridsquare),
+            ("contest ", &self.contest_id),
+        ] {
+            let v = v.trim();
+            if !v.is_empty() {
+                parts.push(format!("{label}{v}"));
+            }
+        }
+        if !self.date_from.trim().is_empty() {
+            parts.push(format!("from {}", self.date_from.trim()));
+        }
+        if !self.date_to.trim().is_empty() {
+            parts.push(format!("to {}", self.date_to.trim()));
+        }
+        if !self.not_uploaded_to.trim().is_empty() {
+            parts.push(format!("not on {}", self.not_uploaded_to.trim()));
+        }
+        if !self.confirmed_by.trim().is_empty() {
+            parts.push(format!("confirmed by {}", self.confirmed_by.trim()));
+        }
+        if self.qsl_rcvd_yes {
+            parts.push("QSL received".into());
+        }
+        parts.join(" · ")
     }
 
-    /// Translate the draft into an [`ExportFilter`].
-    ///
-    /// Returns the *validated* filter, so a malformed one is reported in the
-    /// dialog (as a red line under the count) instead of running a query that
-    /// silently matches nothing.
-    pub fn to_filter(&self) -> Result<ExportFilter, FilterError> {
+    /// Build the shared [`ExportFilter`]. `incremental` (from the export window)
+    /// is ANDed on here, and only there — the view always passes `None`.
+    pub fn to_filter(&self, incremental: Option<String>) -> Result<ExportFilter, FilterError> {
         let f = ExportFilter {
             date_from: opt(&self.date_from),
             date_to: opt(&self.date_to),
             datetime_from: None,
             datetime_to: None,
-            since_last_export: self.incremental.then(|| self.profile_name()),
+            since_last_export: incremental,
 
             bands: (!self.bands.is_empty()).then(|| self.bands.iter().cloned().collect()),
             match_either_band: self.match_either_band,
@@ -164,7 +193,66 @@ impl ExportDraft {
         Ok(f)
     }
 
-    /// Translate the draft into [`ExportOptions`].
+    /// Every band the checkbox grid offers.
+    pub fn all_bands() -> Vec<&'static str> {
+        normalize::known_bands().collect()
+    }
+}
+
+/// A "have I worked this station?" lookup: matches the whole log by callsign,
+/// **ignoring the view filter** — the question is about the log, not about what
+/// the operator happens to be looking at. A 20m-filtered view must not hide the
+/// 40m QSO with the station being checked.
+pub fn call_lookup_filter(call: &str) -> Result<ExportFilter, FilterError> {
+    let f = ExportFilter {
+        call_exact: opt(call),
+        ..Default::default()
+    };
+    f.validate()?;
+    Ok(f)
+}
+
+/// The export window's state: **output shape only**, plus incremental.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExportDraft {
+    pub output_path: String,
+    pub profile_choice: ProfileChoice,
+    /// Comma-separated ADIF fields for [`ProfileChoice::Custom`].
+    pub custom_fields: String,
+    pub include_extra: bool,
+    pub sort_reverse: bool,
+
+    /// Export only what's new since this stream's bookmark. Not a view filter.
+    pub incremental: bool,
+    /// Bookmark stream name (blank → the default stream).
+    pub profile: String,
+}
+
+impl ExportDraft {
+    pub fn new(default_path: PathBuf) -> ExportDraft {
+        ExportDraft {
+            output_path: default_path.to_string_lossy().into_owned(),
+            include_extra: true,
+            ..Default::default()
+        }
+    }
+
+    /// The bookmark stream this draft names (blank → the default).
+    pub fn profile_name(&self) -> String {
+        let p = self.profile.trim();
+        if p.is_empty() {
+            rigflow_log::export::DEFAULT_EXPORT_PROFILE.to_string()
+        } else {
+            p.to_string()
+        }
+    }
+
+    /// `Some(stream)` when this export is incremental — what gets ANDed onto the
+    /// shared filter at export time.
+    pub fn incremental_profile(&self) -> Option<String> {
+        self.incremental.then(|| self.profile_name())
+    }
+
     pub fn to_options(&self) -> Result<ExportOptions, FilterError> {
         let field_profile = match self.profile_choice {
             ProfileChoice::Full => FieldProfile::Full,
@@ -187,11 +275,6 @@ impl ExportDraft {
         opts.validate()?;
         Ok(opts)
     }
-
-    /// Every band the checkbox grid offers.
-    pub fn all_bands() -> Vec<&'static str> {
-        normalize::known_bands().collect()
-    }
 }
 
 fn opt(s: &str) -> Option<String> {
@@ -199,8 +282,8 @@ fn opt(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
 }
 
-/// Split a comma-separated field into a list, or `None` if it's blank. An empty
-/// list would be rejected by `validate()`, so blank must mean "no constraint".
+/// Split a comma-separated field into a list, or `None` if blank. An empty list
+/// would be rejected by `validate()`, so blank must mean "no constraint".
 fn csv(s: &str) -> Option<Vec<String>> {
     let v: Vec<String> = s
         .split(',')
@@ -212,14 +295,32 @@ fn csv(s: &str) -> Option<Vec<String>> {
 
 // ─────────────────────────────────────────────────────────── worker ──────
 
-/// Work handed to the export thread. Both variants carry the database path, so
+/// Work handed to the export thread. Every variant carries the database path, so
 /// the worker holds no per-operator state and an operator switch needs no
 /// teardown.
 pub enum ExportJob {
-    /// Dry run: count the matches, write nothing.
+    /// The contact view's page: rows + total match count.
+    Query {
+        db_path: PathBuf,
+        filter: Box<ExportFilter>,
+        /// Echoed back so a reply for a filter the operator has already edited
+        /// past is dropped instead of flashing stale rows on screen.
+        seq: u64,
+    },
+    /// "Have I worked this station?" — the whole log, by callsign.
+    CallLookup {
+        db_path: PathBuf,
+        call: String,
+        filter: Box<ExportFilter>,
+        seq: u64,
+    },
+    /// How many contacts an *incremental* export would write. Only needed when
+    /// the export's set differs from the visible list (i.e. incremental is on);
+    /// otherwise the view's own total already answers it.
     Count {
         db_path: PathBuf,
         filter: Box<ExportFilter>,
+        seq: u64,
     },
     /// Write the file.
     Write {
@@ -231,14 +332,28 @@ pub enum ExportJob {
 
 /// What the worker reports back.
 pub enum ExportEvent {
-    Count(Result<usize, String>),
+    Contacts {
+        seq: u64,
+        result: Result<Box<ContactPage>, String>,
+    },
+    CallMatches {
+        seq: u64,
+        call: String,
+        result: Result<Box<ContactPage>, String>,
+    },
+    Count {
+        seq: u64,
+        result: Result<usize, String>,
+    },
     Done(Result<Box<ExportSummary>, String>),
 }
 
-/// Spawn the export worker. One thread for the app's lifetime.
+/// Spawn the worker. One thread for the app's lifetime.
 ///
-/// Counts are **coalesced**: while the operator types, several count jobs can
-/// queue up, and only the newest is worth running. Writes are never dropped.
+/// Queries are **coalesced**: while the operator types, several jobs can queue up
+/// and only the newest of each kind is worth running — an older one's answer is
+/// already stale, and running it only delays the one that matters. Writes are
+/// never dropped.
 pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
     let (job_tx, job_rx) = channel::<ExportJob>();
     let (evt_tx, evt_rx) = channel::<ExportEvent>();
@@ -247,15 +362,17 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
         .name("export".into())
         .spawn(move || {
             while let Ok(job) = job_rx.recv() {
-                // Drain whatever else is queued: run every Write, but only the
-                // last Count — an older count's answer is already stale.
-                let mut pending_count: Option<ExportJob> = None;
+                let mut latest_query: Option<ExportJob> = None;
+                let mut latest_lookup: Option<ExportJob> = None;
+                let mut latest_count: Option<ExportJob> = None;
                 let mut jobs = vec![job];
                 jobs.extend(job_rx.try_iter());
 
                 for job in jobs {
                     match job {
-                        c @ ExportJob::Count { .. } => pending_count = Some(c),
+                        q @ ExportJob::Query { .. } => latest_query = Some(q),
+                        l @ ExportJob::CallLookup { .. } => latest_lookup = Some(l),
+                        c @ ExportJob::Count { .. } => latest_count = Some(c),
                         w @ ExportJob::Write { .. } => {
                             if evt_tx.send(run(w)).is_err() {
                                 return; // app gone
@@ -263,10 +380,13 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
                         }
                     }
                 }
-                if let Some(c) = pending_count
-                    && evt_tx.send(run(c)).is_err()
+                for job in [latest_query, latest_lookup, latest_count]
+                    .into_iter()
+                    .flatten()
                 {
-                    return;
+                    if evt_tx.send(run(job)).is_err() {
+                        return;
+                    }
                 }
             }
         })
@@ -277,11 +397,40 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
 
 fn run(job: ExportJob) -> ExportEvent {
     match job {
-        ExportJob::Count { db_path, filter } => ExportEvent::Count(
-            Exporter::open(&db_path)
+        ExportJob::Query {
+            db_path,
+            filter,
+            seq,
+        } => ExportEvent::Contacts {
+            seq,
+            result: Exporter::open(&db_path)
+                .and_then(|ex| ex.page(&filter, VIEW_ROW_LIMIT, Sort::Reverse))
+                .map(Box::new)
+                .map_err(|e| e.to_string()),
+        },
+        ExportJob::CallLookup {
+            db_path,
+            call,
+            filter,
+            seq,
+        } => ExportEvent::CallMatches {
+            seq,
+            call,
+            result: Exporter::open(&db_path)
+                .and_then(|ex| ex.page(&filter, VIEW_ROW_LIMIT, Sort::Reverse))
+                .map(Box::new)
+                .map_err(|e| e.to_string()),
+        },
+        ExportJob::Count {
+            db_path,
+            filter,
+            seq,
+        } => ExportEvent::Count {
+            seq,
+            result: Exporter::open(&db_path)
                 .and_then(|ex| ex.count(&filter))
                 .map_err(|e| e.to_string()),
-        ),
+        },
         ExportJob::Write {
             db_path,
             filter,

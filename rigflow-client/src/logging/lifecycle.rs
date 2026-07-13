@@ -20,11 +20,16 @@ impl RigflowApp {
             return;
         }
 
-        // Operator changed (or first frame): tear down and rebuild.
+        // Operator changed (or first frame): tear down and rebuild. The contact
+        // view, its filter results, and any open call lookup all belonged to the
+        // previous operator's log — none of it survives the switch.
         self.log = None;
         self.worked_before = WorkedBefore::default();
         self.contacts_cache.clear();
+        self.contacts_total = 0;
         self.contacts_cache_dirty = true;
+        self.call_lookup_hits = None;
+        self.filter_error.clear();
 
         if !op.trim().is_empty() {
             if let Err(e) = self.persistence_store.ensure_operator_data_layout(&op) {
@@ -124,18 +129,6 @@ impl RigflowApp {
             }
         }
         self.log_contact(qso);
-    }
-
-    /// Refresh the cached contact list for the contact-view window.
-    pub(crate) fn refresh_contacts_cache(&mut self) {
-        match self.log.as_ref() {
-            Some(store) => match store.query_contacts(500) {
-                Ok(rows) => self.contacts_cache = rows,
-                Err(e) => self.set_log_status(format!("query failed: {e}")),
-            },
-            None => self.contacts_cache.clear(),
-        }
-        self.contacts_cache_dirty = false;
     }
 
     pub(crate) fn set_log_status(&self, msg: String) {

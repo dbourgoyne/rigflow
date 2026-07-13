@@ -99,24 +99,49 @@ pub struct RigflowApp {
     /// Cached recent contacts for the contact-view window; refreshed when dirty.
     pub(crate) contacts_cache: Vec<rigflow_log::store::LoggedQso>,
     pub(crate) contacts_cache_dirty: bool,
+    /// Total contacts matching the active filter, ignoring the row cap — so the
+    /// view can say "showing 500 of 1,483" instead of silently truncating.
+    pub(crate) contacts_total: usize,
     /// Receiver for decoded WSJT-X `LoggedADIF` events from the UDP-2237 thread.
     pub(crate) wsjtx_rx: std::sync::mpsc::Receiver<crate::logging::wsjtx_listener::LogEvent>,
 
-    // ── ADIF export ──────────────────────────────────────────────────────
-    // All of this lives here rather than in `UiState`: only the export window
-    // touches it, and `UiState` is cloned every frame by `snapshot_state()`.
+    // ── Contact filter / export ──────────────────────────────────────────
+    // All of this lives here rather than in `UiState`: only the logging windows
+    // touch it, and `UiState` is cloned every frame by `snapshot_state()`.
+    //
+    // `qso_filter` is the SHARED filter: it drives both the contact-view list and
+    // the export, so what the operator sees is what they get written.
+    pub(crate) qso_filter: crate::logging::export::QsoFilterDraft,
+    /// Previous filter, to notice an edit and re-arm the query debounce.
+    pub(crate) qso_filter_last: Option<crate::logging::export::QsoFilterDraft>,
+    /// Filter window open flag.
+    pub(crate) show_filter: bool,
+    /// When the debounced contact-view re-query should fire.
+    pub(crate) contacts_query_due: Option<std::time::Instant>,
+    /// Monotonic query id; a reply carrying an older one is stale and dropped.
+    pub(crate) contacts_query_seq: u64,
+    /// Filter error, shown in place of the match count.
+    pub(crate) filter_error: String,
+
+    /// Quick "have I worked this station?" lookup (contact-view toolbar).
+    pub(crate) call_lookup: String,
+    /// Rows + total for the lookup popup (`None` = no popup / still querying).
+    pub(crate) call_lookup_hits: Option<rigflow_log::export::ContactPage>,
+    pub(crate) call_lookup_seq: u64,
+    pub(crate) call_lookup_due: Option<std::time::Instant>,
+
     /// Export window open flag (opened from the contact view).
     pub(crate) show_export: bool,
     pub(crate) export_draft: crate::logging::export::ExportDraft,
-    /// Previous draft, to notice an edit and re-arm the count debounce.
+    /// Previous export draft, to re-arm the incremental count when it changes.
     pub(crate) export_draft_last: Option<crate::logging::export::ExportDraft>,
-    /// When the debounced dry-run count should fire.
-    pub(crate) export_count_due: Option<std::time::Instant>,
-    /// Latest dry-run match count (`None` = counting, or a filter error).
+    /// How many contacts the *export* would write. Differs from
+    /// `contacts_total` only when the export is incremental, and the window shows
+    /// both numbers so the difference is never a surprise.
     pub(crate) export_count: Option<usize>,
     /// A write is in flight on the worker.
     pub(crate) export_busy: bool,
-    /// Last export result / filter error, shown in the window.
+    /// Last export result / error, shown in the window.
     pub(crate) export_status: String,
     /// Job queue to the export worker thread, and its replies.
     pub(crate) export_tx: std::sync::mpsc::Sender<crate::logging::export::ExportJob>,
@@ -182,11 +207,21 @@ impl RigflowApp {
             worked_before: rigflow_log::store::WorkedBefore::default(),
             contacts_cache: Vec::new(),
             contacts_cache_dirty: true,
+            contacts_total: 0,
             wsjtx_rx,
+            qso_filter: crate::logging::export::QsoFilterDraft::default(),
+            qso_filter_last: None,
+            show_filter: false,
+            contacts_query_due: None,
+            contacts_query_seq: 0,
+            filter_error: String::new(),
+            call_lookup: String::new(),
+            call_lookup_hits: None,
+            call_lookup_seq: 0,
+            call_lookup_due: None,
             show_export: false,
             export_draft: crate::logging::export::ExportDraft::default(),
             export_draft_last: None,
-            export_count_due: None,
             export_count: None,
             export_busy: false,
             export_status: String::new(),
@@ -720,6 +755,7 @@ impl eframe::App for RigflowApp {
         self.draw_wsjtx_setup_window(ctx);
         self.draw_log_entry_window(ctx, &snapshot);
         self.draw_contact_view_window(ctx, &snapshot);
+        self.draw_filter_window(ctx);
         self.draw_export_window(ctx, &snapshot);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the

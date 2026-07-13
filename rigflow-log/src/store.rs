@@ -249,6 +249,23 @@ impl LogStore {
         crate::export::writer::count_with(&self.conn, filter)
     }
 
+    /// Contacts matching an export filter, newest first, capped at `limit`.
+    ///
+    /// Shares [`crate::export::query::build`] with the export writer, so the
+    /// contact view lists exactly the QSOs an export of the same filter writes.
+    pub fn query_contacts_filtered(
+        &self,
+        filter: &crate::export::ExportFilter,
+        limit: usize,
+    ) -> Result<Vec<LoggedQso>, LogError> {
+        crate::export::writer::query_with(
+            &self.conn,
+            filter,
+            limit,
+            crate::export::Sort::Reverse, // the view is always newest-first
+        )
+    }
+
     /// The current position of a named incremental-export bookmark.
     pub fn export_bookmark(&self, profile: &str) -> Result<Option<i64>, LogError> {
         crate::export::writer::read_bookmark(&self.conn, profile)

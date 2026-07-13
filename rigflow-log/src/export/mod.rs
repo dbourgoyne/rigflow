@@ -42,7 +42,7 @@ pub use filter::{
     CORE_FIELDS, DEFAULT_ADIF_VERSION, DEFAULT_EXPORT_PROFILE, ExportFilter, ExportOptions,
     FieldProfile, FilterError, GridPrecision, QslStatusFilter, Sort, Timestamp,
 };
-pub use writer::{ExportSummary, Exporter, PROGRAM_VERSION};
+pub use writer::{ContactPage, ExportSummary, Exporter, PROGRAM_VERSION};
 
 #[cfg(test)]
 mod tests;
