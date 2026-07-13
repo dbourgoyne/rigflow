@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, UdpSocket};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use rigflow_core::dsp::modes::DeemphasisMode;
@@ -37,6 +38,20 @@ pub struct LeaseRecord {
     pub acquired_at: Instant,
     pub last_renewed_at: Instant,
     pub expires_at: Instant,
+}
+
+/// Where and how a worker sends media (audio + waterfall) back to the client.
+///
+/// `socket` is the shared server UDP socket bound to the registration port, so
+/// media egresses from the same 5-tuple the client's registration/keepalive
+/// opened — return traffic then matches the client's NAT/conntrack mapping.
+/// `target` is the reflexive client address the registration listener observed
+/// packets arriving from; it is `None` until the client has registered, in which
+/// case the worker withholds media until it becomes known.
+#[derive(Clone)]
+pub struct MediaEgress {
+    pub socket: Arc<UdpSocket>,
+    pub target: Arc<RwLock<Option<SocketAddr>>>,
 }
 
 /// Request to acquire and start a radio worker.

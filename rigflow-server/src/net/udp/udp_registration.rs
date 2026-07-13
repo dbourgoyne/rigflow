@@ -1,8 +1,7 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
 
 use log::info;
 
@@ -53,11 +52,10 @@ pub async fn run_udp_registration_listener(
 
         match stream_type {
             STREAM_TYPE_REGISTER_AUDIO => {
-                // Update shared target + ACK (echo header).
-                {
-                    let mut target = udp_audio_target.write().await;
-                    *target = Some(src);
-                }
+                // Record the reflexive source (the address, post-NAT, that the
+                // client's packets actually arrive from) as the media target, and
+                // ACK (echo header).
+                *udp_audio_target.write().unwrap_or_else(|e| e.into_inner()) = Some(src);
                 let _ = socket.send_to(&header, src).await;
                 info!("Registered UDP audio client: {}", src);
             }
@@ -74,6 +72,10 @@ pub async fn run_udp_registration_listener(
                 }
             }
             STREAM_TYPE_TIME_SYNC_REQUEST => {
+                // The 1 Hz time-sync probe doubles as a media-target refresh: it
+                // re-observes the reflexive source, so a lost initial registration
+                // (or a NAT rebind) self-heals within ~1 s.
+                *udp_audio_target.write().unwrap_or_else(|e| e.into_inner()) = Some(src);
                 // Clock-offset probe: echo T1 plus the server receive (T2) and
                 // send (T3) wall-clocks so the client can compute offset + RTT.
                 if let Some((probe_id, t1)) = parse_time_sync_request(&buf[..len]) {

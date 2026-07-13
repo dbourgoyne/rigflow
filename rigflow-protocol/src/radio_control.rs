@@ -93,10 +93,14 @@ pub enum ClientRadioMessage {
         /// Initial tuned frequency (Hz)
         target_freq_hz: u64,
 
-        /// UDP endpoint for audio (e.g. "ip:port")
+        /// No longer used, audio is sent on the media egress socket
+        /// see https://github.com/dbourgoyne/rigflow/pull/31
+        /// TODO: remove
         audio_udp_peer: String,
 
-        /// UDP endpoint for waterfall (e.g. "ip:port")
+        /// No longer used, audio is sent on the media egress socket
+        /// see https://github.com/dbourgoyne/rigflow/pull/31
+        /// TODO: remove
         waterfall_udp_peer: String,
     },
 

@@ -7,7 +7,7 @@ use rigflow_server::config::ServerConfig;
 use rigflow_server::radio::discovery::discover_radios;
 use rigflow_server::radio::manager::RadioManager;
 use rigflow_server::radio::types::{
-    AcquireRequest, ClientId, RadioManagerConfig, RadioManagerError, StopReason,
+    AcquireRequest, ClientId, MediaEgress, RadioManagerConfig, RadioManagerError, StopReason,
 };
 
 /// The fake tone radio is always discovered and opens without any hardware, so
@@ -27,6 +27,13 @@ fn acquire_request() -> AcquireRequest {
 
 fn build_manager(lease_ttl: Duration) -> Arc<RadioManager> {
     let cfg = ServerConfig::default();
+    // The workers these tests spawn never actually stream (no client registers,
+    // so the media target stays None); a throwaway bound socket satisfies the
+    // MediaEgress the manager hands to each worker.
+    let media_egress = MediaEgress {
+        socket: Arc::new(std::net::UdpSocket::bind("127.0.0.1:0").expect("bind test media socket")),
+        target: Arc::new(std::sync::RwLock::new(None)),
+    };
     Arc::new(RadioManager::new(
         discover_radios(&cfg),
         RadioManagerConfig {
@@ -35,6 +42,7 @@ fn build_manager(lease_ttl: Duration) -> Arc<RadioManager> {
             shutdown_timeout: Duration::from_secs(2),
         },
         cfg,
+        media_egress,
     ))
 }
 

@@ -26,7 +26,7 @@ use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::radio::types::{
-    AcquireRequest, StopReason, VfoSplitState, WorkerCommand, WorkerEvent, WorkerExit,
+    AcquireRequest, MediaEgress, StopReason, VfoSplitState, WorkerCommand, WorkerEvent, WorkerExit,
     WorkerReadyInfo, WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
@@ -247,6 +247,7 @@ pub async fn run_radio_worker(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
     server_cfg: ServerConfig,
+    media: MediaEgress,
     mut worker_rx: mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
     events_tx: broadcast::Sender<WorkerEvent>,
@@ -285,6 +286,7 @@ pub async fn run_radio_worker(
         let thread_descriptor = descriptor.clone();
         let thread_request = request.clone();
         let thread_server_cfg = server_cfg.clone();
+        let thread_media = media.clone();
         let thread_status_tx = status_tx.clone();
         let thread_events_tx = events_tx.clone();
         let thread_stop_flag = stop_flag.clone();
@@ -297,6 +299,7 @@ pub async fn run_radio_worker(
                 thread_descriptor,
                 thread_request,
                 thread_server_cfg,
+                thread_media,
                 cmd_rx_std,
                 thread_status_tx,
                 thread_events_tx,
@@ -746,6 +749,7 @@ fn run_iq_worker_threads(
     descriptor: RadioDescriptor,
     request: AcquireRequest,
     server_cfg: ServerConfig,
+    media: MediaEgress,
     cmd_rx: std_mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
     events_tx: broadcast::Sender<WorkerEvent>,
@@ -964,10 +968,9 @@ fn run_iq_worker_threads(
         server_cfg.clone(),
         control.clone(),
         stop_flag.clone(),
-        fatal_tx.clone(),
         status_tx.clone(),
         iq_audio_rx,
-        request.audio_udp_peer,
+        media.clone(),
         startup_info.clone(),
         confirmed_sample_rate_hz.clone(),
         STREAM_TYPE_AUDIO,
@@ -977,15 +980,15 @@ fn run_iq_worker_threads(
         descriptor.clone(),
         iq_wf_rx,
         stop_flag.clone(),
-        fatal_tx.clone(),
-        request.waterfall_udp_peer,
+        media.clone(),
         startup_info.runtime.waterfall_bins as usize,
         control.clone(),
         STREAM_TYPE_WATERFALL,
     );
 
     // VFO B (dual-watch) DSP + waterfall: reuse the same threads via `control_b`
-    // and VFO-B stream types, sharing the client's audio/waterfall UDP peers.
+    // and VFO-B stream types, sharing the same media egress as VFO A — both
+    // receivers stream to the one reflexive target off the one socket.
     // They block on their (empty) channels while dual-watch is off — zero idle
     // cost — and process only when the capture thread feeds them VFO B IQ.
     //
@@ -998,10 +1001,9 @@ fn run_iq_worker_threads(
         server_cfg.clone(),
         control_b.clone(),
         stop_flag.clone(),
-        fatal_tx.clone(),
         status_b_tx,
         iq_audio_b_rx,
-        request.audio_udp_peer,
+        media.clone(),
         startup_info.clone(),
         confirmed_sample_rate_hz.clone(),
         STREAM_TYPE_AUDIO_VFO_B,
@@ -1011,8 +1013,7 @@ fn run_iq_worker_threads(
         descriptor.clone(),
         iq_wf_b_rx,
         stop_flag.clone(),
-        fatal_tx.clone(),
-        request.waterfall_udp_peer,
+        media.clone(),
         startup_info.runtime.waterfall_bins as usize,
         control_b.clone(),
         STREAM_TYPE_WATERFALL_VFO_B,
@@ -1709,8 +1710,7 @@ fn spawn_waterfall_thread(
     descriptor: RadioDescriptor,
     iq_wf_rx: std_mpsc::Receiver<Vec<Complex32>>,
     stop_flag: Arc<AtomicBool>,
-    fatal_tx: std_mpsc::Sender<WorkerExit>,
-    wf_target: std::net::SocketAddr,
+    media: MediaEgress,
     waterfall_window_len: usize,
     control: Arc<Mutex<SharedControlState>>,
     waterfall_stream_type: u8,
@@ -1718,15 +1718,8 @@ fn spawn_waterfall_thread(
     thread::spawn(move || {
         let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
 
-        let mut waterfall = match UdpWaterfallSender::new_with_stream_type(waterfall_stream_type) {
-            Ok(sender) => sender,
-            Err(error) => {
-                let reason = format!("failed to create UDP waterfall sender: {error}");
-                stop_flag.store(true, Ordering::Relaxed);
-                let _ = fatal_tx.send(WorkerExit::Failed { reason });
-                return;
-            }
-        };
+        let mut waterfall =
+            UdpWaterfallSender::new_with_stream_type(media.socket.clone(), waterfall_stream_type);
 
         let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
         let waterfall_max_len = waterfall_window_len * 8;
@@ -1810,7 +1803,15 @@ fn spawn_waterfall_thread(
 			    avg_db
 			);
 
-                        waterfall.send_row_db_to(wf_target, &row_db);
+                        // Copy the target out so the lock is released before the
+                        // send (never held across I/O), tolerating a poisoned lock
+                        // since the value is always consistent.  Send only once the
+                        // reflexive address is known (set by the registration/time-
+                        // sync listener); skip the row otherwise.
+                        let target = *media.target.read().unwrap_or_else(|e| e.into_inner());
+                        if let Some(target) = target {
+                            waterfall.send_row_db_to(target, &row_db);
+                        }
                     }
                 }
 
@@ -2946,10 +2947,9 @@ fn spawn_dsp_thread(
     server_cfg: ServerConfig,
     control: Arc<Mutex<SharedControlState>>,
     stop_flag: Arc<AtomicBool>,
-    fatal_tx: std_mpsc::Sender<WorkerExit>,
     status_tx: watch::Sender<WorkerStatus>,
     iq_audio_rx: std_mpsc::Receiver<Vec<Complex32>>,
-    audio_target: std::net::SocketAddr,
+    media: MediaEgress,
     startup_info: StartupInfo,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
     audio_stream_type: u8,
@@ -2984,15 +2984,8 @@ fn spawn_dsp_thread(
             pipeline.client_output_sample_rate(),
         );
 
-        let mut audio = match UdpAudioSender::new_with_stream_type(240, audio_stream_type) {
-            Ok(sender) => sender,
-            Err(error) => {
-                let reason = format!("failed to create UDP audio sender: {error}");
-                stop_flag.store(true, Ordering::Relaxed);
-                let _ = fatal_tx.send(WorkerExit::Failed { reason });
-                return;
-            }
-        };
+        let mut audio =
+            UdpAudioSender::new_with_stream_type(media.socket.clone(), 240, audio_stream_type);
 
         let mut applied = current_control(&control);
         // TX-audio diagnostics live in the process-global (written by the
@@ -3400,8 +3393,16 @@ fn spawn_dsp_thread(
                         audio_i16.push(value);
                     }
 
+                    // Copy the target out so the lock is released before the send
+                    // (never held across I/O), tolerating a poisoned lock since the
+                    // value is always consistent.  Send only once the reflexive
+                    // address is known (set by the registration/time-sync
+                    // listener); withhold audio otherwise.
+                    let target = *media.target.read().unwrap_or_else(|e| e.into_inner());
                     if !audio_i16.is_empty() {
-                        audio.send_audio_to(audio_target, &audio_i16);
+                        if let Some(target) = target {
+                            audio.send_audio_to(target, &audio_i16);
+                        }
                     }
                 }
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}

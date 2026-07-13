@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::Arc;
 
 use rigflow_core::net::udp_framing::{MAGIC, STREAM_TYPE_WATERFALL, VERSION};
 
@@ -17,7 +18,7 @@ pub const WATERFALL_BINS_PER_CHUNK: usize = 256;
 /// - u16 bin_offset (big-endian) — index of this chunk's first bin in the row
 /// - f32 bins (little-endian) — this chunk's bins (count inferred from datagram length)
 pub struct UdpWaterfallSender {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     /// Per-packet (per-chunk) sequence — drives the client's chunk-level loss stats.
     sequence: u32,
     timestamp: u64,
@@ -28,19 +29,20 @@ pub struct UdpWaterfallSender {
 }
 
 impl UdpWaterfallSender {
-    pub fn new() -> std::io::Result<Self> {
-        Self::new_with_stream_type(STREAM_TYPE_WATERFALL)
+    /// `socket` is the shared server socket bound to the registration port, so
+    /// waterfall rows egress from the same 5-tuple the client registered against.
+    pub fn new(socket: Arc<UdpSocket>) -> Self {
+        Self::new_with_stream_type(socket, STREAM_TYPE_WATERFALL)
     }
 
-    pub fn new_with_stream_type(stream_type: u8) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        Ok(Self {
+    pub fn new_with_stream_type(socket: Arc<UdpSocket>, stream_type: u8) -> Self {
+        Self {
             socket,
             sequence: 0,
             timestamp: 0,
             row_seq: 0,
             stream_type,
-        })
+        }
     }
 
     /// Send one waterfall row as one or more sub-MTU chunks.

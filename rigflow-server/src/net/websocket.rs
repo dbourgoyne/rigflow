@@ -112,8 +112,14 @@ async fn client_socket(socket: WebSocket, state: AppState) {
         // Best-effort cleanup: release any leased radio …
         release_session_radio_on_disconnect(&state_for_recv, &mut session).await;
         // … and free the single-client slot (guarded, so a late-closing old
-        // connection can't clobber a newer owner).
-        release_active_client(&state_for_recv.active_client, &session.client_id).await;
+        // connection can't clobber a newer owner), clearing the media target with
+        // it so the next client's stream never goes to this one's stale address.
+        release_active_client(
+            &state_for_recv.active_client,
+            &state_for_recv.udp_audio_target,
+            &session.client_id,
+        )
+        .await;
     });
 
     tokio::select! {
@@ -138,11 +144,18 @@ async fn try_claim_active_client(
 }
 
 /// Release the single-client slot, but only if `client_id` still owns it (so a
-/// late-closing old/rejected connection can't clear a newer owner's slot).
-async fn release_active_client(slot: &tokio::sync::Mutex<Option<ClientId>>, client_id: &ClientId) {
+/// late-closing old/rejected connection can't clear a newer owner's slot).  The
+/// reflexive media target is cleared in the same guarded block, so the next
+/// client starts with no stale destination.
+async fn release_active_client(
+    slot: &tokio::sync::Mutex<Option<ClientId>>,
+    udp_audio_target: &std::sync::RwLock<Option<std::net::SocketAddr>>,
+    client_id: &ClientId,
+) {
     let mut guard = slot.lock().await;
     if guard.as_ref() == Some(client_id) {
         *guard = None;
+        *udp_audio_target.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -1955,6 +1968,7 @@ mod single_client_tests {
     #[tokio::test]
     async fn second_client_rejected_until_first_releases() {
         let slot: Mutex<Option<ClientId>> = Mutex::new(None);
+        let target: std::sync::RwLock<Option<std::net::SocketAddr>> = std::sync::RwLock::new(None);
         let a = ClientId("a".to_string());
         let b = ClientId("b".to_string());
 
@@ -1964,11 +1978,11 @@ mod single_client_tests {
         assert_eq!(*slot.lock().await, Some(a.clone()));
 
         // A non-owner release is a no-op (guards against clobbering).
-        release_active_client(&slot, &b).await;
+        release_active_client(&slot, &target, &b).await;
         assert_eq!(*slot.lock().await, Some(a.clone()));
 
         // The owner releases; now the second client can claim.
-        release_active_client(&slot, &a).await;
+        release_active_client(&slot, &target, &a).await;
         assert_eq!(*slot.lock().await, None);
         assert!(try_claim_active_client(&slot, &b).await);
         assert_eq!(*slot.lock().await, Some(b));

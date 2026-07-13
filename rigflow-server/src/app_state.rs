@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex};
 
 use rigflow_protocol::ServerMessage;
 
@@ -17,7 +17,12 @@ pub struct AppState {
     pub tx: broadcast::Sender<ServerMessage>,
     pub audio_tx: broadcast::Sender<Vec<u8>>,
     pub waterfall_tx: broadcast::Sender<Vec<u8>>,
-    pub udp_audio_target: Arc<RwLock<Option<SocketAddr>>>,
+    /// Reflexive client media address: the source the UDP registration listener
+    /// observed the client's packets arriving from.  Shared with the radio
+    /// workers (which send audio/waterfall to it) via `MediaEgress`, and with the
+    /// registration listener (which writes it).  `std` RwLock so the blocking
+    /// worker threads can read it without a runtime.
+    pub udp_audio_target: Arc<std::sync::RwLock<Option<SocketAddr>>>,
     pub radio_manager: Arc<RadioManager>,
     /// Single-client policy: the id of the one client currently allowed to be
     /// connected.  A second connection while this is `Some` is rejected.  Freed
@@ -26,7 +31,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(radio_manager: Arc<RadioManager>) -> Self {
+    pub fn new(
+        radio_manager: Arc<RadioManager>,
+        udp_audio_target: Arc<std::sync::RwLock<Option<SocketAddr>>>,
+    ) -> Self {
         let (tx, _) = broadcast::channel(256);
         let (audio_tx, _) = broadcast::channel(256);
         let (waterfall_tx, _) = broadcast::channel(256);
@@ -35,7 +43,7 @@ impl AppState {
             tx,
             audio_tx,
             waterfall_tx,
-            udp_audio_target: Arc::new(RwLock::new(None)),
+            udp_audio_target,
             radio_manager,
             active_client: Arc::new(Mutex::new(None)),
         }
