@@ -121,14 +121,12 @@ impl RigflowApp {
                     });
 
                 if (diag.underruns | diag.overruns) != 0 {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "underruns {}  ·  overruns {}",
-                            diag.underruns, diag.overruns
-                        ))
-                        .small()
-                        .weak(),
-                    );
+                    // Non-zero means audio actually broke up — the last thing that
+                    // should be rendered in unreadably small, dim text.
+                    ui.label(super::note_text(format!(
+                        "underruns {}  ·  overruns {}",
+                        diag.underruns, diag.overruns
+                    )));
                 }
 
                 ui.add_space(4.0);

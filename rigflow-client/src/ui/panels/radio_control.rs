@@ -439,7 +439,7 @@ impl RigflowApp {
             } else {
                 ("muted", egui::Color32::from_rgb(210, 130, 130))
             };
-            ui.label(RichText::new(text).color(color).small());
+            ui.label(RichText::new(text).color(color));
         });
 
         let enabled = *t.squelch_enabled(state);
@@ -763,11 +763,9 @@ impl RigflowApp {
                 "● Transmitting clip…",
             );
         } else if !ssb {
-            ui.label(
-                RichText::new("Switch to USB / LSB / Data to transmit a clip.")
-                    .small()
-                    .weak(),
-            );
+            ui.label(super::note_text(
+                "Switch to USB / LSB / Data to transmit a clip.",
+            ));
         }
         if let Some(err) = &state.voice_keyer_error {
             ui.colored_label(egui::Color32::from_rgb(230, 140, 60), err.clone());
@@ -876,7 +874,7 @@ impl RigflowApp {
                 self.cw_text_abort.store(true, Ordering::Relaxed);
             }
             if sending {
-                ui.label(RichText::new("● sending…").small());
+                ui.label("● sending…");
             }
         });
 
@@ -974,11 +972,7 @@ impl RigflowApp {
             if ui.checkbox(&mut enabled, "Enable Decode").changed() {
                 state.cw_decode.set_enabled(enabled);
             }
-            ui.label(
-                RichText::new(format!("Auto WPM (~{})", state.cw_decode.est_wpm()))
-                    .small()
-                    .weak(),
-            );
+            ui.label(format!("Auto WPM (~{})", state.cw_decode.est_wpm()));
         });
 
         // Scrolling, read-only decoded text (auto-scrolls to the newest).
@@ -1079,7 +1073,7 @@ impl RigflowApp {
         if !state.mic_status.is_empty() {
             ui.colored_label(
                 egui::Color32::from_rgb(255, 200, 50),
-                RichText::new(&state.mic_status).small(),
+                RichText::new(&state.mic_status),
             );
         }
 

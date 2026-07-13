@@ -480,7 +480,7 @@ impl RigflowApp {
         }
 
         if let Some(name) = &rec.filename {
-            ui.label(egui::RichText::new(name).small().monospace());
+            ui.label(egui::RichText::new(name).monospace());
             ui.label(format!(
                 "{}   {}",
                 format_elapsed(rec.elapsed_secs),
@@ -523,7 +523,7 @@ impl RigflowApp {
         if rec.recording {
             ui.colored_label(egui::Color32::from_rgb(230, 90, 90), "● Recording");
             if let Some(name) = &rec.filename {
-                ui.label(egui::RichText::new(name).small().monospace());
+                ui.label(egui::RichText::new(name).monospace());
                 ui.label(format!(
                     "{}   {}",
                     format_elapsed(rec.elapsed_secs),
@@ -539,11 +539,7 @@ impl RigflowApp {
         } else {
             ui.colored_label(egui::Color32::GRAY, "○ Idle");
         }
-        ui.label(
-            egui::RichText::new("Saved per-operator — the audio you hear.")
-                .small()
-                .weak(),
-        );
+        ui.label(super::note_text("Saved per-operator — the audio you hear."));
     }
 
     /// HL2 Band Control: band radio buttons (tune to default freq + mode via the
@@ -724,7 +720,6 @@ impl RigflowApp {
                         state.tx_tone_freq_hz,
                         off_center_pct,
                     ))
-                    .small()
                     .color(egui::Color32::from_rgb(255, 200, 50)),
                 );
             } else {
@@ -760,7 +755,6 @@ impl RigflowApp {
         if state.tx_tone_running {
             ui.label(
                 egui::RichText::new("● Transmitting tone…")
-                    .small()
                     .color(egui::Color32::from_rgb(100, 220, 100)),
             );
         }

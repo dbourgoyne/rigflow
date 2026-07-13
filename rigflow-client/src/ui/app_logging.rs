@@ -445,7 +445,7 @@ impl RigflowApp {
                         // The index says worked, the rows haven't landed yet.
                         _ => {
                             ui.label(egui::RichText::new("Worked before").heading());
-                            ui.label(egui::RichText::new("looking up…").weak());
+                            ui.label("looking up…");
                         }
                     }
                 }

@@ -13,6 +13,7 @@
 use eframe::egui;
 
 use crate::logging::export::QsoFilterDraft;
+use crate::ui::panels::note_text;
 use rigflow_log::export::GridPrecision;
 use rigflow_log::normalize::ModeClass;
 
@@ -180,14 +181,10 @@ impl crate::ui::app::RigflowApp {
                 });
 
                 egui::CollapsingHeader::new("Confirmation").show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "Online-service state isn't tracked yet, so these match nothing \
-                             (or everything) until service sync lands.",
-                        )
-                        .small()
-                        .weak(),
-                    );
+                    ui.label(note_text(
+                        "Online-service state isn't tracked yet, so these match nothing \
+                         (or everything) until service sync lands.",
+                    ));
                     ui.horizontal(|ui| {
                         ui.label("Not uploaded to");
                         ui.add(

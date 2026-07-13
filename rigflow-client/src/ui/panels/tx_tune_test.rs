@@ -40,8 +40,7 @@ impl RigflowApp {
                     "⚠ Short low-power carrier pulse.\n\
                          Verify antenna/load and band before use.",
                 )
-                .color(egui::Color32::from_rgb(255, 160, 40))
-                .small(),
+                .color(egui::Color32::from_rgb(255, 160, 40)),
             );
             ui.add_space(2.0);
 
@@ -52,7 +51,7 @@ impl RigflowApp {
                 let s = snapshot.last_tx_tune_result.status;
                 (format_status(s), status_color(s))
             };
-            ui.label(egui::RichText::new(state_text).color(state_color).small());
+            ui.label(egui::RichText::new(state_text).color(state_color));
             ui.add_space(4.0);
 
             // ── Current TX Drive (read-only) ─────────────────────────────

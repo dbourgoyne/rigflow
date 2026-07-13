@@ -14,6 +14,7 @@
 use eframe::egui;
 
 use crate::logging::export::{ExportDraft, ExportEvent, ExportJob, ProfileChoice, QUERY_DEBOUNCE};
+use crate::ui::panels::note_text;
 
 impl crate::ui::app::RigflowApp {
     /// Open the export window, seeding a dated default path in the operator's
@@ -325,15 +326,10 @@ impl crate::ui::app::RigflowApp {
                                 .desired_width(120.0),
                         );
                     });
-                    ui.label(
-                        egui::RichText::new(
-                            "Each named stream keeps its own position, and only an \
-                             incremental export moves it — an ordinary filtered export \
-                             never does.",
-                        )
-                        .small()
-                        .weak(),
-                    );
+                    ui.label(note_text(
+                        "Each named stream keeps its own position, and only an incremental \
+                         export moves it — an ordinary filtered export never does.",
+                    ));
                 }
 
                 ui.separator();
@@ -349,7 +345,7 @@ impl crate::ui::app::RigflowApp {
                             "{matching} match your filter · {n} new since the last export \
                              · exporting {n}"
                         )),
-                        None => ui.label(egui::RichText::new("counting…").weak()),
+                        None => ui.label("counting…"),
                     };
                 } else {
                     ui.label(format!(
@@ -365,7 +361,7 @@ impl crate::ui::app::RigflowApp {
                         do_export = true;
                     }
                     if self.export_busy {
-                        ui.label(egui::RichText::new("exporting…").weak());
+                        ui.label("exporting…");
                     }
                 });
                 if !self.export_status.is_empty() {

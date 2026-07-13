@@ -277,11 +277,9 @@ impl RigflowApp {
                 self.send_radio_msg(ClientRadioMessage::SetDualWatch { enabled: dw });
             }
             if !dual_watch_supported {
-                ui.label(
-                    egui::RichText::new("Dual-watch needs an HL2 (second receiver).")
-                        .small()
-                        .weak(),
-                );
+                ui.label(super::note_text(
+                    "Dual-watch needs an HL2 (second receiver).",
+                ));
             }
         });
     }

@@ -385,7 +385,7 @@ impl RigflowApp {
         }
 
         if !snapshot.radio_acquired {
-            ui.label(egui::RichText::new("No radio acquired").weak());
+            ui.label("No radio acquired");
             return;
         }
 
@@ -544,7 +544,9 @@ impl RigflowApp {
                     .color(egui::Color32::from_rgb(235, 80, 80)),
             );
         } else {
-            ui.label(egui::RichText::new("RX").weak());
+            // Calm green against TX's alarm red: the quiet state is still legible
+            // at a glance, distinguished by colour rather than by being dimmed.
+            ui.label(egui::RichText::new("RX").color(egui::Color32::from_rgb(120, 200, 120)));
         }
 
         // SWR — shown only when the source reports it.
