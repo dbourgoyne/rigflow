@@ -16,6 +16,69 @@ use eframe::egui;
 use crate::logging::export::{ExportDraft, ExportEvent, ExportJob, ProfileChoice, QUERY_DEBOUNCE};
 use crate::ui::panels::note_text;
 
+/// Shown when there is no native file picker. The path field is always editable,
+/// so a missing picker is an inconvenience, never a blocker.
+const NO_PICKER_HINT: &str = "No file picker available — type the path above. \
+     (Linux: this needs an xdg-desktop-portal backend that implements FileChooser, \
+     e.g. xdg-desktop-portal-gtk or -kde. The wlr backend does not.)";
+
+/// Whether a native save dialog can actually open.
+///
+/// We build `rfd` with the **xdg-portal** backend (deliberately: rfd's GTK
+/// backend would link GTK into the client). It talks to `xdg-desktop-portal` over
+/// D-Bus, and when the dialog can't open, `save_file()` simply returns `None` —
+/// indistinguishable from a cancel. So probe first, and disable the button rather
+/// than offer one that does nothing.
+///
+/// **Having the portal is not enough**: the frontend delegates each interface to a
+/// *backend*, and a backend only implements some of them.
+/// `xdg-desktop-portal-wlr` (Sway/wlroots) implements ScreenCast and Screenshot
+/// but **not FileChooser** — so on such a box the portal is running, the call is
+/// accepted, no backend can serve it, and the picker silently yields nothing.
+/// That is a real configuration, so the probe looks for a backend that actually
+/// declares `FileChooser`, not merely for the portal's presence.
+///
+/// This reads the backends' `.portal` manifests rather than making a live D-Bus
+/// call — cheap, and cached for the process. If it still guesses wrong, the
+/// timing check at the call site catches the failure.
+#[cfg(target_os = "linux")]
+fn file_picker_available() -> bool {
+    use std::sync::OnceLock;
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        // A session bus to talk to at all.
+        let has_bus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some()
+            || std::env::var_os("XDG_RUNTIME_DIR")
+                .map(|d| std::path::Path::new(&d).join("bus").exists())
+                .unwrap_or(false);
+        if !has_bus {
+            return false;
+        }
+
+        // A backend that implements FileChooser. Each backend ships a manifest at
+        // <data-dir>/xdg-desktop-portal/portals/<name>.portal listing the
+        // `org.freedesktop.impl.portal.*` interfaces it serves.
+        let data_dirs = std::env::var("XDG_DATA_DIRS")
+            .unwrap_or_else(|_| "/usr/local/share:/usr/share".to_string());
+        data_dirs.split(':').any(|dir| {
+            let portals = std::path::Path::new(dir).join("xdg-desktop-portal/portals");
+            let Ok(entries) = std::fs::read_dir(&portals) else {
+                return false;
+            };
+            entries.filter_map(Result::ok).any(|e| {
+                e.path().extension().is_some_and(|x| x == "portal")
+                    && std::fs::read_to_string(e.path()).is_ok_and(|s| s.contains("FileChooser"))
+            })
+        })
+    })
+}
+
+/// macOS and Windows have a native picker in the OS; nothing to probe.
+#[cfg(not(target_os = "linux"))]
+fn file_picker_available() -> bool {
+    true
+}
+
 impl crate::ui::app::RigflowApp {
     /// Open the export window, seeding a dated default path in the operator's
     /// data directory.
@@ -288,10 +351,22 @@ impl crate::ui::app::RigflowApp {
                 ui.horizontal(|ui| {
                     ui.label("File");
                     ui.add(egui::TextEdit::singleline(&mut d.output_path).desired_width(260.0));
-                    if ui.button("Browse…").clicked() {
+
+                    // No native picker → say so, instead of offering a button that
+                    // silently does nothing. The path field above is always usable,
+                    // so export is never blocked by a missing portal.
+                    let picker = file_picker_available();
+                    if ui
+                        .add_enabled(picker, egui::Button::new("Browse…"))
+                        .on_disabled_hover_text(NO_PICKER_HINT)
+                        .clicked()
+                    {
                         pick_path = true;
                     }
                 });
+                if !file_picker_available() {
+                    ui.label(note_text(NO_PICKER_HINT));
+                }
                 ui.horizontal(|ui| {
                     ui.label("Fields");
                     ui.selectable_value(&mut d.profile_choice, ProfileChoice::Full, "Full");
@@ -379,14 +454,30 @@ impl crate::ui::app::RigflowApp {
         if pick_path {
             let start = std::path::PathBuf::from(self.export_draft.output_path.trim());
             let mut dlg = rfd::FileDialog::new().add_filter("ADIF", &["adi", "adif"]);
+            // Only seed the directory if it exists; a portal rejects a bad one.
             if let Some(dir) = start.parent().filter(|p| p.is_dir()) {
                 dlg = dlg.set_directory(dir);
             }
             if let Some(name) = start.file_name().and_then(|n| n.to_str()) {
                 dlg = dlg.set_file_name(name);
             }
-            if let Some(path) = dlg.save_file() {
-                self.export_draft.output_path = path.to_string_lossy().into_owned();
+            // `save_file()` returns None for BOTH "operator cancelled" and "the
+            // dialog never opened", and rfd gives us no way to tell them apart.
+            // Time it: a cancel needs a human to see the dialog and click, which
+            // cannot happen in a few milliseconds, whereas a failing portal call
+            // returns immediately. An instant None is therefore a broken picker,
+            // and we say so instead of leaving the button a silent no-op.
+            let t0 = std::time::Instant::now();
+            let picked = dlg.save_file();
+            let instant = t0.elapsed() < std::time::Duration::from_millis(150);
+
+            match picked {
+                Some(path) => {
+                    self.export_draft.output_path = path.to_string_lossy().into_owned();
+                    self.export_status.clear();
+                }
+                None if instant => self.export_status = NO_PICKER_HINT.to_string(),
+                None => {} // a real cancel — nothing to say
             }
         }
 
