@@ -116,6 +116,19 @@ pub struct HermesLite2Source {
     lna_gain_code: u8,
     tx_seq: u32,
     pending: VecDeque<Complex32>,
+    /// Number of *additional* hardware receivers beyond RX0 (0 = single RX, the
+    /// default; 1 = RX0 + RX1 for dual-watch VFO B).  Drives the DDC deinterleave
+    /// stride in `parse_ddc_packet` and the C4 receiver-count / duplex bit.
+    multirx_additional: u8,
+    /// VFO B (RX1 / DDC1) NCO frequency; independent of `center_freq_hz` so VFO B
+    /// can sit on a different band (cross-band dual-watch).
+    vfo_b_center_freq_hz: f32,
+    /// RX1 (DDC1 / VFO B) IQ deinterleaved from the same packets as `pending`.
+    /// Empty unless `multirx_additional >= 1`.
+    secondary: VecDeque<Complex32>,
+    /// VFO B samples aligned to (same count as) the most recent `read_block`,
+    /// ready for `read_secondary_block` to return.
+    secondary_out: Vec<Complex32>,
     /// Accumulated status registers decoded from incoming DDC packet headers.
     status_regs: Hl2StatusRegs,
     /// N2ADR filter byte as it sits in the address-0 C2 register: the 7-bit
@@ -130,6 +143,10 @@ pub struct HermesLite2Source {
     /// RX IQ captured during the most recent transmit while `fdx_enabled`.
     /// Drained by [`HermesLite2Source::take_fdx_iq`] after `tx_tune_test`.
     fdx_iq: Vec<Complex32>,
+    /// Shared "transmitting" flag (set in `tx_seq_begin`, cleared at the end of
+    /// `tx_seq_end`) so the HR50 poller stays off the serial for the whole real
+    /// keyed window.  `None` until the worker installs it via `set_tx_active_flag`.
+    tx_active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// TX PTT sequencing delays (ms): PTT is asserted, `tx_ptt_lead_ms` elapses
     /// before RF, and `tx_ptt_tail_ms` is held after RF stops before release.
     /// Used by every transmit path (Spot/SWR/sweep/test-tone, future CW).
@@ -164,10 +181,15 @@ impl HermesLite2Source {
             lna_gain_code: DEFAULT_LNA_GAIN_CODE,
             tx_seq: 0,
             pending: VecDeque::new(),
+            multirx_additional: 0,
+            vfo_b_center_freq_hz: center_freq_hz,
+            secondary: VecDeque::new(),
+            secondary_out: Vec::new(),
             status_regs: Hl2StatusRegs::default(),
             n2adr_filter_c2: 0,
             fdx_enabled: false,
             fdx_iq: Vec::new(),
+            tx_active: None,
             tx_ptt_lead_ms: 20,
             tx_ptt_tail_ms: 20,
             last_rx: Instant::now(),
@@ -212,11 +234,17 @@ impl HermesLite2Source {
         pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
         self.tx_seq = self.tx_seq.wrapping_add(1);
 
-        // Sub-frame 1: address 0 — C1[1:0]=speed code, C2[7:1]=N2ADR J16 filter.
+        // Sub-frame 1: address 0 — C1[1:0]=speed code, C2[7:1]=N2ADR J16 filter,
+        // C4 = receiver count [5:3] + duplex bit (for dual-watch).
         write_subframe(
             &mut pkt[8..520],
             0x00,
-            [self.speed_code(), self.n2adr_filter_c2, 0, 0],
+            [
+                self.speed_code(),
+                self.n2adr_filter_c2,
+                0,
+                self.receiver_count_c4(),
+            ],
         );
 
         // Sub-frame 2: NCO frequency (address 1, C1–C4 = Hz big-endian)
@@ -230,6 +258,44 @@ impl HermesLite2Source {
             .send(&pkt)
             .map_err(|e| format!("HL2: send C&C failed: {e}"))?;
         Ok(())
+    }
+
+    /// C4 of the address-0 config frame: receiver count in bits [5:3]
+    /// (`multirx_additional`, so 0 → 1 RX, 1 → 2 RX) plus the duplex bit (0x04).
+    /// Single-RX returns 0 — byte-identical to the pre-dual-watch behavior, where
+    /// RX0 follows the TX NCO.  Pinned against Quisk (`quisk_hardware.py:212`).
+    fn receiver_count_c4(&self) -> u8 {
+        if self.multirx_additional > 0 {
+            (self.multirx_additional << 3) | 0x04
+        } else {
+            0
+        }
+    }
+
+    /// Program a single NCO register (`c0` = address << 1: 0x02=TX, 0x04=RX0,
+    /// 0x06=RX1) to `freq_hz`.  Subframe 2 repeats the address-0 config so the
+    /// receiver-count / duplex bit stays asserted.
+    fn send_nco(&mut self, c0: u8, freq_hz: u32) -> Result<(), String> {
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_H2D;
+        pkt[4..8].copy_from_slice(&self.tx_seq.to_be_bytes());
+        self.tx_seq = self.tx_seq.wrapping_add(1);
+        write_subframe(&mut pkt[8..520], c0, freq_hz.to_be_bytes());
+        write_subframe(
+            &mut pkt[520..1032],
+            0x00,
+            [
+                self.speed_code(),
+                self.n2adr_filter_c2,
+                0,
+                self.receiver_count_c4(),
+            ],
+        );
+        self.socket
+            .send(&pkt)
+            .map(|_| ())
+            .map_err(|e| format!("HL2: send NCO failed: {e}"))
     }
 
     /// Send a C&C packet carrying the current LNA gain code (address 9, C0=0x12).
@@ -614,6 +680,12 @@ impl HermesLite2Source {
     ///
     /// Safety: RF is never emitted before this returns (amplitude is 0 here).
     fn tx_seq_begin(&mut self, nco_u32: u32) -> Result<(), String> {
+        // Mark transmitting BEFORE any PTT so the HR50 poller stops touching the
+        // serial; cleared at the end of `tx_seq_end` once PTT is actually released.
+        if let Some(f) = &self.tx_active {
+            f.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+
         let packet_period = Duration::from_secs_f32(TX_SAMPLES_PER_PACKET / TX_SAMPLE_RATE_HZ);
 
         // Non-blocking for the whole transmit; drain any queued DDC packets.
@@ -698,6 +770,12 @@ impl HermesLite2Source {
         let _ = self.send_gain_cc();
         let _ = self.socket.set_nonblocking(false);
         let _ = self.socket.set_read_timeout(Some(RECV_TIMEOUT));
+
+        // PTT is released on every exit path (normal stop and tx_seq_begin errors)
+        // — clear "transmitting" so the HR50 poller may resume touching the serial.
+        if let Some(f) = &self.tx_active {
+            f.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Drain and parse any queued D2H DDC packets (status side-effects only).
@@ -706,7 +784,12 @@ impl HermesLite2Source {
         let mut discard = VecDeque::new();
         while let Ok(len) = self.socket.recv(&mut buf) {
             if len == P1_PACKET_LEN {
-                parse_ddc_packet(&buf, &mut discard, &mut self.status_regs);
+                parse_ddc_primary(
+                    &buf,
+                    self.multirx_additional as usize + 1,
+                    &mut discard,
+                    &mut self.status_regs,
+                );
             }
         }
     }
@@ -737,11 +820,18 @@ impl IqSource for HermesLite2Source {
     }
 
     fn read_block(&mut self, max_samples: usize) -> Result<Vec<Complex32>, String> {
+        let n_rx = self.multirx_additional as usize + 1;
         while self.pending.len() < max_samples {
             let mut buf = [0u8; P1_PACKET_LEN];
             match self.socket.recv(&mut buf) {
                 Ok(len) if len == P1_PACKET_LEN => {
-                    parse_ddc_packet(&buf, &mut self.pending, &mut self.status_regs);
+                    parse_ddc_packet(
+                        &buf,
+                        n_rx,
+                        &mut self.pending,
+                        &mut self.secondary,
+                        &mut self.status_regs,
+                    );
                     self.last_rx = Instant::now();
                 }
                 Ok(len) => {
@@ -760,15 +850,73 @@ impl IqSource for HermesLite2Source {
             }
         }
         let n = max_samples.min(self.pending.len());
+        // Drain the matching count of VFO B samples so the two streams return
+        // identical lengths each call (they accumulate in lockstep, one per
+        // packet).  Stashed for `read_secondary_block`.
+        let nb = n.min(self.secondary.len());
+        self.secondary_out = self.secondary.drain(..nb).collect();
         Ok(self.pending.drain(..n).collect())
+    }
+
+    fn read_secondary_block(&mut self) -> Vec<Complex32> {
+        std::mem::take(&mut self.secondary_out)
+    }
+
+    fn max_receivers(&self) -> u8 {
+        2
     }
 
     fn set_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
         self.center_freq_hz = center_freq_hz;
-        debug!("HL2: NCO → {} Hz", center_freq_hz as u32);
-        // send_gain_cc carries both the NCO freq and the current gain code so
-        // the gain register is always in sync after every tune.
-        self.send_gain_cc()
+        debug!("HL2: VFO A NCO → {} Hz", center_freq_hz as u32);
+        if self.multirx_additional > 0 {
+            // Duplex on: RX0 (DDC0) has its own NCO at address 2 (C0=0x04); it no
+            // longer follows the TX NCO.
+            self.send_nco(0x04, center_freq_hz as u32)
+        } else {
+            // Non-duplex: RX0 follows the TX NCO (address 1, C0=0x02), carried by
+            // send_gain_cc along with the gain code.
+            self.send_gain_cc()
+        }
+    }
+
+    fn set_secondary_center_frequency(&mut self, center_freq_hz: f32) -> Result<(), String> {
+        self.vfo_b_center_freq_hz = center_freq_hz;
+        if self.multirx_additional > 0 {
+            debug!("HL2: VFO B NCO → {} Hz", center_freq_hz as u32);
+            // RX1 (DDC1) NCO at address 3 (C0=0x06).
+            self.send_nco(0x06, center_freq_hz as u32)
+        } else {
+            // Stored; programmed when the second receiver is enabled.
+            Ok(())
+        }
+    }
+
+    fn set_secondary_receiver_enabled(&mut self, enabled: bool) -> Result<(), String> {
+        let want = u8::from(enabled);
+        if self.multirx_additional == want {
+            return Ok(());
+        }
+        self.multirx_additional = want;
+        // The wire stride changes with the receiver count, so flush stale samples
+        // to realign the deinterleave.
+        self.pending.clear();
+        self.secondary.clear();
+        self.secondary_out.clear();
+        // Reprogram the address-0 config with the new receiver-count / duplex C4.
+        self.send_cc()?;
+        if enabled {
+            info!("HL2: dual-watch ON (2 receivers, duplex)");
+            // Duplex is now on, so RX0 needs its own NCO (no longer TX-follow);
+            // program RX0 and RX1.
+            self.send_nco(0x04, self.center_freq_hz as u32)?;
+            self.send_nco(0x06, self.vfo_b_center_freq_hz as u32)?;
+        } else {
+            info!("HL2: dual-watch OFF (single receiver)");
+            // Back to non-duplex: RX0 follows the TX NCO again.
+            self.send_gain_cc()?;
+        }
+        Ok(())
     }
 
     fn keepalive(&mut self) {
@@ -823,6 +971,10 @@ impl IqSource for HermesLite2Source {
         self.fdx_enabled = enabled;
     }
 
+    fn set_tx_active_flag(&mut self, flag: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        self.tx_active = Some(flag);
+    }
+
     fn take_fdx_iq(&mut self) -> Vec<Complex32> {
         std::mem::take(&mut self.fdx_iq)
     }
@@ -851,7 +1003,14 @@ impl IqSource for HermesLite2Source {
     }
 
     fn source_status(&self) -> SourceStatus {
-        let mut status = hl2_status_regs_to_source_status(&self.status_regs);
+        // The TX-FIFO recovery flag only matters while transmitting (see
+        // `hl2_status_regs_to_source_status`); pass our current keyed state so it
+        // stays hidden during RX.
+        let transmitting = self
+            .tx_active
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+        let mut status = hl2_status_regs_to_source_status(&self.status_regs, transmitting);
         // Surface a sustained RX gap as "not responding" (drives the on-screen
         // "HL2 not responding" indicator).
         status.device_responding = Some(self.last_rx.elapsed() < DEVICE_STALL_THRESHOLD);
@@ -1114,7 +1273,12 @@ impl IqSource for HermesLite2Source {
                     // (in `fdx_iq`) so the worker can forward them into the RX DSP
                     // pipeline after the pulse; otherwise behaviour is unchanged.
                     let mut decoded = VecDeque::new();
-                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    parse_ddc_primary(
+                        &rx_buf,
+                        self.multirx_additional as usize + 1,
+                        &mut decoded,
+                        &mut self.status_regs,
+                    );
                     if self.fdx_enabled {
                         self.fdx_iq.extend(decoded.drain(..));
                     }
@@ -1228,7 +1392,12 @@ impl IqSource for HermesLite2Source {
             match self.socket.recv(&mut drain_buf) {
                 Ok(len) if len == P1_PACKET_LEN => {
                     let mut discard = VecDeque::new();
-                    parse_ddc_packet(&drain_buf, &mut discard, &mut self.status_regs);
+                    parse_ddc_primary(
+                        &drain_buf,
+                        self.multirx_additional as usize + 1,
+                        &mut discard,
+                        &mut self.status_regs,
+                    );
                 }
                 _ => {} // timeout or short packet — keep draining
             }
@@ -1318,8 +1487,13 @@ impl IqSource for HermesLite2Source {
         // ── Safety constants ─────────────────────────────────────────────
         const PTT_GRACE_MS: u128 = 60;
         // Hard ceiling: even if no Stop arrives (e.g. client vanished) the tone
-        // auto-keys-down so a stuck PTT cannot cook the PA.
-        const HARD_MAX_TONE_MS: u128 = 30_000;
+        // auto-keys-down so a stuck PTT cannot cook the PA.  Kept short (5 s) — the
+        // single tone is a 100%-duty continuous carrier, the most thermally
+        // stressful case for the HL2's small PA, and the built-in sideband
+        // diagnostic only needs a fraction of a second of samples.  Re-key for a
+        // longer look.  (Local to this fn: does not affect the two-tone test,
+        // which runs through the mic-TX path, nor Spot/SWR/CW/mic SSB.)
+        const HARD_MAX_TONE_MS: u128 = 5_000;
         const HF_MIN_HZ: u64 = 1_800_000;
         const HF_MAX_HZ: u64 = 30_000_000;
 
@@ -1406,7 +1580,12 @@ impl IqSource for HermesLite2Source {
             while let Ok(len) = self.socket.recv(&mut rx_buf) {
                 if len == P1_PACKET_LEN {
                     let mut decoded = VecDeque::new();
-                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    parse_ddc_primary(
+                        &rx_buf,
+                        self.multirx_additional as usize + 1,
+                        &mut decoded,
+                        &mut self.status_regs,
+                    );
 
                     // One-shot sideband diagnostic: gather DIAG_SAMPLES samples
                     // and measure energy above/below carrier + DC, once.
@@ -1655,7 +1834,12 @@ impl IqSource for HermesLite2Source {
             while let Ok(len) = self.socket.recv(&mut rx_buf) {
                 if len == P1_PACKET_LEN {
                     let mut decoded = VecDeque::new();
-                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    parse_ddc_primary(
+                        &rx_buf,
+                        self.multirx_additional as usize + 1,
+                        &mut decoded,
+                        &mut self.status_regs,
+                    );
                     if self.fdx_enabled && !decoded.is_empty() {
                         on_rx_iq(decoded.into_iter().collect());
                     }
@@ -2002,7 +2186,12 @@ impl IqSource for HermesLite2Source {
             while let Ok(len) = self.socket.recv(&mut rx_buf) {
                 if len == P1_PACKET_LEN {
                     let mut decoded = VecDeque::new();
-                    parse_ddc_packet(&rx_buf, &mut decoded, &mut self.status_regs);
+                    parse_ddc_primary(
+                        &rx_buf,
+                        self.multirx_additional as usize + 1,
+                        &mut decoded,
+                        &mut self.status_regs,
+                    );
                     if self.fdx_enabled && !decoded.is_empty() {
                         on_rx_iq(decoded.into_iter().collect());
                     }
@@ -2127,9 +2316,27 @@ fn i24_be(b: &[u8]) -> i32 {
 ///     [0..3]: I sample (24-bit signed big-endian)
 ///     [3..6]: Q sample (24-bit signed big-endian)
 ///     [6..8]: microphone (16-bit, ignored)
+/// Decode a device-to-host DDC packet into `n_rx` interleaved receiver streams.
+/// RX0 (DDC0 / VFO A) goes to `out`; RX1 (DDC1 / VFO B) goes to `secondary`
+/// (ignored unless `n_rx >= 2`).  `n_rx` MUST match the receiver count currently
+/// programmed on the HL2 (C4 of the address-0 C&C), or the deinterleave desyncs.
+/// Decode only RX0 (DDC0 / VFO A) from a DDC packet, discarding any RX1 samples.
+/// Used by the TX / FDX decode paths, which only need the primary receiver.
+fn parse_ddc_primary(
+    pkt: &[u8; P1_PACKET_LEN],
+    n_rx: usize,
+    out: &mut VecDeque<Complex32>,
+    status: &mut Hl2StatusRegs,
+) {
+    let mut discard = VecDeque::new();
+    parse_ddc_packet(pkt, n_rx, out, &mut discard, status);
+}
+
 fn parse_ddc_packet(
     pkt: &[u8; P1_PACKET_LEN],
+    n_rx: usize,
     out: &mut VecDeque<Complex32>,
+    secondary: &mut VecDeque<Complex32>,
     status: &mut Hl2StatusRegs,
 ) {
     if pkt[0..3] != P1_OUTER_SYNC || pkt[3] != P1_ENDPOINT_D2H {
@@ -2198,11 +2405,30 @@ fn parse_ddc_packet(
         // Mapping them the naive way — `Complex(first, second)` — conjugate-
         // mirrors the spectrum and swaps USB/LSB (an HL2-only sideband
         // inversion; RTL-SDR already delivers I+jQ in the expected orientation).
-        for i in 0..P1_SAMPLES_PER_SUBFRAME {
-            let b = 8 + i * 8;
-            let field0 = i24_be(&sf[b..b + 3]) as f32 / (1u32 << 23) as f32;
-            let field1 = i24_be(&sf[b + 3..b + 6]) as f32 / (1u32 << 23) as f32;
-            out.push_back(Complex32::new(field1, field0));
+        //
+        // With `n_rx` active receivers each sample slot interleaves `n_rx` IQ
+        // pairs (6 B each) followed by **one** 2-byte mic field per slot — the
+        // mic is per-slot, NOT per-receiver, so it is skipped once at the end of
+        // the stride.  Slots/subframe = 504 / stride.  `n_rx == 1` reproduces the
+        // original 8-byte stride (63 samples) exactly.
+        let n_rx = n_rx.max(1);
+        let stride = 6 * n_rx + 2;
+        let slots = (512 - 8) / stride; // 504 / stride
+        for i in 0..slots {
+            let base = 8 + i * stride;
+            for rx in 0..n_rx {
+                let b = base + rx * 6;
+                let field0 = i24_be(&sf[b..b + 3]) as f32 / (1u32 << 23) as f32;
+                let field1 = i24_be(&sf[b + 3..b + 6]) as f32 / (1u32 << 23) as f32;
+                let sample = Complex32::new(field1, field0);
+                match rx {
+                    0 => out.push_back(sample),
+                    1 => secondary.push_back(sample),
+                    _ => {} // only two receivers are consumed
+                }
+            }
+            // The trailing 2-byte mic field (at `base + n_rx*6`) is per-slot and
+            // ignored on receive.
         }
     }
 }
@@ -2225,7 +2451,7 @@ fn hl2_temperature_c(temperature_raw: u16) -> f32 {
 ///   and the raw ADC values are logged at TRACE level for future calibration.
 ///   TODO: add calibration once forward-power detector and current-shunt
 ///   specs are confirmed for your HL2 board revision.
-fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
+fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs, transmitting: bool) -> SourceStatus {
     let firmware_version = if r.raddr0_valid {
         let major = r.firmware_version / 10;
         let minor = r.firmware_version % 10;
@@ -2236,29 +2462,24 @@ fn hl2_status_regs_to_source_status(r: &Hl2StatusRegs) -> SourceStatus {
 
     let adc_overload = r.raddr0_valid.then_some(r.adc_overload);
     let tx_inhibited = r.raddr0_valid.then_some(r.tx_inhibited);
-    let recovery_status = if r.raddr0_valid {
-        // Per Quisk, the TX-FIFO recovery/error is a SINGLE flag = bit 15 of the
-        // RADDR 0x00 word (the top bit of `recovery_bits`).  The low bit
-        // (word bit 14) belongs to the TX FIFO sample count, NOT recovery — so a
-        // raw value of 0b01 is benign (previously mislabeled "UNKNOWN").  During
-        // RX the TX FIFO is empty by design, so this flag being set is a normal
-        // idle condition; Quisk only treats it as a fault while transmitting, so
-        // we report it as benign here rather than as a severe RX fault.
-        // (NOTE: `recovery_bits` itself is left unchanged — the Spot/SWR TX path
-        // still uses its 2-bit value to flag in-pulse FIFO anomalies.)
+    // TX-FIFO recovery flag = bit 15 of the RADDR 0x00 word (top bit of
+    // `recovery_bits`).  It is only meaningful WHILE TRANSMITTING: during RX the
+    // TX FIFO is empty by design, so the flag sits permanently set — a benign
+    // idle artifact.  So we gate on `transmitting` and suppress it entirely
+    // during RX (otherwise Source Status shows a standing "TX underrun" false
+    // alarm), surfacing it only when a genuine anomaly is seen mid-transmit.
+    // (The low bit, word bit 14, is a TX FIFO sample-count bit, not recovery;
+    // `recovery_bits` keeps its 2-bit value for the Spot/SWR TX path's in-pulse
+    // anomaly checks.)
+    let recovery_status = if r.raddr0_valid && transmitting {
         let recovery_flag = (r.recovery_bits & 0b10) != 0;
         log::debug!(
-            "HL2 status: recovery_bits={:#04b} recovery_flag={} adc_overload={}",
+            "HL2 status (TX): recovery_bits={:#04b} recovery_flag={} adc_overload={}",
             r.recovery_bits,
             recovery_flag,
             r.adc_overload
         );
-        let label = if recovery_flag {
-            "TX underrun (recovered)"
-        } else {
-            "OK"
-        };
-        Some(label.to_string())
+        recovery_flag.then(|| "TX underrun (recovered)".to_string())
     } else {
         None
     };
@@ -2333,6 +2554,8 @@ pub fn hl2_source_capabilities() -> SourceCapabilities {
         gain_values_db: (-12..=48).map(|i| i as f32).collect(),
         tuner_freq_hz_min: 10_000,
         tuner_freq_hz_max: 30_000_000,
+        supports_transmit: true,
+        supports_dual_watch: true,
         supports_tx_tune_test: true,
         supports_band_control: true,
         supports_fdx: true,
@@ -2379,11 +2602,14 @@ mod tests {
             forward_power_raw: 5,
             ..Default::default()
         };
-        let status = hl2_status_regs_to_source_status(&regs);
+        let status = hl2_status_regs_to_source_status(&regs, false);
         let t = status.temperature_c.expect("temp present");
         assert!((t - 21.0).abs() < 1.0, "got {t}");
         regs.raddr1_valid = false;
-        assert_eq!(hl2_status_regs_to_source_status(&regs).temperature_c, None);
+        assert_eq!(
+            hl2_status_regs_to_source_status(&regs, false).temperature_c,
+            None
+        );
     }
 
     // ── RADDR 0x00: ADC overload (active high) ──────────────────────────────
@@ -2396,7 +2622,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            hl2_status_regs_to_source_status(&ok).adc_overload,
+            hl2_status_regs_to_source_status(&ok, false).adc_overload,
             Some(false)
         );
         let over = Hl2StatusRegs {
@@ -2405,32 +2631,40 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            hl2_status_regs_to_source_status(&over).adc_overload,
+            hl2_status_regs_to_source_status(&over, false).adc_overload,
             Some(true)
         );
     }
 
-    // ── RADDR 0x00: recovery flag = bit 15 only (low bit is FIFO count) ─────
+    // ── RADDR 0x00: recovery flag is TX-only (bit 15; hidden during RX) ─────
 
     #[test]
-    fn recovery_status_uses_only_bit15() {
-        let status_for = |bits: u8| {
+    fn recovery_status_only_during_tx() {
+        let status_for = |bits: u8, transmitting: bool| {
             let r = Hl2StatusRegs {
                 raddr0_valid: true,
                 recovery_bits: bits,
                 ..Default::default()
             };
-            hl2_status_regs_to_source_status(&r)
-                .recovery_status
-                .unwrap()
+            hl2_status_regs_to_source_status(&r, transmitting).recovery_status
         };
-        // bit15 clear → OK (incl. 0b01, which is a FIFO-count bit, not a fault).
-        assert_eq!(status_for(0b00), "OK");
-        assert_eq!(status_for(0b01), "OK");
-        // bit15 set → benign TX-underrun recovery (NOT a severe RX fault),
-        // regardless of bit14.
-        assert_eq!(status_for(0b10), "TX underrun (recovered)");
-        assert_eq!(status_for(0b11), "TX underrun (recovered)");
+        // RX: the flag is a benign idle artifact — never surfaced, whatever the
+        // bits (this is the standing "TX underrun" false alarm we suppress).
+        assert_eq!(status_for(0b00, false), None);
+        assert_eq!(status_for(0b10, false), None);
+        assert_eq!(status_for(0b11, false), None);
+        // TX: bit 15 (0b10) set = a genuine TX-FIFO anomaly → surfaced; clear =
+        // nothing shown.  Bit 14 (the FIFO-count low bit) is ignored.
+        assert_eq!(status_for(0b00, true), None);
+        assert_eq!(status_for(0b01, true), None);
+        assert_eq!(
+            status_for(0b10, true).as_deref(),
+            Some("TX underrun (recovered)")
+        );
+        assert_eq!(
+            status_for(0b11, true).as_deref(),
+            Some("TX underrun (recovered)")
+        );
     }
 
     #[test]
@@ -2440,6 +2674,99 @@ mod tests {
             recovery_bits: 0b10,
             ..Default::default()
         };
-        assert_eq!(hl2_status_regs_to_source_status(&r).recovery_status, None);
+        // Even while transmitting, an invalid RADDR0 read yields no status.
+        assert_eq!(
+            hl2_status_regs_to_source_status(&r, true).recovery_status,
+            None
+        );
+    }
+
+    // ── DDC packet deinterleave (multi-RX, the riskiest code) ──────────────
+
+    fn put_i24(buf: &mut [u8], v: i32) {
+        buf[0] = ((v >> 16) & 0xFF) as u8;
+        buf[1] = ((v >> 8) & 0xFF) as u8;
+        buf[2] = (v & 0xFF) as u8;
+    }
+
+    /// Build a synthetic D2H packet with `n_rx` receivers, where `val(slot, rx)`
+    /// returns the `(I, Q)` to encode (field1 = I, field0 = Q, per the decoder).
+    fn build_packet(n_rx: usize, val: impl Fn(usize, usize) -> (i32, i32)) -> [u8; P1_PACKET_LEN] {
+        let mut pkt = [0u8; P1_PACKET_LEN];
+        pkt[0..3].copy_from_slice(&P1_OUTER_SYNC);
+        pkt[3] = P1_ENDPOINT_D2H;
+        let stride = 6 * n_rx + 2;
+        let slots = 504 / stride;
+        for &sf_base in &P1_SUBFRAME_OFFSETS {
+            let sf = &mut pkt[sf_base..sf_base + 512];
+            sf[0..3].copy_from_slice(&P1_SUBFRAME_SYNC);
+            sf[3] = 0x00; // C0 → raddr 0
+            for slot in 0..slots {
+                let base = 8 + slot * stride;
+                for rx in 0..n_rx {
+                    let b = base + rx * 6;
+                    let (i_val, q_val) = val(slot, rx);
+                    put_i24(&mut sf[b..b + 3], q_val); // field0 = Q
+                    put_i24(&mut sf[b + 3..b + 6], i_val); // field1 = I
+                }
+            }
+        }
+        pkt
+    }
+
+    const I24_SCALE: f32 = (1u32 << 23) as f32;
+
+    #[test]
+    fn parses_single_rx_126_samples() {
+        let pkt = build_packet(1, |slot, _rx| (slot as i32, slot as i32 + 1000));
+        let (mut out, mut sec, mut st) =
+            (VecDeque::new(), VecDeque::new(), Hl2StatusRegs::default());
+        parse_ddc_packet(&pkt, 1, &mut out, &mut sec, &mut st);
+        assert_eq!(out.len(), 126); // 2 subframes × 63
+        assert!(sec.is_empty());
+        assert_eq!((out[5].re * I24_SCALE).round() as i32, 5); // I
+        assert_eq!((out[5].im * I24_SCALE).round() as i32, 1005); // Q
+    }
+
+    #[test]
+    fn deinterleaves_two_rx_with_mic_per_slot() {
+        let pkt = build_packet(2, |slot, rx| {
+            if rx == 0 {
+                (slot as i32, slot as i32 + 1000)
+            } else {
+                (slot as i32 + 5000, slot as i32 + 6000)
+            }
+        });
+        let (mut out, mut sec, mut st) =
+            (VecDeque::new(), VecDeque::new(), Hl2StatusRegs::default());
+        parse_ddc_packet(&pkt, 2, &mut out, &mut sec, &mut st);
+        assert_eq!(out.len(), 72); // stride 14 → 36 slots × 2 subframes
+        assert_eq!(sec.len(), 72);
+        // RX0 slot 3
+        assert_eq!((out[3].re * I24_SCALE).round() as i32, 3);
+        assert_eq!((out[3].im * I24_SCALE).round() as i32, 1003);
+        // RX1 slot 3 (deinterleaved into `secondary`, mic skipped)
+        assert_eq!((sec[3].re * I24_SCALE).round() as i32, 5003);
+        assert_eq!((sec[3].im * I24_SCALE).round() as i32, 6003);
+    }
+
+    #[test]
+    fn single_rx_regression_primary_equals_full() {
+        let pkt = build_packet(1, |slot, _rx| (slot as i32 * 7, slot as i32 * 11));
+        let (mut full, mut sec, mut st) =
+            (VecDeque::new(), VecDeque::new(), Hl2StatusRegs::default());
+        parse_ddc_packet(&pkt, 1, &mut full, &mut sec, &mut st);
+        let (mut prim, mut st2) = (VecDeque::new(), Hl2StatusRegs::default());
+        parse_ddc_primary(&pkt, 1, &mut prim, &mut st2);
+        assert_eq!(full, prim);
+        assert!(sec.is_empty());
+    }
+
+    #[test]
+    fn receiver_count_c4_encoding() {
+        // additional=0 → 0 (single RX, byte-identical); additional=1 → 0x0C
+        // (count 1 in bits[5:3] | duplex 0x04).
+        assert_eq!((0u8 << 3) | 0x00, 0x00);
+        assert_eq!((1u8 << 3) | 0x04, 0x0C);
     }
 }

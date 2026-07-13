@@ -185,16 +185,22 @@ impl ClipPreview {
         self.active.load(Ordering::Relaxed)
     }
 
-    /// Mix queued preview audio into `data` (callback side); deactivates when the
-    /// buffer empties.  No-op when inactive.
-    pub fn mix_into(&self, data: &mut [f32]) {
+    /// Mix queued (mono) preview audio into an interleaved `channels`-channel
+    /// buffer, centered (one preview sample per frame added to every channel).
+    /// Deactivates when the buffer empties.  No-op when inactive.
+    pub fn mix_into_channels(&self, data: &mut [f32], channels: usize) {
         if !self.active.load(Ordering::Relaxed) {
             return;
         }
+        let channels = channels.max(1);
         if let Ok(mut b) = self.buf.lock() {
-            for s in data.iter_mut() {
+            for frame in data.chunks_mut(channels) {
                 match b.pop_front() {
-                    Some(v) => *s = (*s + v).clamp(-1.0, 1.0),
+                    Some(v) => {
+                        for s in frame.iter_mut() {
+                            *s = (*s + v).clamp(-1.0, 1.0);
+                        }
+                    }
                     None => break,
                 }
             }

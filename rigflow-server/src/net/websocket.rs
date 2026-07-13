@@ -17,8 +17,8 @@ use crate::{
         api::{manager_error_to_protocol, parse_acquire_request, radio_summary_to_protocol},
         session::SessionState,
         types::{
-            ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerRuntimeState,
-            WorkerStatus,
+            ClientId, RadioManagerError, StopReason, WorkerCommand, WorkerEvent,
+            WorkerRuntimeState, WorkerStatus,
         },
     },
 };
@@ -352,6 +352,42 @@ async fn handle_radio_message(
                     last_runtime = Some(runtime);
                 }
             });
+
+            // Forward transient worker events (async errors, e.g. a cross-band TX
+            // aborted because the amp band change couldn't be confirmed) to this
+            // client as RadioError.  Best-effort: events are not replayed.
+            match app_state
+                .radio_manager
+                .subscribe_events(
+                    &session.client_id,
+                    &acquire_result.radio_id,
+                    &acquire_result.lease_id,
+                )
+                .await
+            {
+                Ok(mut events_rx) => {
+                    let local_tx_events = local_tx.clone();
+                    tokio::spawn(async move {
+                        loop {
+                            match events_rx.recv().await {
+                                Ok(WorkerEvent::Error { code, message }) => {
+                                    send_radio(
+                                        &local_tx_events,
+                                        ServerRadioMessage::RadioError { code, message },
+                                    );
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                    continue
+                                }
+                                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    });
+                }
+                Err(err) => {
+                    debug!("[websocket] subscribe_events failed: {err:?}");
+                }
+            }
         }
 
         ClientRadioMessage::ReleaseRadio => {
@@ -1193,6 +1229,262 @@ async fn handle_radio_message(
                 );
             }
         }
+
+        // ── Dual-VFO / split / RIT-XIT ──
+        ClientRadioMessage::SetVfoBFrequency { target_freq_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBFrequency { hz: target_freq_hz },
+                "set_vfo_b_frequency_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBCenterFrequency { center_freq_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBCenterFrequency { hz: center_freq_hz },
+                "set_vfo_b_center_frequency_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBDemodMode { mode } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBDemodMode { mode },
+                "set_vfo_b_demod_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBSideband { sideband } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBSideband { sideband },
+                "set_vfo_b_sideband_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBFilterBandwidth { bandwidth_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBFilterBandwidth { bandwidth_hz },
+                "set_vfo_b_filter_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBPitch { pitch_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBPitch { pitch_hz },
+                "set_vfo_b_pitch_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBDeemphasisMode { mode } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBDeemphasisMode { mode },
+                "set_vfo_b_deemphasis_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBSquelchEnabled { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBSquelchEnabled { enabled },
+                "set_vfo_b_squelch_enabled_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBSquelchThreshold { threshold_db } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBSquelchThreshold { threshold_db },
+                "set_vfo_b_squelch_threshold_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBNr2Enabled { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBNr2Enabled { enabled },
+                "set_vfo_b_nr2_enabled_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBNr2Strength { strength } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBNr2Strength { strength },
+                "set_vfo_b_nr2_strength_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBNoiseBlankerEnabled { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBNoiseBlankerEnabled { enabled },
+                "set_vfo_b_nb_enabled_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBNoiseBlankerThreshold { threshold } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBNoiseBlankerThreshold { threshold },
+                "set_vfo_b_nb_threshold_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBNotchAutoEnabled { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBNotchAutoEnabled { enabled },
+                "set_vfo_b_notch_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBAgcEnabled { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBAgcEnabled { enabled },
+                "set_vfo_b_agc_enabled_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBAgcStrength { strength } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBAgcStrength { strength },
+                "set_vfo_b_agc_strength_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBRit { enabled, offset_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBRit { enabled, offset_hz },
+                "set_vfo_b_rit_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetVfoBWaterfallFrameRate { rate_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoBWaterfallFrameRate { rate_hz },
+                "set_vfo_b_waterfall_rate_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::CopyVfoAToB => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::CopyVfoAToB,
+                "copy_vfo_a_to_b_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetRit { enabled, offset_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetRit { enabled, offset_hz },
+                "set_rit_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetXit { enabled, offset_hz } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetXit { enabled, offset_hz },
+                "set_xit_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetSplit { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetSplit { enabled },
+                "set_split_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetTxVfo { vfo } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetTxVfo { vfo },
+                "set_tx_vfo_failed",
+            )
+            .await;
+        }
+        ClientRadioMessage::SetDualWatch { enabled } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetDualWatch { enabled },
+                "set_dual_watch_failed",
+            )
+            .await;
+        }
+    }
+}
+
+/// Forward a `WorkerCommand` for the session's acquired radio, reporting any
+/// failure to the client with `err_code` (used by the simple Set* messages).
+async fn forward_worker_command(
+    app_state: &AppState,
+    session: &SessionState,
+    local_tx: &mpsc::UnboundedSender<ServerRadioMessage>,
+    cmd: WorkerCommand,
+    err_code: &str,
+) {
+    if let Err(err) = send_worker_command_for_session(app_state, session, cmd).await {
+        send_radio_error(local_tx, err_code, &radio_manager_error_string(err));
     }
 }
 
@@ -1315,6 +1607,55 @@ fn runtime_changed_from_runtime(
     let iq_recording_status = (current.iq_recording_status != previous.iq_recording_status)
         .then_some(current.iq_recording_status.clone());
 
+    // ── Dual-VFO / split / RIT-XIT deltas ──
+    let (pv, cv) = (&previous.vfo, &current.vfo);
+    let vfo_b_target_freq_hz =
+        (cv.vfo_b_target_freq_hz != pv.vfo_b_target_freq_hz).then_some(cv.vfo_b_target_freq_hz);
+    let vfo_b_center_freq_hz =
+        (cv.vfo_b_center_freq_hz != pv.vfo_b_center_freq_hz).then_some(cv.vfo_b_center_freq_hz);
+    let vfo_b_demod_mode =
+        (cv.vfo_b_demod_mode != pv.vfo_b_demod_mode).then_some(cv.vfo_b_demod_mode);
+    let vfo_b_sideband = (cv.vfo_b_sideband != pv.vfo_b_sideband).then_some(cv.vfo_b_sideband);
+    let vfo_b_filter_bandwidth_hz = (cv.vfo_b_filter_bandwidth_hz != pv.vfo_b_filter_bandwidth_hz)
+        .then_some(cv.vfo_b_filter_bandwidth_hz);
+    let vfo_b_ssb_pitch_hz =
+        (cv.vfo_b_ssb_pitch_hz != pv.vfo_b_ssb_pitch_hz).then_some(cv.vfo_b_ssb_pitch_hz);
+    let vfo_b_cw_pitch_hz =
+        (cv.vfo_b_cw_pitch_hz != pv.vfo_b_cw_pitch_hz).then_some(cv.vfo_b_cw_pitch_hz);
+    let vfo_b_deemphasis_mode =
+        (cv.vfo_b_deemphasis_mode != pv.vfo_b_deemphasis_mode).then_some(cv.vfo_b_deemphasis_mode);
+    let vfo_b_squelch_enabled =
+        (cv.vfo_b_squelch_enabled != pv.vfo_b_squelch_enabled).then_some(cv.vfo_b_squelch_enabled);
+    let vfo_b_squelch_threshold_db = (cv.vfo_b_squelch_threshold_db
+        != pv.vfo_b_squelch_threshold_db)
+        .then_some(cv.vfo_b_squelch_threshold_db);
+    let vfo_b_squelch_open =
+        (cv.vfo_b_squelch_open != pv.vfo_b_squelch_open).then_some(cv.vfo_b_squelch_open);
+    let vfo_b_nr2_enabled =
+        (cv.vfo_b_nr2_enabled != pv.vfo_b_nr2_enabled).then_some(cv.vfo_b_nr2_enabled);
+    let vfo_b_nr2_strength =
+        (cv.vfo_b_nr2_strength != pv.vfo_b_nr2_strength).then_some(cv.vfo_b_nr2_strength);
+    let vfo_b_agc_enabled =
+        (cv.vfo_b_agc_enabled != pv.vfo_b_agc_enabled).then_some(cv.vfo_b_agc_enabled);
+    let vfo_b_agc_strength =
+        (cv.vfo_b_agc_strength != pv.vfo_b_agc_strength).then_some(cv.vfo_b_agc_strength);
+    let vfo_b_rit_enabled =
+        (cv.vfo_b_rit_enabled != pv.vfo_b_rit_enabled).then_some(cv.vfo_b_rit_enabled);
+    let vfo_b_rit_offset_hz =
+        (cv.vfo_b_rit_offset_hz != pv.vfo_b_rit_offset_hz).then_some(cv.vfo_b_rit_offset_hz);
+    let rit_enabled = (cv.rit_enabled != pv.rit_enabled).then_some(cv.rit_enabled);
+    let rit_offset_hz = (cv.rit_offset_hz != pv.rit_offset_hz).then_some(cv.rit_offset_hz);
+    let xit_enabled = (cv.xit_enabled != pv.xit_enabled).then_some(cv.xit_enabled);
+    let xit_offset_hz = (cv.xit_offset_hz != pv.xit_offset_hz).then_some(cv.xit_offset_hz);
+    let split_enabled = (cv.split_enabled != pv.split_enabled).then_some(cv.split_enabled);
+    let tx_vfo = (cv.tx_vfo != pv.tx_vfo).then_some(cv.tx_vfo);
+    let dual_watch_enabled =
+        (cv.dual_watch_enabled != pv.dual_watch_enabled).then_some(cv.dual_watch_enabled);
+    let vfo_b_signal_dbm =
+        (cv.vfo_b_signal_dbm != pv.vfo_b_signal_dbm).then_some(cv.vfo_b_signal_dbm);
+    let vfo_b_signal_s_units =
+        (cv.vfo_b_signal_s_units != pv.vfo_b_signal_s_units).then_some(cv.vfo_b_signal_s_units);
+
     // `last_tx_tune_result` is itself an `Option<TxTuneResult>`, so we cannot
     // use `.then_some(…)` here — that would produce `Option<Option<…>>`.
     // A plain if/else gives the `Option<TxTuneResult>` the protocol expects.
@@ -1334,6 +1675,8 @@ fn runtime_changed_from_runtime(
     } else {
         None
     };
+    let tx_tone_running =
+        (current.tx_tone_running != previous.tx_tone_running).then_some(current.tx_tone_running);
 
     let has_change = center_freq_hz.is_some()
         || input_sample_rate_hz.is_some()
@@ -1361,7 +1704,34 @@ fn runtime_changed_from_runtime(
         || tx_audio_diag.is_some()
         || tx_tune_result.is_some()
         || swr_sweep_result.is_some()
-        || swr_sweep_progress.is_some();
+        || swr_sweep_progress.is_some()
+        || tx_tone_running.is_some()
+        || vfo_b_target_freq_hz.is_some()
+        || vfo_b_center_freq_hz.is_some()
+        || vfo_b_demod_mode.is_some()
+        || vfo_b_sideband.is_some()
+        || vfo_b_filter_bandwidth_hz.is_some()
+        || vfo_b_ssb_pitch_hz.is_some()
+        || vfo_b_cw_pitch_hz.is_some()
+        || vfo_b_deemphasis_mode.is_some()
+        || vfo_b_squelch_enabled.is_some()
+        || vfo_b_squelch_threshold_db.is_some()
+        || vfo_b_squelch_open.is_some()
+        || vfo_b_nr2_enabled.is_some()
+        || vfo_b_nr2_strength.is_some()
+        || vfo_b_agc_enabled.is_some()
+        || vfo_b_agc_strength.is_some()
+        || vfo_b_rit_enabled.is_some()
+        || vfo_b_rit_offset_hz.is_some()
+        || rit_enabled.is_some()
+        || rit_offset_hz.is_some()
+        || xit_enabled.is_some()
+        || xit_offset_hz.is_some()
+        || split_enabled.is_some()
+        || tx_vfo.is_some()
+        || dual_watch_enabled.is_some()
+        || vfo_b_signal_dbm.is_some()
+        || vfo_b_signal_s_units.is_some();
 
     has_change.then_some(ServerRadioMessage::RuntimeChanged {
         radio_id,
@@ -1392,6 +1762,33 @@ fn runtime_changed_from_runtime(
         tx_tune_result,
         swr_sweep_result,
         swr_sweep_progress,
+        tx_tone_running,
+        vfo_b_target_freq_hz,
+        vfo_b_center_freq_hz,
+        vfo_b_demod_mode,
+        vfo_b_sideband,
+        vfo_b_filter_bandwidth_hz,
+        vfo_b_ssb_pitch_hz,
+        vfo_b_cw_pitch_hz,
+        vfo_b_deemphasis_mode,
+        vfo_b_squelch_enabled,
+        vfo_b_squelch_threshold_db,
+        vfo_b_squelch_open,
+        vfo_b_nr2_enabled,
+        vfo_b_nr2_strength,
+        vfo_b_agc_enabled,
+        vfo_b_agc_strength,
+        vfo_b_rit_enabled,
+        vfo_b_rit_offset_hz,
+        rit_enabled,
+        rit_offset_hz,
+        xit_enabled,
+        xit_offset_hz,
+        split_enabled,
+        tx_vfo,
+        dual_watch_enabled,
+        vfo_b_signal_dbm,
+        vfo_b_signal_s_units,
     })
 }
 
@@ -1434,6 +1831,33 @@ fn runtime_snapshot_from_status(
             tx_tune_result: runtime.last_tx_tune_result.clone(),
             swr_sweep_result: runtime.last_swr_sweep_result.clone(),
             swr_sweep_progress: runtime.swr_sweep_progress,
+            tx_tone_running: runtime.tx_tone_running,
+            vfo_b_target_freq_hz: runtime.vfo.vfo_b_target_freq_hz,
+            vfo_b_center_freq_hz: runtime.vfo.vfo_b_center_freq_hz,
+            vfo_b_demod_mode: runtime.vfo.vfo_b_demod_mode,
+            vfo_b_sideband: runtime.vfo.vfo_b_sideband,
+            vfo_b_filter_bandwidth_hz: runtime.vfo.vfo_b_filter_bandwidth_hz,
+            vfo_b_ssb_pitch_hz: runtime.vfo.vfo_b_ssb_pitch_hz,
+            vfo_b_cw_pitch_hz: runtime.vfo.vfo_b_cw_pitch_hz,
+            vfo_b_deemphasis_mode: runtime.vfo.vfo_b_deemphasis_mode,
+            vfo_b_squelch_enabled: runtime.vfo.vfo_b_squelch_enabled,
+            vfo_b_squelch_threshold_db: runtime.vfo.vfo_b_squelch_threshold_db,
+            vfo_b_squelch_open: runtime.vfo.vfo_b_squelch_open,
+            vfo_b_nr2_enabled: runtime.vfo.vfo_b_nr2_enabled,
+            vfo_b_nr2_strength: runtime.vfo.vfo_b_nr2_strength,
+            vfo_b_agc_enabled: runtime.vfo.vfo_b_agc_enabled,
+            vfo_b_agc_strength: runtime.vfo.vfo_b_agc_strength,
+            vfo_b_rit_enabled: runtime.vfo.vfo_b_rit_enabled,
+            vfo_b_rit_offset_hz: runtime.vfo.vfo_b_rit_offset_hz,
+            rit_enabled: runtime.vfo.rit_enabled,
+            rit_offset_hz: runtime.vfo.rit_offset_hz,
+            xit_enabled: runtime.vfo.xit_enabled,
+            xit_offset_hz: runtime.vfo.xit_offset_hz,
+            split_enabled: runtime.vfo.split_enabled,
+            tx_vfo: runtime.vfo.tx_vfo,
+            dual_watch_enabled: runtime.vfo.dual_watch_enabled,
+            vfo_b_signal_dbm: runtime.vfo.vfo_b_signal_dbm,
+            vfo_b_signal_s_units: runtime.vfo.vfo_b_signal_s_units,
         }),
         _ => None,
     }
@@ -1544,8 +1968,7 @@ mod single_client_tests {
     #[tokio::test]
     async fn second_client_rejected_until_first_releases() {
         let slot: Mutex<Option<ClientId>> = Mutex::new(None);
-        let target: std::sync::RwLock<Option<std::net::SocketAddr>> =
-            std::sync::RwLock::new(None);
+        let target: std::sync::RwLock<Option<std::net::SocketAddr>> = std::sync::RwLock::new(None);
         let a = ClientId("a".to_string());
         let b = ClientId("b".to_string());
 

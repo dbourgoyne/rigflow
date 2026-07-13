@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::persistence::models::{DemodPreferenceSetFile, RadioSettingsFile};
+use crate::persistence::models::{
+    DemodPreferenceSetFile, RadioSettingsFile, TuningStepPreferencesFile,
+};
 use crate::sidetone::SidetoneShared;
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::DeemphasisMode;
@@ -15,6 +17,7 @@ use rigflow_core::radio::source_status::SourceStatus;
 use rigflow_core::radio::swr_sweep::{SwrSweepProgress, SwrSweepResult};
 use rigflow_core::radio::tx_audio_diag::TxAudioDiag;
 use rigflow_core::radio::tx_tune::TxTuneResult;
+use rigflow_core::radio::vfo::VfoSelect;
 
 /// A single CW memory macro: a short button label and the text to transmit.
 #[derive(Debug, Clone, Default)]
@@ -55,6 +58,75 @@ pub struct UiState {
 
     /// Target tuned frequency, in Hz
     pub target_freq_hz: f32,
+
+    // ── Dual-VFO / split / RIT-XIT (mirrors server runtime; UI lands in Stage 5).
+    // VFO A is the existing flat fields above; VFO B is independent (own mode). ──
+    pub vfo_b_target_freq_hz: f32,
+    /// VFO B's LO / centre (RX1 hardware NCO).  With `vfo_b_target_freq_hz` this
+    /// gives VFO B the same centre+target panadapter model as VFO A.
+    pub vfo_b_center_freq_hz: f32,
+    pub vfo_b_demod_mode: DemodMode,
+    pub vfo_b_sideband: Sideband,
+    pub vfo_b_filter_bandwidth_hz: f32,
+    pub vfo_b_ssb_pitch_hz: f32,
+    pub vfo_b_cw_pitch_hz: f32,
+    /// VFO B independent receive processing (mirror of the like-named VFO-A
+    /// fields below).  The Receive panel edits these when the active control VFO
+    /// is B.  `nb_*` / `notch_auto` are local-only (server never echoes them,
+    /// matching VFO A); the rest round-trip via the runtime snapshot/delta.
+    pub vfo_b_deemphasis_mode: DeemphasisMode,
+    pub vfo_b_squelch_enabled: bool,
+    pub vfo_b_squelch_threshold_db: f32,
+    /// Live VFO-B squelch gate (server-reported, like `squelch_open` for A).
+    pub vfo_b_squelch_open: bool,
+    pub vfo_b_nr2_enabled: bool,
+    pub vfo_b_nr2_strength: f32,
+    pub vfo_b_nb_enabled: bool,
+    pub vfo_b_nb_threshold: f32,
+    pub vfo_b_notch_auto_enabled: bool,
+    pub vfo_b_agc_enabled: bool,
+    pub vfo_b_agc_strength: f32,
+    /// VFO B independent RIT (separate from VFO A's `rit_*`).
+    pub vfo_b_rit_enabled: bool,
+    pub vfo_b_rit_offset_hz: i32,
+    pub vfo_b_signal_dbm: f32,
+    pub vfo_b_signal_s_units: i32,
+    pub rit_enabled: bool,
+    pub rit_offset_hz: i32,
+    pub xit_enabled: bool,
+    pub xit_offset_hz: i32,
+    pub split_enabled: bool,
+    /// Which VFO transmits while split is on.
+    pub tx_vfo: VfoSelect,
+    pub dual_watch_enabled: bool,
+    // Dual-watch support is a static capability: read it from
+    // `source_capabilities.supports_dual_watch`, not a mirrored runtime field.
+    /// Which VFO the Receive-panel controls edit (client-local; only meaningful
+    /// under dual-watch — the panel forces A otherwise).
+    pub active_control_vfo: VfoSelect,
+
+    // ── Accidental-change locks (client-local safety) ─────────────────────────
+    /// TX Drive is a damage-capable control (overdrives the PA/amp), so it has
+    /// its own inline lock, default LOCKED each session.  `*_unlocked_at` stamps
+    /// when it was unlocked so it auto-re-locks after an idle period.
+    pub tx_drive_locked: bool,
+    pub tx_drive_unlocked_at: Option<Instant>,
+    /// Spot Level is damage-adjacent (TX carrier amplitude); its own independent
+    /// inline lock, same default-locked + auto-re-lock behaviour as TX Drive.
+    pub spot_level_locked: bool,
+    pub spot_level_unlocked_at: Option<Instant>,
+    /// Global lock for the set-once / wrong-frequency config controls (sample
+    /// rate, gain, PPM, direct sampling, demod mode, split/TX-VFO).  Non-damaging,
+    /// so a single shared lock (unlike the per-control damage locks).  Manual
+    /// toggle (no auto-re-lock); persisted per operator.  Default unlocked.
+    pub config_locked: bool,
+    /// Dedicated dial lock: freezes ALL frequency-tuning paths (wheel, click,
+    /// drag, arrows, LO spinners, freq fields, bookmark apply).  Session-only
+    /// (transient — lock for a net, unlock after); default unlocked.
+    pub dial_locked: bool,
+    /// VFO B receive-audio volume percent (client-side; applied to the right
+    /// channel under dual-watch).  VFO A uses `volume_percent` below.
+    pub volume_percent_b: u8,
 
     /// Current demodulation mode
     pub demod_mode: DemodMode,
@@ -99,6 +171,12 @@ pub struct UiState {
     /// Receive-audio volume in percent (0–100).  Persisted per-operator.
     pub volume_percent: u8,
 
+    /// Mute flags (session-only, not persisted): while set, the audio is silenced
+    /// but `volume_percent` / `volume_percent_b` keep the remembered level, so
+    /// unmuting restores it.  The slider shows 0 while muted.
+    pub volume_muted: bool,
+    pub volume_b_muted: bool,
+
     /// Show the Advanced & Diagnostics controls (two-tone test, TX-audio
     /// diagnostics, limiter/compressor, digital interface).  Off by default for
     /// an uncluttered view; persisted per-operator.
@@ -132,6 +210,20 @@ pub struct UiState {
     /// Set on radio acquire so the panel pushes the restored waterfall rate to the
     /// server on connect (the server starts at its own default).
     pub pending_apply_waterfall_rate: bool,
+
+    /// Set by the LO-strip "Snap" dropdown (which only has `&self`) when the
+    /// per-mode tuning step changes; the main loop persists it and clears this.
+    pub pending_save_tuning_steps: bool,
+
+    /// Single-slot per-band tuning memory (band → last freq/mode there), restored
+    /// on band change like a radio's band-stacking register.  Persisted per
+    /// operator.  `pending_save_band_memory` flags the main loop to persist it
+    /// (set from `draw_band_control`, which only has `&self`).
+    pub band_memory: HashMap<
+        rigflow_core::radio::ham_band::HamBand,
+        crate::persistence::models::BandMemoryEntry,
+    >,
+    pub pending_save_band_memory: bool,
 
     // =====================================================================
     // CONNECTION / SERVER STATE
@@ -168,6 +260,12 @@ pub struct UiState {
     // =====================================================================
     pub runtime_error: String,
 
+    /// Most recent server-pushed transient error (`RadioError`), timestamped so
+    /// the Problems panel can show it for a few seconds then auto-clear.  Used for
+    /// async worker failures like a cross-band TX aborted because the amp band
+    /// change couldn't be confirmed.
+    pub last_radio_error: Option<(String, Instant)>,
+
     pub selected_license: Option<LicenseClass>,
 
     pub spectrum_zoom_x: f32,
@@ -191,6 +289,22 @@ pub struct UiState {
     /// Waterfall frame rate in Hz sent to the server (0 = off). Persisted with the
     /// other waterfall display prefs; range 0–30 (matches the server clamp).
     pub waterfall_frame_rate_hz: f32,
+    /// Waterfall temporal smoothing strength [0..1] (0 = raw) — a client-side
+    /// per-bin EMA on the FFT rows that reduces noise-floor scintillation.
+    pub waterfall_smoothing: f32,
+
+    // VFO B independent waterfall display (mirror of the VFO-A fields above).
+    // Edited when the active control VFO is B; session-only (not persisted). The
+    // adaptive estimates are computed from VFO B's own spectrum rows.
+    pub vfo_b_adaptive_waterfall_normalization: bool,
+    pub vfo_b_manual_waterfall_top_db: f32,
+    pub vfo_b_manual_waterfall_range_db: f32,
+    pub vfo_b_adaptive_top_db_estimate: f32,
+    pub vfo_b_adaptive_floor_db_estimate: f32,
+    pub vfo_b_adaptive_range_db_estimate: f32,
+    pub vfo_b_display_zoom: f32,
+    pub vfo_b_waterfall_frame_rate_hz: f32,
+    pub vfo_b_waterfall_smoothing: f32,
 
     // =====================================================================
     // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
@@ -211,6 +325,15 @@ pub struct UiState {
     // PER-DEMOD OPERATOR PREFERENCES
     // =====================================================================
     pub demod_preferences: DemodPreferenceSetFile,
+
+    /// Per-mode grid-snap / tuning-step sizes (Hz) for VFO A; UI-only, persisted
+    /// per operator.  Looked up by VFO A's mode at tuning time.
+    pub tuning_step_preferences: TuningStepPreferencesFile,
+
+    /// VFO B's grid-snap step (Hz) — independent of VFO A and session-only (not
+    /// persisted, matching VFO B's other receive controls).  Seeded from the
+    /// per-mode default on a B mode change / copy.
+    pub vfo_b_tuning_step_hz: f32,
 
     // =====================================================================
     // BOOKMARKS
@@ -471,10 +594,49 @@ impl Default for UiState {
             // =================================================================
             center_freq_hz: 0.0,
             target_freq_hz: 0.0,
+            vfo_b_target_freq_hz: 0.0,
+            vfo_b_center_freq_hz: 0.0,
+            vfo_b_demod_mode: DemodMode::Usb,
+            vfo_b_sideband: Sideband::Usb,
+            vfo_b_filter_bandwidth_hz: 2700.0,
+            vfo_b_ssb_pitch_hz: 0.0,
+            vfo_b_cw_pitch_hz: 600.0,
+            vfo_b_deemphasis_mode: DeemphasisMode::Off,
+            vfo_b_squelch_enabled: false,
+            vfo_b_squelch_threshold_db: -90.0,
+            vfo_b_squelch_open: true,
+            vfo_b_nr2_enabled: false,
+            vfo_b_nr2_strength: 0.5,
+            vfo_b_nb_enabled: false,
+            vfo_b_nb_threshold: 0.5,
+            vfo_b_notch_auto_enabled: false,
+            vfo_b_agc_enabled: true,
+            vfo_b_agc_strength: 0.5,
+            vfo_b_rit_enabled: false,
+            vfo_b_rit_offset_hz: 0,
+            vfo_b_signal_dbm: -140.0,
+            vfo_b_signal_s_units: 0,
+            rit_enabled: false,
+            rit_offset_hz: 0,
+            xit_enabled: false,
+            xit_offset_hz: 0,
+            split_enabled: false,
+            tx_vfo: VfoSelect::A,
+            dual_watch_enabled: false,
+            active_control_vfo: VfoSelect::A,
+            tx_drive_locked: true,
+            tx_drive_unlocked_at: None,
+            spot_level_locked: true,
+            spot_level_unlocked_at: None,
+            config_locked: false,
+            dial_locked: false,
+            volume_percent_b: 50,
             demod_mode: DemodMode::Wfm,
             sideband: Sideband::Lsb,
 
             demod_preferences: DemodPreferenceSetFile::default(),
+            tuning_step_preferences: TuningStepPreferencesFile::default(),
+            vfo_b_tuning_step_hz: 1_000.0,
             pitch_hz: 0.0,
             filter_bandwidth_hz: 3000.0,
             deemphasis_mode: DeemphasisMode::Off,
@@ -491,6 +653,8 @@ impl Default for UiState {
             signal_dbm: -140.0,
             signal_s_units: 0,
             volume_percent: 50,
+            volume_muted: false,
+            volume_b_muted: false,
             show_advanced: false,
             input_sample_rate_hz: 0.0,
 
@@ -509,6 +673,9 @@ impl Default for UiState {
 
             waterfall_rate_debounce: DebounceState::new(20.0),
             pending_apply_waterfall_rate: false,
+            pending_save_tuning_steps: false,
+            band_memory: HashMap::new(),
+            pending_save_band_memory: false,
 
             // =================================================================
             // CONNECTION / SERVER STATE
@@ -530,6 +697,7 @@ impl Default for UiState {
             // UI STATE
             // =================================================================
             runtime_error: String::new(),
+            last_radio_error: None,
             selected_license: None,
             spectrum_zoom_x: 1.0,
 
@@ -546,6 +714,17 @@ impl Default for UiState {
 
             display_zoom: 1.0,
             waterfall_frame_rate_hz: 20.0,
+            waterfall_smoothing: crate::persistence::models::default_waterfall_smoothing(),
+
+            vfo_b_adaptive_waterfall_normalization: true,
+            vfo_b_manual_waterfall_top_db: -35.0,
+            vfo_b_manual_waterfall_range_db: 80.0,
+            vfo_b_adaptive_top_db_estimate: -35.0,
+            vfo_b_adaptive_floor_db_estimate: -140.0,
+            vfo_b_adaptive_range_db_estimate: 100.0,
+            vfo_b_display_zoom: 1.0,
+            vfo_b_waterfall_frame_rate_hz: 20.0,
+            vfo_b_waterfall_smoothing: crate::persistence::models::default_waterfall_smoothing(),
 
             pan_velocity_hz_per_s: 0.0,
             last_pan_send: Instant::now(),
@@ -702,6 +881,10 @@ pub struct Problem {
 /// and this is the single place that decides what counts as a problem, so the
 /// status-bar badge count and the panel list always agree.  Errors are ordered
 /// before warnings.
+/// How long a transient server-pushed `RadioError` stays in the Problems panel
+/// before it auto-clears (it's a one-shot event, not a standing condition).
+const RADIO_ERROR_NOTICE_SECS: u64 = 8;
+
 pub fn collect_problems(s: &UiState) -> Vec<Problem> {
     let mut errors: Vec<Problem> = Vec::new();
     let mut warnings: Vec<Problem> = Vec::new();
@@ -738,6 +921,19 @@ pub fn collect_problems(s: &UiState) -> Vec<Problem> {
             source: "Amplifier",
             detail: err.clone(),
         });
+    }
+    // Transient server-pushed error (RadioError) — e.g. a cross-band TX aborted
+    // because the amp band change wasn't confirmed, or a rejected command.  Shown
+    // for a few seconds then auto-clears (it's a one-shot event, not a standing
+    // condition).
+    if let Some((msg, when)) = &s.last_radio_error {
+        if when.elapsed().as_secs() < RADIO_ERROR_NOTICE_SECS {
+            errors.push(Problem {
+                severity: ProblemSeverity::Error,
+                source: "Radio",
+                detail: msg.clone(),
+            });
+        }
     }
     // The SDR stopped sending IQ (HL2 link blip, RTL dongle pulled, device
     // powered off, …).  Only while a radio is held (so stale status after a

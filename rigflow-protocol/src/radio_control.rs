@@ -9,6 +9,7 @@ use rigflow_core::{
         swr_sweep::{SwrSweepProgress, SwrSweepResult},
         tx_audio_diag::TxAudioDiag,
         tx_tune::TxTuneResult,
+        vfo::{VfoSelect, VfoState},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,22 @@ pub fn default_signal_dbm() -> f32 {
 /// Default receive-audio volume percent for `#[serde(default)]` decoding.
 pub fn default_volume_percent() -> u8 {
     50
+}
+
+/// VFO-B `#[serde(default)]` fallbacks (only used when an older peer omits the
+/// dual-VFO fields; the server always sends real values).  Sourced from the
+/// canonical `VfoState::default()` so they can't drift from a fresh VFO B.
+pub fn default_demod_mode() -> DemodMode {
+    VfoState::default().demod_mode
+}
+pub fn default_sideband() -> Sideband {
+    VfoState::default().sideband
+}
+pub fn default_filter_bandwidth_hz() -> f32 {
+    VfoState::default().filter_bandwidth_hz
+}
+pub fn default_deemphasis_mode() -> DeemphasisMode {
+    VfoState::default().deemphasis_mode
 }
 
 /// Messages sent from client → server over WebSocket.
@@ -337,6 +354,104 @@ pub enum ClientRadioMessage {
 
     /// Ask the amplifier ATU to tune on the next transmission.
     TuneAmplifierAtu,
+
+    // ── Dual-VFO / split / RIT-XIT (VFO B is independent: own mode + filter) ──
+    /// Set VFO B's tuned frequency (the secondary VFO; independent of VFO A).
+    SetVfoBFrequency {
+        target_freq_hz: u64,
+    },
+    /// Set VFO B's LO / centre frequency (the RX1 hardware NCO).  Together with
+    /// `SetVfoBFrequency` this gives VFO B the same centre+target panadapter model
+    /// as VFO A (LO window + tuned offset within it).
+    SetVfoBCenterFrequency {
+        center_freq_hz: u64,
+    },
+    /// Set VFO B's demod mode.
+    SetVfoBDemodMode {
+        mode: DemodMode,
+    },
+    /// Set VFO B's sideband.
+    SetVfoBSideband {
+        sideband: Sideband,
+    },
+    /// Set VFO B's filter bandwidth (Hz).
+    SetVfoBFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+    /// Set VFO B's pitch (Hz) — SSB display pitch / CW pitch per its mode.
+    SetVfoBPitch {
+        pitch_hz: f32,
+    },
+    /// VFO B independent receive controls (mirror the VFO-A `Set*` setters; each
+    /// targets VFO B's own DSP pipeline under dual-watch).
+    SetVfoBDeemphasisMode {
+        mode: DeemphasisMode,
+    },
+    SetVfoBSquelchEnabled {
+        enabled: bool,
+    },
+    SetVfoBSquelchThreshold {
+        threshold_db: f32,
+    },
+    SetVfoBNr2Enabled {
+        enabled: bool,
+    },
+    SetVfoBNr2Strength {
+        strength: f32,
+    },
+    SetVfoBNoiseBlankerEnabled {
+        enabled: bool,
+    },
+    SetVfoBNoiseBlankerThreshold {
+        threshold: f32,
+    },
+    SetVfoBNotchAutoEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcStrength {
+        strength: f32,
+    },
+    /// RIT for VFO B (independent of VFO A's RIT) — offsets only VFO B's receive.
+    SetVfoBRit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    /// Set VFO B's waterfall frame rate (Hz, 0 = off) — independent of VFO A.
+    SetVfoBWaterfallFrameRate {
+        rate_hz: f32,
+    },
+    /// Clone VFO A's entire receiver state (frequency, mode, filter, DSP utils,
+    /// RIT) onto VFO B — the "A=B" copy.  Establishes an identical baseline.
+    CopyVfoAToB,
+    /// RIT (Receive Increment Tuning): a small offset applied to the *receiving*
+    /// VFO only, leaving transmit unchanged.
+    SetRit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    /// XIT (Transmit Increment Tuning): a small offset applied to the transmit
+    /// frequency only, leaving receive unchanged.
+    SetXit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    /// Enable/disable split: when on, transmit uses the TX VFO (`SetTxVfo`)
+    /// instead of the receiving VFO.
+    SetSplit {
+        enabled: bool,
+    },
+    /// Select which VFO transmits while split is enabled.
+    SetTxVfo {
+        vfo: VfoSelect,
+    },
+    /// Enable/disable dual-watch: spin up the second hardware receiver so VFO B
+    /// is received (audio + spectrum).  Requires a multi-RX-capable source.
+    SetDualWatch {
+        enabled: bool,
+    },
 }
 
 /// Messages sent from server → client over WebSocket.
@@ -462,6 +577,72 @@ pub enum ServerRadioMessage {
         /// Live SWR-sweep progress (`running=false` when idle/done).
         #[serde(default)]
         swr_sweep_progress: Option<SwrSweepProgress>,
+
+        /// Live TX-test-tone status (true while transmitting).  Lets the client
+        /// clear its Start/Stop buttons when the server hard-timeout auto-stops.
+        #[serde(default)]
+        tx_tone_running: bool,
+
+        // ── Dual-VFO / split / RIT-XIT (VFO B is independent: own mode + filter) ──
+        #[serde(default)]
+        vfo_b_target_freq_hz: u64,
+        #[serde(default)]
+        vfo_b_center_freq_hz: u64,
+        #[serde(default = "default_demod_mode")]
+        vfo_b_demod_mode: DemodMode,
+        #[serde(default = "default_sideband")]
+        vfo_b_sideband: Sideband,
+        #[serde(default = "default_filter_bandwidth_hz")]
+        vfo_b_filter_bandwidth_hz: f32,
+        #[serde(default)]
+        vfo_b_ssb_pitch_hz: f32,
+        #[serde(default)]
+        vfo_b_cw_pitch_hz: f32,
+        // VFO B independent receive controls (echoed back like the VFO-A fields).
+        // Noise blanker + auto-notch are fire-and-forget (not echoed, matching
+        // VFO A), so they are absent here by design.
+        #[serde(default = "default_deemphasis_mode")]
+        vfo_b_deemphasis_mode: DeemphasisMode,
+        #[serde(default)]
+        vfo_b_squelch_enabled: bool,
+        #[serde(default = "default_squelch_threshold_db")]
+        vfo_b_squelch_threshold_db: f32,
+        /// Live VFO-B squelch gate (open = audio passing).
+        #[serde(default = "default_squelch_open")]
+        vfo_b_squelch_open: bool,
+        #[serde(default)]
+        vfo_b_nr2_enabled: bool,
+        #[serde(default = "default_nr2_strength")]
+        vfo_b_nr2_strength: f32,
+        #[serde(default = "default_agc_enabled")]
+        vfo_b_agc_enabled: bool,
+        #[serde(default = "default_agc_strength")]
+        vfo_b_agc_strength: f32,
+        #[serde(default)]
+        vfo_b_rit_enabled: bool,
+        #[serde(default)]
+        vfo_b_rit_offset_hz: i32,
+        #[serde(default)]
+        rit_enabled: bool,
+        #[serde(default)]
+        rit_offset_hz: i32,
+        #[serde(default)]
+        xit_enabled: bool,
+        #[serde(default)]
+        xit_offset_hz: i32,
+        #[serde(default)]
+        split_enabled: bool,
+        #[serde(default)]
+        tx_vfo: VfoSelect,
+        #[serde(default)]
+        dual_watch_enabled: bool,
+        // `dual_watch_supported` is a static capability — carried in
+        // `SourceCapabilities` (RadioInfo), not here.
+        /// VFO B S-meter (read-only status).
+        #[serde(default = "default_signal_dbm")]
+        vfo_b_signal_dbm: f32,
+        #[serde(default)]
+        vfo_b_signal_s_units: i32,
     },
 
     /// Incremental runtime update.
@@ -531,6 +712,65 @@ pub enum ServerRadioMessage {
         swr_sweep_result: Option<SwrSweepResult>,
         #[serde(default)]
         swr_sweep_progress: Option<SwrSweepProgress>,
+        #[serde(default)]
+        tx_tone_running: Option<bool>,
+
+        // ── Dual-VFO / split / RIT-XIT deltas (None = unchanged) ──
+        #[serde(default)]
+        vfo_b_target_freq_hz: Option<u64>,
+        #[serde(default)]
+        vfo_b_center_freq_hz: Option<u64>,
+        #[serde(default)]
+        vfo_b_demod_mode: Option<DemodMode>,
+        #[serde(default)]
+        vfo_b_sideband: Option<Sideband>,
+        #[serde(default)]
+        vfo_b_filter_bandwidth_hz: Option<f32>,
+        #[serde(default)]
+        vfo_b_ssb_pitch_hz: Option<f32>,
+        #[serde(default)]
+        vfo_b_cw_pitch_hz: Option<f32>,
+        // VFO B independent receive controls (echoed; nb/notch fire-and-forget).
+        #[serde(default)]
+        vfo_b_deemphasis_mode: Option<DeemphasisMode>,
+        #[serde(default)]
+        vfo_b_squelch_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_squelch_threshold_db: Option<f32>,
+        #[serde(default)]
+        vfo_b_squelch_open: Option<bool>,
+        #[serde(default)]
+        vfo_b_nr2_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_nr2_strength: Option<f32>,
+        #[serde(default)]
+        vfo_b_agc_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_agc_strength: Option<f32>,
+        #[serde(default)]
+        vfo_b_rit_enabled: Option<bool>,
+        #[serde(default)]
+        vfo_b_rit_offset_hz: Option<i32>,
+        #[serde(default)]
+        rit_enabled: Option<bool>,
+        #[serde(default)]
+        rit_offset_hz: Option<i32>,
+        #[serde(default)]
+        xit_enabled: Option<bool>,
+        #[serde(default)]
+        xit_offset_hz: Option<i32>,
+        #[serde(default)]
+        split_enabled: Option<bool>,
+        #[serde(default)]
+        tx_vfo: Option<VfoSelect>,
+        #[serde(default)]
+        dual_watch_enabled: Option<bool>,
+        // `dual_watch_supported` is a static capability (SourceCapabilities), not
+        // a runtime delta.
+        #[serde(default)]
+        vfo_b_signal_dbm: Option<f32>,
+        #[serde(default)]
+        vfo_b_signal_s_units: Option<i32>,
     },
 
     /// Error message related to radio control or streaming.

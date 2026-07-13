@@ -8,10 +8,11 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info, trace, warn};
 use num_complex::Complex32;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use rigflow_core::dsp::modes::{default_deemphasis_mode, DeemphasisMode};
 use rigflow_core::dsp::modes::{DemodMode, Sideband};
+use rigflow_core::radio::vfo::{VfoSelect, VfoState};
 use rigflow_core::radio::{HardwareKind, RadioDescriptor};
 
 use crate::config::{
@@ -25,14 +26,17 @@ use crate::dsp::pipeline::{DspPipeline, DspPipelineConfig};
 use crate::net::udp::udp_audio::UdpAudioSender;
 use crate::net::udp::udp_waterfall::UdpWaterfallSender;
 use crate::radio::types::{
-    AcquireRequest, MediaEgress, StopReason, WorkerCommand, WorkerExit, WorkerReadyInfo,
-    WorkerRuntimeState, WorkerStartResult, WorkerStatus,
+    AcquireRequest, MediaEgress, StopReason, VfoSplitState, WorkerCommand, WorkerEvent, WorkerExit,
+    WorkerReadyInfo, WorkerRuntimeState, WorkerStartResult, WorkerStatus,
 };
 use crate::source::factory::{create_source, SourceConfig};
 use crate::source::wav_metadata::parse_center_freq_hz_from_filename;
 use crate::source::IqSource;
 use crate::waterfall::generator::WaterfallGenerator;
-use rigflow_core::radio::amplifier::AmplifierStatus;
+use rigflow_core::net::udp_framing::{
+    STREAM_TYPE_AUDIO, STREAM_TYPE_AUDIO_VFO_B, STREAM_TYPE_WATERFALL, STREAM_TYPE_WATERFALL_VFO_B,
+};
+use rigflow_core::radio::amplifier::{AmplifierKeyingMode, AmplifierStatus};
 use rigflow_core::radio::ham_band::{band_from_frequency, n2adr_filter_value_for_band, HamBand};
 use rigflow_core::radio::iq_recording::IqRecordingStatus;
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceControlState};
@@ -64,6 +68,9 @@ const SWR_SWEEP_SPOT_MS: u32 = 250;
 struct SharedControlState {
     center_freq_hz: u64,
     target_freq_hz: u64,
+    /// Dual-VFO / split / RIT-XIT state (set by the command thread; the DSP
+    /// thread copies it into `WorkerRuntimeState` and fills VFO-B signal/support).
+    vfo: VfoSplitState,
     demod_mode: DemodMode,
     sideband: Sideband,
     ssb_pitch_hz: f32,
@@ -125,6 +132,11 @@ struct SharedControlState {
     /// stop signal the capture thread polls while the (open-ended) tone runs.
     pending_tx_tone: Option<(f32, bool)>,
     tx_tone_stop: Arc<AtomicBool>,
+    /// Live "tone is transmitting" status, set true by the capture thread around
+    /// the (blocking) tone loop and false when it ends — including the server's
+    /// hard-timeout auto-stop.  Published in the runtime snapshot so the client's
+    /// Start/Stop buttons reflect an auto-stop the client didn't request.
+    tx_tone_running: bool,
 
     /// CW keying: `pending_cw_key` starts a keying session; `cw_key_held` is the
     /// live key state the session polls.  `cw_hang_ms` is the semi-break-in hang
@@ -166,6 +178,60 @@ struct SharedControlState {
     iq_recording_status: IqRecordingStatus,
 }
 
+impl SharedControlState {
+    /// Project VFO A's (flat) receiver settings as a `VfoState`.  VFO A's RIT
+    /// lives in `vfo.rit_*`; everything else is the top-level flat fields.
+    fn vfo_a_state(&self) -> VfoState {
+        VfoState {
+            target_freq_hz: self.target_freq_hz,
+            center_freq_hz: self.center_freq_hz,
+            demod_mode: self.demod_mode,
+            sideband: self.sideband,
+            filter_bandwidth_hz: self.filter_bandwidth_hz,
+            ssb_pitch_hz: self.ssb_pitch_hz,
+            cw_pitch_hz: self.cw_pitch_hz,
+            deemphasis_mode: self.deemphasis_mode,
+            squelch_enabled: self.squelch_enabled,
+            squelch_threshold_db: self.squelch_threshold_db,
+            nr2_enabled: self.nr2_enabled,
+            nr2_strength: self.nr2_strength,
+            nb_enabled: self.nb_enabled,
+            nb_threshold: self.nb_threshold,
+            notch_auto_enabled: self.notch_auto_enabled,
+            agc_enabled: self.agc_enabled,
+            agc_strength: self.agc_strength,
+            rit_enabled: self.vfo.rit_enabled,
+            rit_offset_hz: self.vfo.rit_offset_hz,
+            volume_percent: self.volume_percent,
+        }
+    }
+
+    /// Write a `VfoState` wholesale into VFO B's (flat `vfo_b_*`) fields.  The
+    /// `control_b` mirror then carries these onto the DSP-B pipeline.  Volume is
+    /// applied client-side, so it is not stored for VFO B here.
+    fn apply_vfo_b_state(&mut self, v: &VfoState) {
+        self.vfo.vfo_b_target_freq_hz = v.target_freq_hz;
+        self.vfo.vfo_b_center_freq_hz = v.center_freq_hz;
+        self.vfo.vfo_b_demod_mode = v.demod_mode;
+        self.vfo.vfo_b_sideband = v.sideband;
+        self.vfo.vfo_b_filter_bandwidth_hz = v.filter_bandwidth_hz;
+        self.vfo.vfo_b_ssb_pitch_hz = v.ssb_pitch_hz;
+        self.vfo.vfo_b_cw_pitch_hz = v.cw_pitch_hz;
+        self.vfo.vfo_b_deemphasis_mode = v.deemphasis_mode;
+        self.vfo.vfo_b_squelch_enabled = v.squelch_enabled;
+        self.vfo.vfo_b_squelch_threshold_db = v.squelch_threshold_db;
+        self.vfo.vfo_b_nr2_enabled = v.nr2_enabled;
+        self.vfo.vfo_b_nr2_strength = v.nr2_strength;
+        self.vfo.vfo_b_nb_enabled = v.nb_enabled;
+        self.vfo.vfo_b_nb_threshold = v.nb_threshold;
+        self.vfo.vfo_b_notch_auto_enabled = v.notch_auto_enabled;
+        self.vfo.vfo_b_agc_enabled = v.agc_enabled;
+        self.vfo.vfo_b_agc_strength = v.agc_strength;
+        self.vfo.vfo_b_rit_enabled = v.rit_enabled;
+        self.vfo.vfo_b_rit_offset_hz = v.rit_offset_hz;
+    }
+}
+
 #[derive(Debug, Clone)]
 struct StartupInfo {
     input_sample_rate_hz: f32,
@@ -184,6 +250,7 @@ pub async fn run_radio_worker(
     media: MediaEgress,
     mut worker_rx: mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
+    events_tx: broadcast::Sender<WorkerEvent>,
     mut stop_rx: oneshot::Receiver<()>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
 ) -> WorkerExit {
@@ -221,6 +288,7 @@ pub async fn run_radio_worker(
         let thread_server_cfg = server_cfg.clone();
         let thread_media = media.clone();
         let thread_status_tx = status_tx.clone();
+        let thread_events_tx = events_tx.clone();
         let thread_stop_flag = stop_flag.clone();
         let thread_stop_reason = stop_reason.clone();
 
@@ -234,6 +302,7 @@ pub async fn run_radio_worker(
                 thread_media,
                 cmd_rx_std,
                 thread_status_tx,
+                thread_events_tx,
                 startup_tx,
                 thread_stop_flag,
                 thread_stop_reason,
@@ -384,6 +453,241 @@ fn soft_clip(x: f32) -> f32 {
     }
 }
 
+/// Extra settle (ms) for a **cross-band** transmit: external amp relays and the
+/// async serial HR50 band switch need longer than the same-band PTT lead before
+/// RF, or RF would hit a switching/mismatched filter. Same-band TX adds nothing.
+const TX_CROSS_BAND_SETTLE_MS: u64 = 80;
+
+/// How long the SWR sweep waits for the HR50 to confirm it entered/left bypass
+/// (`HRMD0` = OFF), read back via the poller's ~1 Hz `HRRX`.  Covers the SET
+/// command + a couple of poll cycles.  On timeout the sweep is aborted (no RF).
+const AMP_BYPASS_TIMEOUT_MS: u64 = 3500;
+
+/// Outcome of [`prepare_tx_band`].  `cross_band` drives the RX-band restore;
+/// `ready` is false only when a cross-band amp band change is not yet confirmed
+/// — the caller must then abort the transmit (never key into a mismatched band).
+struct TxBandPrep {
+    cross_band: bool,
+    ready: bool,
+}
+
+/// Surface an aborted cross-band TX (amp band change unconfirmed) to the log and
+/// — via the worker event channel — to the leasing client as a `RadioError`.
+fn abort_cross_band_tx(
+    events_tx: &broadcast::Sender<WorkerEvent>,
+    radio_id: &str,
+    tx_freq_hz: u64,
+) {
+    warn!(
+        "[radio-worker {radio_id}] cross-band TX aborted: HR50 not yet confirmed on the \
+         band for {tx_freq_hz} Hz (retry in a moment)"
+    );
+    // Best-effort: no subscriber (client between updates) just drops it.
+    let _ = events_tx.send(WorkerEvent::Error {
+        code: "tx_band_unconfirmed".to_string(),
+        message: format!(
+            "Cross-band TX aborted: amplifier band change to {:.3} MHz not confirmed",
+            tx_freq_hz as f64 / 1_000_000.0
+        ),
+    });
+}
+
+/// Wait for the HR50's reported keying mode (`amplifier_status.mode`, from the
+/// poller's `HRRX` reads) to reach `want`.  Used by the SWR sweep to confirm the
+/// amp entered/left bypass (`HRMD0` = OFF) before transmitting.  No time pressure:
+/// the sweep settles fully before any RF.  Returns `false` on timeout.
+fn wait_for_keying_mode(
+    control: &Arc<Mutex<SharedControlState>>,
+    want: AmplifierKeyingMode,
+    timeout_ms: u64,
+) -> bool {
+    let started = Instant::now();
+    loop {
+        let reported = control
+            .lock()
+            .ok()
+            .and_then(|cs| cs.amplifier_status.mode.clone())
+            .and_then(|m| AmplifierKeyingMode::from_label(&m));
+        if reported == Some(want) {
+            return true;
+        }
+        if started.elapsed() >= Duration::from_millis(timeout_ms) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Effective transmit frequency from VFO / split / XIT state.
+/// Simplex (no split) = VFO A; split = the selected TX VFO; plus the XIT offset.
+fn effective_tx_freq_hz(cs: &SharedControlState) -> u64 {
+    let base = if cs.vfo.split_enabled {
+        match cs.vfo.tx_vfo {
+            VfoSelect::A => cs.target_freq_hz,
+            VfoSelect::B => cs.vfo.vfo_b_target_freq_hz,
+        }
+    } else {
+        cs.target_freq_hz
+    };
+    let off = if cs.vfo.xit_enabled {
+        cs.vfo.xit_offset_hz as i64
+    } else {
+        0
+    };
+    (base as i64 + off).max(0) as u64
+}
+
+/// Apply VFO B's independent settings onto a `control_b` that has just been
+/// cloned from VFO A's control state.  Overrides every VFO-B-independent field —
+/// freq/mode/filter/pitch plus the receive processing (deemphasis/squelch/NR2/
+/// NB/notch/AGC) — so the reused DSP-B thread, which reads these from its own
+/// lock each loop, honours VFO B's own settings.  Volume is intentionally NOT
+/// overridden (it is applied client-side).  RIT is written onto `cb.vfo.rit_*`
+/// because the DSP-B thread derives its NCO target via `effective_rx_freq_hz`,
+/// which reads those fields.  Centralised here so the override list lives in one
+/// place and is unit-tested.
+fn mirror_vfo_b_controls(cb: &mut SharedControlState, vfo: &VfoSplitState) {
+    cb.center_freq_hz = vfo.vfo_b_center_freq_hz;
+    cb.target_freq_hz = vfo.vfo_b_target_freq_hz;
+    cb.demod_mode = vfo.vfo_b_demod_mode;
+    cb.sideband = vfo.vfo_b_sideband;
+    cb.filter_bandwidth_hz = vfo.vfo_b_filter_bandwidth_hz;
+    cb.ssb_pitch_hz = vfo.vfo_b_ssb_pitch_hz;
+    cb.cw_pitch_hz = vfo.vfo_b_cw_pitch_hz;
+    cb.deemphasis_mode = vfo.vfo_b_deemphasis_mode;
+    cb.squelch_enabled = vfo.vfo_b_squelch_enabled;
+    cb.squelch_threshold_db = vfo.vfo_b_squelch_threshold_db;
+    cb.nr2_enabled = vfo.vfo_b_nr2_enabled;
+    cb.nr2_strength = vfo.vfo_b_nr2_strength;
+    cb.nb_enabled = vfo.vfo_b_nb_enabled;
+    cb.nb_threshold = vfo.vfo_b_nb_threshold;
+    cb.notch_auto_enabled = vfo.vfo_b_notch_auto_enabled;
+    cb.agc_enabled = vfo.vfo_b_agc_enabled;
+    cb.agc_strength = vfo.vfo_b_agc_strength;
+    cb.vfo.rit_enabled = vfo.vfo_b_rit_enabled;
+    cb.vfo.rit_offset_hz = vfo.vfo_b_rit_offset_hz;
+    // The DSP-B waterfall thread paces off `waterfall_frame_rate_hz`; give it
+    // VFO B's own rate (the clone copied VFO A's).
+    cb.waterfall_frame_rate_hz = vfo.vfo_b_waterfall_frame_rate_hz;
+}
+
+/// Effective VFO-A receive frequency: the tuned frequency plus the RIT offset
+/// (RIT shifts only what you hear, not the dial or transmit).
+fn effective_rx_freq_hz(cs: &SharedControlState) -> u64 {
+    let off = if cs.vfo.rit_enabled {
+        cs.vfo.rit_offset_hz as i64
+    } else {
+        0
+    };
+    (cs.target_freq_hz as i64 + off).max(0) as u64
+}
+
+/// Effective transmit demod mode (drives CW side / SSB sideband selection).
+/// Follows the TX VFO when split is on, else the primary (VFO A) mode.
+fn effective_tx_demod_mode(cs: &SharedControlState) -> DemodMode {
+    if cs.vfo.split_enabled && cs.vfo.tx_vfo == VfoSelect::B {
+        cs.vfo.vfo_b_demod_mode
+    } else {
+        cs.demod_mode
+    }
+}
+
+/// Hot-switch protection: program the N2ADR LPF + external-amp band for the
+/// transmit frequency **before** RF, and (cross-band only) block long enough for
+/// relays / the serial amp to settle. Returns `true` if it was a cross-band
+/// change, so the caller restores the RX band afterward. Same-band is a no-op
+/// beyond keeping the amp mirror on the (identical) TX freq.
+fn prepare_tx_band(
+    source: &mut dyn IqSource,
+    amp_fa_sent: &AtomicU64,
+    amp_present: bool,
+    n2adr_enabled: bool,
+    rx_freq_hz: u64,
+    tx_freq_hz: u64,
+) -> TxBandPrep {
+    let cross_band = band_from_frequency(rx_freq_hz) != band_from_frequency(tx_freq_hz);
+    // The N2ADR LPF is in the RX/TX path: program it to the TX band now (fast,
+    // I2C/gateware — no relay/serial latency).  The HR50 amp band is NOT set here:
+    // it can't be switched while keyed, so the capture loop's effective-TX tracking
+    // keeps it on the TX band during RX; we only *verify* that below.
+    if n2adr_enabled {
+        if let Some(band) = band_from_frequency(tx_freq_hz) {
+            let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
+        }
+    }
+    // Same-band needs no amp band switch; nothing to verify.
+    if !cross_band {
+        return TxBandPrep {
+            cross_band: false,
+            ready: true,
+        };
+    }
+    // No HR50 to protect — the internal N2ADR LPF (set above) is enough.  A small
+    // settle covers the (instant) gateway switch + relay margin.
+    if !amp_present {
+        std::thread::sleep(std::time::Duration::from_millis(TX_CROSS_BAND_SETTLE_MS));
+        return TxBandPrep {
+            cross_band: true,
+            ready: true,
+        };
+    }
+    // Cross-band with an HR50 present: the amp must ALREADY be on the TX band (the
+    // poller put it there during RX and can't switch it while keyed).  Verify the
+    // poller's last-sent FA is on the TX band; if it hasn't caught up yet (e.g. you
+    // keyed right after enabling split), abort — a re-key a moment later succeeds.
+    let amp_ready =
+        band_from_frequency(amp_fa_sent.load(Ordering::Relaxed)) == band_from_frequency(tx_freq_hz);
+    TxBandPrep {
+        cross_band: true,
+        ready: amp_ready,
+    }
+}
+
+/// Restore the receive band after a transmit.  The N2ADR LPF is in the RX path,
+/// so (cross-band only) force the per-loop tracker to reprogram the RX band on the
+/// next capture iteration.  The HR50 amp is bypassed on receive, so it is left on
+/// the (effective-TX) band — the capture loop's effective-TX tracking owns the amp
+/// FA mirror, so reverting here would only cause a needless per-over relay bounce.
+fn restore_rx_band(cross_band: bool, last_n2adr_value: &mut Option<u8>) {
+    if cross_band {
+        *last_n2adr_value = None;
+    }
+}
+
+/// N2ADR filter value for the current RECEIVE configuration.
+///
+/// Single-VFO: the tuned band's value (the 3 MHz HPF bit is already correct per
+/// band — set for 80m–10m, clear for 160m).  Dual-watch: the LPF must pass the
+/// HIGHEST active RX band (a higher-cutoff LPF passes the lower band too), and the
+/// HPF (bit 6) must be OFF if either RX is on 160m, otherwise the higher band's
+/// HPF would block the 160m receiver.  `None` = no VFO in a supported band → leave
+/// the filter unchanged.
+fn n2adr_value_for_rx(cs: &SharedControlState) -> Option<u8> {
+    let b = cs
+        .vfo
+        .dual_watch_enabled
+        .then_some(cs.vfo.vfo_b_target_freq_hz);
+    n2adr_rx_value(cs.target_freq_hz, b)
+}
+
+/// Pure core of [`n2adr_value_for_rx`].  `freq_b = Some` means dual-watch (two
+/// active receivers); `None` means single-VFO.
+fn n2adr_rx_value(freq_a: u64, freq_b: Option<u64>) -> Option<u8> {
+    let band_a = band_from_frequency(freq_a);
+    let Some(freq_b) = freq_b else {
+        return band_a.map(n2adr_filter_value_for_band);
+    };
+    let band_b = band_from_frequency(freq_b);
+    let hi = match (band_a, band_b) {
+        (Some(_), Some(_)) => band_from_frequency(freq_a.max(freq_b)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }?;
+    let any_160 = band_a == Some(HamBand::B160) || band_b == Some(HamBand::B160);
+    // Highest band's LPF band-select bits (lower 6) + HPF (0x40) unless 160m.
+    Some((n2adr_filter_value_for_band(hi) & 0x3F) | if any_160 { 0 } else { 0x40 })
+}
+
 fn build_runtime_state(
     control: &SharedControlState,
     input_sample_rate_hz: f32,
@@ -391,6 +695,7 @@ fn build_runtime_state(
     WorkerRuntimeState {
         center_freq_hz: control.center_freq_hz,
         target_freq_hz: control.target_freq_hz,
+        vfo: control.vfo.clone(),
         demod_mode: control.demod_mode,
         sideband: control.sideband,
         ssb_pitch_hz: control.ssb_pitch_hz,
@@ -415,6 +720,7 @@ fn build_runtime_state(
         last_tx_tune_result: control.last_tx_tune_result.clone(),
         last_swr_sweep_result: control.last_swr_sweep_result.clone(),
         swr_sweep_progress: control.swr_sweep_progress,
+        tx_tone_running: control.tx_tone_running,
 
         input_sample_rate_hz,
         audio_sample_rate_hz: 48_000,
@@ -446,6 +752,7 @@ fn run_iq_worker_threads(
     media: MediaEgress,
     cmd_rx: std_mpsc::Receiver<WorkerCommand>,
     status_tx: watch::Sender<WorkerStatus>,
+    events_tx: broadcast::Sender<WorkerEvent>,
     startup_tx: oneshot::Sender<WorkerStartResult>,
     stop_flag: Arc<AtomicBool>,
     stop_reason: Arc<Mutex<StopReason>>,
@@ -479,6 +786,14 @@ fn run_iq_worker_threads(
     let control = Arc::new(Mutex::new(SharedControlState {
         center_freq_hz: initial_center_freq_hz,
         target_freq_hz: initial_target_freq_hz,
+        vfo: VfoSplitState {
+            // VFO B starts mirroring VFO A's frequency; mode/filter independent.
+            vfo_b_target_freq_hz: initial_target_freq_hz,
+            vfo_b_center_freq_hz: initial_center_freq_hz,
+            // Dual-watch needs a second hardware receiver — HL2 only.
+            dual_watch_supported: matches!(source_kind, SourceKind::HermesLite2),
+            ..VfoSplitState::default()
+        },
         demod_mode: server_cfg.demod,
         sideband: Sideband::Lsb,
         ssb_pitch_hz: 0.0,
@@ -510,6 +825,7 @@ fn run_iq_worker_threads(
         swr_sweep_progress: None,
         pending_tx_tone: None,
         tx_tone_stop: Arc::new(AtomicBool::new(false)),
+        tx_tone_running: false,
         pending_cw_key: false,
         cw_key_held: Arc::new(AtomicBool::new(false)),
         cw_hang_ms: 300,
@@ -530,6 +846,28 @@ fn run_iq_worker_threads(
 
     let (iq_audio_tx, iq_audio_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(2);
     let (iq_wf_tx, iq_wf_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+
+    // VFO B (dual-watch) second-receiver channels + control mirror.  The DSP-B
+    // and waterfall-B threads block on these empty channels when dual-watch is
+    // off (the capture thread only feeds them when enabled), so idle cost is
+    // ~zero.  `control_b` presents VFO B's settings in VFO-A shape so the
+    // existing DSP/waterfall threads are reused verbatim.
+    //
+    // VFO A's audio channel is depth-2 but the capture thread *blocks* on it
+    // (paced by DSP-A, never dropped).  VFO B is fed by `try_send` (so a stalled
+    // B can never block A), so it needs real slack — a depth-2 channel drops B IQ
+    // on any brief DSP-B scheduling hiccup, starving the right-channel jitter
+    // buffer.  Depth 16 absorbs that jitter; it still drops (not blocks) under a
+    // sustained B stall, and runs near-empty when DSP-B keeps up (low latency).
+    let (iq_audio_b_tx, iq_audio_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(16);
+    let (iq_wf_b_tx, iq_wf_b_rx) = std_mpsc::sync_channel::<Vec<Complex32>>(4);
+    let control_b = Arc::new(Mutex::new(
+        control
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_else(|e| e.into_inner().clone()),
+    ));
+
     let (startup_info_tx, startup_info_rx) =
         std_mpsc::sync_channel::<Result<StartupInfo, String>>(1);
     let (capture_start_tx, capture_start_rx) = std_mpsc::sync_channel::<()>(1);
@@ -546,6 +884,18 @@ fn run_iq_worker_threads(
     let amp_freq = Arc::new(AtomicU64::new(
         control.lock().map(|c| c.target_freq_hz).unwrap_or(0),
     ));
+    // Confirmed amplifier frequency: the value the HR50 poller last sent `FA` for.
+    // The capture loop keeps `amp_freq` on the effective-TX band, the poller tracks
+    // it during RX, and a cross-band TX verifies `amp_fa_sent` is on the TX band
+    // before keying (the poller can't switch the band while keyed).  0 = none yet.
+    let amp_fa_sent = Arc::new(AtomicU64::new(0));
+
+    // "HL2 is keyed" flag for the TX paths that assert PTT WITHOUT a per-path keyed
+    // flag — tune test (Spot/SWR), test tone, and the SWR sweep.  The HR50 firmware
+    // hangs if it gets serial while keyed, and mic/CW already gate the poller via
+    // `mic_tx_active`/`cw_key_held`; this closes the gap for the other paths.  Set
+    // around those transmits in the capture loop; watched by the amp poller.
+    let tx_active = Arc::new(AtomicBool::new(false));
 
     // HL2 has a watchdog: if no C&C packets arrive in ~60 s it stops streaming.
     // The capture thread sends a keepalive C&C every 30 s to prevent this.
@@ -557,8 +907,7 @@ fn run_iq_worker_threads(
         stop_flag.clone(),
         stop_reason.clone(),
         fatal_tx.clone(),
-        amp_cmd_tx,
-        amp_freq.clone(),
+        amp_cmd_tx.clone(),
     );
 
     let capture_thread = spawn_capture_thread(
@@ -576,6 +925,15 @@ fn run_iq_worker_threads(
         initial_center_freq_hz,
         confirmed_sample_rate_hz.clone(),
         needs_cc_keepalive,
+        amp_freq.clone(),
+        amp_fa_sent.clone(),
+        tx_active.clone(),
+        amp_cmd_tx,
+        events_tx.clone(),
+        iq_audio_b_tx,
+        iq_wf_b_tx,
+        control_b.clone(),
+        status_tx.clone(),
     );
 
     let startup_info = match startup_info_rx.recv() {
@@ -615,6 +973,7 @@ fn run_iq_worker_threads(
         media.clone(),
         startup_info.clone(),
         confirmed_sample_rate_hz.clone(),
+        STREAM_TYPE_AUDIO,
     );
 
     let waterfall_thread = spawn_waterfall_thread(
@@ -624,6 +983,40 @@ fn run_iq_worker_threads(
         media.clone(),
         startup_info.runtime.waterfall_bins as usize,
         control.clone(),
+        STREAM_TYPE_WATERFALL,
+    );
+
+    // VFO B (dual-watch) DSP + waterfall: reuse the same threads via `control_b`
+    // and VFO-B stream types, sharing the same media egress as VFO A — both
+    // receivers stream to the one reflexive target off the one socket.
+    // They block on their (empty) channels while dual-watch is off — zero idle
+    // cost — and process only when the capture thread feeds them VFO B IQ.
+    //
+    // The DSP-B thread must NOT publish the authoritative WorkerStatus (VFO A
+    // owns it), so it gets a throwaway watch channel whose receiver we hold open;
+    // VFO B's S-meter is read back from `control_b` by the capture thread.
+    let (status_b_tx, _status_b_rx) = watch::channel(WorkerStatus::Starting);
+    let dsp_b_thread = spawn_dsp_thread(
+        descriptor.clone(),
+        server_cfg.clone(),
+        control_b.clone(),
+        stop_flag.clone(),
+        status_b_tx,
+        iq_audio_b_rx,
+        media.clone(),
+        startup_info.clone(),
+        confirmed_sample_rate_hz.clone(),
+        STREAM_TYPE_AUDIO_VFO_B,
+    );
+
+    let waterfall_b_thread = spawn_waterfall_thread(
+        descriptor.clone(),
+        iq_wf_b_rx,
+        stop_flag.clone(),
+        media.clone(),
+        startup_info.runtime.waterfall_bins as usize,
+        control_b.clone(),
+        STREAM_TYPE_WATERFALL_VFO_B,
     );
 
     // Amplifier (HR50) poller — HL2 only, when a serial device is configured.
@@ -637,6 +1030,8 @@ fn run_iq_worker_threads(
             stop_flag.clone(),
             amp_cmd_rx,
             amp_freq.clone(),
+            amp_fa_sent.clone(),
+            tx_active.clone(),
         )
     } else {
         None
@@ -667,6 +1062,8 @@ fn run_iq_worker_threads(
     let _ = capture_thread.join();
     let _ = dsp_thread.join();
     let _ = waterfall_thread.join();
+    let _ = dsp_b_thread.join();
+    let _ = waterfall_b_thread.join();
     if let Some(h) = amplifier_thread {
         let _ = h.join();
     }
@@ -736,6 +1133,8 @@ fn spawn_amplifier_thread(
     stop_flag: Arc<AtomicBool>,
     amp_cmd_rx: std_mpsc::Receiver<crate::amplifier::AmpCommand>,
     amp_freq: Arc<AtomicU64>,
+    amp_fa_sent: Arc<AtomicU64>,
+    tx_active: Arc<AtomicBool>,
 ) -> Option<thread::JoinHandle<()>> {
     let configured = server_cfg.hr50_serial.clone()?;
     let radio_id = descriptor.id.0;
@@ -773,17 +1172,24 @@ fn spawn_amplifier_thread(
         };
         info!("[radio-worker {radio_id}] HR50 amplifier polling on {path} @ {baud} 8N1");
         // The HR50 hangs if sent serial while keyed, so the poller goes silent
-        // during TX.  Reuse the existing per-path keying flags (mic/FT8/two-tone
-        // and CW) — both are reliably cleared on key-up and on worker stop.
+        // during TX.  Watch the per-path keying flags (mic/FT8/two-tone, CW — both
+        // cleared on key-up and worker stop) plus `tx_active`, which covers the TX
+        // paths that assert PTT without a per-path flag (tune test, test tone, SWR
+        // sweep).  Any one true → the poller stays off the serial.
         let tx_keyed = match control.lock() {
-            Ok(cs) => vec![Arc::clone(&cs.mic_tx_active), Arc::clone(&cs.cw_key_held)],
-            Err(_) => Vec::new(),
+            Ok(cs) => vec![
+                Arc::clone(&cs.mic_tx_active),
+                Arc::clone(&cs.cw_key_held),
+                tx_active.clone(),
+            ],
+            Err(_) => vec![tx_active.clone()],
         };
         crate::amplifier::run_amplifier_poller(
             Box::new(transport),
             stop_flag,
             amp_cmd_rx,
             amp_freq,
+            amp_fa_sent,
             tx_keyed,
             |status| {
                 if let Ok(mut cs) = control.lock() {
@@ -803,7 +1209,6 @@ fn spawn_command_thread(
     stop_reason: Arc<Mutex<StopReason>>,
     fatal_tx: std_mpsc::Sender<WorkerExit>,
     amp_cmd_tx: std_mpsc::Sender<crate::amplifier::AmpCommand>,
-    amp_freq: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !stop_requested(&stop_flag) {
@@ -813,8 +1218,10 @@ fn spawn_command_thread(
                         if let Ok(mut control_state) = control.lock() {
                             control_state.target_freq_hz = hz;
                         }
-                        // Mirror to the amplifier poller for FA band tracking.
-                        amp_freq.store(hz, Ordering::Relaxed);
+                        // The amplifier FA mirror (`amp_freq`) tracks the *effective
+                        // TX* frequency from the capture loop, not the RX dial — so a
+                        // VFO A retune is picked up there, and a split TX on VFO B
+                        // keeps the amp on the TX band (no per-over relay bounce).
                     }
                     WorkerCommand::SetCenterFrequency { hz } => {
                         if let Ok(mut control_state) = control.lock() {
@@ -983,6 +1390,145 @@ fn spawn_command_thread(
                         if let Ok(mut control_state) = control.lock() {
                             control_state.source_control.tx_ptt_lead_ms = lead_ms.min(100);
                             control_state.source_control.tx_ptt_tail_ms = tail_ms.min(100);
+                        }
+                    }
+
+                    // ── Dual-VFO / split / RIT-XIT (Stage 0: store only; the DSP
+                    // thread (Stage 3) and TX path (Stage 1) read these) ──
+                    WorkerCommand::SetVfoBFrequency { hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_target_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetVfoBCenterFrequency { hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_center_freq_hz = hz;
+                        }
+                    }
+                    WorkerCommand::SetVfoBDemodMode { mode } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_demod_mode = mode;
+                        }
+                    }
+                    WorkerCommand::SetVfoBSideband { sideband } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_sideband = sideband;
+                        }
+                    }
+                    WorkerCommand::SetVfoBFilterBandwidth { bandwidth_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_filter_bandwidth_hz = bandwidth_hz;
+                        }
+                    }
+                    WorkerCommand::SetVfoBPitch { pitch_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            match cs.vfo.vfo_b_demod_mode {
+                                DemodMode::Cwu | DemodMode::Cwl => {
+                                    cs.vfo.vfo_b_cw_pitch_hz = pitch_hz.clamp(100.0, 1500.0);
+                                }
+                                _ => {
+                                    cs.vfo.vfo_b_ssb_pitch_hz = pitch_hz.clamp(-1500.0, 1500.0);
+                                }
+                            }
+                        }
+                    }
+                    WorkerCommand::SetVfoBDeemphasisMode { mode } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_deemphasis_mode = mode;
+                        }
+                    }
+                    WorkerCommand::SetVfoBSquelchEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_squelch_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBSquelchThreshold { threshold_db } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBNr2Enabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nr2_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBNr2Strength { strength } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nr2_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBNoiseBlankerEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nb_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBNoiseBlankerThreshold { threshold } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_nb_threshold = threshold.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBNotchAutoEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_notch_auto_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBAgcEnabled { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_agc_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetVfoBAgcStrength { strength } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_agc_strength = strength.clamp(0.0, 1.0);
+                        }
+                    }
+                    WorkerCommand::SetVfoBRit { enabled, offset_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_rit_enabled = enabled;
+                            cs.vfo.vfo_b_rit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::SetVfoBWaterfallFrameRate { rate_hz } => {
+                        let applied = rate_hz.clamp(0.0, WATERFALL_FRAME_RATE_MAX_HZ);
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.vfo_b_waterfall_frame_rate_hz = applied;
+                        }
+                    }
+                    WorkerCommand::CopyVfoAToB => {
+                        // Wholesale clone of VFO A's receiver state onto VFO B, in
+                        // one locked transaction (the `control_b` mirror then carries
+                        // it to the DSP-B pipeline).
+                        if let Ok(mut cs) = control.lock() {
+                            let a = cs.vfo_a_state();
+                            cs.apply_vfo_b_state(&a);
+                        }
+                    }
+                    WorkerCommand::SetRit { enabled, offset_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.rit_enabled = enabled;
+                            cs.vfo.rit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::SetXit { enabled, offset_hz } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.xit_enabled = enabled;
+                            cs.vfo.xit_offset_hz = offset_hz.clamp(-9999, 9999);
+                        }
+                    }
+                    WorkerCommand::SetSplit { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.split_enabled = enabled;
+                        }
+                    }
+                    WorkerCommand::SetTxVfo { vfo } => {
+                        if let Ok(mut cs) = control.lock() {
+                            cs.vfo.tx_vfo = vfo;
+                        }
+                    }
+                    WorkerCommand::SetDualWatch { enabled } => {
+                        if let Ok(mut cs) = control.lock() {
+                            // Honor the capability gate; non-HL2 sources stay off.
+                            cs.vfo.dual_watch_enabled = enabled && cs.vfo.dual_watch_supported;
                         }
                     }
 
@@ -1159,6 +1705,7 @@ fn spawn_command_thread(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_waterfall_thread(
     descriptor: RadioDescriptor,
     iq_wf_rx: std_mpsc::Receiver<Vec<Complex32>>,
@@ -1166,11 +1713,13 @@ fn spawn_waterfall_thread(
     media: MediaEgress,
     waterfall_window_len: usize,
     control: Arc<Mutex<SharedControlState>>,
+    waterfall_stream_type: u8,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut waterfall_gen = WaterfallGenerator::new(WATERFALL_BINS);
 
-        let mut waterfall = UdpWaterfallSender::new(media.socket.clone());
+        let mut waterfall =
+            UdpWaterfallSender::new_with_stream_type(media.socket.clone(), waterfall_stream_type);
 
         let mut waterfall_iq_buffer: VecDeque<Complex32> = VecDeque::new();
         let waterfall_max_len = waterfall_window_len * 8;
@@ -1321,6 +1870,15 @@ fn spawn_capture_thread(
     initial_center_freq_hz: u64,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
     needs_cc_keepalive: bool,
+    amp_freq: Arc<AtomicU64>,
+    amp_fa_sent: Arc<AtomicU64>,
+    tx_active: Arc<AtomicBool>,
+    amp_cmd_tx: std_mpsc::Sender<crate::amplifier::AmpCommand>,
+    events_tx: broadcast::Sender<WorkerEvent>,
+    iq_audio_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
+    iq_wf_b_tx: std_mpsc::SyncSender<Vec<Complex32>>,
+    control_b: Arc<Mutex<SharedControlState>>,
+    status_tx: watch::Sender<WorkerStatus>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut source = match create_worker_source(
@@ -1336,6 +1894,11 @@ fn spawn_capture_thread(
                 return;
             }
         };
+
+        // Give the source the shared "transmitting" flag so the HR50 poller stays
+        // off the serial for the entire real keyed window (HL2 sets it in
+        // tx_seq_begin/end; no-op on other sources).
+        source.set_tx_active_flag(tx_active.clone());
 
         // This thread owns the IQ source, so source-level controls are applied here.
         let initial_source_control = source.source_control_state();
@@ -1376,8 +1939,10 @@ fn spawn_capture_thread(
         let mut last_cc_sent = Instant::now();
         // N2ADR HF filter board (HL2): track the last band we programmed and the
         // enable state so we only reprogram on band change or (re)enable.
-        let mut last_n2adr_band: Option<HamBand> = None;
+        let mut last_n2adr_value: Option<u8> = None;
         let mut last_n2adr_enabled = false;
+        // Last value pushed to the amplifier FA mirror (effective-TX band tracking).
+        let mut last_amp_freq: u64 = 0;
         // FDX / TX Monitor Spectrum (HL2): mirror the enable state into the
         // source so it retains RX IQ during transmit.  Only pushed on change.
         let mut last_fdx_enabled = false;
@@ -1393,6 +1958,10 @@ fn spawn_capture_thread(
         // Poll source_status() at ~4 Hz to avoid flooding SharedControlState.
         let status_poll_interval = Duration::from_millis(250);
         let mut last_status_poll = Instant::now();
+        // VFO B (dual-watch) second-receiver state, tracked to program the source
+        // only on change.  `u64::MAX` forces the first RX1-NCO program.
+        let mut last_dual_watch = false;
+        let mut last_vfo_b_freq: u64 = u64::MAX;
 
         debug!(
             "[radio-worker {}] source running: sample_rate={} block_size={} realtime={}",
@@ -1409,6 +1978,62 @@ fn spawn_capture_thread(
 
             let control_snapshot = current_control(&control);
             let current_source_control = control_snapshot.source_control.clone();
+
+            // ── VFO B (dual-watch) second-receiver management + control_b mirror ──
+            {
+                let vfo = control_snapshot.vfo.clone();
+                if vfo.dual_watch_enabled != last_dual_watch {
+                    if let Err(e) = source.set_secondary_receiver_enabled(vfo.dual_watch_enabled) {
+                        warn!(
+                            "[radio-worker {}] dual-watch toggle failed: {e}",
+                            descriptor.id.0
+                        );
+                    }
+                    last_dual_watch = vfo.dual_watch_enabled;
+                    last_vfo_b_freq = u64::MAX; // force RX1 NCO reprogram
+                }
+                if vfo.dual_watch_enabled {
+                    // RX1 hardware NCO tracks VFO B's LO/centre (like VFO A's DDC0);
+                    // the DSP-B fine-tunes (target − centre) into baseband.
+                    if vfo.vfo_b_center_freq_hz != last_vfo_b_freq {
+                        if let Err(e) =
+                            source.set_secondary_center_frequency(vfo.vfo_b_center_freq_hz as f32)
+                        {
+                            warn!("[radio-worker {}] VFO B NCO failed: {e}", descriptor.id.0);
+                        }
+                        last_vfo_b_freq = vfo.vfo_b_center_freq_hz;
+                    }
+                    // Mirror into control_b in VFO-A shape: clone VFO A's state, then
+                    // override every VFO-B-independent field (freq/mode/filter/pitch
+                    // AND the receive processing: deemphasis/squelch/NR2/NB/notch/AGC),
+                    // so the reused DSP-B thread — which reads these from its own lock
+                    // each loop — honours VFO B's own settings.  Volume stays out (it's
+                    // applied client-side).  Read VFO B's S-meter + squelch gate
+                    // back into the main control for the snapshot (the DSP-B thread
+                    // wrote them on its previous cycle, before this clone overwrites
+                    // them with VFO A's values).
+                    if let Ok(mut cb) = control_b.lock() {
+                        let (b_dbm, b_su, b_sq_open) =
+                            (cb.signal_dbm, cb.signal_s_units, cb.squelch_open);
+                        *cb = control_snapshot.clone();
+                        mirror_vfo_b_controls(&mut cb, &vfo);
+                        // The clone above also copied VFO A's DSP *outputs* (S-meter,
+                        // squelch gate) into control_b.  Restore VFO B's own — else
+                        // they fight the DSP-B thread (which only rewrites the gate
+                        // on change), making B's gate/S-meter flicker between A's and
+                        // B's values every loop.
+                        cb.signal_dbm = b_dbm;
+                        cb.signal_s_units = b_su;
+                        cb.squelch_open = b_sq_open;
+                        drop(cb);
+                        if let Ok(mut a) = control.lock() {
+                            a.vfo.vfo_b_signal_dbm = b_dbm;
+                            a.vfo.vfo_b_signal_s_units = b_su;
+                            a.vfo.vfo_b_squelch_open = b_sq_open;
+                        }
+                    }
+                }
+            }
 
             if current_source_control.sample_rate_hz != applied_source_control.sample_rate_hz {
                 if let Err(err) = source.set_sample_rate(current_source_control.sample_rate_hz) {
@@ -1538,26 +2163,25 @@ fn spawn_capture_thread(
                 last_cc_sent = Instant::now();
             }
 
-            // N2ADR HF filter board (HL2): when enabled, follow the tuned band.
-            // Reprogram only when the band changes or N2ADR was just enabled.
-            // Outside the supported bands the filter is left unchanged and no
-            // update is sent (per spec).  No-op on sources without N2ADR.
+            // N2ADR HF filter board (HL2): when enabled, follow the receive
+            // configuration — the tuned band single-VFO, or the highest active RX
+            // band (HPF off if 160m is in use) under dual-watch.  Reprogram only
+            // when the value changes or N2ADR was just enabled.  Outside the
+            // supported bands the filter is left unchanged.  No-op without N2ADR.
             {
                 let just_enabled = current_source_control.n2adr_enabled && !last_n2adr_enabled;
                 if current_source_control.n2adr_enabled {
-                    if let Some(band) = band_from_frequency(control_snapshot.target_freq_hz) {
-                        if last_n2adr_band != Some(band) || just_enabled {
-                            let value = n2adr_filter_value_for_band(band);
+                    if let Some(value) = n2adr_value_for_rx(&control_snapshot) {
+                        if last_n2adr_value != Some(value) || just_enabled {
                             match source.set_n2adr_filter(value) {
                                 Ok(()) => {
                                     info!(
-                                        "[hl2] band={} freq={} mode={:?} n2adr={}",
-                                        band.label(),
+                                        "[hl2] n2adr={value} rx_a={} rx_b={} dual={}",
                                         control_snapshot.target_freq_hz,
-                                        control_snapshot.demod_mode,
-                                        value
+                                        control_snapshot.vfo.vfo_b_target_freq_hz,
+                                        control_snapshot.vfo.dual_watch_enabled,
                                     );
-                                    last_n2adr_band = Some(band);
+                                    last_n2adr_value = Some(value);
                                 }
                                 Err(e) => warn!("HL2: N2ADR filter program failed: {e}"),
                             }
@@ -1566,9 +2190,23 @@ fn spawn_capture_thread(
                 } else if last_n2adr_enabled {
                     // Just disabled: leave the hardware filter as-is; reset
                     // tracking so a later re-enable reprograms.
-                    last_n2adr_band = None;
+                    last_n2adr_value = None;
                 }
                 last_n2adr_enabled = current_source_control.n2adr_enabled;
+            }
+
+            // HR50 amplifier band tracking (FA mirror for the poller): follow the
+            // *effective TX* frequency, not the RX dial.  The HR50 is bypassed on
+            // receive, so its band only matters for TX — tracking effective-TX means
+            // it follows the TX VFO in a split (switches once and holds, no per-over
+            // relay bounce) and is identical to the dial in simplex.  prepare_tx_band
+            // still confirms the band before RF; restore_rx_band no longer reverts it.
+            {
+                let etx = effective_tx_freq_hz(&control_snapshot);
+                if etx != last_amp_freq {
+                    amp_freq.store(etx, Ordering::Relaxed);
+                    last_amp_freq = etx;
+                }
             }
 
             // FDX / TX Monitor Spectrum (HL2): push the enable flag into the
@@ -1680,37 +2318,51 @@ fn spawn_capture_thread(
                     .and_then(|mut cs| cs.pending_tx_tune_test.take());
 
                 if let Some(duration_ms) = pending {
-                    // Spot/SWR transmits on the operator's target frequency (not
-                    // the RX DDC centre).  TX power is the configured source
-                    // drive percent, read from control state at measure time.
-                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    // Spot/SWR transmits on the *effective TX* frequency (split /
+                    // XIT aware), not the RX DDC centre.  Program the TX band
+                    // (N2ADR + amp) before RF and restore the RX band after.
+                    let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     let spot_level_percent = control_snapshot.source_control.spot_level_percent;
-                    info!(
-                        "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
-                        descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
-                    );
-
-                    let result = source.tx_tune_test(
+                    let prep = prepare_tx_band(
+                        source.as_mut(),
+                        &amp_fa_sent,
+                        control_snapshot.amplifier_status.model.is_some(),
+                        control_snapshot.source_control.n2adr_enabled,
+                        control_snapshot.target_freq_hz,
                         target_freq_hz,
-                        duration_ms,
-                        tx_drive_percent,
-                        spot_level_percent,
                     );
+                    if prep.ready {
+                        info!(
+                            "[radio-worker {}] Spot/SWR: target_freq={} dur_ms={} tx_drive_percent={:.0} spot_level_percent={:.0}",
+                            descriptor.id.0, target_freq_hz, duration_ms, tx_drive_percent, spot_level_percent
+                        );
 
-                    info!(
-                        "[radio-worker {}] TX tune test complete: result={:?}",
-                        descriptor.id.0, result.message
-                    );
+                        let result = source.tx_tune_test(
+                            target_freq_hz,
+                            duration_ms,
+                            tx_drive_percent,
+                            spot_level_percent,
+                        );
 
-                    // FDX / TX Monitor Spectrum: forward any RX IQ the source
-                    // captured during the pulse into the spectrum/waterfall path
-                    // (see `forward_fdx_iq`).  Empty unless FDX is enabled.
-                    forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+                        info!(
+                            "[radio-worker {}] TX tune test complete: result={:?}",
+                            descriptor.id.0, result.message
+                        );
 
-                    if let Ok(mut cs) = control.lock() {
-                        cs.last_tx_tune_result = Some(result);
+                        // FDX / TX Monitor Spectrum: forward any RX IQ the source
+                        // captured during the pulse into the spectrum/waterfall path
+                        // (see `forward_fdx_iq`).  Empty unless FDX is enabled.
+                        forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+
+                        if let Ok(mut cs) = control.lock() {
+                            cs.last_tx_tune_result = Some(result);
+                        }
+                    } else {
+                        abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
                     }
+
+                    restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                 }
             }
 
@@ -1745,68 +2397,137 @@ fn spawn_capture_thread(
                         // Single validated band → program its N2ADR filter once.
                         if n2adr_enabled {
                             if let Some(band) = band_from_frequency(start_hz) {
-                                let _ = source.set_n2adr_filter(n2adr_filter_value_for_band(band));
-                                last_n2adr_band = Some(band);
+                                let value = n2adr_filter_value_for_band(band);
+                                let _ = source.set_n2adr_filter(value);
+                                last_n2adr_value = Some(value);
                             }
                         }
 
-                        if let Ok(mut cs) = control.lock() {
-                            cs.swr_sweep_progress = Some(SwrSweepProgress {
-                                running: true,
-                                done: 0,
-                                total,
-                            });
-                        }
-
-                        let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
-                        let mut cancelled = false;
-                        for i in 0..total {
-                            if control
-                                .lock()
-                                .map(|cs| cs.swr_sweep_cancel)
-                                .unwrap_or(false)
-                            {
-                                cancelled = true;
-                                break;
+                        // Bypass the HR50 (if present) for the sweep: measure the load
+                        // directly and don't radiate amplified power across the band.
+                        // Save the reported keying mode, set OFF (HRMD0), confirm, then
+                        // restore it after.  The amp's band is irrelevant while bypassed,
+                        // so it is left untouched.  No time pressure.
+                        let amp_present = control_snapshot.amplifier_status.model.is_some();
+                        let saved_keying_mode = control_snapshot
+                            .amplifier_status
+                            .mode
+                            .as_deref()
+                            .and_then(AmplifierKeyingMode::from_label);
+                        // We attempt (and must restore) bypass only with an amp whose
+                        // mode we know — otherwise defer rather than guess the restore.
+                        let attempted_bypass = amp_present && saved_keying_mode.is_some();
+                        let bypass_ready = if !amp_present {
+                            true
+                        } else if attempted_bypass {
+                            let _ = amp_cmd_tx.send(crate::amplifier::AmpCommand::SetKeyingMode(
+                                AmplifierKeyingMode::Off,
+                            ));
+                            let ok = wait_for_keying_mode(
+                                &control,
+                                AmplifierKeyingMode::Off,
+                                AMP_BYPASS_TIMEOUT_MS,
+                            );
+                            if !ok {
+                                warn!(
+                                    "[radio-worker {}] SWR sweep aborted: HR50 did not enter bypass",
+                                    descriptor.id.0
+                                );
                             }
-                            let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
-                            let r = source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive, spot_level);
-                            // FDX: keep spectrum/waterfall alive between points.
-                            forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
-                            points.push(SwrSweepPoint {
-                                frequency_hz: freq,
-                                swr: r.swr,
-                                forward_raw: r.forward_raw,
-                                reverse_raw: r.reverse_raw,
+                            ok
+                        } else {
+                            warn!(
+                                "[radio-worker {}] SWR sweep deferred: HR50 keying mode not yet \
+                                 read — retry in a moment",
+                                descriptor.id.0
+                            );
+                            false
+                        };
+
+                        if !bypass_ready {
+                            let _ = events_tx.send(WorkerEvent::Error {
+                                code: "swr_sweep_amp".to_string(),
+                                message: "SWR sweep aborted: HR50 amplifier bypass not confirmed"
+                                    .to_string(),
                             });
                             if let Ok(mut cs) = control.lock() {
                                 cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                    running: false,
+                                    done: 0,
+                                    total,
+                                });
+                                cs.swr_sweep_cancel = false;
+                            }
+                        } else {
+                            if let Ok(mut cs) = control.lock() {
+                                cs.swr_sweep_progress = Some(SwrSweepProgress {
                                     running: true,
-                                    done: i + 1,
+                                    done: 0,
                                     total,
                                 });
                             }
-                        }
 
-                        let done = points.len() as u32;
-                        let result = SwrSweepResult {
-                            start_hz,
-                            stop_hz,
-                            points,
-                        };
-                        info!(
-                            "[radio-worker {}] SWR sweep {}: {done}/{total} points",
-                            descriptor.id.0,
-                            if cancelled { "cancelled" } else { "complete" }
-                        );
-                        if let Ok(mut cs) = control.lock() {
-                            cs.last_swr_sweep_result = Some(result);
-                            cs.swr_sweep_progress = Some(SwrSweepProgress {
-                                running: false,
-                                done,
-                                total,
-                            });
-                            cs.swr_sweep_cancel = false;
+                            let mut points: Vec<SwrSweepPoint> = Vec::with_capacity(total as usize);
+                            let mut cancelled = false;
+                            for i in 0..total {
+                                if control
+                                    .lock()
+                                    .map(|cs| cs.swr_sweep_cancel)
+                                    .unwrap_or(false)
+                                {
+                                    cancelled = true;
+                                    break;
+                                }
+                                let freq = sweep_frequency_hz(start_hz, stop_hz, i, total);
+                                let r =
+                                    source.tx_tune_test(freq, SWR_SWEEP_SPOT_MS, drive, spot_level);
+                                // FDX: keep spectrum/waterfall alive between points.
+                                forward_fdx_iq(source.take_fdx_iq(), &iq_wf_tx, &descriptor.id.0);
+                                points.push(SwrSweepPoint {
+                                    frequency_hz: freq,
+                                    swr: r.swr,
+                                    forward_raw: r.forward_raw,
+                                    reverse_raw: r.reverse_raw,
+                                });
+                                if let Ok(mut cs) = control.lock() {
+                                    cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                        running: true,
+                                        done: i + 1,
+                                        total,
+                                    });
+                                }
+                            }
+
+                            let done = points.len() as u32;
+                            let result = SwrSweepResult {
+                                start_hz,
+                                stop_hz,
+                                points,
+                            };
+                            info!(
+                                "[radio-worker {}] SWR sweep {}: {done}/{total} points",
+                                descriptor.id.0,
+                                if cancelled { "cancelled" } else { "complete" }
+                            );
+                            if let Ok(mut cs) = control.lock() {
+                                cs.last_swr_sweep_result = Some(result);
+                                cs.swr_sweep_progress = Some(SwrSweepProgress {
+                                    running: false,
+                                    done,
+                                    total,
+                                });
+                                cs.swr_sweep_cancel = false;
+                            }
+                        } // end: amp bypassed for the sweep
+
+                        // Restore the HR50 keying mode on every path where we set OFF
+                        // (aborted-after-bypass and completed).  Fire-and-forget — the
+                        // poller applies it and the next HRRX read reflects it.
+                        if attempted_bypass {
+                            if let Some(prev) = saved_keying_mode {
+                                let _ = amp_cmd_tx
+                                    .send(crate::amplifier::AmpCommand::SetKeyingMode(prev));
+                            }
                         }
                     }
                 }
@@ -1827,13 +2548,39 @@ fn spawn_capture_thread(
                 if let Some((tone_hz, usb)) = pending {
                     let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                     let spot_level_percent = control_snapshot.source_control.spot_level_percent;
-                    let target_freq_hz = control_snapshot.target_freq_hz;
+                    let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
+                    let prep = prepare_tx_band(
+                        source.as_mut(),
+                        &amp_fa_sent,
+                        control_snapshot.amplifier_status.model.is_some(),
+                        control_snapshot.source_control.n2adr_enabled,
+                        control_snapshot.target_freq_hz,
+                        target_freq_hz,
+                    );
                     let stop = control.lock().ok().map(|cs| cs.tx_tone_stop.clone());
 
-                    if let Some(stop) = stop {
+                    if !prep.ready {
+                        abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                    } else if let Some(stop) = stop {
                         let mut forward = |iq: Vec<Complex32>| {
                             let _ = iq_wf_tx.try_send(iq);
                         };
+                        // Publish "tone on" so the client's Start/Stop buttons track
+                        // the real TX state; cleared below when the tone ends — by a
+                        // Stop *or* the source's hard-timeout auto-key-down.  The
+                        // capture thread publishes the status itself (build + send on
+                        // both edges): during the tone it stops feeding the audio IQ
+                        // channel, so the DSP thread — the usual publisher — is blocked
+                        // and would never see the true→false transition.
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_tone_running = true;
+                        }
+                        let _ = status_tx.send(WorkerStatus::Running {
+                            runtime: build_runtime_state(
+                                &current_control(&control),
+                                source.sample_rate(),
+                            ),
+                        });
                         if let Err(e) = source.tx_test_tone(
                             target_freq_hz,
                             tone_hz,
@@ -1845,7 +2592,17 @@ fn spawn_capture_thread(
                         ) {
                             warn!("[radio-worker {}] TX test tone error: {e}", descriptor.id.0);
                         }
+                        if let Ok(mut cs) = control.lock() {
+                            cs.tx_tone_running = false;
+                        }
+                        let _ = status_tx.send(WorkerStatus::Running {
+                            runtime: build_runtime_state(
+                                &current_control(&control),
+                                source.sample_rate(),
+                            ),
+                        });
                     }
+                    restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                 }
             }
 
@@ -1866,15 +2623,18 @@ fn spawn_capture_thread(
                     .unwrap_or(false);
 
                 if pending {
-                    let cw_usb = match control_snapshot.demod_mode {
+                    // CW TX side + frequency come from the *effective TX* VFO
+                    // (split-aware), not the RX pipeline mode.
+                    let tx_mode = effective_tx_demod_mode(&control_snapshot);
+                    let cw_usb = match tx_mode {
                         DemodMode::Cwu => Some(true),
                         DemodMode::Cwl => Some(false),
                         _ => None,
                     };
                     if cw_usb.is_none() {
                         warn!(
-                            "[radio-worker {}] CW key ignored: mode is {:?}, not CWU/CWL",
-                            descriptor.id.0, control_snapshot.demod_mode
+                            "[radio-worker {}] CW key ignored: TX mode is {:?}, not CWU/CWL",
+                            descriptor.id.0, tx_mode
                         );
                         // Clear the held flag so a stale key doesn't linger.
                         if let Ok(cs) = control.lock() {
@@ -1883,19 +2643,38 @@ fn spawn_capture_thread(
                     } else {
                         let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
                         let spot_level_percent = control_snapshot.source_control.spot_level_percent;
-                        // CW transmit pitch = the operator's CW pitch from Radio
-                        // Control (the same value used for RX CW demod), so TX and
-                        // RX share one pitch.
-                        let pitch_hz = control_snapshot.cw_pitch_hz;
+                        // CW transmit pitch from the TX VFO (B when split on B).
+                        let pitch_hz = if control_snapshot.vfo.split_enabled
+                            && control_snapshot.vfo.tx_vfo == VfoSelect::B
+                        {
+                            control_snapshot.vfo.vfo_b_cw_pitch_hz
+                        } else {
+                            control_snapshot.cw_pitch_hz
+                        };
                         // CW TX side comes from the MODE (CWU=above, CWL=below),
                         // never the generic SSB sideband field.
                         let usb = cw_usb.unwrap();
-                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
+                        let prep = prepare_tx_band(
+                            source.as_mut(),
+                            &amp_fa_sent,
+                            control_snapshot.amplifier_status.model.is_some(),
+                            control_snapshot.source_control.n2adr_enabled,
+                            control_snapshot.target_freq_hz,
+                            target_freq_hz,
+                        );
                         // Semi break-in hang time (PTT persists between elements).
                         let hang_ms = control_snapshot.cw_hang_ms;
                         let held = control.lock().ok().map(|cs| cs.cw_key_held.clone());
 
-                        if let Some(held) = held {
+                        if !prep.ready {
+                            abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                            // Clear the latched key request so we don't immediately
+                            // retry-spam the aborted cross-band session.
+                            if let Ok(mut cs) = control.lock() {
+                                cs.pending_cw_key = false;
+                            }
+                        } else if let Some(held) = held {
                             let mut forward = |iq: Vec<Complex32>| {
                                 let _ = iq_wf_tx.try_send(iq);
                             };
@@ -1921,6 +2700,7 @@ fn spawn_capture_thread(
                                 cs.pending_cw_key = cs.cw_key_held.load(Ordering::Relaxed);
                             }
                         }
+                        restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                     }
                 }
             }
@@ -1942,7 +2722,9 @@ fn spawn_capture_thread(
                     .unwrap_or(false);
 
                 if pending {
-                    let mic_usb = match control_snapshot.demod_mode {
+                    // Sideband + frequency from the *effective TX* VFO (split-aware).
+                    let tx_mode = effective_tx_demod_mode(&control_snapshot);
+                    let mic_usb = match tx_mode {
                         // DgtU (data-USB) keys on the USB sideband — WSJT-X/FT8
                         // sets this mode when its Radio "Mode" is Data/Pkt.  The
                         // RX pipeline already treats DgtU as USB everywhere; the
@@ -1953,8 +2735,8 @@ fn spawn_capture_thread(
                     };
                     if mic_usb.is_none() {
                         warn!(
-                            "[radio-worker {}] mic TX ignored: mode is {:?}, not USB/LSB",
-                            descriptor.id.0, control_snapshot.demod_mode
+                            "[radio-worker {}] mic TX ignored: TX mode is {:?}, not USB/LSB",
+                            descriptor.id.0, tx_mode
                         );
                         if let Ok(cs) = control.lock() {
                             cs.mic_tx_active.store(false, Ordering::Relaxed);
@@ -1967,14 +2749,29 @@ fn spawn_capture_thread(
                         // make-up gain and any limiter clipping only add IMD /
                         // splatter.  Force both off for DgtU regardless of the
                         // operator's persisted SSB-voice settings.
-                        let is_digital = matches!(control_snapshot.demod_mode, DemodMode::DgtU);
+                        let is_digital = matches!(tx_mode, DemodMode::DgtU);
                         let limiter_enabled = control_snapshot.tx_limiter_enabled && !is_digital;
                         let compressor_enabled = control_snapshot.compressor_enabled && !is_digital;
                         let tx_drive_percent = control_snapshot.source_control.tx_drive_percent;
-                        let target_freq_hz = control_snapshot.target_freq_hz;
+                        let target_freq_hz = effective_tx_freq_hz(&control_snapshot);
+                        let prep = prepare_tx_band(
+                            source.as_mut(),
+                            &amp_fa_sent,
+                            control_snapshot.amplifier_status.model.is_some(),
+                            control_snapshot.source_control.n2adr_enabled,
+                            control_snapshot.target_freq_hz,
+                            target_freq_hz,
+                        );
                         let active = control.lock().ok().map(|cs| cs.mic_tx_active.clone());
 
-                        if let Some(active) = active {
+                        if !prep.ready {
+                            abort_cross_band_tx(&events_tx, &descriptor.id.0, target_freq_hz);
+                            // Drop the key request so the aborted cross-band mic TX
+                            // doesn't immediately retry every loop.
+                            if let Ok(cs) = control.lock() {
+                                cs.mic_tx_active.store(false, Ordering::Relaxed);
+                            }
+                        } else if let Some(active) = active {
                             let mut forward = |iq: Vec<Complex32>| {
                                 let _ = iq_wf_tx.try_send(iq);
                             };
@@ -2028,6 +2825,7 @@ fn spawn_capture_thread(
                                 warn!("[radio-worker {}] mic TX error: {e}", descriptor.id.0);
                             }
                         }
+                        restore_rx_band(prep.cross_band, &mut last_n2adr_value);
                     }
                 }
             }
@@ -2122,6 +2920,17 @@ fn spawn_capture_thread(
                     break;
                 }
             }
+
+            // VFO B (dual-watch): fan the secondary receiver's IQ (deinterleaved
+            // during the read_block above) to the DSP-B / waterfall-B threads.
+            // Both use try_send so a stalled B pipeline can NEVER block VFO A.
+            if control_snapshot.vfo.dual_watch_enabled {
+                let iq_b = source.read_secondary_block();
+                if !iq_b.is_empty() {
+                    let _ = iq_audio_b_tx.try_send(iq_b.clone());
+                    let _ = iq_wf_b_tx.try_send(iq_b);
+                }
+            }
         }
 
         // Finalize any in-progress recording on capture-thread exit so the WAV
@@ -2132,6 +2941,7 @@ fn spawn_capture_thread(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_dsp_thread(
     descriptor: RadioDescriptor,
     server_cfg: ServerConfig,
@@ -2142,6 +2952,7 @@ fn spawn_dsp_thread(
     media: MediaEgress,
     startup_info: StartupInfo,
     confirmed_sample_rate_hz: Arc<AtomicU32>,
+    audio_stream_type: u8,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut pipeline_sample_rate_hz = startup_info.input_sample_rate_hz;
@@ -2173,7 +2984,8 @@ fn spawn_dsp_thread(
             pipeline.client_output_sample_rate(),
         );
 
-        let mut audio = UdpAudioSender::new(media.socket.clone(), 240);
+        let mut audio =
+            UdpAudioSender::new_with_stream_type(media.socket.clone(), 240, audio_stream_type);
 
         let mut applied = current_control(&control);
         // TX-audio diagnostics live in the process-global (written by the
@@ -2327,8 +3139,10 @@ fn spawn_dsp_thread(
                 changed = true;
             }
 
-            if current.target_freq_hz != applied.target_freq_hz {
-                pipeline.set_target_frequency(current.target_freq_hz as f32);
+            // RX NCO tunes to the effective RX frequency (tuned + RIT offset), so
+            // a RIT change retunes even when the dial frequency is unchanged.
+            if effective_rx_freq_hz(&current) != effective_rx_freq_hz(&applied) {
+                pipeline.set_target_frequency(effective_rx_freq_hz(&current) as f32);
                 changed = true;
             }
 
@@ -2677,6 +3491,52 @@ mod hr50_path_tests {
 }
 
 #[cfg(test)]
+mod n2adr_tests {
+    use super::*;
+
+    // Band reference frequencies (Hz).
+    const M160: u64 = 1_900_000;
+    const M40: u64 = 7_100_000;
+    const M20: u64 = 14_100_000;
+    const M10: u64 = 28_400_000;
+
+    #[test]
+    fn single_vfo_uses_the_tuned_band_value() {
+        // HPF bit (0x40) already correct per band: set for 80–10m, clear for 160m.
+        assert_eq!(n2adr_rx_value(M20, None), Some(72)); // 20m: 0b1001000
+        assert_eq!(n2adr_rx_value(M40, None), Some(68)); // 40m: 0b1000100
+        assert_eq!(n2adr_rx_value(M160, None), Some(1)); // 160m: 0b0000001 (HPF off)
+        assert_eq!(n2adr_rx_value(5_000_000, None), None); // out of band → unchanged
+    }
+
+    #[test]
+    fn dual_watch_uses_the_highest_band_lpf() {
+        // 40m + 20m → 20m LPF (passes both), HPF on.  Order-independent.
+        assert_eq!(n2adr_rx_value(M40, Some(M20)), Some(72));
+        assert_eq!(n2adr_rx_value(M20, Some(M40)), Some(72));
+        // 40m + 10m → 10m LPF, HPF on.
+        assert_eq!(n2adr_rx_value(M40, Some(M10)), Some(96));
+    }
+
+    #[test]
+    fn dual_watch_with_160m_drops_the_hpf() {
+        // 160m + 20m → 20m LPF band-select (8) but HPF (0x40) OFF so 160m passes.
+        assert_eq!(n2adr_rx_value(M160, Some(M20)), Some(8));
+        assert_eq!(n2adr_rx_value(M20, Some(M160)), Some(8));
+        // Both 160m → 160m value (HPF already off).
+        assert_eq!(n2adr_rx_value(M160, Some(M160)), Some(1));
+    }
+
+    #[test]
+    fn dual_watch_falls_back_when_one_vfo_is_out_of_band() {
+        // One out of band → use the in-band VFO's band.
+        assert_eq!(n2adr_rx_value(M20, Some(5_000_000)), Some(72));
+        assert_eq!(n2adr_rx_value(5_000_000, Some(M20)), Some(72));
+        assert_eq!(n2adr_rx_value(5_000_000, Some(5_000_000)), None);
+    }
+}
+
+#[cfg(test)]
 mod volume_tests {
     use super::*;
 
@@ -2700,5 +3560,186 @@ mod volume_tests {
         }
         // Continuity-ish: just above threshold stays close to threshold.
         assert!((soft_clip(0.96) - 0.95).abs() < 0.02);
+    }
+}
+
+#[cfg(test)]
+mod vfo_b_mirror_tests {
+    use super::*;
+
+    /// A `SharedControlState` standing in for VFO A, with deliberately "A-side"
+    /// receive-processing values so the mirror's overrides are observable.
+    fn vfo_a_control() -> SharedControlState {
+        SharedControlState {
+            center_freq_hz: 14_000_000,
+            target_freq_hz: 14_074_000,
+            vfo: VfoSplitState::default(),
+            demod_mode: DemodMode::Usb,
+            sideband: Sideband::Usb,
+            ssb_pitch_hz: 0.0,
+            cw_pitch_hz: 600.0,
+            filter_bandwidth_hz: 2700.0,
+            deemphasis_mode: DeemphasisMode::Off,
+            squelch_enabled: false,
+            squelch_threshold_db: -90.0,
+            squelch_open: true,
+            nr2_enabled: false,
+            nr2_strength: 0.5,
+            nb_enabled: false,
+            nb_threshold: 0.5,
+            notch_auto_enabled: false,
+            agc_enabled: true,
+            agc_strength: 0.5,
+            signal_dbm: -140.0,
+            signal_s_units: 0,
+            volume_percent: 50,
+            waterfall_frame_rate_hz: 10.0,
+            source_control: SourceControlState::default(),
+            source_status: SourceStatus::default(),
+            amplifier_status: AmplifierStatus::default(),
+            pending_tx_tune_test: None,
+            last_tx_tune_result: None,
+            pending_swr_sweep: None,
+            swr_sweep_cancel: false,
+            last_swr_sweep_result: None,
+            swr_sweep_progress: None,
+            pending_tx_tone: None,
+            tx_tone_stop: Arc::new(AtomicBool::new(false)),
+            tx_tone_running: false,
+            pending_cw_key: false,
+            cw_key_held: Arc::new(AtomicBool::new(false)),
+            cw_hang_ms: 300,
+            pending_mic_tx: false,
+            mic_tx_active: Arc::new(AtomicBool::new(false)),
+            two_tone_enabled: false,
+            two_tone_a_hz: 700.0,
+            two_tone_b_hz: 1900.0,
+            two_tone_level: 0.5,
+            tx_limiter_enabled: true,
+            tx_limiter_threshold: 0.9,
+            compressor_enabled: false,
+            compressor_level: 3,
+            pending_iq_record_start: false,
+            pending_iq_record_stop: false,
+            iq_recording_status: IqRecordingStatus::default(),
+        }
+    }
+
+    /// A VFO-B settings block whose every receive control differs from VFO A's.
+    fn distinct_vfo_b() -> VfoSplitState {
+        VfoSplitState {
+            vfo_b_target_freq_hz: 7_074_000,
+            vfo_b_center_freq_hz: 7_000_000,
+            vfo_b_demod_mode: DemodMode::Lsb,
+            vfo_b_sideband: Sideband::Lsb,
+            vfo_b_filter_bandwidth_hz: 500.0,
+            vfo_b_ssb_pitch_hz: 200.0,
+            vfo_b_cw_pitch_hz: 700.0,
+            vfo_b_deemphasis_mode: DeemphasisMode::Tau75us,
+            vfo_b_squelch_enabled: true,
+            vfo_b_squelch_threshold_db: -40.0,
+            vfo_b_nr2_enabled: true,
+            vfo_b_nr2_strength: 0.9,
+            vfo_b_nb_enabled: true,
+            vfo_b_nb_threshold: 0.8,
+            vfo_b_notch_auto_enabled: true,
+            vfo_b_agc_enabled: false,
+            vfo_b_agc_strength: 0.1,
+            vfo_b_rit_enabled: true,
+            vfo_b_rit_offset_hz: 250,
+            ..VfoSplitState::default()
+        }
+    }
+
+    #[test]
+    fn mirror_overrides_every_independent_control() {
+        let mut cb = vfo_a_control(); // already a clone of VFO A's state
+        let vfo = distinct_vfo_b();
+        mirror_vfo_b_controls(&mut cb, &vfo);
+
+        assert_eq!(cb.center_freq_hz, 7_000_000);
+        assert_eq!(cb.target_freq_hz, 7_074_000);
+        assert_eq!(cb.demod_mode, DemodMode::Lsb);
+        assert_eq!(cb.sideband, Sideband::Lsb);
+        assert_eq!(cb.filter_bandwidth_hz, 500.0);
+        assert_eq!(cb.ssb_pitch_hz, 200.0);
+        assert_eq!(cb.cw_pitch_hz, 700.0);
+        assert_eq!(cb.deemphasis_mode, DeemphasisMode::Tau75us);
+        assert!(cb.squelch_enabled);
+        assert_eq!(cb.squelch_threshold_db, -40.0);
+        assert!(cb.nr2_enabled);
+        assert_eq!(cb.nr2_strength, 0.9);
+        assert!(cb.nb_enabled);
+        assert_eq!(cb.nb_threshold, 0.8);
+        assert!(cb.notch_auto_enabled);
+        assert!(!cb.agc_enabled);
+        assert_eq!(cb.agc_strength, 0.1);
+    }
+
+    #[test]
+    fn mirror_keeps_volume_shared_not_overridden() {
+        // Volume is applied client-side, so the mirror must leave control_b's
+        // volume as VFO A's clone — never a VFO-B value.
+        let mut cb = vfo_a_control();
+        cb.volume_percent = 73;
+        mirror_vfo_b_controls(&mut cb, &distinct_vfo_b());
+        assert_eq!(cb.volume_percent, 73);
+    }
+
+    #[test]
+    fn mirror_applies_vfo_b_rit_to_effective_rx_freq() {
+        // RIT-B reaches the DSP-B NCO through effective_rx_freq_hz(&control_b),
+        // which reads cb.vfo.rit_*; the mirror must point those at VFO B's RIT.
+        let mut cb = vfo_a_control();
+        mirror_vfo_b_controls(&mut cb, &distinct_vfo_b());
+        assert!(cb.vfo.rit_enabled);
+        assert_eq!(cb.vfo.rit_offset_hz, 250);
+        assert_eq!(effective_rx_freq_hz(&cb), 7_074_000 + 250);
+    }
+
+    #[test]
+    fn copy_a_to_b_clones_entire_vfo_state() {
+        // CopyVfoAToB does `apply_vfo_b_state(&vfo_a_state())` — a wholesale clone
+        // of VFO A's receiver settings onto VFO B.  Give A some non-default values,
+        // start B different, then copy and assert B == A across the board.
+        let mut cs = vfo_a_control();
+        cs.target_freq_hz = 14_074_000;
+        cs.center_freq_hz = 14_000_000;
+        cs.demod_mode = DemodMode::Cwu;
+        cs.sideband = Sideband::Usb;
+        cs.filter_bandwidth_hz = 300.0;
+        cs.cw_pitch_hz = 650.0;
+        cs.squelch_enabled = true;
+        cs.squelch_threshold_db = -55.0;
+        cs.nr2_enabled = true;
+        cs.nr2_strength = 0.7;
+        cs.agc_enabled = false;
+        cs.agc_strength = 0.2;
+        cs.vfo.rit_enabled = true;
+        cs.vfo.rit_offset_hz = -120;
+        // Make B clearly different up front.
+        cs.vfo = VfoSplitState {
+            vfo_b_demod_mode: DemodMode::Lsb,
+            vfo_b_filter_bandwidth_hz: 3000.0,
+            vfo_b_squelch_enabled: false,
+            ..cs.vfo.clone()
+        };
+
+        let a = cs.vfo_a_state();
+        cs.apply_vfo_b_state(&a);
+
+        assert_eq!(cs.vfo.vfo_b_target_freq_hz, 14_074_000);
+        assert_eq!(cs.vfo.vfo_b_center_freq_hz, 14_000_000);
+        assert_eq!(cs.vfo.vfo_b_demod_mode, DemodMode::Cwu);
+        assert_eq!(cs.vfo.vfo_b_filter_bandwidth_hz, 300.0);
+        assert_eq!(cs.vfo.vfo_b_cw_pitch_hz, 650.0);
+        assert!(cs.vfo.vfo_b_squelch_enabled);
+        assert_eq!(cs.vfo.vfo_b_squelch_threshold_db, -55.0);
+        assert!(cs.vfo.vfo_b_nr2_enabled);
+        assert_eq!(cs.vfo.vfo_b_nr2_strength, 0.7);
+        assert!(!cs.vfo.vfo_b_agc_enabled);
+        assert_eq!(cs.vfo.vfo_b_agc_strength, 0.2);
+        assert!(cs.vfo.vfo_b_rit_enabled);
+        assert_eq!(cs.vfo.vfo_b_rit_offset_hz, -120);
     }
 }

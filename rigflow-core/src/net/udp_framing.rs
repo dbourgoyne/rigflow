@@ -18,6 +18,11 @@ pub const VERSION: u8 = 2;
 /// These distinguish payload formats carried over UDP.
 pub const STREAM_TYPE_AUDIO: u8 = 1;
 pub const STREAM_TYPE_WATERFALL: u8 = 2;
+/// Dual-watch VFO B receive audio / waterfall (same payload formats as the VFO A
+/// streams above).  Old clients ignore unknown stream types, so these degrade
+/// gracefully against a pre-dual-watch client.
+pub const STREAM_TYPE_AUDIO_VFO_B: u8 = 3;
+pub const STREAM_TYPE_WATERFALL_VFO_B: u8 = 4;
 pub const STREAM_TYPE_REGISTER_AUDIO: u8 = 10;
 /// Client → server microphone audio (mono f32 LE samples after a 4-byte
 /// `MAGIC/VERSION/stream_type/_` header).  Loss-tolerant; no sequence/codec.

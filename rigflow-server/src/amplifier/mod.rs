@@ -178,6 +178,7 @@ pub fn run_amplifier_poller<F>(
     stop: Arc<AtomicBool>,
     commands: Receiver<AmpCommand>,
     target_freq_hz: Arc<AtomicU64>,
+    amp_fa_sent: Arc<AtomicU64>,
     tx_keyed: Vec<Arc<AtomicBool>>,
     mut publish: F,
 ) where
@@ -204,7 +205,16 @@ pub fn run_amplifier_poller<F>(
 
         let t = transport.as_mut();
 
+        // Re-check "keyed" before EACH serial write: a TX can start mid-cycle, and
+        // the HR50 hangs if it receives serial while keyed.  `continue` abandons the
+        // cycle (the loop top then parks).  Belt-and-suspenders with the top-of-loop
+        // park, which only catches a TX that began before the cycle started.
+        let keyed_now = |ky: &[Arc<AtomicBool>]| ky.iter().any(|f| f.load(Ordering::Relaxed));
+
         // 1. Apply queued control commands (one serial SET each).
+        if keyed_now(&tx_keyed) {
+            continue;
+        }
         while let Ok(cmd) = commands.try_recv() {
             match cmd {
                 AmpCommand::SetKeyingMode(m) => send_set(t, &cmd_hrmd(m), "HRMD"),
@@ -213,17 +223,37 @@ pub fn run_amplifier_poller<F>(
             }
         }
 
-        // 2. Frequency tracking: send FA when the dial frequency changes.
+        // 2. Frequency tracking: send FA when the dial frequency changes, and
+        // publish the value as `amp_fa_sent` — the *confirmed* amp frequency.  A
+        // cross-band TX checks this before keying (the poller can't touch the
+        // serial while keyed, so the band must already be set — done here, during
+        // RX, via the worker's effective-TX tracking).
+        if keyed_now(&tx_keyed) {
+            continue;
+        }
         let freq = target_freq_hz.load(Ordering::Relaxed);
         if freq != last_freq_sent && freq > 0 {
             send_set(t, &cmd_fa(freq), "FA");
             last_freq_sent = freq;
+            amp_fa_sent.store(freq, Ordering::Relaxed);
         }
 
-        // 3. Poll status / telemetry.
+        // 3. Poll status / telemetry (re-checking keyed before each query).
+        if keyed_now(&tx_keyed) {
+            continue;
+        }
         let rx = query_hrrx(t);
+        if keyed_now(&tx_keyed) {
+            continue;
+        }
         let vt = query_hrvt(t);
+        if keyed_now(&tx_keyed) {
+            continue;
+        }
         let mx = query(t, CMD_HRMX, "HRMX", "HRMX").and_then(|s| parse_hrmx(&s));
+        if keyed_now(&tx_keyed) {
+            continue;
+        }
         let at = query(t, CMD_HRAT, "HRAT", "HRAT").and_then(|s| parse_hrat(&s));
 
         if rx.is_some() || vt.is_some() {

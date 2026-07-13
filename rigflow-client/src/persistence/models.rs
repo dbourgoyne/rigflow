@@ -4,7 +4,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui::om_bands::LicenseClass;
 use rigflow_core::dsp::modes::{DeemphasisMode, DemodMode, Sideband};
+use rigflow_core::radio::ham_band::HamBand;
 use rigflow_core::radio::source_control::SourceControlState;
+
+/// One band's remembered tuning (single-slot band memory): where you left off on
+/// that band, restored when you return to it (like a radio's band-stacking
+/// register).  Stores the LO/center + tuned target + mode so the whole display
+/// returns to where it was.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct BandMemoryEntry {
+    pub center_freq_hz: u64,
+    pub target_freq_hz: u64,
+    pub demod_mode: DemodMode,
+}
 
 pub const APP_STATE_FILE_VERSION: u32 = 1;
 pub const OPERATOR_SETTINGS_FILE_VERSION: u32 = 3;
@@ -36,10 +48,19 @@ pub struct WaterfallDisplayPreferencesFile {
     /// files (written before this field existed) loading cleanly.
     #[serde(default = "default_waterfall_frame_rate_hz")]
     pub waterfall_frame_rate_hz: f32,
+    /// Waterfall temporal smoothing strength [0..1] (0 = raw/off) — a per-bin EMA
+    /// on the FFT rows that reduces noise-floor scintillation.  Serde default for
+    /// older operator files.
+    #[serde(default = "default_waterfall_smoothing")]
+    pub waterfall_smoothing: f32,
 }
 
 fn default_waterfall_frame_rate_hz() -> f32 {
     20.0
+}
+
+pub fn default_waterfall_smoothing() -> f32 {
+    0.5
 }
 
 impl Default for WaterfallDisplayPreferencesFile {
@@ -50,6 +71,7 @@ impl Default for WaterfallDisplayPreferencesFile {
             manual_waterfall_top_db: -35.0,
             manual_waterfall_range_db: 70.0,
             waterfall_frame_rate_hz: default_waterfall_frame_rate_hz(),
+            waterfall_smoothing: default_waterfall_smoothing(),
         }
     }
 }
@@ -130,6 +152,61 @@ impl DemodPreferenceSetFile {
     }
 }
 
+/// Per-mode grid-snap / tuning-step size (Hz), persisted per operator.  UI-only:
+/// it constrains how target tuning is rounded before the Hz integer is sent to
+/// the server.  CWU/CWL share one entry (like `DemodPreferenceSetFile`).
+/// Defaults: SSB 1 kHz, CW 50 Hz, AM/NFM 5 kHz, Digital 1 Hz, WFM 10 kHz.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TuningStepPreferencesFile {
+    pub wfm: f32,
+    pub nfm: f32,
+    pub am: f32,
+    pub usb: f32,
+    pub lsb: f32,
+    pub cw: f32,
+    pub dgt_u: f32,
+}
+
+impl Default for TuningStepPreferencesFile {
+    fn default() -> Self {
+        Self {
+            wfm: 10_000.0,
+            nfm: 5_000.0,
+            am: 5_000.0,
+            usb: 1_000.0,
+            lsb: 1_000.0,
+            cw: 50.0,
+            dgt_u: 1.0,
+        }
+    }
+}
+
+impl TuningStepPreferencesFile {
+    pub fn get(&self, mode: DemodMode) -> f32 {
+        match mode {
+            DemodMode::Wfm => self.wfm,
+            DemodMode::Nfm => self.nfm,
+            DemodMode::Am => self.am,
+            DemodMode::Usb => self.usb,
+            DemodMode::Lsb => self.lsb,
+            DemodMode::Cwu | DemodMode::Cwl => self.cw,
+            DemodMode::DgtU => self.dgt_u,
+        }
+    }
+
+    pub fn set(&mut self, mode: DemodMode, step_hz: f32) {
+        match mode {
+            DemodMode::Wfm => self.wfm = step_hz,
+            DemodMode::Nfm => self.nfm = step_hz,
+            DemodMode::Am => self.am = step_hz,
+            DemodMode::Usb => self.usb = step_hz,
+            DemodMode::Lsb => self.lsb = step_hz,
+            DemodMode::Cwu | DemodMode::Cwl => self.cw = step_hz,
+            DemodMode::DgtU => self.dgt_u = step_hz,
+        }
+    }
+}
+
 /// Per-(operator, radio) operating state — restored when the radio is acquired
 /// and saved on change, so an operator resumes each radio exactly where they
 /// left off.  Lives in `OperatorSettingsFile.radio_settings` keyed by radio ID,
@@ -201,6 +278,11 @@ pub struct OperatorSettingsFile {
 
     pub demod_preferences: DemodPreferenceSetFile,
 
+    /// Per-mode grid-snap / tuning-step sizes (Hz).  Serde default so older files
+    /// load with the sensible per-mode defaults.
+    #[serde(default)]
+    pub tuning_step_preferences: TuningStepPreferencesFile,
+
     pub default_bookmark_id: Option<String>,
     pub auto_apply_default_bookmark_on_acquire: bool,
 
@@ -231,10 +313,24 @@ pub struct OperatorSettingsFile {
     #[serde(default = "default_volume_percent")]
     pub volume_percent: u8,
 
+    /// VFO B receive-audio volume in percent (0–100) for dual-watch, persisted
+    /// per operator.  Serde default so older settings files load unchanged.
+    #[serde(default = "default_volume_percent")]
+    pub volume_percent_b: u8,
+
     /// Show the Advanced & Diagnostics controls in Radio Control.  Serde default
     /// (false) so older settings files load without migration.
     #[serde(default)]
     pub show_advanced: bool,
+    /// Global settings lock (sample rate, gain, PPM, direct sampling, demod mode,
+    /// split/TX-VFO).  Serde-default false so older files load unlocked.
+    #[serde(default)]
+    pub config_locked: bool,
+    /// Per-band tuning memory (band → last freq/mode there).  Serde-default empty
+    /// so older files load with no memory (first visit to each band uses the
+    /// band default).
+    #[serde(default)]
+    pub band_memory: HashMap<HamBand, BandMemoryEntry>,
 
     /// Text-to-CW: last-used message text.  Serde default (empty) for old files.
     #[serde(default)]
@@ -303,6 +399,7 @@ impl OperatorSettingsFile {
             // a remote/Pi server.  Persisted per-operator thereafter.
             server_ip: "127.0.0.1".to_string(),
             demod_preferences: DemodPreferenceSetFile::default(),
+            tuning_step_preferences: TuningStepPreferencesFile::default(),
             default_bookmark_id: None,
             auto_apply_default_bookmark_on_acquire: false,
             bookmarks: Vec::new(),
@@ -310,7 +407,10 @@ impl OperatorSettingsFile {
             source_control_preferences: HashMap::new(),
             radio_settings: HashMap::new(),
             volume_percent: default_volume_percent(),
+            volume_percent_b: default_volume_percent(),
             show_advanced: false,
+            config_locked: false,
+            band_memory: HashMap::new(),
             cw_message: String::new(),
             cw_speed_wpm: default_cw_speed_wpm(),
             cw_macros: default_cw_macros(),

@@ -149,12 +149,23 @@ impl RigflowApp {
     /// (so the caller persists it).
     fn draw_configuration_section(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
         let mut save = false;
+        // Global settings lock greys the set-once config controls below (NOT the
+        // TX Drive slider, which keeps its own separate damage lock).
+        let config_locked = state.config_locked;
+        // Band selection is a frequency jump, so it's also frozen by the dial lock.
+        let dial_locked = state.dial_locked;
 
         // -----------------------------
         // Band Control + N2ADR (HL2).
         // -----------------------------
         if state.source_capabilities.supports_band_control {
-            save |= self.draw_band_control(ui, state);
+            // Band Control is a wrong-frequency / disruptive change → frozen by the
+            // settings lock AND the dial lock (it's a frequency jump).
+            save |= ui
+                .add_enabled_ui(!config_locked && !dial_locked, |ui| {
+                    self.draw_band_control(ui, state)
+                })
+                .inner;
         }
 
         // -----------------------------
@@ -166,17 +177,19 @@ impl RigflowApp {
             if !sample_rates.is_empty() {
                 let mut selected_sample_rate = state.source_control.sample_rate_hz;
 
-                egui::ComboBox::from_id_salt("source_sample_rate_combo")
-                    .selected_text(format_sample_rate(selected_sample_rate))
-                    .show_ui(ui, |ui| {
-                        for sample_rate_hz in sample_rates {
-                            ui.selectable_value(
-                                &mut selected_sample_rate,
-                                sample_rate_hz,
-                                format_sample_rate(sample_rate_hz),
-                            );
-                        }
-                    });
+                ui.add_enabled_ui(!config_locked, |ui| {
+                    egui::ComboBox::from_id_salt("source_sample_rate_combo")
+                        .selected_text(format_sample_rate(selected_sample_rate))
+                        .show_ui(ui, |ui| {
+                            for sample_rate_hz in sample_rates {
+                                ui.selectable_value(
+                                    &mut selected_sample_rate,
+                                    sample_rate_hz,
+                                    format_sample_rate(sample_rate_hz),
+                                );
+                            }
+                        });
+                });
 
                 if selected_sample_rate != state.source_control.sample_rate_hz {
                     state.source_control.sample_rate_hz = selected_sample_rate;
@@ -211,7 +224,7 @@ impl RigflowApp {
         let ds_active = state.source_control.direct_sampling != DirectSamplingMode::Off;
 
         if state.source_capabilities.supports_gain_mode {
-            ui.add_enabled_ui(!ds_active, |ui| {
+            ui.add_enabled_ui(!ds_active && !config_locked, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Gain Mode");
 
@@ -242,7 +255,7 @@ impl RigflowApp {
         if state.source_capabilities.supports_gain {
             let manual_gain = !ds_active && state.source_control.gain_mode == GainMode::Manual;
 
-            ui.add_enabled_ui(manual_gain, |ui| {
+            ui.add_enabled_ui(manual_gain && !config_locked, |ui| {
                 let gains = &state.source_capabilities.gain_values_db;
 
                 if !gains.is_empty() {
@@ -306,25 +319,28 @@ impl RigflowApp {
 
             ui.label("PPM Correction");
             ui.horizontal(|ui| {
-                let mut slider = ui.add(
+                let mut slider = ui.add_enabled(
+                    !config_locked,
                     egui::Slider::new(&mut ppm, ppm_min..=ppm_max)
                         .integer()
                         .show_value(false),
                 );
-                super::slider_scroll(
-                    ui,
-                    &mut slider,
-                    &mut ppm,
-                    ppm_min as f64,
-                    ppm_max as f64,
-                    1.0,
-                );
+                if !config_locked {
+                    super::slider_scroll(
+                        ui,
+                        &mut slider,
+                        &mut ppm,
+                        ppm_min as f64,
+                        ppm_max as f64,
+                        1.0,
+                    );
+                }
 
                 let sign = if ppm > 0 { "+" } else { "" };
                 ui.label(format!("{sign}{ppm} ppm"));
 
                 let reset = ui
-                    .add_enabled(ppm != 0, egui::Button::new("Reset"))
+                    .add_enabled(ppm != 0 && !config_locked, egui::Button::new("Reset"))
                     .clicked();
 
                 if slider.changed() || reset {
@@ -350,17 +366,19 @@ impl RigflowApp {
                 ui.horizontal(|ui| {
                     ui.label("Direct Sampling");
 
-                    egui::ComboBox::from_id_salt("source_direct_sampling_combo")
-                        .selected_text(format_direct_sampling_mode(selected))
-                        .show_ui(ui, |ui| {
-                            for mode in modes {
-                                ui.selectable_value(
-                                    &mut selected,
-                                    mode,
-                                    format_direct_sampling_mode(mode),
-                                );
-                            }
-                        });
+                    ui.add_enabled_ui(!config_locked, |ui| {
+                        egui::ComboBox::from_id_salt("source_direct_sampling_combo")
+                            .selected_text(format_direct_sampling_mode(selected))
+                            .show_ui(ui, |ui| {
+                                for mode in modes {
+                                    ui.selectable_value(
+                                        &mut selected,
+                                        mode,
+                                        format_direct_sampling_mode(mode),
+                                    );
+                                }
+                            });
+                    });
                 });
 
                 if selected != state.source_control.direct_sampling {
@@ -376,36 +394,55 @@ impl RigflowApp {
         // -----------------------------
         // TX Drive (%) — operator transmit power.  Part of source control:
         // applies to all transmit operations (Spot now; CW/SSB/digital/sweep
-        // later).  Gated on TX support.  Flows through the source-control plane
-        // like gain (SetSourceTxDrive); the server uses it when a Spot/SWR
-        // measurement runs.
+        // later), so it's gated on general transmit support (not the Spot/SWR-
+        // specific tune-test flag).  Flows through the source-control plane like
+        // gain (SetSourceTxDrive).
         // -----------------------------
-        if state.source_capabilities.supports_tx_tune_test {
-            let mut tx_drive = state.source_control.tx_drive_percent;
-            let mut resp = ui.add(
-                egui::Slider::new(&mut tx_drive, 0.0..=100.0)
-                    .step_by(1.0)
-                    .fixed_decimals(0)
-                    .suffix("%")
-                    .text("TX Drive"),
-            );
-            super::slider_scroll(ui, &mut resp, &mut tx_drive, 0.0, 100.0, 1.0);
-            if resp.changed() {
-                let snapped = tx_drive.clamp(0.0, 100.0).round();
-                if (snapped - state.source_control.tx_drive_percent).abs() > f32::EPSILON {
-                    state.source_control.tx_drive_percent = snapped;
-                    self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
-                        tx_drive_percent: snapped,
-                    });
-                    save = true;
+        if state.source_capabilities.supports_transmit {
+            // TX Drive is damage-capable (overdrives the PA/amp), so it sits
+            // behind its own inline lock — locked by default, auto-re-locking
+            // after an idle period (see `auto_relock_controls`).
+            ui.horizontal(|ui| {
+                if super::lock_button(ui, &mut state.tx_drive_locked, super::LOCK_SMALL) {
+                    state.tx_drive_unlocked_at = Some(std::time::Instant::now());
                 }
-            }
+                let locked = state.tx_drive_locked;
+                let mut tx_drive = state.source_control.tx_drive_percent;
+                let mut resp = ui.add_enabled(
+                    !locked,
+                    egui::Slider::new(&mut tx_drive, 0.0..=100.0)
+                        .step_by(1.0)
+                        .fixed_decimals(0)
+                        .suffix("%")
+                        .text("TX Drive"),
+                );
+                if locked {
+                    resp = resp.on_hover_text("Locked — click the padlock to change TX Drive");
+                } else {
+                    super::slider_scroll(ui, &mut resp, &mut tx_drive, 0.0, 100.0, 1.0);
+                }
+                if resp.changed() {
+                    let snapped = tx_drive.clamp(0.0, 100.0).round();
+                    if (snapped - state.source_control.tx_drive_percent).abs() > f32::EPSILON {
+                        state.source_control.tx_drive_percent = snapped;
+                        self.send_radio_msg(ClientRadioMessage::SetSourceTxDrive {
+                            tx_drive_percent: snapped,
+                        });
+                        save = true;
+                    }
+                }
+                // Keep the unlock window alive while actively adjusting.
+                if resp.dragged() || resp.changed() {
+                    state.tx_drive_unlocked_at = Some(std::time::Instant::now());
+                }
+            });
         }
 
         // -----------------------------
-        // TX Sequencing (HL2 PTT lead/tail delays).
+        // TX Sequencing (HL2 PTT lead/tail delays) — applies to all transmit
+        // paths, so gated on general transmit support.
         // -----------------------------
-        if state.source_capabilities.supports_tx_tune_test {
+        if state.source_capabilities.supports_transmit {
             save |= self.draw_tx_sequencing_section(ui, state);
         }
 
@@ -533,16 +570,39 @@ impl RigflowApp {
 
         if let Some(band) = selected {
             if Some(band) != current_band {
-                // Tune to the band default through the existing tuning path
-                // (clamped, server-validated).  Move both the LO (center) and
-                // the target so the band is actually received.
-                let freq = default_frequency_for_band(band) as f32;
-                let mode = default_mode_for_band(band);
+                // Band memory (single-slot band-stacking): save where we're
+                // leaving the OUTGOING band, then restore the INCOMING band's
+                // last freq/mode — or its default the first time we visit it.
+                if let Some(from) = current_band {
+                    state.band_memory.insert(
+                        from,
+                        crate::persistence::models::BandMemoryEntry {
+                            center_freq_hz: state.center_freq_hz.max(0.0) as u64,
+                            target_freq_hz: state.target_freq_hz.max(0.0) as u64,
+                            demod_mode: state.demod_mode,
+                        },
+                    );
+                }
+                let (freq_center, freq_target, mode) = match state.band_memory.get(&band).copied() {
+                    Some(m) => (
+                        m.center_freq_hz as f32,
+                        m.target_freq_hz as f32,
+                        m.demod_mode,
+                    ),
+                    None => {
+                        let f = default_frequency_for_band(band) as f32;
+                        (f, f, default_mode_for_band(band))
+                    }
+                };
+                state.pending_save_band_memory = true;
 
+                // Apply through the existing tuning path (clamped to the current
+                // limits, server-validated) — sample rate may differ from when
+                // the memory was saved.
                 let limits = crate::ui::freq_limits::active_freq_limits(state);
-                let new_center = crate::ui::freq_limits::clamp_center(freq, &limits);
+                let new_center = crate::ui::freq_limits::clamp_center(freq_center, &limits);
                 let new_target = crate::ui::freq_limits::clamp_target(
-                    freq,
+                    freq_target,
                     new_center,
                     state.input_sample_rate_hz,
                     &limits,

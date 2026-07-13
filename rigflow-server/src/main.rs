@@ -175,8 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_nonblocking(true)
         .expect("set UDP socket non-blocking");
     let media_socket = Arc::new(udp_std.try_clone().expect("clone UDP media socket"));
-    let udp_socket =
-        tokio::net::UdpSocket::from_std(udp_std).expect("adopt UDP socket into tokio");
+    let udp_socket = tokio::net::UdpSocket::from_std(udp_std).expect("adopt UDP socket into tokio");
 
     let media_egress = MediaEgress {
         socket: media_socket,

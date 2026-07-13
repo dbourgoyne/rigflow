@@ -233,17 +233,15 @@ fn draw_health_group(ui: &mut egui::Ui, status: &SourceStatus) {
                 ui.end_row();
             }
 
+            // Only populated on a genuine TX-FIFO anomaly mid-transmit (hidden
+            // during RX), so it's always a warning when present.
             if let Some(ref recovery) = status.recovery_status {
                 ui.label("Recovery");
-                if recovery == "OK" {
-                    ui.label(recovery.as_str());
-                } else {
-                    ui.label(
-                        egui::RichText::new(recovery.as_str())
-                            .color(egui::Color32::from_rgb(255, 200, 40))
-                            .strong(),
-                    );
-                }
+                ui.label(
+                    egui::RichText::new(recovery.as_str())
+                        .color(egui::Color32::from_rgb(255, 200, 40))
+                        .strong(),
+                );
                 ui.end_row();
             }
         });

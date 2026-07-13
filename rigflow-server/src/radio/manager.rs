@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::{mpsc, oneshot, watch, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
 
 use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
@@ -11,8 +11,8 @@ use rigflow_core::radio::{LeaseId, RadioDescriptor, RadioId};
 use crate::config::ServerConfig;
 use crate::radio::types::{
     AcquireRadioResult, AcquireRequest, ClientId, LeaseRecord, MediaEgress, RadioManagerConfig,
-    RadioManagerError, RadioState, RadioSummary, StopReason, WorkerCommand, WorkerExit,
-    WorkerStartResult, WorkerStatus,
+    RadioManagerError, RadioState, RadioSummary, StopReason, WorkerCommand, WorkerEvent,
+    WorkerExit, WorkerStartResult, WorkerStatus,
 };
 use crate::radio::worker::run_radio_worker;
 
@@ -23,6 +23,8 @@ use crate::radio::worker::run_radio_worker;
 pub struct RadioRuntime {
     pub worker_tx: mpsc::Sender<WorkerCommand>,
     pub status_rx: watch::Receiver<WorkerStatus>,
+    /// Broadcast of transient worker events (async errors) to the leasing client.
+    pub events_tx: broadcast::Sender<WorkerEvent>,
     pub stop_tx: Option<oneshot::Sender<()>>,
     pub join_handle: JoinHandle<WorkerExit>,
     pub started_at: Instant,
@@ -144,6 +146,44 @@ impl RadioManager {
             .clone();
 
         Ok(status_rx)
+    }
+
+    /// Subscribe to transient worker events (async errors) for the lease owner.
+    /// Returns a fresh broadcast receiver; only events emitted after subscription
+    /// are delivered.  Same ownership checks as [`Self::subscribe_runtime_status`].
+    pub async fn subscribe_events(
+        &self,
+        client_id: &ClientId,
+        radio_id: &RadioId,
+        lease_id: &LeaseId,
+    ) -> Result<broadcast::Receiver<WorkerEvent>, RadioManagerError> {
+        let radios = self.radios.read().await;
+        let radio = radios
+            .get(radio_id)
+            .ok_or(RadioManagerError::RadioNotFound)?;
+
+        let lease = radio
+            .lease
+            .as_ref()
+            .ok_or(RadioManagerError::NoActiveLease)?;
+
+        if &lease.client_id != client_id {
+            return Err(RadioManagerError::NotLeaseOwner);
+        }
+        if &lease.lease_id != lease_id {
+            return Err(RadioManagerError::InvalidLease);
+        }
+        match radio.state {
+            RadioState::Running | RadioState::Starting => {}
+            _ => return Err(RadioManagerError::RadioNotRunning),
+        }
+
+        Ok(radio
+            .runtime
+            .as_ref()
+            .ok_or(RadioManagerError::RadioNotRunning)?
+            .events_tx
+            .subscribe())
     }
 
     /// Periodically scans for expired leases and releases them.
@@ -277,6 +317,9 @@ impl RadioManager {
 
         let (worker_tx, worker_rx) = mpsc::channel(64);
         let (status_tx, status_rx) = watch::channel(WorkerStatus::Starting);
+        // Transient worker events (async errors) → leasing client.  Buffer a few
+        // so a burst isn't lost; the client subscribes on acquire.
+        let (events_tx, _events_rx) = broadcast::channel(16);
         let (stop_tx, stop_rx) = oneshot::channel();
         let (startup_tx, startup_rx) = oneshot::channel();
 
@@ -287,6 +330,7 @@ impl RadioManager {
             self.media_egress.clone(),
             worker_rx,
             status_tx,
+            events_tx.clone(),
             stop_rx,
             startup_tx,
         ));
@@ -302,6 +346,7 @@ impl RadioManager {
             radio.runtime = Some(RadioRuntime {
                 worker_tx,
                 status_rx,
+                events_tx,
                 stop_tx: Some(stop_tx),
                 join_handle,
                 started_at: Instant::now(),

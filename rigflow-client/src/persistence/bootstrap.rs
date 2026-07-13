@@ -90,6 +90,9 @@ pub fn apply_operator_settings_to_ui_state(
     state.waterfall_frame_rate_hz = operator
         .waterfall_display_preferences
         .waterfall_frame_rate_hz;
+    state.waterfall_smoothing = operator.waterfall_display_preferences.waterfall_smoothing;
+    // VFO B's session smoothing seeds from VFO A's persisted value.
+    state.vfo_b_waterfall_smoothing = state.waterfall_smoothing;
 
     // Keep selection stable if possible, otherwise clear it.
     let selected_still_exists = state
@@ -111,6 +114,7 @@ pub fn apply_operator_settings_to_ui_state(
 
     // --- NEW: load per-demod preferences ---
     state.demod_preferences = operator.demod_preferences.clone();
+    state.tuning_step_preferences = operator.tuning_step_preferences;
 
     let prefs = state.demod_preferences.get(state.demod_mode);
 
@@ -130,7 +134,10 @@ pub fn apply_operator_settings_to_ui_state(
     state.radio_settings = operator.radio_settings.clone();
 
     state.volume_percent = operator.volume_percent;
+    state.volume_percent_b = operator.volume_percent_b;
     state.show_advanced = operator.show_advanced;
+    state.config_locked = operator.config_locked;
+    state.band_memory = operator.band_memory.clone();
 
     // Text-to-CW: restore the last-used message and speed.
     state.cw_message = operator.cw_message.clone();
@@ -163,6 +170,7 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
 
     // --- NEW: persist per-demod preferences ---
     operator.demod_preferences = state.demod_preferences.clone();
+    operator.tuning_step_preferences = state.tuning_step_preferences;
 
     operator.waterfall_display_preferences.display_zoom = state.display_zoom;
     operator
@@ -180,7 +188,10 @@ pub fn apply_ui_state_to_operator_settings(state: &UiState, operator: &mut Opera
     operator.radio_settings = state.radio_settings.clone();
 
     operator.volume_percent = state.volume_percent;
+    operator.volume_percent_b = state.volume_percent_b;
     operator.show_advanced = state.show_advanced;
+    operator.config_locked = state.config_locked;
+    operator.band_memory = state.band_memory.clone();
 
     operator.cw_message = state.cw_message.clone();
     operator.cw_speed_wpm = state.cw_speed_wpm;

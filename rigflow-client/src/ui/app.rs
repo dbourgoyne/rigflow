@@ -27,8 +27,14 @@ pub struct RigflowApp {
     pub ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
     pub waterfall_buffer: Arc<Mutex<Vec<u32>>>,
     pub spectrum_db: Arc<Mutex<Vec<f32>>>,
+    /// VFO B (dual-watch) spectrum + waterfall buffers, drawn in the stacked
+    /// lower pane when dual-watch is active.
+    pub spectrum_db_b: Arc<Mutex<Vec<f32>>>,
+    pub waterfall_buffer_b: Arc<Mutex<Vec<u32>>>,
     pub persistence_store: PersistenceStore,
     pub waterfall_texture: Option<egui::TextureHandle>,
+    /// Texture for VFO B's waterfall (separate from VFO A's).
+    pub waterfall_texture_b: Option<egui::TextureHandle>,
 
     /// Text-to-CW sender control (shared with its timer thread): `cw_text_abort`
     /// requests a prompt stop; `cw_text_sending` is true while a message plays.
@@ -84,11 +90,14 @@ pub struct RigflowApp {
 }
 
 impl RigflowApp {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         state: Arc<Mutex<UiState>>,
         ws_cmd_tx: mpsc::UnboundedSender<ControlCommand>,
         waterfall_buffer: Arc<Mutex<Vec<u32>>>,
         spectrum_db: Arc<Mutex<Vec<f32>>>,
+        waterfall_buffer_b: Arc<Mutex<Vec<u32>>>,
+        spectrum_db_b: Arc<Mutex<Vec<f32>>>,
         persistence_store: PersistenceStore,
     ) -> Self {
         // Create the virtual digital-audio endpoints once, at startup.
@@ -105,8 +114,11 @@ impl RigflowApp {
             ws_cmd_tx,
             waterfall_buffer,
             spectrum_db,
+            spectrum_db_b,
+            waterfall_buffer_b,
             persistence_store,
             waterfall_texture: None,
+            waterfall_texture_b: None,
             cw_text_abort: Arc::new(AtomicBool::new(false)),
             cw_text_sending: Arc::new(AtomicBool::new(false)),
             mic: None,
@@ -219,9 +231,25 @@ impl RigflowApp {
         }
     }
 
+    /// The mode transmit actually uses: VFO B's mode when split is on and the TX
+    /// VFO is B, otherwise VFO A's mode.  The Space-key handlers (CW keying, CW
+    /// macros, SSB PTT) choose their path from this so a split with differing A/B
+    /// modes keys the correct one — matching the server's effective TX mode.
+    /// Without this, the client keyed off VFO A's mode while the server modulated
+    /// the TX VFO's mode, so a cross-mode split (e.g. A=USB, TX VFO B=CW) asserted
+    /// PTT but produced no RF.
+    fn effective_tx_mode(snapshot: &UiState) -> rigflow_core::dsp::modes::DemodMode {
+        use rigflow_core::radio::vfo::VfoSelect;
+        if snapshot.split_enabled && snapshot.tx_vfo == VfoSelect::B {
+            snapshot.vfo_b_demod_mode
+        } else {
+            snapshot.demod_mode
+        }
+    }
+
     /// Space-bar CW keying (CW TX Phase 1).  Space held = CW key down, released
     /// = key up.  Only active when a radio is acquired, the source supports TX,
-    /// and the current mode is CW.  Edge-detected against `cw_key_down` so a
+    /// and the effective TX mode is CW.  Edge-detected against `cw_key_down` so a
     /// single Start/Stop is sent per press (no auto-repeat spam).  When a text
     /// edit has keyboard focus we treat Space as "not keying" so it isn't stolen
     /// from text widgets (and any in-progress key is released).
@@ -240,15 +268,29 @@ impl RigflowApp {
             focused && !typing && !needs_fresh && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let cw_ready = snapshot.radio_acquired
-            && snapshot.source_capabilities.supports_tx_tune_test
-            && matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl);
+            && snapshot.source_capabilities.supports_transmit
+            && matches!(
+                Self::effective_tx_mode(snapshot),
+                DemodMode::Cwu | DemodMode::Cwl
+            );
         let want_key = space_held && cw_ready;
 
         // Keep the lock-free sidetone control current every frame so CW Pitch
         // and Sidetone Volume changes take effect immediately.  The Arc is
         // shared with the audio callback; writing via the snapshot clone hits
         // the same inner state.
-        snapshot.sidetone.set_pitch_hz(snapshot.pitch_hz);
+        // Sidetone pitch follows the transmitting VFO: VFO A's pitch normally,
+        // VFO B's CW pitch when keying a split TX on B.  Otherwise a cross-mode
+        // split (A=USB → pitch 0) would set the sidetone to 0 Hz and you'd see
+        // the CW pulse but hear nothing.
+        let cw_pitch = if snapshot.split_enabled
+            && snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B
+        {
+            snapshot.vfo_b_cw_pitch_hz
+        } else {
+            snapshot.pitch_hz
+        };
+        snapshot.sidetone.set_pitch_hz(cw_pitch);
         snapshot
             .sidetone
             .set_volume(snapshot.cw_sidetone_volume as f32 / 100.0);
@@ -292,8 +334,11 @@ impl RigflowApp {
 
         if ctx.wants_keyboard_input()
             || !snapshot.radio_acquired
-            || !snapshot.source_capabilities.supports_tx_tune_test
-            || !matches!(snapshot.demod_mode, DemodMode::Cwu | DemodMode::Cwl)
+            || !snapshot.source_capabilities.supports_transmit
+            || !matches!(
+                Self::effective_tx_mode(snapshot),
+                DemodMode::Cwu | DemodMode::Cwl
+            )
             || self.cw_text_sending.load(Ordering::Relaxed)
         {
             return;
@@ -347,9 +392,9 @@ impl RigflowApp {
             focused && !typing && !needs_fresh && ctx.input(|i| i.key_down(egui::Key::Space));
 
         let ssb_ready = snapshot.radio_acquired
-            && snapshot.source_capabilities.supports_tx_tune_test
+            && snapshot.source_capabilities.supports_transmit
             && matches!(
-                snapshot.demod_mode,
+                Self::effective_tx_mode(snapshot),
                 DemodMode::Usb | DemodMode::Lsb | DemodMode::DgtU
             )
             // The voice keyer owns the mic-TX path while playing, and a clip
@@ -374,10 +419,76 @@ impl RigflowApp {
         }
     }
 
-    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
-        use crate::ui::tuning_steps::{TuneTier, center_step_hz, target_step_hz};
+    /// Auto-re-lock the damage-capable controls after an idle period, so an
+    /// unlocked control (e.g. TX Drive) can't be left exposed to an accidental
+    /// change.  Runs every frame; the unlock window is refreshed while the
+    /// operator is actively adjusting the control.
+    fn auto_relock_controls(&self) {
+        const RELOCK_IDLE: Duration = Duration::from_secs(8);
+        if let Ok(mut state) = self.state.lock() {
+            if !state.tx_drive_locked
+                && state
+                    .tx_drive_unlocked_at
+                    .map_or(true, |t| t.elapsed() >= RELOCK_IDLE)
+            {
+                state.tx_drive_locked = true;
+                state.tx_drive_unlocked_at = None;
+            }
+            if !state.spot_level_locked
+                && state
+                    .spot_level_unlocked_at
+                    .map_or(true, |t| t.elapsed() >= RELOCK_IDLE)
+            {
+                state.spot_level_locked = true;
+                state.spot_level_unlocked_at = None;
+            }
+        }
+    }
 
-        // Gather arrow presses + modifiers in one input pass.
+    fn handle_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        use crate::ui::app_center::TuneVfo;
+        use crate::ui::tuning_steps::{center_step_hz, scaled_snap_step_hz};
+
+        // VFO hotkeys — ignored while a text field has focus (so typing a
+        // callsign/frequency never triggers them).  `X` = TX-focus swap,
+        // `=` = copy VFO A onto VFO B.
+        if !ctx.wants_keyboard_input() {
+            let (swap_tx, copy_ab, bookmark) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::X),
+                    i.key_pressed(egui::Key::Equals),
+                    i.key_pressed(egui::Key::B),
+                )
+            });
+            if swap_tx || copy_ab || bookmark {
+                let snapshot = self.snapshot_state();
+                if snapshot.radio_acquired {
+                    if swap_tx {
+                        self.swap_tx_focus(&snapshot);
+                    }
+                    if copy_ab {
+                        self.copy_a_to_b(&snapshot);
+                    }
+                    if bookmark {
+                        // Same as the "Save Current as Bookmark" button.
+                        if let Ok(mut state) = self.state.lock() {
+                            state.show_add_bookmark_dialog = true;
+                            state.pending_bookmark_name.clear();
+                            state.pending_bookmark_notes.clear();
+                            state.bookmark_status.clear();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Arrow-key tuning also respects input focus — ignored while typing in a
+        // text field (frequency/callsign entry, etc.).
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+
+        // Gather arrow presses + the Shift/Alt modifiers in one input pass.
         let (up, down, left, right, shift, alt) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowUp),
@@ -393,46 +504,74 @@ impl RigflowApp {
             return;
         }
 
-        // Steps are mode-aware and only apply to an acquired radio (matches the
-        // mouse wheel).
         let snapshot = self.snapshot_state();
-        if !snapshot.radio_acquired {
+        // Dial lock freezes arrow-key tuning too (the X/= VFO hotkeys above are
+        // unaffected — they're deliberate, not accidental dial movement).
+        if !snapshot.radio_acquired || snapshot.dial_locked {
             return;
         }
-        let mode = snapshot.demod_mode;
+        // Under dual-watch the arrow keys tune the active control VFO (matching
+        // the wheel/click on each spectrum); otherwise they tune VFO A.
+        let active_b = snapshot.dual_watch_enabled
+            && matches!(
+                snapshot.active_control_vfo,
+                rigflow_core::radio::vfo::VfoSelect::B
+            );
+        let active_vfo = if active_b { TuneVfo::B } else { TuneVfo::A };
+        let mode = if active_b {
+            snapshot.vfo_b_demod_mode
+        } else {
+            snapshot.demod_mode
+        };
 
-        // ↑/↓ — center / LO step (mode-aware; Shift = coarse).
+        // ←/→ target step = the active VFO's Snap value scaled by the modifiers
+        // (Shift ×10, Alt ×0.1, else ×1; 1 Hz floor) — identical model to the
+        // mouse wheel.
+        let snap = if active_b {
+            snapshot.vfo_b_tuning_step_hz
+        } else {
+            snapshot.tuning_step_preferences.get(mode)
+        };
+        let target_step = scaled_snap_step_hz(snap, shift, alt);
+
+        // ↑/↓ — move the LO / centre of the active VFO.  Coarse + mode-appropriate
+        // (Shift = coarser), independent of Snap, so a whole band sweeps quickly.
         let center_dir = (up as i32) - (down as i32);
         if center_dir != 0 {
             let delta = center_dir as f32 * center_step_hz(mode, shift);
             let mut send_center: Option<u64> = None;
             if let Ok(mut state) = self.state.lock() {
                 let limits = crate::ui::freq_limits::active_freq_limits(&state);
-                let new_center =
-                    crate::ui::freq_limits::clamp_center(state.center_freq_hz + delta, &limits);
-                state.center_freq_hz = new_center;
+                let cur = if active_b {
+                    state.vfo_b_center_freq_hz
+                } else {
+                    state.center_freq_hz
+                };
+                let new_center = crate::ui::freq_limits::clamp_center(cur + delta, &limits);
+                if active_b {
+                    state.vfo_b_center_freq_hz = new_center;
+                } else {
+                    state.center_freq_hz = new_center;
+                }
                 send_center = Some(new_center as u64);
             }
             if let Some(hz) = send_center {
-                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz },
-                ));
+                let msg = if active_b {
+                    rigflow_protocol::ClientRadioMessage::SetVfoBCenterFrequency {
+                        center_freq_hz: hz,
+                    }
+                } else {
+                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency { center_freq_hz: hz }
+                };
+                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
             }
         }
 
-        // ←/→ — target step, identical to the wheel (mode-aware; Shift = medium,
-        // Alt = coarse) including soft-edge LO panning.
+        // ←/→ — move the target of the active VFO by one Snap step (same soft-edge
+        // LO pan as the wheel).
         let target_dir = (right as i32) - (left as i32);
         if target_dir != 0 {
-            let tier = if shift {
-                TuneTier::Medium
-            } else if alt {
-                TuneTier::Coarse
-            } else {
-                TuneTier::Fine
-            };
-            let delta = target_dir as f32 * target_step_hz(mode, tier);
-            self.tune_target_relative(&snapshot, delta);
+            self.tune_target_relative(&snapshot, target_dir as f32 * target_step, active_vfo);
         }
     }
 
@@ -488,6 +627,7 @@ impl eframe::App for RigflowApp {
         let config_mode = !snapshot.server_connected;
 
         self.ensure_mic();
+        self.auto_relock_controls();
         self.handle_keyboard_shortcuts(ctx);
         self.update_ptt_focus_latch(ctx);
         self.handle_cw_keying(ctx, &snapshot);
@@ -513,6 +653,26 @@ impl eframe::App for RigflowApp {
         // slider/frequency drag doesn't thrash the file, and catches every change
         // path (tuning, band, all controls).
         self.autosave_radio_settings();
+
+        // Persist a tuning-step change requested by the LO-strip "Snap" dropdown
+        // (it only has `&self`, so it flags the change for us to save here).
+        let save_steps = {
+            let mut state = self.state.lock().unwrap();
+            std::mem::take(&mut state.pending_save_tuning_steps)
+        };
+        if save_steps {
+            self.save_tuning_step_preferences_to_current_operator();
+        }
+
+        // Persist per-band tuning memory when a band change updated it
+        // (`draw_band_control` only has `&self`, so it flags us here).
+        let save_band_mem = {
+            let mut state = self.state.lock().unwrap();
+            std::mem::take(&mut state.pending_save_band_memory)
+        };
+        if save_band_mem {
+            self.save_band_memory_to_current_operator();
+        }
 
         self.handle_exit(ctx, &snapshot);
 

@@ -26,6 +26,7 @@ pub(crate) fn radio_settings_from_ui(state: &UiState) -> RadioSettingsFile {
             manual_waterfall_top_db: state.manual_waterfall_top_db,
             manual_waterfall_range_db: state.manual_waterfall_range_db,
             waterfall_frame_rate_hz: state.waterfall_frame_rate_hz,
+            waterfall_smoothing: state.waterfall_smoothing,
         },
         volume_percent: state.volume_percent,
         cw_sidetone_volume: state.cw_sidetone_volume,
@@ -225,6 +226,7 @@ impl RigflowApp {
                 state.manual_waterfall_top_db,
                 state.manual_waterfall_range_db,
                 state.waterfall_frame_rate_hz,
+                state.waterfall_smoothing,
             )
         };
 
@@ -235,6 +237,7 @@ impl RigflowApp {
             manual_top_db,
             manual_range_db,
             waterfall_frame_rate_hz,
+            waterfall_smoothing,
         ) = snapshot;
 
         if operator_id.trim().is_empty() {
@@ -264,6 +267,10 @@ impl RigflowApp {
                     .waterfall_display_preferences
                     .waterfall_frame_rate_hz = waterfall_frame_rate_hz;
 
+                operator_settings
+                    .waterfall_display_preferences
+                    .waterfall_smoothing = waterfall_smoothing;
+
                 if let Err(err) = self
                     .persistence_store
                     .save_operator_settings(&operator_settings)
@@ -284,11 +291,51 @@ impl RigflowApp {
         }
     }
 
+    /// Persist the per-mode grid-snap / tuning-step sizes for the current operator.
+    pub(crate) fn save_tuning_step_preferences_to_current_operator(&mut self) {
+        let (operator_id, tuning_step_preferences) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.tuning_step_preferences)
+        };
+
+        if operator_id.trim().is_empty() {
+            return;
+        }
+
+        match self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            Ok(mut operator_settings) => {
+                operator_settings.tuning_step_preferences = tuning_step_preferences;
+                if let Err(err) = self
+                    .persistence_store
+                    .save_operator_settings(&operator_settings)
+                {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.persistence_status = format!("failed to save tuning step: {err}");
+                    }
+                } else if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status.clear();
+                }
+            }
+            Err(err) => {
+                if let Ok(mut state) = self.state.lock() {
+                    state.persistence_status = format!("failed to load operator settings: {err}");
+                }
+            }
+        }
+    }
+
     /// Persist the receive-audio volume (%) for the current operator.
     pub(crate) fn save_volume_to_current_operator(&mut self) {
-        let (operator_id, volume_percent) = {
+        let (operator_id, volume_percent, volume_percent_b) = {
             let state = self.state.lock().unwrap();
-            (state.operator_id.clone(), state.volume_percent)
+            (
+                state.operator_id.clone(),
+                state.volume_percent,
+                state.volume_percent_b,
+            )
         };
 
         if operator_id.trim().is_empty() {
@@ -301,6 +348,7 @@ impl RigflowApp {
         {
             Ok(mut operator_settings) => {
                 operator_settings.volume_percent = volume_percent;
+                operator_settings.volume_percent_b = volume_percent_b;
 
                 if let Err(err) = self
                     .persistence_store
@@ -319,6 +367,42 @@ impl RigflowApp {
                     state.persistence_status = format!("failed to load operator settings: {err}");
                 }
             }
+        }
+    }
+
+    /// Persist per-band tuning memory to the current operator.
+    pub(crate) fn save_band_memory_to_current_operator(&mut self) {
+        let (operator_id, band_memory) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.band_memory.clone())
+        };
+        if operator_id.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut op) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            op.band_memory = band_memory;
+            let _ = self.persistence_store.save_operator_settings(&op);
+        }
+    }
+
+    /// Persist the global settings-lock toggle to the current operator.
+    pub(crate) fn save_config_lock_to_current_operator(&mut self) {
+        let (operator_id, config_locked) = {
+            let state = self.state.lock().unwrap();
+            (state.operator_id.clone(), state.config_locked)
+        };
+        if operator_id.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut op) = self
+            .persistence_store
+            .load_or_create_operator_settings(&operator_id)
+        {
+            op.config_locked = config_locked;
+            let _ = self.persistence_store.save_operator_settings(&op);
         }
     }
 
@@ -677,6 +761,13 @@ impl RigflowApp {
     }
 
     pub(crate) fn apply_bookmark(&mut self, bookmark_id: &str) {
+        // A bookmark QSYs, so it's gated by the dial lock too.
+        if let Ok(mut state) = self.state.lock() {
+            if state.dial_locked {
+                state.server_status = "dial locked: unlock to recall a bookmark".to_string();
+                return;
+            }
+        }
         let (bookmark, rejection) = {
             let state = self.state.lock().unwrap();
             let bookmark = state

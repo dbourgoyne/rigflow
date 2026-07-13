@@ -105,6 +105,7 @@ pub fn draw_digit_wheel_widget(
     origin: Pos2,
     spec: &DigitWheelSpec<'_>,
     value: i64,
+    enabled: bool,
 ) -> Option<i64> {
     // --- Styling ----------------------------------------------------------
 
@@ -221,12 +222,18 @@ pub fn draw_digit_wheel_widget(
 
     // --- Hover detection --------------------------------------------------
 
-    let hovered_digit = response.hover_pos().and_then(|pos| {
-        digit_cells
-            .iter()
-            .find(|c| c.rect.contains(pos))
-            .map(|c| c.digit_index)
-    });
+    // When disabled (dial lock), suppress hover + scroll so the digits are inert
+    // but still drawn at full brightness (the frequency stays readable).
+    let hovered_digit = if enabled {
+        response.hover_pos().and_then(|pos| {
+            digit_cells
+                .iter()
+                .find(|c| c.rect.contains(pos))
+                .map(|c| c.digit_index)
+        })
+    } else {
+        None
+    };
 
     // --- Draw digits ------------------------------------------------------
 
@@ -277,7 +284,12 @@ pub fn draw_digit_wheel_widget(
 }
 
 /// LO frequency widget (center frequency).
-pub fn draw_lo_widget(ui: &mut egui::Ui, top_left: Pos2, center_freq_hz: u64) -> Option<u64> {
+pub fn draw_lo_widget(
+    ui: &mut egui::Ui,
+    top_left: Pos2,
+    center_freq_hz: u64,
+    enabled: bool,
+) -> Option<u64> {
     let spec = DigitWheelSpec {
         label: "LO",
         digit_count: 10,
@@ -286,11 +298,17 @@ pub fn draw_lo_widget(ui: &mut egui::Ui, top_left: Pos2, center_freq_hz: u64) ->
         anchor: DigitWheelAnchor::Left,
     };
 
-    draw_digit_wheel_widget(ui, top_left, &spec, center_freq_hz as i64).map(|v| v.max(0) as u64)
+    draw_digit_wheel_widget(ui, top_left, &spec, center_freq_hz as i64, enabled)
+        .map(|v| v.max(0) as u64)
 }
 
 /// LO offset widget (relative tuning offset).
-pub fn draw_lo_offset_widget(ui: &mut egui::Ui, top_right: Pos2, offset_hz: i64) -> Option<i64> {
+pub fn draw_lo_offset_widget(
+    ui: &mut egui::Ui,
+    top_right: Pos2,
+    offset_hz: i64,
+    enabled: bool,
+) -> Option<i64> {
     let spec = DigitWheelSpec {
         label: "LO Offset",
         digit_count: 6,
@@ -299,5 +317,5 @@ pub fn draw_lo_offset_widget(ui: &mut egui::Ui, top_right: Pos2, offset_hz: i64)
         anchor: DigitWheelAnchor::Right,
     };
 
-    draw_digit_wheel_widget(ui, top_right, &spec, offset_hz)
+    draw_digit_wheel_widget(ui, top_right, &spec, offset_hz, enabled)
 }

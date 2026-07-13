@@ -2,6 +2,57 @@
 
 ---
 
+## v0.1.5 — Dual-watch, split / RIT-XIT, band memory, and safety locks
+
+> **⚠ Upgrade the client and server together.** This release extends the client↔server protocol
+> (per-VFO receive controls, dual-watch / split fields, and transmit / dual-watch capabilities), so a
+> new client needs a new server and vice-versa. Install the matching v0.1.5 pair below.
+
+**Dual-watch & split (Hermes Lite 2)**
+
+- **Dual-watch — two receivers at once.** Run an independent VFO B alongside VFO A: stacked spectrum
+  + waterfall, heard A-left / B-right, each with its own frequency, mode, and full receive processing
+  (filter, pitch, squelch, NR2, noise blanker, auto-notch, AGC, deemphasis, RIT). An "Active VFO:
+  A | B" selector points the Receive controls at the receiver you're working; both volumes stay
+  visible so you can mix them live.
+- **Split + RIT/XIT.** Transmit on the selected TX VFO, with a per-VFO RIT receive offset and an XIT
+  transmit offset that follows the TX VFO. A↔B TX-focus swap (`X`) and A=B copy (`=`).
+
+**Tuning**
+
+- **Relative "Snap" tuning.** The mouse wheel and ←/→ move the dial by the active Snap step (×1,
+  Shift ×10, Alt ×0.1), remembered per mode and per VFO; ↑/↓ move the LO in coarse, band-appropriate
+  steps.
+- **Per-band memory.** Leaving a band remembers where you were (frequency + mode); returning restores
+  it like a band-stacking register, persisted per operator.
+
+**Display**
+
+- **Reworked status bar.** Each receiver is grouped (frequency · mode · flags · S-meter); in
+  dual-watch both S-meters show, coloured per VFO, with inline RIT/XIT and a ▶TX marker on the
+  transmitting VFO. Fixed-width readouts so nothing shifts as values change.
+- **Waterfall smoothing + cleaner dual-watch.** A "Smoothing" slider (temporal averaging) calms the
+  noise-floor twinkle, and linear texture minification removes the shimmer when the panes are split.
+
+**Safety locks**
+
+- **Damage locks** on TX Drive and Spot Level — each behind its own inline padlock (locked by
+  default, auto-re-locking after you adjust) so a stray scroll can't over-drive the PA/amp.
+- **Settings lock** greys the set-once config (sample rate, gain, PPM, direct sampling, band, mode,
+  split) against accidental change; **Dial lock** freezes all tuning while the frequency stays
+  readable.
+
+**Other**
+
+- **Volume mute/unmute** on each control (remembers the level), and a **`B`** hotkey to bookmark the
+  current frequency.
+- Transmit and dual-watch controls now appear only on hardware that supports them (hidden for
+  RTL-SDR / WAV / receive-only sources).
+- UI polish: readable help glyphs, larger lock icons, and the side-panel scroll no longer nudges
+  sliders it passes over.
+
+---
+
 ## v0.1.4 — Voice keyer, receive notch/blanker, and a smoother waterfall
 
 > **⚠ Upgrade the client and server together.** This release changes the client↔server media
@@ -150,7 +201,7 @@ path is unaffected.
 
 The S-meter / dBm, TX forward/reverse power (watts), and SWR are **approximate
 indications**, not lab-calibrated measurements. They use sensible default scaling
-(like Quisk's defaults) and are good for *relative* judgements — comparing signals,
+and are good for *relative* judgements — comparing signals,
 spotting a high-SWR condition, peaking a tune — but should not be treated as
 absolute, instrument-grade values. No user calibration is required (or currently
 offered); a per-rig calibration option may come in a future release.

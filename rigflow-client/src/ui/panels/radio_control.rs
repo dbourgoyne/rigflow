@@ -13,7 +13,161 @@ use rigflow_core::dsp::modes::{
     DeemphasisMode, DemodMode, Sideband, clamp_filter_bandwidth, default_deemphasis_mode,
     filter_bandwidth_limits, pitch_limits,
 };
+use rigflow_core::radio::vfo::VfoSelect;
 use rigflow_protocol::radio_control::ClientRadioMessage;
+
+/// Routes the Receive-section controls to VFO A or VFO B under dual-watch.
+///
+/// Each accessor returns a `&mut` to the active VFO's `UiState` field, and each
+/// `*_msg` builds the matching A or B `ClientRadioMessage`.  The draw helpers
+/// keep their "read field → on change, write field + send message" shape; only
+/// the field they touch and the message they send vary by VFO.  When dual-watch
+/// is off the panel always builds `RxTargets { vfo: A }`, so a stale
+/// `active_control_vfo == B` can never misroute an edit.
+#[derive(Clone, Copy)]
+struct RxTargets {
+    vfo: VfoSelect,
+}
+
+macro_rules! rx_field {
+    ($name:ident, $ty:ty, $a:ident, $b:ident) => {
+        fn $name<'a>(self, s: &'a mut UiState) -> &'a mut $ty {
+            match self.vfo {
+                VfoSelect::A => &mut s.$a,
+                VfoSelect::B => &mut s.$b,
+            }
+        }
+    };
+}
+
+impl RxTargets {
+    fn is_b(self) -> bool {
+        matches!(self.vfo, VfoSelect::B)
+    }
+
+    rx_field!(
+        deemphasis_mode,
+        DeemphasisMode,
+        deemphasis_mode,
+        vfo_b_deemphasis_mode
+    );
+    rx_field!(
+        squelch_enabled,
+        bool,
+        squelch_enabled,
+        vfo_b_squelch_enabled
+    );
+    rx_field!(
+        squelch_threshold_db,
+        f32,
+        squelch_threshold_db,
+        vfo_b_squelch_threshold_db
+    );
+    rx_field!(nr2_enabled, bool, nr2_enabled, vfo_b_nr2_enabled);
+    rx_field!(nr2_strength, f32, nr2_strength, vfo_b_nr2_strength);
+    rx_field!(nb_enabled, bool, nb_enabled, vfo_b_nb_enabled);
+    rx_field!(nb_threshold, f32, nb_threshold, vfo_b_nb_threshold);
+    rx_field!(
+        notch_auto_enabled,
+        bool,
+        notch_auto_enabled,
+        vfo_b_notch_auto_enabled
+    );
+    rx_field!(agc_enabled, bool, agc_enabled, vfo_b_agc_enabled);
+    rx_field!(agc_strength, f32, agc_strength, vfo_b_agc_strength);
+    rx_field!(
+        filter_bandwidth,
+        f32,
+        filter_bandwidth_hz,
+        vfo_b_filter_bandwidth_hz
+    );
+
+    /// Pitch field for the active VFO.  VFO A uses one `pitch_hz` (the server
+    /// routes it by mode); VFO B keeps SSB and CW pitch separate, so pick by the
+    /// active demod mode.
+    fn pitch<'a>(self, s: &'a mut UiState, mode: DemodMode) -> &'a mut f32 {
+        match self.vfo {
+            VfoSelect::A => &mut s.pitch_hz,
+            VfoSelect::B => match mode {
+                DemodMode::Cwu | DemodMode::Cwl => &mut s.vfo_b_cw_pitch_hz,
+                _ => &mut s.vfo_b_ssb_pitch_hz,
+            },
+        }
+    }
+
+    fn squelch_enabled_msg(self, enabled: bool) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetSquelchEnabled { enabled },
+            VfoSelect::B => ClientRadioMessage::SetVfoBSquelchEnabled { enabled },
+        }
+    }
+    fn squelch_threshold_msg(self, threshold_db: f32) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetSquelchThreshold { threshold_db },
+            VfoSelect::B => ClientRadioMessage::SetVfoBSquelchThreshold { threshold_db },
+        }
+    }
+    fn nr2_enabled_msg(self, enabled: bool) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetNr2Enabled { enabled },
+            VfoSelect::B => ClientRadioMessage::SetVfoBNr2Enabled { enabled },
+        }
+    }
+    fn nr2_strength_msg(self, strength: f32) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetNr2Strength { strength },
+            VfoSelect::B => ClientRadioMessage::SetVfoBNr2Strength { strength },
+        }
+    }
+    fn nb_enabled_msg(self, enabled: bool) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetNoiseBlankerEnabled { enabled },
+            VfoSelect::B => ClientRadioMessage::SetVfoBNoiseBlankerEnabled { enabled },
+        }
+    }
+    fn nb_threshold_msg(self, threshold: f32) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetNoiseBlankerThreshold { threshold },
+            VfoSelect::B => ClientRadioMessage::SetVfoBNoiseBlankerThreshold { threshold },
+        }
+    }
+    fn notch_auto_msg(self, enabled: bool) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetNotchAutoEnabled { enabled },
+            VfoSelect::B => ClientRadioMessage::SetVfoBNotchAutoEnabled { enabled },
+        }
+    }
+    fn agc_enabled_msg(self, enabled: bool) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetAgcEnabled { enabled },
+            VfoSelect::B => ClientRadioMessage::SetVfoBAgcEnabled { enabled },
+        }
+    }
+    fn agc_strength_msg(self, strength: f32) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetAgcStrength { strength },
+            VfoSelect::B => ClientRadioMessage::SetVfoBAgcStrength { strength },
+        }
+    }
+    fn deemphasis_msg(self, mode: DeemphasisMode) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetDeemphasisMode { mode },
+            VfoSelect::B => ClientRadioMessage::SetVfoBDeemphasisMode { mode },
+        }
+    }
+    fn filter_bandwidth_msg(self, bandwidth_hz: f32) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetFilterBandwidth { bandwidth_hz },
+            VfoSelect::B => ClientRadioMessage::SetVfoBFilterBandwidth { bandwidth_hz },
+        }
+    }
+    fn pitch_msg(self, pitch_hz: f32) -> ClientRadioMessage {
+        match self.vfo {
+            VfoSelect::A => ClientRadioMessage::SetPitch { pitch_hz },
+            VfoSelect::B => ClientRadioMessage::SetVfoBPitch { pitch_hz },
+        }
+    }
+}
 
 impl RigflowApp {
     pub(crate) fn draw_radio_control_panel(&mut self, ui: &mut egui::Ui, snapshot: &UiState) {
@@ -150,23 +304,40 @@ impl RigflowApp {
                 }
             }
 
-            // Receive: frequently-used RX controls.
+            // Receive: frequently-used RX controls.  Under dual-watch an
+            // "Active VFO: A | B" selector chooses which receiver every control
+            // below edits; otherwise the controls always edit VFO A.
             Section::Receive => {
+                let active_vfo = if snapshot.dual_watch_enabled {
+                    self.draw_active_vfo_selector(ui, snapshot)
+                } else {
+                    VfoSelect::A
+                };
+                let t = RxTargets { vfo: active_vfo };
+                // The mode/filter/pitch/deemphasis controls follow the active
+                // VFO's own demod mode.
+                let eff_mode = match active_vfo {
+                    VfoSelect::A => snapshot.demod_mode,
+                    VfoSelect::B => snapshot.vfo_b_demod_mode,
+                };
                 // Demod mode buttons first (locks state internally → must be
-                // outside the lock below to avoid a deadlock).
-                let mut save_demod_prefs = self.draw_demod_selector(ui, snapshot);
+                // outside the lock below to avoid a deadlock).  Gated by the
+                // global settings lock (demod mode affects TX sideband/mode).
+                let mut save_demod_prefs = ui
+                    .add_enabled_ui(!snapshot.config_locked, |ui| {
+                        self.draw_demod_selector(ui, snapshot, t)
+                    })
+                    .inner;
                 if let Ok(mut state) = self.state.lock() {
-                    save_demod_prefs |=
-                        self.draw_filter_bandwidth_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, snapshot.demod_mode);
-                    save_demod_prefs |=
-                        self.draw_deemphasis_row(ui, &mut state, snapshot.demod_mode);
-                    self.draw_squelch_row(ui, &mut state);
-                    self.draw_nr2_row(ui, &mut state);
-                    self.draw_agc_row(ui, &mut state);
-                    self.draw_noise_blanker_row(ui, &mut state);
-                    self.draw_notch_row(ui, &mut state);
-                    self.draw_cw_decode_row(ui, &mut state, snapshot.demod_mode);
+                    save_demod_prefs |= self.draw_filter_bandwidth_row(ui, &mut state, eff_mode, t);
+                    save_demod_prefs |= self.draw_pitch_row(ui, &mut state, eff_mode, t);
+                    save_demod_prefs |= self.draw_deemphasis_row(ui, &mut state, eff_mode, t);
+                    self.draw_squelch_row(ui, &mut state, t);
+                    self.draw_nr2_row(ui, &mut state, t);
+                    self.draw_agc_row(ui, &mut state, t);
+                    self.draw_noise_blanker_row(ui, &mut state, t);
+                    self.draw_notch_row(ui, &mut state, t);
+                    self.draw_cw_decode_row(ui, &mut state, eff_mode);
                 }
                 if save_demod_prefs {
                     self.save_demod_preferences_to_current_operator();
@@ -195,6 +366,9 @@ impl RigflowApp {
             // Advanced: normal-operation controls rarely changed.  TX Processing
             // (limiter/compressor) + the one-time WSJT-X / FT8 setup helper.
             Section::Advanced => {
+                // The whole Advanced section is TX-gated by the composer
+                // (`present_sections`): both TX Processing and the WSJT-X/FT8
+                // setup helper are part of the transmit workflow.
                 if let Ok(mut state) = self.state.lock() {
                     self.draw_tx_processing_row(ui, &mut state, snapshot.demod_mode);
                 }
@@ -219,23 +393,48 @@ impl RigflowApp {
         }
     }
 
+    /// "Active VFO: A | B" selector shown at the top of the Receive section
+    /// under dual-watch.  Returns the selected VFO; updates only the client-local
+    /// `active_control_vfo` (no message is sent).
+    fn draw_active_vfo_selector(&self, ui: &mut egui::Ui, snapshot: &UiState) -> VfoSelect {
+        let mut sel = snapshot.active_control_vfo;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Active VFO").size(11.0).strong());
+            ui.selectable_value(&mut sel, VfoSelect::A, "A");
+            ui.selectable_value(&mut sel, VfoSelect::B, "B");
+            ui.label(RichText::new("(controls below)").size(11.0));
+        });
+        if sel != snapshot.active_control_vfo {
+            if let Ok(mut state) = self.state.lock() {
+                state.active_control_vfo = sel;
+            }
+        }
+        ui.separator();
+        sel
+    }
+
     /// Receive squelch: enable checkbox, threshold slider, and a live gate
     /// indicator.  These are radio (DSP) controls sent to the server; they are
     /// not persisted as demod preferences.
-    fn draw_squelch_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+    fn draw_squelch_row(&self, ui: &mut egui::Ui, state: &mut UiState, t: RxTargets) {
         ui.separator();
 
         ui.horizontal(|ui| {
-            let mut enabled = state.squelch_enabled;
+            let mut enabled = *t.squelch_enabled(state);
             if ui.checkbox(&mut enabled, "Squelch").changed() {
-                state.squelch_enabled = enabled;
-                self.send_radio_msg(ClientRadioMessage::SetSquelchEnabled { enabled });
+                *t.squelch_enabled(state) = enabled;
+                self.send_radio_msg(t.squelch_enabled_msg(enabled));
             }
 
-            // Live gate indicator from the server-reported open state.
-            let (text, color) = if !state.squelch_enabled {
+            // Live gate indicator from the server-reported open state (per VFO).
+            let gate_open = if t.is_b() {
+                state.vfo_b_squelch_open
+            } else {
+                state.squelch_open
+            };
+            let (text, color) = if !*t.squelch_enabled(state) {
                 ("—", egui::Color32::GRAY)
-            } else if state.squelch_open {
+            } else if gate_open {
                 ("● open", egui::Color32::from_rgb(100, 220, 100))
             } else {
                 ("muted", egui::Color32::from_rgb(210, 130, 130))
@@ -243,9 +442,9 @@ impl RigflowApp {
             ui.label(RichText::new(text).color(color).small());
         });
 
-        let enabled = state.squelch_enabled;
+        let enabled = *t.squelch_enabled(state);
         ui.add_enabled_ui(enabled, |ui| {
-            let mut threshold_db = state.squelch_threshold_db;
+            let mut threshold_db = *t.squelch_threshold_db(state);
             let mut response = ui.add(
                 egui::Slider::new(&mut threshold_db, -120.0..=0.0)
                     .step_by(1.0)
@@ -255,25 +454,24 @@ impl RigflowApp {
             );
             super::slider_scroll(ui, &mut response, &mut threshold_db, -120.0, 0.0, 1.0);
             if response.changed() {
-                state.squelch_threshold_db = threshold_db.clamp(-120.0, 0.0);
-                self.send_radio_msg(ClientRadioMessage::SetSquelchThreshold {
-                    threshold_db: state.squelch_threshold_db,
-                });
+                let v = threshold_db.clamp(-120.0, 0.0);
+                *t.squelch_threshold_db(state) = v;
+                self.send_radio_msg(t.squelch_threshold_msg(v));
             }
         });
     }
 
     /// NR2 spectral noise reduction enable.  A radio (DSP) control sent to the
     /// server; applied to demodulated receive audio.  Not persisted.
-    fn draw_nr2_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
-        let mut enabled = state.nr2_enabled;
+    fn draw_nr2_row(&self, ui: &mut egui::Ui, state: &mut UiState, t: RxTargets) {
+        let mut enabled = *t.nr2_enabled(state);
         if ui.checkbox(&mut enabled, "NR2 noise reduction").changed() {
-            state.nr2_enabled = enabled;
-            self.send_radio_msg(ClientRadioMessage::SetNr2Enabled { enabled });
+            *t.nr2_enabled(state) = enabled;
+            self.send_radio_msg(t.nr2_enabled_msg(enabled));
         }
 
-        ui.add_enabled_ui(state.nr2_enabled, |ui| {
-            let mut strength = state.nr2_strength;
+        ui.add_enabled_ui(*t.nr2_enabled(state), |ui| {
+            let mut strength = *t.nr2_strength(state);
             let mut response = ui.add(
                 egui::Slider::new(&mut strength, 0.0..=1.0)
                     .step_by(0.05)
@@ -282,26 +480,25 @@ impl RigflowApp {
             );
             super::slider_scroll(ui, &mut response, &mut strength, 0.0, 1.0, 0.05);
             if response.changed() {
-                state.nr2_strength = strength.clamp(0.0, 1.0);
-                self.send_radio_msg(ClientRadioMessage::SetNr2Strength {
-                    strength: state.nr2_strength,
-                });
+                let v = strength.clamp(0.0, 1.0);
+                *t.nr2_strength(state) = v;
+                self.send_radio_msg(t.nr2_strength_msg(v));
             }
         });
     }
 
     /// Impulse noise blanker enable + level.  Radio (DSP) control sent to the
     /// server; persisted per radio via the background autosave.
-    fn draw_noise_blanker_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+    fn draw_noise_blanker_row(&self, ui: &mut egui::Ui, state: &mut UiState, t: RxTargets) {
         ui.separator();
-        let mut enabled = state.nb_enabled;
+        let mut enabled = *t.nb_enabled(state);
         if ui.checkbox(&mut enabled, "Noise blanker").changed() {
-            state.nb_enabled = enabled;
-            self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerEnabled { enabled });
+            *t.nb_enabled(state) = enabled;
+            self.send_radio_msg(t.nb_enabled_msg(enabled));
         }
 
-        ui.add_enabled_ui(state.nb_enabled, |ui| {
-            let mut threshold = state.nb_threshold;
+        ui.add_enabled_ui(*t.nb_enabled(state), |ui| {
+            let mut threshold = *t.nb_threshold(state);
             let mut response = ui.add(
                 egui::Slider::new(&mut threshold, 0.0..=1.0)
                     .step_by(0.05)
@@ -310,30 +507,29 @@ impl RigflowApp {
             );
             super::slider_scroll(ui, &mut response, &mut threshold, 0.0, 1.0, 0.05);
             if response.changed() {
-                state.nb_threshold = threshold.clamp(0.0, 1.0);
-                self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerThreshold {
-                    threshold: state.nb_threshold,
-                });
+                let v = threshold.clamp(0.0, 1.0);
+                *t.nb_threshold(state) = v;
+                self.send_radio_msg(t.nb_threshold_msg(v));
             }
         });
     }
 
     /// Adaptive auto-notch enable (nulls steady carriers) plus a "Restore Default"
     /// for the noise-blanker + notch group.  Radio (DSP) controls; persisted per radio.
-    fn draw_notch_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
-        let mut enabled = state.notch_auto_enabled;
+    fn draw_notch_row(&self, ui: &mut egui::Ui, state: &mut UiState, t: RxTargets) {
+        let mut enabled = *t.notch_auto_enabled(state);
         if ui.checkbox(&mut enabled, "Auto notch").changed() {
-            state.notch_auto_enabled = enabled;
-            self.send_radio_msg(ClientRadioMessage::SetNotchAutoEnabled { enabled });
+            *t.notch_auto_enabled(state) = enabled;
+            self.send_radio_msg(t.notch_auto_msg(enabled));
         }
 
         // Defaults must match `UiState::default` / the persistence serde defaults.
         const DEF_NB_ENABLED: bool = false;
         const DEF_NB_THRESHOLD: f32 = 0.5;
         const DEF_NOTCH_AUTO_ENABLED: bool = false;
-        let at_default = state.nb_enabled == DEF_NB_ENABLED
-            && (state.nb_threshold - DEF_NB_THRESHOLD).abs() < f32::EPSILON
-            && state.notch_auto_enabled == DEF_NOTCH_AUTO_ENABLED;
+        let at_default = *t.nb_enabled(state) == DEF_NB_ENABLED
+            && (*t.nb_threshold(state) - DEF_NB_THRESHOLD).abs() < f32::EPSILON
+            && *t.notch_auto_enabled(state) == DEF_NOTCH_AUTO_ENABLED;
         if ui
             .add_enabled(
                 !at_default,
@@ -341,42 +537,106 @@ impl RigflowApp {
             )
             .clicked()
         {
-            state.nb_enabled = DEF_NB_ENABLED;
-            state.nb_threshold = DEF_NB_THRESHOLD;
-            state.notch_auto_enabled = DEF_NOTCH_AUTO_ENABLED;
-            self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerEnabled {
-                enabled: DEF_NB_ENABLED,
-            });
-            self.send_radio_msg(ClientRadioMessage::SetNoiseBlankerThreshold {
-                threshold: DEF_NB_THRESHOLD,
-            });
-            self.send_radio_msg(ClientRadioMessage::SetNotchAutoEnabled {
-                enabled: DEF_NOTCH_AUTO_ENABLED,
-            });
+            *t.nb_enabled(state) = DEF_NB_ENABLED;
+            *t.nb_threshold(state) = DEF_NB_THRESHOLD;
+            *t.notch_auto_enabled(state) = DEF_NOTCH_AUTO_ENABLED;
+            self.send_radio_msg(t.nb_enabled_msg(DEF_NB_ENABLED));
+            self.send_radio_msg(t.nb_threshold_msg(DEF_NB_THRESHOLD));
+            self.send_radio_msg(t.notch_auto_msg(DEF_NOTCH_AUTO_ENABLED));
         }
     }
 
-    /// Receive-audio volume slider (0–100%).  Sends `SetVolume` on change and
-    /// returns `true` when the value changed (so the caller persists it).
+    /// One labelled receive-volume slider (0–100%).  Returns the new value when
+    /// the user moved it, else `None`.
+    /// One volume control: `[slider %]  [mute button]  [label]`.  The slider shows
+    /// 0 while muted (the real level stays in `current`).  Returns the new volume
+    /// if the slider moved, and whether the mute button was clicked this frame.
+    /// (Glyph note: 🔊/🔇 come from the emoji font — swap for text if they tofu.)
+    fn volume_control(
+        &self,
+        ui: &mut egui::Ui,
+        label: &str,
+        current: u8,
+        muted: bool,
+    ) -> (Option<u8>, bool) {
+        let mut new_vol = None;
+        let mut toggled = false;
+        ui.horizontal(|ui| {
+            let mut volume = if muted { 0 } else { current as i32 };
+            let mut response = ui.add(
+                egui::Slider::new(&mut volume, 0..=100)
+                    .integer()
+                    .suffix("%"),
+            );
+            super::slider_scroll(ui, &mut response, &mut volume, 0.0, 100.0, 1.0);
+            if response.changed() {
+                new_vol = Some(volume.clamp(0, 100) as u8);
+            }
+            let (icon, hover) = if muted {
+                ("🔇", "Muted — click to unmute")
+            } else {
+                ("🔊", "Click to mute")
+            };
+            if ui
+                .add(egui::Button::new(icon).small())
+                .on_hover_text(hover)
+                .clicked()
+            {
+                toggled = true;
+            }
+            ui.label(label);
+        });
+        (new_vol, toggled)
+    }
+
+    /// Receive-audio volume.  Off dual-watch this is the single "Volume" control
+    /// (sends `SetVolume`).  Under dual-watch it expands to always-visible
+    /// "VFO A" + "VFO B" controls so both levels are mixed live; VFO B's volume is
+    /// applied client-side only (no server message).  Each has its own mute button
+    /// (client-side, remembers the level).  Returns `true` when a *volume* changed
+    /// (mute toggles are session-only and don't persist).
     fn draw_volume_row(&self, ui: &mut egui::Ui, state: &mut UiState) -> bool {
         ui.separator();
-        let mut volume = state.volume_percent as i32;
-        let mut response = ui.add(
-            egui::Slider::new(&mut volume, 0..=100)
-                .integer()
-                .suffix("%")
-                .text("Volume"),
-        );
-        super::slider_scroll(ui, &mut response, &mut volume, 0.0, 100.0, 1.0);
-        if response.changed() {
-            let v = volume.clamp(0, 100) as u8;
-            if v != state.volume_percent {
+
+        if !state.dual_watch_enabled {
+            let (nv, tog) =
+                self.volume_control(ui, "Volume", state.volume_percent, state.volume_muted);
+            if tog {
+                state.volume_muted = !state.volume_muted;
+            }
+            if let Some(v) = nv {
                 state.volume_percent = v;
+                state.volume_muted = false; // dragging the slider unmutes
                 self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
                 return true;
             }
+            return false;
         }
-        false
+
+        let mut changed = false;
+        let (nv, tog) = self.volume_control(ui, "VFO A", state.volume_percent, state.volume_muted);
+        if tog {
+            state.volume_muted = !state.volume_muted;
+        }
+        if let Some(v) = nv {
+            state.volume_percent = v;
+            state.volume_muted = false;
+            self.send_radio_msg(ClientRadioMessage::SetVolume { volume_percent: v });
+            changed = true;
+        }
+        let (nvb, togb) =
+            self.volume_control(ui, "VFO B", state.volume_percent_b, state.volume_b_muted);
+        if togb {
+            state.volume_b_muted = !state.volume_b_muted;
+        }
+        if let Some(v) = nvb {
+            // Client-side only — applied to the right channel in the audio
+            // callback; the server streams full-level audio.
+            state.volume_percent_b = v;
+            state.volume_b_muted = false;
+            changed = true;
+        }
+        changed
     }
 
     /// CW controls shown only in CWU/CWL: Sidetone Volume (client-local, drives
@@ -1082,17 +1342,17 @@ impl RigflowApp {
 
     /// AGC enable + strength.  A radio (DSP) control sent to the server;
     /// applied to demodulated receive audio (before NR2/squelch). Not persisted.
-    fn draw_agc_row(&self, ui: &mut egui::Ui, state: &mut UiState) {
+    fn draw_agc_row(&self, ui: &mut egui::Ui, state: &mut UiState, t: RxTargets) {
         ui.separator();
 
-        let mut enabled = state.agc_enabled;
+        let mut enabled = *t.agc_enabled(state);
         if ui.checkbox(&mut enabled, "AGC").changed() {
-            state.agc_enabled = enabled;
-            self.send_radio_msg(ClientRadioMessage::SetAgcEnabled { enabled });
+            *t.agc_enabled(state) = enabled;
+            self.send_radio_msg(t.agc_enabled_msg(enabled));
         }
 
-        ui.add_enabled_ui(state.agc_enabled, |ui| {
-            let mut strength = state.agc_strength;
+        ui.add_enabled_ui(*t.agc_enabled(state), |ui| {
+            let mut strength = *t.agc_strength(state);
             let mut response = ui.add(
                 egui::Slider::new(&mut strength, 0.0..=1.0)
                     .step_by(0.01)
@@ -1101,10 +1361,9 @@ impl RigflowApp {
             );
             super::slider_scroll(ui, &mut response, &mut strength, 0.0, 1.0, 0.01);
             if response.changed() {
-                state.agc_strength = strength.clamp(0.0, 1.0);
-                self.send_radio_msg(ClientRadioMessage::SetAgcStrength {
-                    strength: state.agc_strength,
-                });
+                let v = strength.clamp(0.0, 1.0);
+                *t.agc_strength(state) = v;
+                self.send_radio_msg(t.agc_strength_msg(v));
             }
         });
     }
@@ -1114,29 +1373,30 @@ impl RigflowApp {
         ui: &mut egui::Ui,
         state: &mut UiState,
         demod_mode: DemodMode,
+        t: RxTargets,
     ) -> bool {
+        // VFO B's filter is session state — not written to the shared per-demod
+        // preferences (which stay VFO-A defaults), so it never sets `save`.
+        let persist = !t.is_b();
         let mut save = false;
         let bw_limits = filter_bandwidth_limits(demod_mode);
 
-        state.filter_bandwidth_hz = clamp_filter_bandwidth(demod_mode, state.filter_bandwidth_hz);
-
-        let at_default = (state.filter_bandwidth_hz - bw_limits.default_hz).abs() < 1.0;
+        *t.filter_bandwidth(state) = clamp_filter_bandwidth(demod_mode, *t.filter_bandwidth(state));
+        let mut bw = *t.filter_bandwidth(state);
+        let at_default = (bw - bw_limits.default_hz).abs() < 1.0;
 
         ui.horizontal(|ui| {
             let slider_width = (ui.available_width() - 80.0).max(100.0);
 
             let mut response = ui.add_sized(
                 [slider_width, 0.0],
-                egui::Slider::new(
-                    &mut state.filter_bandwidth_hz,
-                    bw_limits.min_hz..=bw_limits.max_hz,
-                )
-                .text(RichText::new("Filter BW (Hz)").size(11.0)),
+                egui::Slider::new(&mut bw, bw_limits.min_hz..=bw_limits.max_hz)
+                    .text(RichText::new("Filter BW (Hz)").size(11.0)),
             );
             let bw_scrolled = super::slider_scroll(
                 ui,
                 &mut response,
-                &mut state.filter_bandwidth_hz,
+                &mut bw,
                 bw_limits.min_hz as f64,
                 bw_limits.max_hz as f64,
                 50.0,
@@ -1150,56 +1410,55 @@ impl RigflowApp {
                 .clicked()
             {
                 let default_hz = bw_limits.default_hz;
-                state.filter_bandwidth_hz = default_hz;
+                bw = default_hz;
+                *t.filter_bandwidth(state) = default_hz;
+                if persist {
+                    state
+                        .demod_preferences
+                        .get_mut(demod_mode)
+                        .filter_bandwidth_hz = default_hz;
+                    save = true;
+                }
+                state.filter_bw_debounce = DebounceState::new(default_hz);
+                self.send_radio_msg(t.filter_bandwidth_msg(default_hz));
+            }
+
+            *t.filter_bandwidth(state) = bw;
+            if persist {
                 state
                     .demod_preferences
                     .get_mut(demod_mode)
-                    .filter_bandwidth_hz = default_hz;
-                state.filter_bw_debounce = DebounceState::new(default_hz);
-                self.send_radio_msg(ClientRadioMessage::SetFilterBandwidth {
-                    bandwidth_hz: default_hz,
-                });
-                save = true;
+                    .filter_bandwidth_hz = bw;
             }
-
-            state
-                .demod_preferences
-                .get_mut(demod_mode)
-                .filter_bandwidth_hz = state.filter_bandwidth_hz;
 
             let now = Instant::now();
 
             if response.changed() {
                 if let Some(send_hz) = should_send_debounced(
                     now,
-                    state.filter_bandwidth_hz,
+                    bw,
                     &mut state.filter_bw_debounce,
                     10.0,
                     Duration::from_millis(75),
                 ) {
-                    self.send_radio_msg(ClientRadioMessage::SetFilterBandwidth {
-                        bandwidth_hz: send_hz,
-                    });
+                    self.send_radio_msg(t.filter_bandwidth_msg(send_hz));
                 }
             }
 
             if response.drag_stopped() || bw_scrolled {
-                let final_hz = state
-                    .filter_bandwidth_hz
-                    .round()
-                    .clamp(bw_limits.min_hz, bw_limits.max_hz);
+                let final_hz = bw.round().clamp(bw_limits.min_hz, bw_limits.max_hz);
 
-                state.filter_bandwidth_hz = final_hz;
-                state
-                    .demod_preferences
-                    .get_mut(demod_mode)
-                    .filter_bandwidth_hz = final_hz;
+                *t.filter_bandwidth(state) = final_hz;
+                if persist {
+                    state
+                        .demod_preferences
+                        .get_mut(demod_mode)
+                        .filter_bandwidth_hz = final_hz;
+                    save = true;
+                }
                 state.filter_bw_debounce.last_sent_value = final_hz;
                 state.filter_bw_debounce.last_send_time = now;
-                self.send_radio_msg(ClientRadioMessage::SetFilterBandwidth {
-                    bandwidth_hz: final_hz,
-                });
-                save = true;
+                self.send_radio_msg(t.filter_bandwidth_msg(final_hz));
             }
         });
 
@@ -1211,28 +1470,36 @@ impl RigflowApp {
         ui: &mut egui::Ui,
         state: &mut UiState,
         demod_mode: DemodMode,
+        t: RxTargets,
     ) -> bool {
         let Some(limits) = pitch_limits(demod_mode) else {
             return false;
         };
 
+        // VFO B's pitch is session state — not persisted to the shared per-demod
+        // preferences (see the filter row).
+        let persist = !t.is_b();
         let mut save = false;
 
-        state.pitch_hz = state.pitch_hz.clamp(limits.min_hz, limits.max_hz);
-        let at_default = (state.pitch_hz - limits.default_hz).abs() < 1.0;
+        {
+            let p = t.pitch(state, demod_mode);
+            *p = p.clamp(limits.min_hz, limits.max_hz);
+        }
+        let mut pitch = *t.pitch(state, demod_mode);
+        let at_default = (pitch - limits.default_hz).abs() < 1.0;
 
         ui.horizontal(|ui| {
             let slider_width = (ui.available_width() - 80.0).max(100.0);
 
             let mut response = ui.add_sized(
                 [slider_width, 0.0],
-                egui::Slider::new(&mut state.pitch_hz, limits.min_hz..=limits.max_hz)
+                egui::Slider::new(&mut pitch, limits.min_hz..=limits.max_hz)
                     .text(RichText::new(limits.label).size(11.0)),
             );
             let pitch_scrolled = super::slider_scroll(
                 ui,
                 &mut response,
-                &mut state.pitch_hz,
+                &mut pitch,
                 limits.min_hz as f64,
                 limits.max_hz as f64,
                 10.0,
@@ -1246,39 +1513,45 @@ impl RigflowApp {
                 .clicked()
             {
                 let default_hz = limits.default_hz;
-                state.pitch_hz = default_hz;
-                state.demod_preferences.get_mut(demod_mode).pitch_hz = default_hz;
+                pitch = default_hz;
+                *t.pitch(state, demod_mode) = default_hz;
+                if persist {
+                    state.demod_preferences.get_mut(demod_mode).pitch_hz = default_hz;
+                    save = true;
+                }
                 state.pitch_debounce = DebounceState::new(default_hz);
-                self.send_radio_msg(ClientRadioMessage::SetPitch {
-                    pitch_hz: default_hz,
-                });
-                save = true;
+                self.send_radio_msg(t.pitch_msg(default_hz));
             }
 
-            state.demod_preferences.get_mut(demod_mode).pitch_hz = state.pitch_hz;
+            *t.pitch(state, demod_mode) = pitch;
+            if persist {
+                state.demod_preferences.get_mut(demod_mode).pitch_hz = pitch;
+            }
 
             let now = Instant::now();
 
             if response.changed() {
                 if let Some(send_hz) = should_send_debounced(
                     now,
-                    state.pitch_hz,
+                    pitch,
                     &mut state.pitch_debounce,
                     limits.debounce_delta_hz,
                     Duration::from_millis(limits.debounce_interval_ms),
                 ) {
-                    self.send_radio_msg(ClientRadioMessage::SetPitch { pitch_hz: send_hz });
+                    self.send_radio_msg(t.pitch_msg(send_hz));
                 }
             }
 
             if response.drag_stopped() || pitch_scrolled {
-                let final_hz = state.pitch_hz.round().clamp(limits.min_hz, limits.max_hz);
-                state.pitch_hz = final_hz;
-                state.demod_preferences.get_mut(demod_mode).pitch_hz = final_hz;
+                let final_hz = pitch.round().clamp(limits.min_hz, limits.max_hz);
+                *t.pitch(state, demod_mode) = final_hz;
+                if persist {
+                    state.demod_preferences.get_mut(demod_mode).pitch_hz = final_hz;
+                    save = true;
+                }
                 state.pitch_debounce.last_sent_value = final_hz;
                 state.pitch_debounce.last_send_time = now;
-                self.send_radio_msg(ClientRadioMessage::SetPitch { pitch_hz: final_hz });
-                save = true;
+                self.send_radio_msg(t.pitch_msg(final_hz));
             }
         });
 
@@ -1290,39 +1563,43 @@ impl RigflowApp {
         ui: &mut egui::Ui,
         state: &mut UiState,
         demod_mode: DemodMode,
+        t: RxTargets,
     ) -> bool {
         if default_deemphasis_mode(demod_mode).is_none() {
             return false;
         }
 
+        // VFO B's deemphasis is session state — not persisted (see the filter row).
+        let persist = !t.is_b();
         let mut save = false;
         let mut changed = false;
         let default_mode = default_deemphasis_mode(demod_mode).unwrap();
-        let at_default = state.deemphasis_mode == default_mode;
+        let mut mode = *t.deemphasis_mode(state);
+        let at_default = mode == default_mode;
 
         ui.horizontal(|ui| {
             ui.label("Deemphasis");
 
             egui::ComboBox::from_id_salt("deemphasis_mode_combo")
-                .selected_text(state.deemphasis_mode.label())
+                .selected_text(mode.label())
                 .show_ui(ui, |ui| {
                     changed |= ui
                         .selectable_value(
-                            &mut state.deemphasis_mode,
+                            &mut mode,
                             DeemphasisMode::Off,
                             DeemphasisMode::Off.label(),
                         )
                         .changed();
                     changed |= ui
                         .selectable_value(
-                            &mut state.deemphasis_mode,
+                            &mut mode,
                             DeemphasisMode::Tau50us,
                             DeemphasisMode::Tau50us.label(),
                         )
                         .changed();
                     changed |= ui
                         .selectable_value(
-                            &mut state.deemphasis_mode,
+                            &mut mode,
                             DeemphasisMode::Tau75us,
                             DeemphasisMode::Tau75us.label(),
                         )
@@ -1336,30 +1613,38 @@ impl RigflowApp {
                 )
                 .clicked()
             {
-                state.deemphasis_mode = default_mode;
-                state.demod_preferences.get_mut(demod_mode).deemphasis_mode = default_mode;
-                self.send_radio_msg(ClientRadioMessage::SetDeemphasisMode {
-                    mode: state.deemphasis_mode,
-                });
-                save = true;
+                mode = default_mode;
+                *t.deemphasis_mode(state) = default_mode;
+                if persist {
+                    state.demod_preferences.get_mut(demod_mode).deemphasis_mode = default_mode;
+                    save = true;
+                }
+                self.send_radio_msg(t.deemphasis_msg(default_mode));
             }
         });
 
         if changed {
-            state.demod_preferences.get_mut(demod_mode).deemphasis_mode = state.deemphasis_mode;
-            self.send_radio_msg(ClientRadioMessage::SetDeemphasisMode {
-                mode: state.deemphasis_mode,
-            });
-            save = true;
+            *t.deemphasis_mode(state) = mode;
+            if persist {
+                state.demod_preferences.get_mut(demod_mode).deemphasis_mode = mode;
+                save = true;
+            }
+            self.send_radio_msg(t.deemphasis_msg(mode));
         }
 
         save
     }
 
-    fn draw_demod_selector(&self, ui: &mut egui::Ui, snapshot: &UiState) -> bool {
-        ui.label(RichText::new("Demod").size(15.0).strong());
+    fn draw_demod_selector(&self, ui: &mut egui::Ui, snapshot: &UiState, t: RxTargets) -> bool {
+        let label = if t.is_b() { "Demod (B)" } else { "Demod" };
+        ui.label(RichText::new(label).size(15.0).strong());
 
-        let mut selected = snapshot.demod_mode.clone();
+        let current = if t.is_b() {
+            snapshot.vfo_b_demod_mode
+        } else {
+            snapshot.demod_mode
+        };
+        let mut selected = current;
 
         ui.horizontal(|ui| {
             ui.radio_value(&mut selected, DemodMode::Wfm, "WFM");
@@ -1372,28 +1657,67 @@ impl RigflowApp {
             ui.radio_value(&mut selected, DemodMode::Cwl, "CWL");
         });
 
-        if selected == snapshot.demod_mode {
+        if selected == current {
+            return false;
+        }
+
+        let sideband = match selected {
+            DemodMode::Lsb => Sideband::Lsb,
+            DemodMode::Usb | DemodMode::DgtU => Sideband::Usb,
+            _ => {
+                if t.is_b() {
+                    snapshot.vfo_b_sideband
+                } else {
+                    snapshot.sideband
+                }
+            }
+        };
+        let is_ssb = matches!(selected, DemodMode::Lsb | DemodMode::Usb | DemodMode::DgtU);
+
+        if t.is_b() {
+            // VFO B carries its own mode; on a mode switch load the shared
+            // per-demod defaults into VFO B's (session-only) filter/pitch/deemph
+            // so the new mode gets a sensible passband.
+            let (bw, pitch, deemph) = if let Ok(mut state) = self.state.lock() {
+                state.vfo_b_demod_mode = selected;
+                state.vfo_b_sideband = sideband;
+                let prefs = state.demod_preferences.get(selected);
+                let bw = clamp_filter_bandwidth(selected, prefs.filter_bandwidth_hz);
+                state.vfo_b_filter_bandwidth_hz = bw;
+                match selected {
+                    DemodMode::Cwu | DemodMode::Cwl => state.vfo_b_cw_pitch_hz = prefs.pitch_hz,
+                    _ => state.vfo_b_ssb_pitch_hz = prefs.pitch_hz,
+                }
+                state.vfo_b_deemphasis_mode = prefs.deemphasis_mode;
+                // Seed VFO B's (independent) grid-snap step from the operator's
+                // per-mode default for the new mode.
+                state.vfo_b_tuning_step_hz = state.tuning_step_preferences.get(selected);
+                (bw, prefs.pitch_hz, prefs.deemphasis_mode)
+            } else {
+                return false;
+            };
+            self.send_radio_msg(ClientRadioMessage::SetVfoBDemodMode { mode: selected });
+            if is_ssb {
+                self.send_radio_msg(ClientRadioMessage::SetVfoBSideband { sideband });
+            }
+            self.send_radio_msg(ClientRadioMessage::SetVfoBFilterBandwidth { bandwidth_hz: bw });
+            if pitch_limits(selected).is_some() {
+                self.send_radio_msg(ClientRadioMessage::SetVfoBPitch { pitch_hz: pitch });
+            }
+            if default_deemphasis_mode(selected).is_some() {
+                self.send_radio_msg(ClientRadioMessage::SetVfoBDeemphasisMode { mode: deemph });
+            }
             return false;
         }
 
         if let Ok(mut state) = self.state.lock() {
-            state.demod_mode = selected.clone();
-            state.sideband = match selected {
-                DemodMode::Lsb => Sideband::Lsb,
-                DemodMode::Usb | DemodMode::DgtU => Sideband::Usb,
-                _ => state.sideband,
-            };
+            state.demod_mode = selected;
+            state.sideband = sideband;
         }
 
         self.send_radio_msg(ClientRadioMessage::SetDemodMode { mode: selected });
-
-        if matches!(selected, DemodMode::Lsb | DemodMode::Usb | DemodMode::DgtU) {
-            self.send_radio_msg(ClientRadioMessage::SetSideband {
-                sideband: match selected {
-                    DemodMode::Lsb => Sideband::Lsb,
-                    _ => Sideband::Usb, // USB and Data-USB
-                },
-            });
+        if is_ssb {
+            self.send_radio_msg(ClientRadioMessage::SetSideband { sideband });
         }
 
         false // demod change does not trigger persisting per-demod prefs

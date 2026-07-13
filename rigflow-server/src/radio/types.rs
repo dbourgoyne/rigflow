@@ -12,6 +12,7 @@ use rigflow_core::radio::{
     swr_sweep::{SwrSweepProgress, SwrSweepResult},
     tx_audio_diag::TxAudioDiag,
     tx_tune::TxTuneResult,
+    vfo::VfoSelect,
     LeaseId, RadioDescriptor, RadioId,
 };
 
@@ -90,6 +91,94 @@ pub enum StopReason {
     UserRequested,
 }
 
+/// Dual-VFO / split / RIT-XIT state (VFO B is independent: own mode + filter).
+/// Grouped so the many worker / snapshot / delta sites touch a single field.
+/// Defaults make pre-dual-watch behavior byte-identical.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VfoSplitState {
+    pub vfo_b_target_freq_hz: u64,
+    /// VFO B's own hardware-receiver center (RX1 NCO); independent of VFO A.
+    pub vfo_b_center_freq_hz: u64,
+    pub vfo_b_demod_mode: DemodMode,
+    pub vfo_b_sideband: Sideband,
+    pub vfo_b_filter_bandwidth_hz: f32,
+    pub vfo_b_ssb_pitch_hz: f32,
+    pub vfo_b_cw_pitch_hz: f32,
+    /// VFO B independent receive processing (own DSP pipeline under dual-watch).
+    /// Mirrors the like-named `SharedControlState` fields; copied into `control_b`
+    /// each loop so the reused DSP-B thread honours them. `nb_*` / `notch_auto`
+    /// are control-only (not echoed in the protocol snapshot, matching VFO A).
+    pub vfo_b_deemphasis_mode: DeemphasisMode,
+    pub vfo_b_squelch_enabled: bool,
+    pub vfo_b_squelch_threshold_db: f32,
+    /// Live VFO-B squelch gate (open = audio passing); written by the DSP-B
+    /// thread and read back into the snapshot, like `vfo_b_signal_*`.
+    pub vfo_b_squelch_open: bool,
+    pub vfo_b_nr2_enabled: bool,
+    pub vfo_b_nr2_strength: f32,
+    pub vfo_b_nb_enabled: bool,
+    pub vfo_b_nb_threshold: f32,
+    pub vfo_b_notch_auto_enabled: bool,
+    pub vfo_b_agc_enabled: bool,
+    pub vfo_b_agc_strength: f32,
+    /// RIT for VFO B (independent of VFO A's `rit_*`); offsets only VFO B's RX NCO.
+    pub vfo_b_rit_enabled: bool,
+    pub vfo_b_rit_offset_hz: i32,
+    /// VFO B waterfall frame rate (Hz, 0 = off); paces the DSP-B waterfall thread
+    /// independently of VFO A.
+    pub vfo_b_waterfall_frame_rate_hz: f32,
+    pub vfo_b_signal_dbm: f32,
+    pub vfo_b_signal_s_units: i32,
+    pub rit_enabled: bool,
+    pub rit_offset_hz: i32,
+    pub xit_enabled: bool,
+    pub xit_offset_hz: i32,
+    pub split_enabled: bool,
+    pub tx_vfo: VfoSelect,
+    pub dual_watch_enabled: bool,
+    /// True when the source has a second hardware receiver (HL2). Static per
+    /// source; set at worker start from `IqSource::max_receivers() >= 2`.
+    pub dual_watch_supported: bool,
+}
+
+impl Default for VfoSplitState {
+    fn default() -> Self {
+        Self {
+            vfo_b_target_freq_hz: 0,
+            vfo_b_center_freq_hz: 0,
+            vfo_b_demod_mode: DemodMode::Usb,
+            vfo_b_sideband: Sideband::Usb,
+            vfo_b_filter_bandwidth_hz: 2700.0,
+            vfo_b_ssb_pitch_hz: 0.0,
+            vfo_b_cw_pitch_hz: 600.0,
+            vfo_b_deemphasis_mode: DeemphasisMode::Off,
+            vfo_b_squelch_enabled: false,
+            vfo_b_squelch_threshold_db: -90.0,
+            vfo_b_squelch_open: true,
+            vfo_b_nr2_enabled: false,
+            vfo_b_nr2_strength: 0.5,
+            vfo_b_nb_enabled: false,
+            vfo_b_nb_threshold: 0.5,
+            vfo_b_notch_auto_enabled: false,
+            vfo_b_agc_enabled: true,
+            vfo_b_agc_strength: 0.5,
+            vfo_b_rit_enabled: false,
+            vfo_b_rit_offset_hz: 0,
+            vfo_b_waterfall_frame_rate_hz: 20.0,
+            vfo_b_signal_dbm: -140.0,
+            vfo_b_signal_s_units: 0,
+            rit_enabled: false,
+            rit_offset_hz: 0,
+            xit_enabled: false,
+            xit_offset_hz: 0,
+            split_enabled: false,
+            tx_vfo: VfoSelect::A,
+            dual_watch_enabled: false,
+            dual_watch_supported: false,
+        }
+    }
+}
+
 /// Runtime state snapshot of a worker.
 ///
 /// This is sent to clients via RuntimeSnapshot / RuntimeChanged.
@@ -97,6 +186,8 @@ pub enum StopReason {
 pub struct WorkerRuntimeState {
     pub center_freq_hz: u64,
     pub target_freq_hz: u64,
+    /// Dual-VFO / split / RIT-XIT state.
+    pub vfo: VfoSplitState,
     pub demod_mode: DemodMode,
     pub sideband: Sideband,
     pub ssb_pitch_hz: f32,
@@ -127,6 +218,9 @@ pub struct WorkerRuntimeState {
     /// Result of the most recent SWR sweep, and live progress.
     pub last_swr_sweep_result: Option<SwrSweepResult>,
     pub swr_sweep_progress: Option<SwrSweepProgress>,
+    /// Live TX-test-tone status (true while transmitting); reflects the server's
+    /// hard-timeout auto-stop so the client can clear its Start/Stop buttons.
+    pub tx_tone_running: bool,
 
     pub input_sample_rate_hz: f32,
     pub audio_sample_rate_hz: u32,
@@ -220,6 +314,82 @@ pub enum WorkerCommand {
         lead_ms: u32,
         tail_ms: u32,
     },
+    // ── Dual-VFO / split / RIT-XIT ──
+    SetVfoBFrequency {
+        hz: u64,
+    },
+    SetVfoBCenterFrequency {
+        hz: u64,
+    },
+    SetVfoBDemodMode {
+        mode: DemodMode,
+    },
+    SetVfoBSideband {
+        sideband: Sideband,
+    },
+    SetVfoBFilterBandwidth {
+        bandwidth_hz: f32,
+    },
+    SetVfoBPitch {
+        pitch_hz: f32,
+    },
+    /// VFO B independent receive controls (mirror the VFO-A setters).
+    SetVfoBDeemphasisMode {
+        mode: DeemphasisMode,
+    },
+    SetVfoBSquelchEnabled {
+        enabled: bool,
+    },
+    SetVfoBSquelchThreshold {
+        threshold_db: f32,
+    },
+    SetVfoBNr2Enabled {
+        enabled: bool,
+    },
+    SetVfoBNr2Strength {
+        strength: f32,
+    },
+    SetVfoBNoiseBlankerEnabled {
+        enabled: bool,
+    },
+    SetVfoBNoiseBlankerThreshold {
+        threshold: f32,
+    },
+    SetVfoBNotchAutoEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcEnabled {
+        enabled: bool,
+    },
+    SetVfoBAgcStrength {
+        strength: f32,
+    },
+    SetVfoBRit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    SetVfoBWaterfallFrameRate {
+        rate_hz: f32,
+    },
+    /// Clone VFO A's entire receiver state onto VFO B (the "A=B" copy).
+    CopyVfoAToB,
+    SetRit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    SetXit {
+        enabled: bool,
+        offset_hz: i32,
+    },
+    SetSplit {
+        enabled: bool,
+    },
+    SetTxVfo {
+        vfo: VfoSelect,
+    },
+    SetDualWatch {
+        enabled: bool,
+    },
     /// CW key down / up (Space bar).  The server keys the CW carrier with
     /// envelope shaping; `tx_drive_percent` / `spot_level_percent` set power.
     StartCwKey,
@@ -311,6 +481,15 @@ pub enum WorkerStatus {
 #[derive(Debug, Clone)]
 pub struct WorkerReadyInfo {
     pub runtime: WorkerRuntimeState,
+}
+
+/// Transient, fire-and-forget event from a worker thread to the leasing client —
+/// an asynchronous failure not tied to a specific command (e.g. a cross-band TX
+/// aborted because the HR50 band change couldn't be confirmed before RF).
+/// Delivered over a broadcast channel and surfaced as `ServerRadioMessage::RadioError`.
+#[derive(Debug, Clone)]
+pub enum WorkerEvent {
+    Error { code: String, message: String },
 }
 
 /// Result of worker startup handshake.

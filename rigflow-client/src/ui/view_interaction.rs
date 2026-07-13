@@ -9,8 +9,6 @@
 
 use eframe::egui;
 
-use crate::ui::tuning_steps::TuneTier;
-
 /// Minimum pointer speed at release (screen points/s) to start flick-momentum
 /// panning.  Below this a release just stops the pan — no inertia.
 const MIN_FLING_PX_PER_S: f32 = 150.0;
@@ -18,10 +16,10 @@ const MIN_FLING_PX_PER_S: f32 = 150.0;
 /// Outcome of one frame of mouse interaction over a Spectrum/Waterfall view.
 /// All fields are inert (None/0/false) when there is nothing to do.
 ///
-/// Wheel fine-tune is reported as a *direction* + *tier* rather than a Hz delta:
-/// the actual step is mode-dependent, and this handler doesn't know the mode.
-/// The caller (which has the demod mode) resolves it via
-/// [`crate::ui::tuning_steps::target_step_hz`].
+/// Wheel tune is reported as a *direction* + the *modifier* state rather than a
+/// Hz delta: the step is the active Snap value scaled by the modifiers, and this
+/// handler doesn't know the Snap value.  The caller resolves it via
+/// [`crate::ui::tuning_steps::scaled_snap_step_hz`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ViewMouseResult {
     /// Single click: tune the target frequency to this absolute Hz.
@@ -29,10 +27,12 @@ pub struct ViewMouseResult {
     /// `C` key pressed while the cursor is over the view: recenter the LO on the
     /// current target frequency and zero the LO offset.
     pub center_on_target: bool,
-    /// Wheel fine-tune direction: +1 = up, -1 = down, 0 = none/zoom.
+    /// Wheel tune direction: +1 = up, -1 = down, 0 = none/zoom.
     pub tune_dir: i32,
-    /// Step tier for `tune_dir`, selected by the modifier keys.
-    pub tune_tier: TuneTier,
+    /// Shift held during the wheel tune (×10 accelerate).
+    pub tune_shift: bool,
+    /// Alt held during the wheel tune (×0.1 decelerate).
+    pub tune_alt: bool,
     /// Ctrl+wheel zoom: +1 = zoom in, -1 = zoom out, 0 = none.
     pub zoom_steps: i32,
     /// Horizontal click-drag this frame, converted to a target-frequency delta
@@ -95,13 +95,8 @@ pub fn handle_view_mouse(
                 result.zoom_steps = dir;
             } else {
                 result.tune_dir = dir;
-                result.tune_tier = if mods.shift {
-                    TuneTier::Medium
-                } else if mods.alt {
-                    TuneTier::Coarse
-                } else {
-                    TuneTier::Fine
-                };
+                result.tune_shift = mods.shift;
+                result.tune_alt = mods.alt;
             }
         }
     }

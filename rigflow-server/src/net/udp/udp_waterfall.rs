@@ -24,17 +24,24 @@ pub struct UdpWaterfallSender {
     timestamp: u64,
     /// Per-row identifier — groups a row's chunks for reassembly.
     row_seq: u16,
+    /// Media stream type (VFO A waterfall by default; VFO B uses its own type).
+    stream_type: u8,
 }
 
 impl UdpWaterfallSender {
     /// `socket` is the shared server socket bound to the registration port, so
     /// waterfall rows egress from the same 5-tuple the client registered against.
     pub fn new(socket: Arc<UdpSocket>) -> Self {
+        Self::new_with_stream_type(socket, STREAM_TYPE_WATERFALL)
+    }
+
+    pub fn new_with_stream_type(socket: Arc<UdpSocket>, stream_type: u8) -> Self {
         Self {
             socket,
             sequence: 0,
             timestamp: 0,
             row_seq: 0,
+            stream_type,
         }
     }
 
@@ -56,7 +63,7 @@ impl UdpWaterfallSender {
             // Media header.
             buf.extend_from_slice(&MAGIC.to_be_bytes());
             buf.push(VERSION);
-            buf.push(STREAM_TYPE_WATERFALL);
+            buf.push(self.stream_type);
             buf.extend_from_slice(&self.sequence.to_be_bytes());
             buf.extend_from_slice(&self.timestamp.to_be_bytes());
 

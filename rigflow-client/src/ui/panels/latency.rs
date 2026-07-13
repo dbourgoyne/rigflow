@@ -93,44 +93,46 @@ impl RigflowApp {
 
             ui.add_space(4.0);
 
-            // ---- Transmit ------------------------------------------------
-            ui.label(egui::RichText::new("Transmit").strong());
-            egui::Grid::new("latency_tx_grid")
-                .num_columns(2)
-                .spacing([10.0, 2.0])
-                .show(ui, |ui| {
-                    ui.label("Mic ring (client)");
-                    ui.label(format!("{mic_ring_ms:.0} ms"));
-                    ui.end_row();
+            // ---- Transmit (TX-capable sources only) ----------------------
+            if snapshot.source_capabilities.supports_transmit {
+                ui.label(egui::RichText::new("Transmit").strong());
+                egui::Grid::new("latency_tx_grid")
+                    .num_columns(2)
+                    .spacing([10.0, 2.0])
+                    .show(ui, |ui| {
+                        ui.label("Mic ring (client)");
+                        ui.label(format!("{mic_ring_ms:.0} ms"));
+                        ui.end_row();
 
-                    ui.label("Server queue");
-                    ui.label(format!("{server_q_ms:.0} ms"));
-                    ui.end_row();
+                        ui.label("Server queue");
+                        ui.label(format!("{server_q_ms:.0} ms"));
+                        ui.end_row();
 
-                    ui.label("Network one-way");
-                    ui.label(net_label(m.rx_one_way_ms()));
-                    ui.end_row();
+                        ui.label("Network one-way");
+                        ui.label(net_label(m.rx_one_way_ms()));
+                        ui.end_row();
 
-                    ui.label(egui::RichText::new("TX total").strong());
+                        ui.label(egui::RichText::new("TX total").strong());
+                        ui.label(
+                            egui::RichText::new(format!("≈ {tx_total:.0} ms  (peak {tx_peak:.0})"))
+                                .strong(),
+                        );
+                        ui.end_row();
+                    });
+
+                if (diag.underruns | diag.overruns) != 0 {
                     ui.label(
-                        egui::RichText::new(format!("≈ {tx_total:.0} ms  (peak {tx_peak:.0})"))
-                            .strong(),
+                        egui::RichText::new(format!(
+                            "underruns {}  ·  overruns {}",
+                            diag.underruns, diag.overruns
+                        ))
+                        .small()
+                        .weak(),
                     );
-                    ui.end_row();
-                });
+                }
 
-            if (diag.underruns | diag.overruns) != 0 {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "underruns {}  ·  overruns {}",
-                        diag.underruns, diag.overruns
-                    ))
-                    .small()
-                    .weak(),
-                );
+                ui.add_space(4.0);
             }
-
-            ui.add_space(4.0);
 
             // ---- Network -------------------------------------------------
             ui.label(egui::RichText::new("Network").strong());
@@ -155,7 +157,7 @@ impl RigflowApp {
                 });
 
             ui.label(super::note_text(
-                "One-way is measured server→client and applied to both directions \
+                "One-way is measured server»client and applied to both directions \
                  (symmetric estimate). CPAL device buffers are not included. For \
                  FT8/digital (PipeWire or TCI) the network and TX figures apply, but \
                  FT8 bypasses the jitter buffer and WSJT-X's own audio buffering isn't \

@@ -59,97 +59,24 @@ impl RigflowApp {
                     );
 
                     let lo_strip_height = 34.0;
-                    let spectrum_height = 220.0;
                     let gap = 6.0;
-                    let waterfall_height = (ui.available_height()
-                        - lo_strip_height
-                        - spectrum_height
-                        - gap
-                        - gap
-                        - 2.0)
-                        .max(120.0);
+                    // Dual-watch stacks VFO B below VFO A: spectrum A shrinks and
+                    // a VFO B spectrum + waterfall pane is added below.
+                    let dual = snapshot.dual_watch_enabled;
+                    let spectrum_height = if dual { 140.0 } else { 220.0 };
+                    let spectrum_b_height = 120.0;
+                    // VFO B's render view (VFO-A-shaped) — built once per frame and
+                    // reused by both the B spectrum and B waterfall, instead of
+                    // cloning the whole UiState twice.
+                    let b_view = dual.then(|| vfo_b_view(snapshot));
+                    // The waterfall heights are computed later, from the *actual*
+                    // remaining height just before they are drawn, so the VFO A and
+                    // VFO B waterfalls come out exactly equal.
 
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), lo_strip_height),
                         egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            let state_snapshot = {
-                                let state = self.state.lock().unwrap();
-                                state.clone()
-                            };
-
-                            let strip_rect = ui.max_rect();
-                            let lo_y = strip_rect.top() + 2.0;
-
-                            let lo_pos = egui::Pos2::new(strip_rect.left() + 12.0, lo_y);
-                            let lo_offset_pos = egui::Pos2::new(strip_rect.right() - 12.0, lo_y);
-
-                            let mut new_center_freq_hz = None;
-                            let mut new_target_freq_hz = None;
-
-                            if let Some(new_center_hz) =
-                                crate::widgets::lo_frequency_widget::draw_lo_widget(
-                                    ui,
-                                    lo_pos,
-                                    state_snapshot.center_freq_hz.max(0.0) as u64,
-                                )
-                            {
-                                let limits =
-                                    crate::ui::freq_limits::active_freq_limits(&state_snapshot);
-                                new_center_freq_hz = Some(crate::ui::freq_limits::clamp_center(
-                                    new_center_hz as f32,
-                                    &limits,
-                                ));
-                            }
-
-                            let lo_offset_hz = (state_snapshot.target_freq_hz
-                                - state_snapshot.center_freq_hz)
-                                .round() as i64;
-
-                            if let Some(new_offset_hz) =
-                                crate::widgets::lo_frequency_widget::draw_lo_offset_widget(
-                                    ui,
-                                    lo_offset_pos,
-                                    lo_offset_hz,
-                                )
-                            {
-                                let raw_target = (state_snapshot.center_freq_hz.round() as i64
-                                    + new_offset_hz)
-                                    .max(0) as f32;
-                                let limits =
-                                    crate::ui::freq_limits::active_freq_limits(&state_snapshot);
-                                new_target_freq_hz = Some(crate::ui::freq_limits::clamp_target(
-                                    raw_target,
-                                    state_snapshot.center_freq_hz,
-                                    state_snapshot.input_sample_rate_hz,
-                                    &limits,
-                                ));
-                            }
-
-                            if let Some(new_center_hz) = new_center_freq_hz {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.center_freq_hz = new_center_hz;
-                                }
-
-                                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                                        center_freq_hz: new_center_hz as u64,
-                                    },
-                                ));
-                            }
-
-                            if let Some(new_target_hz) = new_target_freq_hz {
-                                if let Ok(mut state) = self.state.lock() {
-                                    state.target_freq_hz = new_target_hz;
-                                }
-
-                                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                                    rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                                        target_freq_hz: new_target_hz as u64,
-                                    },
-                                ));
-                            }
-                        },
+                        |ui| self.draw_lo_strip(ui, TuneVfo::A),
                     );
 
                     ui.allocate_ui_with_layout(
@@ -191,13 +118,73 @@ impl RigflowApp {
                             if let Some(bookmark_id) = interaction.clicked_bookmark_id {
                                 self.apply_bookmark(&bookmark_id);
                             }
-                            self.apply_view_interaction(&interaction.mouse, snapshot);
+                            self.apply_view_interaction(&interaction.mouse, snapshot, TuneVfo::A);
                         },
                     );
+
+                    // ── VFO B spectrum (dual-watch): stacked below VFO A ──────
+                    if let Some(b_view) = b_view.as_ref() {
+                        ui.add_space(gap);
+                        // VFO B's own LO + LO-Offset spinner strip.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), lo_strip_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| self.draw_lo_strip(ui, TuneVfo::B),
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), spectrum_b_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                let spectrum_b = {
+                                    let g = self.spectrum_db_b.lock().unwrap();
+                                    g.clone()
+                                };
+                                let (db_min, db_max) = if b_view.adaptive_waterfall_normalization {
+                                    let top = b_view.adaptive_top_db_estimate + 3.0;
+                                    (top - b_view.adaptive_range_db_estimate, top)
+                                } else {
+                                    let top = b_view.manual_waterfall_top_db;
+                                    (top - b_view.manual_waterfall_range_db, top)
+                                };
+                                let inter = draw_spectrum_plot(
+                                    ui,
+                                    egui::vec2(ui.available_width(), spectrum_b_height),
+                                    &spectrum_b,
+                                    db_min,
+                                    db_max,
+                                    b_view,
+                                );
+                                // Full VFO B tuning — click / drag / wheel / recenter,
+                                // identical to VFO A but on VFO B's centre/target.
+                                self.apply_view_interaction(&inter.mouse, snapshot, TuneVfo::B);
+                            },
+                        );
+                    }
 
                     ui.add_space(gap);
                     ui.separator();
                     ui.add_space(gap);
+
+                    // Split the remaining height equally between the VFO A and VFO B
+                    // waterfalls.  Measured here (after the spectra are laid out) so
+                    // both halves are exactly equal regardless of what the panels
+                    // above consumed; the `between` reserve covers the separator +
+                    // gaps that sit between the two waterfalls so B is never clipped.
+                    let waterfall_height;
+                    let waterfall_b_height;
+                    {
+                        let remaining = ui.available_height();
+                        if dual {
+                            let item_sp = ui.spacing().item_spacing.y;
+                            let between = gap * 2.0 + 2.0 + item_sp * 4.0;
+                            let each = ((remaining - between) / 2.0).max(60.0);
+                            waterfall_height = each;
+                            waterfall_b_height = each;
+                        } else {
+                            waterfall_height = remaining.max(120.0);
+                            waterfall_b_height = 0.0;
+                        }
+                    }
 
                     ui.allocate_ui_with_layout(
                         egui::vec2(ui.available_width(), waterfall_height),
@@ -261,10 +248,70 @@ impl RigflowApp {
                                     );
                                 });
 
-                                self.apply_view_interaction(&mouse, snapshot);
+                                self.apply_view_interaction(&mouse, snapshot, TuneVfo::A);
                             }
                         },
                     );
+
+                    // ── VFO B waterfall (dual-watch): stacked below A's, with a
+                    //    separator between the two waterfalls ───────────────────
+                    if let Some(b_view) = b_view.as_ref() {
+                        ui.add_space(gap);
+                        ui.separator();
+                        ui.add_space(gap);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), waterfall_b_height),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                render_waterfall_texture(
+                                    ctx,
+                                    WATERFALL_IMAGE_WIDTH,
+                                    WATERFALL_IMAGE_HEIGHT,
+                                    &self.waterfall_buffer_b,
+                                    &mut self.waterfall_texture_b,
+                                    "waterfall_texture_b",
+                                );
+                                if let Some(texture) = &self.waterfall_texture_b {
+                                    let image_width =
+                                        (ui.available_width() - LEFT_GUTTER - RIGHT_GUTTER)
+                                            .max(100.0);
+                                    let spectrum_len = {
+                                        let s = self.spectrum_db_b.lock().unwrap();
+                                        s.len()
+                                    };
+                                    let mut wf_mouse = ViewMouseResult::default();
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(LEFT_GUTTER);
+                                        let image = egui::Image::new((
+                                            texture.id(),
+                                            egui::vec2(image_width, waterfall_b_height),
+                                        ))
+                                        .sense(egui::Sense::click_and_drag());
+                                        let response = ui.add(image);
+                                        let rect = response.rect;
+                                        wf_mouse = crate::ui::view_interaction::handle_view_mouse(
+                                            ui,
+                                            &response,
+                                            rect,
+                                            |x| {
+                                                let frac = ((x - rect.left()) / rect.width())
+                                                    .clamp(0.0, 1.0);
+                                                if let Some((l, r)) = zoomed_visible_freq_range_hz(
+                                                    spectrum_len,
+                                                    b_view,
+                                                ) {
+                                                    l + frac * (r - l)
+                                                } else {
+                                                    x_frac_to_frequency_hz(frac, b_view)
+                                                }
+                                            },
+                                        );
+                                    });
+                                    self.apply_view_interaction(&wf_mouse, snapshot, TuneVfo::B);
+                                }
+                            },
+                        );
+                    }
                 });
         });
     }
@@ -308,6 +355,17 @@ impl RigflowApp {
         ui.painter()
             .circle_filled(rect.center(), diameter * 0.45, color);
         response.on_hover_text(hover);
+
+        // Dial lock — global (freezes tuning for BOTH VFOs), so it sits at the far
+        // left next to the status light rather than beside VFO A's frequency.
+        let mut dial_locked = snapshot.dial_locked;
+        if crate::ui::panels::lock_button(ui, &mut dial_locked, crate::ui::panels::LOCK_LARGE)
+            || dial_locked != snapshot.dial_locked
+        {
+            if let Ok(mut s) = self.state.lock() {
+                s.dial_locked = dial_locked;
+            }
+        }
         ui.separator();
 
         // Operator + license first (shown whenever an operator is selected,
@@ -331,25 +389,144 @@ impl RigflowApp {
             return;
         }
 
-        // Frequency (operating / target) — prominent.
+        // ── VFO accent colours + TX routing + shared helpers ──────────────────
+        let a_color = ui.visuals().strong_text_color();
+        // VFO B is always its blue accent (shared by the B freq + B S-meter); the
+        // transmitting VFO is flagged inline with a red ▶TX marker instead.
+        let vfo_b_color = egui::Color32::from_rgb(160, 200, 235);
+        // TX routing: A transmits in simplex or split-to-A; B only in split-to-B.
+        // XIT is a single transmit offset that acts on whichever VFO transmits, so
+        // it's shown in that VFO's group.  The ▶TX marker shows whenever both VFOs
+        // are on screen (split OR dual-watch) so the operator always knows which
+        // VFO PTT keys; a plain simplex single-VFO view needs no marker.
+        let split = snapshot.split_enabled;
+        let a_is_tx = !split || snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::A;
+        let b_is_tx = split && snapshot.tx_vfo == rigflow_core::radio::vfo::VfoSelect::B;
+        let show_tx_marker = split || snapshot.dual_watch_enabled;
+        let xit =
+            (snapshot.xit_enabled && snapshot.xit_offset_hz != 0).then_some(snapshot.xit_offset_hz);
+
+        // S-meter cell: fixed-width S-unit label + fixed-width monospace dBm
+        // (right-aligned 4-char field) so neither the S9+ readings nor a 2↔3 digit
+        // dBm change shifts the row.  No A/B prefix — identity comes from grouping
+        // beside each VFO's frequency.  Reserve the S-unit width for the widest
+        // reading ("S9+60 dB") so "S6" and "S9+10 dB" occupy the same slot.
+        let s_meter_w = ui.fonts(|f| {
+            f.layout_no_wrap(
+                "S9+60 dB".to_owned(),
+                egui::FontId::proportional(20.0),
+                egui::Color32::WHITE,
+            )
+            .size()
+            .x
+        }) + 6.0;
+        let draw_meter = |ui: &mut egui::Ui, dbm: f32, color: egui::Color32| {
+            ui.add_sized(
+                [s_meter_w, ui.available_height()],
+                egui::Label::new(
+                    egui::RichText::new(s_meter_label(dbm))
+                        .size(20.0)
+                        .color(color),
+                )
+                .wrap_mode(egui::TextWrapMode::Extend),
+            );
+            ui.label(
+                egui::RichText::new(format!("{:>4} dBm", dbm.round() as i32))
+                    .font(egui::FontId::monospace(15.0))
+                    .color(color),
+            );
+        };
+        // Inline per-VFO flags drawn right after the freq/mode: ▶TX (this VFO is
+        // the split transmit VFO), RIT (this VFO's own receive offset), XIT (the
+        // transmit offset, shown on the TX VFO only).
+        let draw_flags =
+            |ui: &mut egui::Ui, tx_marker: bool, rit: Option<i32>, xit: Option<i32>| {
+                if tx_marker {
+                    ui.label(
+                        egui::RichText::new("▶TX")
+                            .strong()
+                            .color(egui::Color32::from_rgb(235, 80, 80)),
+                    );
+                }
+                if let Some(off) = rit {
+                    ui.label(
+                        egui::RichText::new(format!("RIT {off:+} Hz"))
+                            .strong()
+                            .color(egui::Color32::from_rgb(120, 210, 255)),
+                    );
+                }
+                if let Some(off) = xit {
+                    ui.label(
+                        egui::RichText::new(format!("XIT {off:+} Hz"))
+                            .strong()
+                            .color(egui::Color32::from_rgb(235, 180, 70)),
+                    );
+                }
+            };
+
+        // ── VFO A group: frequency + mode + flags + S-meter ───────────────────
         ui.label(
             egui::RichText::new(format_freq_dotted(snapshot.target_freq_hz.max(0.0) as u64))
                 .size(18.0)
                 .strong(),
         );
-        // Mode.
         ui.label(egui::RichText::new(mode_label(snapshot.demod_mode)).strong());
-
-        ui.separator();
-
-        // S-meter — the most prominent item (largest text, coloured).
-        ui.label(
-            egui::RichText::new(s_meter_label(snapshot.signal_dbm))
-                .size(20.0)
-                .strong()
-                .color(egui::Color32::from_rgb(120, 230, 120)),
+        draw_flags(
+            ui,
+            show_tx_marker && a_is_tx,
+            (snapshot.rit_enabled && snapshot.rit_offset_hz != 0).then_some(snapshot.rit_offset_hz),
+            a_is_tx.then_some(xit).flatten(),
         );
-        ui.label(egui::RichText::new(format!("{:.0} dBm", snapshot.signal_dbm)).size(15.0));
+        ui.separator();
+        // A meter matches the A freq (white) in dual-watch; the lone green meter
+        // otherwise.
+        let a_meter_color = if snapshot.dual_watch_enabled {
+            a_color
+        } else {
+            egui::Color32::from_rgb(120, 230, 120)
+        };
+        draw_meter(ui, snapshot.signal_dbm, a_meter_color);
+
+        // ── VFO B group: frequency + mode + flags (split or dual-watch) + meter ─
+        // (meter is dual-watch only — split alone has no second receiver).  B's
+        // freq/mode match VFO A's size + weight, tinted with the B accent colour.
+        if split || snapshot.dual_watch_enabled {
+            ui.separator();
+            ui.label(
+                egui::RichText::new("B")
+                    .size(18.0)
+                    .strong()
+                    .color(vfo_b_color),
+            );
+            ui.label(
+                egui::RichText::new(format_freq_dotted(
+                    snapshot.vfo_b_target_freq_hz.max(0.0) as u64
+                ))
+                .size(18.0)
+                .strong()
+                .color(vfo_b_color),
+            );
+            ui.label(
+                egui::RichText::new(mode_label(snapshot.vfo_b_demod_mode))
+                    .strong()
+                    .color(vfo_b_color),
+            );
+            // B RIT only when dual-watch (B is only received then); B XIT only when
+            // B is the split TX VFO.
+            draw_flags(
+                ui,
+                show_tx_marker && b_is_tx,
+                (snapshot.dual_watch_enabled
+                    && snapshot.vfo_b_rit_enabled
+                    && snapshot.vfo_b_rit_offset_hz != 0)
+                    .then_some(snapshot.vfo_b_rit_offset_hz),
+                b_is_tx.then_some(xit).flatten(),
+            );
+            if snapshot.dual_watch_enabled {
+                ui.separator();
+                draw_meter(ui, snapshot.vfo_b_signal_dbm, vfo_b_color);
+            }
+        }
 
         ui.separator();
 
@@ -397,28 +574,33 @@ impl RigflowApp {
     /// instead of hitting the dead zone at `center ± sample_rate/2`.  Shared by
     /// the mouse wheel and the ←/→ arrow keys so both behave identically.  The
     /// caller must ensure a radio is acquired.
-    pub(crate) fn tune_target_relative(&self, snapshot: &UiState, delta_hz: f32) {
+    pub(crate) fn tune_target_relative(&self, snapshot: &UiState, delta_hz: f32, vfo: TuneVfo) {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
         if delta_hz == 0.0 {
             return;
         }
         let limits = active_freq_limits(snapshot);
+        let cur_center = vfo.center(snapshot);
 
-        // Move the target by the step, clamped only to the RF range (NOT the
-        // visible band) so it can cross the soft edge; the LO follows it.
-        let desired_target = clamp_center(snapshot.target_freq_hz + delta_hz, &limits);
+        // Move the target by exactly `delta_hz` (the caller already scaled the
+        // active Snap value by the modifier keys).  Relative move — no re-snap, so
+        // Shift/Alt scaling isn't rounded away.  Clamped only to the RF range (NOT
+        // the visible band) so it can cross the soft edge; the LO follows it.
+        let desired_target = clamp_center(vfo.target(snapshot) + delta_hz, &limits);
 
         // Soft threshold = 80% of the visible half-span (zoom-aware: the visible
-        // span is sample_rate / display_zoom, centered on the LO).
+        // span is sample_rate / display_zoom, centered on the LO).  Use *this*
+        // VFO's own zoom (VFO B has its own) so B's auto-pan point isn't computed
+        // from VFO A's zoom.
         let half_span =
-            (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
+            (snapshot.input_sample_rate_hz / (2.0 * vfo.display_zoom(snapshot).max(1.0))).max(0.0);
         let soft = 0.8 * half_span;
 
         // Pan the LO by the excess past the threshold so the target settles back
         // at ~±soft (symmetric for the left and right edges).  The target itself
         // always moves by exactly one step — no jumps.
-        let mut new_center = snapshot.center_freq_hz;
+        let mut new_center = cur_center;
         let offset = desired_target - new_center;
         if half_span > 0.0 && offset.abs() > soft {
             let excess = offset.abs() - soft;
@@ -433,21 +615,17 @@ impl RigflowApp {
         );
 
         if let Ok(mut state) = self.state.lock() {
-            state.center_freq_hz = new_center;
-            state.target_freq_hz = new_target;
+            vfo.set_center(&mut state, new_center);
+            vfo.set_target(&mut state, new_target);
         }
         // Retune the LO only when it actually panned.
-        if (new_center - snapshot.center_freq_hz).abs() > 0.5 {
+        if (new_center - cur_center).abs() > 0.5 {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                    center_freq_hz: new_center as u64,
-                },
+                vfo.center_msg(new_center as u64),
             ));
         }
         let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-            rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                target_freq_hz: new_target as u64,
-            },
+            vfo.target_msg(new_target as u64),
         ));
     }
 
@@ -462,20 +640,29 @@ impl RigflowApp {
     ///
     /// Returns `true` if the target actually moved; `false` means it was pinned
     /// at a band edge — the caller uses that to stop momentum.
-    fn pan_target_by(&self, snapshot: &UiState, delta_hz: f32, force_send: bool) -> bool {
+    fn pan_target_by(
+        &self,
+        snapshot: &UiState,
+        delta_hz: f32,
+        force_send: bool,
+        vfo: TuneVfo,
+    ) -> bool {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
         if delta_hz == 0.0 && !force_send {
             return false;
         }
         let limits = active_freq_limits(snapshot);
-        let desired_target = clamp_center(snapshot.target_freq_hz + delta_hz, &limits);
+        let cur_center = vfo.center(snapshot);
+        let cur_target = vfo.target(snapshot);
+        let desired_target = clamp_center(cur_target + delta_hz, &limits);
 
-        // Soft-edge LO pan — identical math to `tune_target_relative`.
+        // Soft-edge LO pan — identical math to `tune_target_relative`, using this
+        // VFO's own zoom.
         let half_span =
-            (snapshot.input_sample_rate_hz / (2.0 * snapshot.display_zoom.max(1.0))).max(0.0);
+            (snapshot.input_sample_rate_hz / (2.0 * vfo.display_zoom(snapshot).max(1.0))).max(0.0);
         let soft = 0.8 * half_span;
-        let mut new_center = snapshot.center_freq_hz;
+        let mut new_center = cur_center;
         let offset = desired_target - new_center;
         if half_span > 0.0 && offset.abs() > soft {
             let excess = offset.abs() - soft;
@@ -488,8 +675,7 @@ impl RigflowApp {
             &limits,
         );
 
-        let moved = (new_target - snapshot.target_freq_hz).abs() > 0.5
-            || (new_center - snapshot.center_freq_hz).abs() > 0.5;
+        let moved = (new_target - cur_target).abs() > 0.5 || (new_center - cur_center).abs() > 0.5;
 
         // Apply locally every frame; decide under the lock whether this frame's
         // send passes the throttle, and whether the LO changed and must be sent.
@@ -498,8 +684,8 @@ impl RigflowApp {
                 Ok(s) => s,
                 Err(_) => return moved,
             };
-            state.center_freq_hz = new_center;
-            state.target_freq_hz = new_target;
+            vfo.set_center(&mut state, new_center);
+            vfo.set_target(&mut state, new_target);
 
             let now = Instant::now();
             let allow = force_send || now.duration_since(state.last_pan_send) >= PAN_SEND_INTERVAL;
@@ -520,16 +706,12 @@ impl RigflowApp {
 
         if do_center {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                    center_freq_hz: new_center as u64,
-                },
+                vfo.center_msg(new_center as u64),
             ));
         }
         if do_target {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                    target_freq_hz: new_target as u64,
-                },
+                vfo.target_msg(new_target as u64),
             ));
         }
         moved
@@ -565,7 +747,7 @@ impl RigflowApp {
 
         // Move by this frame's velocity; force the exact final send when stopping
         // so the server lands precisely on the settled frequency.
-        let moved = self.pan_target_by(snapshot, v * dt, stopping);
+        let moved = self.pan_target_by(snapshot, v * dt, stopping, TuneVfo::A);
         if stopping || !moved {
             new_v = 0.0;
         }
@@ -578,21 +760,25 @@ impl RigflowApp {
         }
     }
 
-    fn apply_view_interaction(&self, r: &ViewMouseResult, snapshot: &UiState) {
+    fn apply_view_interaction(&self, r: &ViewMouseResult, snapshot: &UiState, vfo: TuneVfo) {
         use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
 
-        let send_target = |new_target: f32| {
-            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
-                    target_freq_hz: new_target as u64,
-                },
-            ));
+        let send = |msg: rigflow_protocol::ClientRadioMessage| {
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(msg));
         };
 
-        // Any explicit tune / zoom / click cancels an in-flight momentum sweep.
+        // Any explicit tune / zoom / click cancels an in-flight momentum sweep,
+        // and — under dual-watch — focuses this view's VFO so the Receive-panel
+        // controls follow the spectrum the operator is working on.
         if r.tune_dir != 0 || r.tune_to_hz.is_some() || r.center_on_target || r.zoom_steps != 0 {
             if let Ok(mut state) = self.state.lock() {
                 state.pan_velocity_hz_per_s = 0.0;
+                if state.dual_watch_enabled {
+                    state.active_control_vfo = match vfo {
+                        TuneVfo::A => rigflow_core::radio::vfo::VfoSelect::A,
+                        TuneVfo::B => rigflow_core::radio::vfo::VfoSelect::B,
+                    };
+                }
             }
         }
 
@@ -605,28 +791,41 @@ impl RigflowApp {
             }
         }
 
-        // Wheel fine-tune: resolve the mode-aware Hz step here (this code has the
-        // demod mode; the shared mouse handler does not) and apply it through the
-        // common relative-tune path, which also handles soft-edge LO panning.
-        if r.tune_dir != 0 && snapshot.radio_acquired {
-            let step = crate::ui::tuning_steps::target_step_hz(snapshot.demod_mode, r.tune_tier);
-            self.tune_target_relative(snapshot, r.tune_dir as f32 * step);
+        // Dial lock: freeze every frequency change (wheel / click / C-key /
+        // drag / momentum).  Zoom and VFO-focus above still work.
+        if snapshot.dial_locked {
+            return;
         }
 
-        // Single-click → tune target to the clicked frequency.
+        // Wheel tune: each notch moves the target by the active Snap value scaled
+        // by the modifier keys (Shift ×10, Alt ×0.1, else ×1; 1 Hz floor), through
+        // the common relative-tune path (soft-edge LO panning).
+        if r.tune_dir != 0 && snapshot.radio_acquired {
+            let step = crate::ui::tuning_steps::scaled_snap_step_hz(
+                vfo.tuning_step_hz(snapshot),
+                r.tune_shift,
+                r.tune_alt,
+            );
+            self.tune_target_relative(snapshot, r.tune_dir as f32 * step, vfo);
+        }
+
+        // Single-click → tune target to the clicked frequency, grid-snapped to the
+        // VFO's tuning step.
         if let Some(freq_hz) = r.tune_to_hz {
             if snapshot.radio_acquired {
                 let limits = active_freq_limits(snapshot);
+                let snapped =
+                    crate::ui::tuning_steps::snap_to_step_hz(freq_hz, vfo.tuning_step_hz(snapshot));
                 let new_target = clamp_target(
-                    freq_hz,
-                    snapshot.center_freq_hz,
+                    snapped,
+                    vfo.center(snapshot),
                     snapshot.input_sample_rate_hz,
                     &limits,
                 );
                 if let Ok(mut state) = self.state.lock() {
-                    state.target_freq_hz = new_target;
+                    vfo.set_target(&mut state, new_target);
                 }
-                send_target(new_target);
+                send(vfo.target_msg(new_target as u64));
             } else if let Ok(mut state) = self.state.lock() {
                 state.server_status = "cannot tune: no radio acquired".to_string();
             }
@@ -638,7 +837,7 @@ impl RigflowApp {
         if r.center_on_target {
             if snapshot.radio_acquired {
                 let limits = active_freq_limits(snapshot);
-                let new_center = clamp_center(snapshot.target_freq_hz, &limits);
+                let new_center = clamp_center(vfo.target(snapshot), &limits);
                 let new_target = clamp_target(
                     new_center,
                     new_center,
@@ -646,15 +845,11 @@ impl RigflowApp {
                     &limits,
                 );
                 if let Ok(mut state) = self.state.lock() {
-                    state.center_freq_hz = new_center;
-                    state.target_freq_hz = new_target;
+                    vfo.set_center(&mut state, new_center);
+                    vfo.set_target(&mut state, new_target);
                 }
-                let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                    rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
-                        center_freq_hz: new_center as u64,
-                    },
-                ));
-                send_target(new_target);
+                send(vfo.center_msg(new_center as u64));
+                send(vfo.target_msg(new_target as u64));
             } else if let Ok(mut state) = self.state.lock() {
                 state.server_status = "cannot tune: no radio acquired".to_string();
             }
@@ -667,12 +862,13 @@ impl RigflowApp {
             if let Ok(mut state) = self.state.lock() {
                 state.pan_velocity_hz_per_s = 0.0;
             }
-            self.pan_target_by(snapshot, r.drag_delta_hz, false);
+            self.pan_target_by(snapshot, r.drag_delta_hz, false, vfo);
         }
 
-        // Flick release → seed momentum (decays to a stop over ~1–1.5 s).
+        // Flick release → seed momentum (VFO A only; the shared momentum field
+        // animates VFO A's spectrum).  VFO B still pans live during the drag.
         if let Some(v) = r.fling_velocity_hz_per_s {
-            if snapshot.radio_acquired && !is_transmitting(snapshot) {
+            if vfo == TuneVfo::A && snapshot.radio_acquired && !is_transmitting(snapshot) {
                 if let Ok(mut state) = self.state.lock() {
                     state.pan_velocity_hz_per_s = v;
                 }
@@ -680,46 +876,277 @@ impl RigflowApp {
         }
     }
 
-    fn update_waterfall_texture(&mut self, ctx: &egui::Context, wf_width: usize, wf_height: usize) {
-        let pixels = {
-            let guard = self.waterfall_buffer.lock().unwrap();
-            guard.clone()
+    /// Draw the LO + LO-Offset spinner strip for `vfo`.  Offset-preserving LO
+    /// (the tuned target rides with the LO) and soft-edge LO-Offset (the LO
+    /// follows the target at the passband edge) — identical for VFO A and VFO B.
+    fn draw_lo_strip(&self, ui: &mut egui::Ui, vfo: TuneVfo) {
+        use crate::ui::freq_limits::{active_freq_limits, clamp_center, clamp_target};
+
+        let state_snapshot = {
+            let state = self.state.lock().unwrap();
+            state.clone()
         };
+        let strip_rect = ui.max_rect();
+        let lo_y = strip_rect.top() + 2.0;
+        let lo_pos = egui::Pos2::new(strip_rect.left() + 12.0, lo_y);
+        let lo_offset_pos = egui::Pos2::new(strip_rect.right() - 12.0, lo_y);
 
-        if pixels.len() != wf_width * wf_height {
-            warn!(
-                "waterfall texture size mismatch: pixels={} expected={}",
-                pixels.len(),
-                wf_width * wf_height
-            );
-            return;
+        let cur_center = vfo.center(&state_snapshot);
+        let cur_target = vfo.target(&state_snapshot);
+        let mut new_center_freq_hz = None;
+        let mut new_target_freq_hz = None;
+
+        let dial_locked = state_snapshot.dial_locked;
+        if let Some(new_center_hz) = crate::widgets::lo_frequency_widget::draw_lo_widget(
+            ui,
+            lo_pos,
+            cur_center.max(0.0) as u64,
+            !dial_locked,
+        ) {
+            let limits = active_freq_limits(&state_snapshot);
+            let clamped_center = clamp_center(new_center_hz as f32, &limits);
+            new_center_freq_hz = Some(clamped_center);
+            // Offset-preserving LO: shift the target by the same delta so the LO
+            // Offset stays constant and the target never leaves center ± sr/2.
+            let delta = clamped_center - cur_center;
+            new_target_freq_hz = Some(clamp_target(
+                cur_target + delta,
+                clamped_center,
+                state_snapshot.input_sample_rate_hz,
+                &limits,
+            ));
         }
 
-        let mut image = egui::ColorImage::new([wf_width, wf_height], egui::Color32::BLACK);
-
-        for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
-            let rgb = *src;
-            let r = ((rgb >> 16) & 0xff) as u8;
-            let g = ((rgb >> 8) & 0xff) as u8;
-            let b = (rgb & 0xff) as u8;
-            *dst = egui::Color32::from_rgb(r, g, b);
+        let lo_offset_hz = (cur_target - cur_center).round() as i64;
+        if let Some(new_offset_hz) = crate::widgets::lo_frequency_widget::draw_lo_offset_widget(
+            ui,
+            lo_offset_pos,
+            lo_offset_hz,
+            !dial_locked,
+        ) {
+            // Reuse the soft-edge LO pan (LO follows the target at the edge).
+            let delta = (new_offset_hz - lo_offset_hz) as f32;
+            self.tune_target_relative(&state_snapshot, delta, vfo);
         }
 
-        match &mut self.waterfall_texture {
-            Some(texture) => {
-                texture.set(image, egui::TextureOptions::NEAREST);
+        if let Some(new_center_hz) = new_center_freq_hz {
+            if let Ok(mut state) = self.state.lock() {
+                vfo.set_center(&mut state, new_center_hz);
             }
-            None => {
-                let texture =
-                    ctx.load_texture("waterfall_texture", image, egui::TextureOptions::NEAREST);
-                self.waterfall_texture = Some(texture);
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                vfo.center_msg(new_center_hz as u64),
+            ));
+        }
+        if let Some(new_target_hz) = new_target_freq_hz {
+            if let Ok(mut state) = self.state.lock() {
+                vfo.set_target(&mut state, new_target_hz);
+            }
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                vfo.target_msg(new_target_hz as u64),
+            ));
+        }
+
+        // ── "Snap" (grid-snap / tuning-step) dropdown, just right of the LO spin
+        //    widget. Per-mode (req: operator+mode memory); governs wheel / click /
+        //    arrow tuning for this VFO.  UI-only: nothing extra is sent — tuning
+        //    paths read this step and snap the Hz they already send. ──
+        let mode = vfo.demod_mode(&state_snapshot);
+        let cur_step = vfo.tuning_step_hz(&state_snapshot);
+        let mut chosen = cur_step;
+        let snap_rect = egui::Rect::from_min_size(
+            egui::Pos2::new(strip_rect.left() + 12.0 + 200.0, lo_y - 1.0),
+            egui::Vec2::new(150.0, 22.0),
+        );
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(snap_rect), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Snap").size(12.0));
+                egui::ComboBox::from_id_salt(("snap_step", matches!(vfo, TuneVfo::B)))
+                    .selected_text(crate::ui::tuning_steps::tuning_step_label(cur_step))
+                    .width(72.0)
+                    .show_ui(ui, |ui| {
+                        for opt in crate::ui::tuning_steps::TUNING_STEP_OPTIONS_HZ {
+                            ui.selectable_value(
+                                &mut chosen,
+                                opt,
+                                crate::ui::tuning_steps::tuning_step_label(opt),
+                            );
+                        }
+                    });
+            });
+        });
+        if chosen != cur_step {
+            if let Ok(mut state) = self.state.lock() {
+                match vfo {
+                    // VFO A's step is per-mode and persisted per operator.
+                    TuneVfo::A => {
+                        state.tuning_step_preferences.set(mode, chosen);
+                        state.pending_save_tuning_steps = true;
+                    }
+                    // VFO B's step is independent + session-only (not persisted).
+                    TuneVfo::B => state.vfo_b_tuning_step_hz = chosen,
+                }
             }
         }
+    }
+
+    fn update_waterfall_texture(&mut self, ctx: &egui::Context, wf_width: usize, wf_height: usize) {
+        render_waterfall_texture(
+            ctx,
+            wf_width,
+            wf_height,
+            &self.waterfall_buffer,
+            &mut self.waterfall_texture,
+            "waterfall_texture",
+        );
     }
 }
 
 /// Format a frequency in Hz with `.` thousands separators, e.g.
 /// `14074000 → "14.074.000"`.
+/// Which VFO a tuning gesture operates on.  Abstracts the centre/target state
+/// fields and the protocol messages so the tuning helpers (relative tune, drag
+/// pan, click-to-tune, recenter, LO/LO-Offset spinners) are VFO-agnostic and
+/// VFO B tunes identically to VFO A.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum TuneVfo {
+    A,
+    B,
+}
+
+impl TuneVfo {
+    fn center(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.center_freq_hz,
+            TuneVfo::B => s.vfo_b_center_freq_hz,
+        }
+    }
+    fn target(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.target_freq_hz,
+            TuneVfo::B => s.vfo_b_target_freq_hz,
+        }
+    }
+    fn set_center(self, s: &mut UiState, hz: f32) {
+        match self {
+            TuneVfo::A => s.center_freq_hz = hz,
+            TuneVfo::B => s.vfo_b_center_freq_hz = hz,
+        }
+    }
+    fn set_target(self, s: &mut UiState, hz: f32) {
+        match self {
+            TuneVfo::A => s.target_freq_hz = hz,
+            TuneVfo::B => s.vfo_b_target_freq_hz = hz,
+        }
+    }
+    fn demod_mode(self, s: &UiState) -> rigflow_core::dsp::modes::DemodMode {
+        match self {
+            TuneVfo::A => s.demod_mode,
+            TuneVfo::B => s.vfo_b_demod_mode,
+        }
+    }
+    /// Grid-snap / tuning-step size (Hz) for this VFO.  VFO A uses the persisted
+    /// per-mode preferences; VFO B has its own independent (session) step.
+    fn tuning_step_hz(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.tuning_step_preferences.get(s.demod_mode),
+            TuneVfo::B => s.vfo_b_tuning_step_hz,
+        }
+    }
+    /// Display zoom for this VFO's panadapter (drives the soft-edge LO-pan
+    /// threshold).  VFO B has its own independent zoom.
+    fn display_zoom(self, s: &UiState) -> f32 {
+        match self {
+            TuneVfo::A => s.display_zoom,
+            TuneVfo::B => s.vfo_b_display_zoom,
+        }
+    }
+    fn center_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
+        use rigflow_protocol::ClientRadioMessage as M;
+        match self {
+            TuneVfo::A => M::SetCenterFrequency { center_freq_hz: hz },
+            TuneVfo::B => M::SetVfoBCenterFrequency { center_freq_hz: hz },
+        }
+    }
+    fn target_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
+        use rigflow_protocol::ClientRadioMessage as M;
+        match self {
+            TuneVfo::A => M::SetTargetFrequency { target_freq_hz: hz },
+            TuneVfo::B => M::SetVfoBFrequency { target_freq_hz: hz },
+        }
+    }
+}
+
+/// A VFO-A-shaped view of VFO B's state, so the spectrum/waterfall drawing and
+/// the screen-x → frequency mapping work for the second receiver unchanged.
+fn vfo_b_view(snapshot: &UiState) -> UiState {
+    let mut v = snapshot.clone();
+    v.center_freq_hz = snapshot.vfo_b_center_freq_hz;
+    v.target_freq_hz = snapshot.vfo_b_target_freq_hz;
+    v.demod_mode = snapshot.vfo_b_demod_mode;
+    v.sideband = snapshot.vfo_b_sideband;
+    v.filter_bandwidth_hz = snapshot.vfo_b_filter_bandwidth_hz;
+    v.signal_dbm = snapshot.vfo_b_signal_dbm;
+    v.signal_s_units = snapshot.vfo_b_signal_s_units;
+    // VFO B's own waterfall display settings (zoom / normalization / estimates),
+    // so the B spectrum + waterfall render independently of VFO A.
+    v.display_zoom = snapshot.vfo_b_display_zoom;
+    v.adaptive_waterfall_normalization = snapshot.vfo_b_adaptive_waterfall_normalization;
+    v.manual_waterfall_top_db = snapshot.vfo_b_manual_waterfall_top_db;
+    v.manual_waterfall_range_db = snapshot.vfo_b_manual_waterfall_range_db;
+    v.adaptive_top_db_estimate = snapshot.vfo_b_adaptive_top_db_estimate;
+    v.adaptive_floor_db_estimate = snapshot.vfo_b_adaptive_floor_db_estimate;
+    v.adaptive_range_db_estimate = snapshot.vfo_b_adaptive_range_db_estimate;
+    v
+}
+
+/// Render a waterfall pixel buffer (ARGB u32) into `texture`, reused for both
+/// VFO A and VFO B so the two stacked waterfalls share one code path.
+fn render_waterfall_texture(
+    ctx: &egui::Context,
+    wf_width: usize,
+    wf_height: usize,
+    buffer: &std::sync::Arc<std::sync::Mutex<Vec<u32>>>,
+    texture: &mut Option<egui::TextureHandle>,
+    name: &str,
+) {
+    let pixels = {
+        let guard = buffer.lock().unwrap();
+        guard.clone()
+    };
+    if pixels.len() != wf_width * wf_height {
+        warn!(
+            "waterfall texture size mismatch: pixels={} expected={}",
+            pixels.len(),
+            wf_width * wf_height
+        );
+        return;
+    }
+    let mut image = egui::ColorImage::new([wf_width, wf_height], egui::Color32::BLACK);
+    for (dst, src) in image.pixels.iter_mut().zip(pixels.iter()) {
+        let rgb = *src;
+        *dst = egui::Color32::from_rgb(
+            ((rgb >> 16) & 0xff) as u8,
+            ((rgb >> 8) & 0xff) as u8,
+            (rgb & 0xff) as u8,
+        );
+    }
+    // Nearest magnification keeps the rows/frequency bins crisp when the window
+    // is enlarged (the common case).  Linear minification box-blends adjacent
+    // rows when the image is scaled *down* — e.g. dual-watch's ~2:1 half-height
+    // panes — which removes the nearest-neighbour row-dropping shimmer
+    // (scintillation).  No mipmaps: backend-agnostic and zero per-frame cost.
+    const WATERFALL_TEX_OPTS: egui::TextureOptions = egui::TextureOptions {
+        magnification: egui::TextureFilter::Nearest,
+        minification: egui::TextureFilter::Linear,
+        wrap_mode: egui::TextureWrapMode::ClampToEdge,
+        mipmap_mode: None,
+    };
+    match texture {
+        Some(t) => t.set(image, WATERFALL_TEX_OPTS),
+        None => *texture = Some(ctx.load_texture(name, image, WATERFALL_TEX_OPTS)),
+    }
+}
+
 fn format_freq_dotted(hz: u64) -> String {
     let digits = hz.to_string();
     let n = digits.len();

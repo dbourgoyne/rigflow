@@ -127,6 +127,19 @@ pub struct SourceCapabilities {
     pub tuner_freq_hz_min: u32,
     pub tuner_freq_hz_max: u32,
 
+    /// Whether the source can transmit at all.  This is the master gate for ALL
+    /// transmit UI (Radio Control → Transmit, the Dual-VFO split/TX controls, TX
+    /// latency, two-tone / TX-audio diagnostics, mic/CW keying).  Receive-only
+    /// sources (RTL-SDR, WAV playback, fake tone) advertise `false`.
+    #[serde(default)]
+    pub supports_transmit: bool,
+
+    /// Whether the source has a second hardware receiver, so dual-watch (VFO B
+    /// received in stereo with its own spectrum) is available.  Static per source
+    /// (HL2 = true); gates the dual-watch UI.
+    #[serde(default)]
+    pub supports_dual_watch: bool,
+
     /// Whether the source supports a TX tune test (short low-power carrier
     /// pulse used to measure forward/reverse power and SWR).
     ///
@@ -148,6 +161,22 @@ pub struct SourceCapabilities {
 }
 
 impl SourceCapabilities {
+    /// True if the source exposes any adjustable parameter that the Source
+    /// Control "Configuration" section would draw (sample rate, gain/gain-mode,
+    /// PPM, direct sampling, band control, or transmit controls).  Used to hide
+    /// the section entirely for fixed sources that expose nothing — e.g. WAV
+    /// playback and the fake-tone generator.  Keep in sync with
+    /// `source_control::draw_configuration_section`.
+    pub fn has_configuration_controls(&self) -> bool {
+        self.supports_sample_rate
+            || self.supports_gain_mode
+            || self.supports_gain
+            || self.supports_ppm_correction
+            || self.supports_direct_sampling
+            || self.supports_band_control
+            || self.supports_transmit
+    }
+
     pub fn none() -> Self {
         Self {
             supports_sample_rate: false,
@@ -165,6 +194,8 @@ impl SourceCapabilities {
             tuner_freq_hz_min: 0,
             tuner_freq_hz_max: 0,
 
+            supports_transmit: false,
+            supports_dual_watch: false,
             supports_tx_tune_test: false,
             supports_band_control: false,
             supports_fdx: false,
