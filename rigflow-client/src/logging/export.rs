@@ -23,11 +23,13 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
+use rigflow_log::dedupe::DEFAULT_WINDOW_SECS;
 use rigflow_log::display;
 use rigflow_log::export::{
     ContactPage, ExportFilter, ExportOptions, ExportSummary, Exporter, FieldProfile, FilterError,
     GridPrecision, QslStatusFilter, Sort,
 };
+use rigflow_log::import::ImportPlan;
 use rigflow_log::normalize::{self, ModeClass};
 
 /// How long the UI waits after the last edit before re-querying.
@@ -339,6 +341,10 @@ pub enum ExportJob {
         filter: Box<ExportFilter>,
         options: Box<ExportOptions>,
     },
+    /// Read an ADIF file and work out what importing it *would* do — parse,
+    /// normalize, validate, dedupe. Read-only, so it runs here rather than on the
+    /// UI thread; a big file is slow to parse and the operator keeps logging.
+    PlanImport { db_path: PathBuf, file: PathBuf },
 }
 
 /// What the worker reports back.
@@ -357,6 +363,12 @@ pub enum ExportEvent {
         result: Result<usize, String>,
     },
     Done(Result<Box<ExportSummary>, String>),
+    /// The import preview. The plan carries the parsed contacts, so committing it
+    /// needs no second parse — the operator confirms exactly what was planned.
+    ImportPlanned {
+        file: PathBuf,
+        result: Result<Box<ImportPlan>, String>,
+    },
 }
 
 /// Spawn the worker. One thread for the app's lifetime.
@@ -384,7 +396,8 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
                         q @ ExportJob::Query { .. } => latest_query = Some(q),
                         l @ ExportJob::CallLookup { .. } => latest_lookup = Some(l),
                         c @ ExportJob::Count { .. } => latest_count = Some(c),
-                        w @ ExportJob::Write { .. } => {
+                        // Never coalesced: each is an explicit operator action.
+                        w @ (ExportJob::Write { .. } | ExportJob::PlanImport { .. }) => {
                             if evt_tx.send(run(w)).is_err() {
                                 return; // app gone
                             }
@@ -452,5 +465,16 @@ fn run(job: ExportJob) -> ExportEvent {
                 .map(Box::new)
                 .map_err(|e| e.to_string()),
         ),
+        ExportJob::PlanImport { db_path, file } => {
+            let result = std::fs::read_to_string(&file)
+                .map_err(|e| format!("{}: {e}", file.display()))
+                .and_then(|text| {
+                    Exporter::open(&db_path)
+                        .and_then(|ex| ex.plan_import(&text, DEFAULT_WINDOW_SECS))
+                        .map_err(|e| e.to_string())
+                })
+                .map(Box::new);
+            ExportEvent::ImportPlanned { file, result }
+        }
     }
 }

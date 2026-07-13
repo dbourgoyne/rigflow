@@ -103,6 +103,21 @@ impl Exporter {
         Ok(ContactPage { rows, total })
     }
 
+    /// Work out what importing an ADIF document *would* do, without writing.
+    ///
+    /// Lives on `Exporter` because it needs exactly what `Exporter` has: a
+    /// **read-only** connection. Planning an import must not be able to touch the
+    /// log — the operator hasn't agreed to anything yet — and running it here
+    /// makes that structural rather than a promise. The commit is a separate call
+    /// on the read-write [`crate::LogStore`].
+    pub fn plan_import(
+        &self,
+        text: &str,
+        window_secs: i64,
+    ) -> Result<crate::import::ImportPlan, LogError> {
+        crate::import::plan(&self.conn, text, window_secs)
+    }
+
     /// Test-only handle, used to prove SQLite itself refuses a write here.
     #[cfg(test)]
     pub(crate) fn conn_for_test(&self) -> &Connection {

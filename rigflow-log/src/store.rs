@@ -33,6 +33,18 @@ pub struct InsertOutcome {
     pub journal_appended: bool,
 }
 
+/// Result of a committed import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportCommit {
+    /// Rows written. Duplicates and unusable records were dropped at plan time,
+    /// so this is the length of what was handed in.
+    pub imported: usize,
+    /// Whether the batched ADIF journal append succeeded. `false` means the
+    /// contacts are in the DB but missing from the journal (a warning: the
+    /// journal is only ever a subset of the DB).
+    pub journal_appended: bool,
+}
+
 /// A stored contact plus its row id, for the contact view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoggedQso {
@@ -128,45 +140,16 @@ impl LogStore {
     /// snapshot fills only `extra` keys not already present, so an imported
     /// record's own `MY_*` (from WSJT-X or another log) is preserved.
     pub fn insert(&mut self, qso: &Qso, station: &Station) -> Result<InsertOutcome, LogError> {
-        let mut q = qso.clone();
-        for (k, v) in station.my_adif_fields() {
-            q.extra.entry(k).or_insert(v);
-        }
-        let now = Utc::now().to_rfc3339();
-        let extra_json = serde_json::to_string(&q.extra)?;
+        let q = with_station_snapshot(qso, station);
 
         let tx = self.conn.transaction()?;
         let station_id = upsert_station(&tx, station)?;
-        tx.execute(
-            "INSERT INTO qso (call,qso_date,time_on,band,mode,submode,freq_hz,freq_rx_hz,\
-             band_rx,rst_sent,rst_rcvd,gridsquare,dxcc,station_id,extra,created_at,updated_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
-            params![
-                q.call,
-                q.qso_date,
-                q.time_on,
-                q.band,
-                q.mode,
-                q.submode,
-                q.freq_hz.map(|v| v as i64),
-                q.freq_rx_hz.map(|v| v as i64),
-                q.band_rx,
-                q.rst_sent,
-                q.rst_rcvd,
-                q.gridsquare,
-                q.dxcc,
-                station_id,
-                extra_json,
-                now,
-                now,
-            ],
-        )?;
-        let id = tx.last_insert_rowid();
+        let id = insert_qso_row(&tx, &q, station_id)?;
         tx.commit()?;
 
         // Journal append happens AFTER the DB commit. A failure here is a
         // warning, not an error: the DB is authoritative.
-        let journal_appended = match self.append_journal(&q) {
+        let journal_appended = match self.append_journal(std::slice::from_ref(&q)) {
             Ok(()) => true,
             Err(e) => {
                 eprintln!("rigflow-log: ADIF journal append failed (DB commit kept): {e}");
@@ -175,6 +158,59 @@ impl LogStore {
         };
         Ok(InsertOutcome {
             id,
+            journal_appended,
+        })
+    }
+
+    /// Commit a planned ADIF import: **one transaction, one journal write, one
+    /// fsync** for the whole batch.
+    ///
+    /// This is not a loop over [`LogStore::insert`], and it must not become one.
+    /// `insert` is tuned for a single live contact — `synchronous=FULL` plus a
+    /// journal `fsync` per record, because a QSO cannot be re-made and must
+    /// survive a crash. Paying that per row over an imported log is quadratically
+    /// miserable: 20k records take ~100s that way, and under a second like this.
+    ///
+    /// Atomic: if any row fails, the transaction rolls back and **nothing** is
+    /// imported. A half-imported log is worse than none, because the operator
+    /// cannot tell which half.
+    ///
+    /// `qsos` is expected to be [`crate::import::ImportPlan::importable`] — already
+    /// normalized, validated, and deduped. Callers get the `MY_*` snapshot
+    /// semantics of `insert`: the station fills only fields the imported record
+    /// doesn't already carry, so another log's `MY_*` survives.
+    pub fn commit_import(
+        &mut self,
+        qsos: &[Qso],
+        station: &Station,
+    ) -> Result<ImportCommit, LogError> {
+        if qsos.is_empty() {
+            return Ok(ImportCommit {
+                imported: 0,
+                journal_appended: true,
+            });
+        }
+        let staged: Vec<Qso> = qsos
+            .iter()
+            .map(|q| with_station_snapshot(q, station))
+            .collect();
+
+        let tx = self.conn.transaction()?;
+        let station_id = upsert_station(&tx, station)?;
+        for q in &staged {
+            insert_qso_row(&tx, q, station_id)?;
+        }
+        tx.commit()?;
+
+        let journal_appended = match self.append_journal(&staged) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("rigflow-log: ADIF journal append failed (DB commit kept): {e}");
+                false
+            }
+        };
+        Ok(ImportCommit {
+            imported: staged.len(),
             journal_appended,
         })
     }
@@ -308,21 +344,77 @@ impl LogStore {
         Ok(())
     }
 
-    /// Append one ADIF record to the journal, creating it (with header) on first
-    /// write. `O_APPEND` + `fsync`; safe because this store is single-owner.
-    fn append_journal(&self, q: &Qso) -> Result<(), LogError> {
+    /// Append records to the journal, creating it (with header) on first write.
+    /// `O_APPEND` + a single `fsync` for the whole batch; safe because this store
+    /// is single-owner.
+    ///
+    /// Batched deliberately: a live contact passes one record (one fsync, which is
+    /// the durability we want for a QSO that cannot be re-made), while an import
+    /// passes thousands and pays that cost **once**.
+    fn append_journal(&self, qsos: &[Qso]) -> Result<(), LogError> {
+        if qsos.is_empty() {
+            return Ok(());
+        }
         let fresh = !self.journal_path.exists();
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.journal_path)?;
+
+        let mut buf = String::new();
         if fresh {
-            f.write_all(adif::adif_header().as_bytes())?;
+            buf.push_str(&adif::adif_header());
         }
-        f.write_all(adif::write_record(&adif::qso_to_record(q)).as_bytes())?;
+        for q in qsos {
+            buf.push_str(&adif::write_record(&adif::qso_to_record(q)));
+        }
+        f.write_all(buf.as_bytes())?;
         f.sync_all()?;
         Ok(())
     }
+}
+
+/// Apply the station's `MY_*` snapshot to a QSO, filling only fields the record
+/// does not already carry — so an imported record's own `MY_*` (from WSJT-X, or
+/// from another logging program) is preserved as the historical truth it is.
+fn with_station_snapshot(qso: &Qso, station: &Station) -> Qso {
+    let mut q = qso.clone();
+    for (k, v) in station.my_adif_fields() {
+        q.extra.entry(k).or_insert(v);
+    }
+    q
+}
+
+/// Insert one `qso` row inside an open transaction. Shared by the single-contact
+/// and bulk-import paths so the column list can only ever drift in one place.
+fn insert_qso_row(tx: &Transaction<'_>, q: &Qso, station_id: i64) -> Result<i64, LogError> {
+    let now = Utc::now().to_rfc3339();
+    let extra_json = serde_json::to_string(&q.extra)?;
+    tx.execute(
+        "INSERT INTO qso (call,qso_date,time_on,band,mode,submode,freq_hz,freq_rx_hz,\
+         band_rx,rst_sent,rst_rcvd,gridsquare,dxcc,station_id,extra,created_at,updated_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        params![
+            q.call,
+            q.qso_date,
+            q.time_on,
+            q.band,
+            q.mode,
+            q.submode,
+            q.freq_hz.map(|v| v as i64),
+            q.freq_rx_hz.map(|v| v as i64),
+            q.band_rx,
+            q.rst_sent,
+            q.rst_rcvd,
+            q.gridsquare,
+            q.dxcc,
+            station_id,
+            extra_json,
+            now,
+            now,
+        ],
+    )?;
+    Ok(tx.last_insert_rowid())
 }
 
 /// Upsert the station row keyed by callsign, refreshing its location fields to

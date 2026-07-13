@@ -18,7 +18,7 @@ use crate::ui::panels::note_text;
 
 /// Shown when there is no native file picker. The path field is always editable,
 /// so a missing picker is an inconvenience, never a blocker.
-const NO_PICKER_HINT: &str = "No file picker available — type the path above. \
+pub(crate) const NO_PICKER_HINT: &str = "No file picker available. \
      (Linux: this needs an xdg-desktop-portal backend that implements FileChooser, \
      e.g. xdg-desktop-portal-gtk or -kde. The wlr backend does not.)";
 
@@ -42,7 +42,7 @@ const NO_PICKER_HINT: &str = "No file picker available — type the path above. 
 /// call — cheap, and cached for the process. If it still guesses wrong, the
 /// timing check at the call site catches the failure.
 #[cfg(target_os = "linux")]
-fn file_picker_available() -> bool {
+pub(crate) fn file_picker_available() -> bool {
     use std::sync::OnceLock;
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
@@ -75,8 +75,14 @@ fn file_picker_available() -> bool {
 
 /// macOS and Windows have a native picker in the OS; nothing to probe.
 #[cfg(not(target_os = "linux"))]
-fn file_picker_available() -> bool {
+pub(crate) fn file_picker_available() -> bool {
     true
+}
+
+/// Export's variant of the hint: unlike import, it has a typed-path fallback, so
+/// a missing picker is an inconvenience rather than a blocker.
+fn no_picker_hint_export() -> String {
+    format!("{NO_PICKER_HINT} Type the path above instead.")
 }
 
 impl crate::ui::app::RigflowApp {
@@ -290,6 +296,24 @@ impl crate::ui::app::RigflowApp {
                     self.export_busy = false;
                     self.export_status = format!("export failed: {e}");
                 }
+
+                ExportEvent::ImportPlanned { file, result } => {
+                    self.import_planning = false;
+                    // Ignore a plan for a file the operator has already replaced.
+                    if self.import_file.as_ref() != Some(&file) {
+                        continue;
+                    }
+                    match result {
+                        Ok(plan) => {
+                            self.import_plan = Some(*plan);
+                            self.import_status.clear();
+                        }
+                        Err(e) => {
+                            self.import_plan = None;
+                            self.import_status = format!("could not read that file: {e}");
+                        }
+                    }
+                }
             }
         }
         if got {
@@ -358,14 +382,14 @@ impl crate::ui::app::RigflowApp {
                     let picker = file_picker_available();
                     if ui
                         .add_enabled(picker, egui::Button::new("Browse…"))
-                        .on_disabled_hover_text(NO_PICKER_HINT)
+                        .on_disabled_hover_text(no_picker_hint_export())
                         .clicked()
                     {
                         pick_path = true;
                     }
                 });
                 if !file_picker_available() {
-                    ui.label(note_text(NO_PICKER_HINT));
+                    ui.label(note_text(no_picker_hint_export()));
                 }
                 ui.horizontal(|ui| {
                     ui.label("Fields");
@@ -476,7 +500,7 @@ impl crate::ui::app::RigflowApp {
                     self.export_draft.output_path = path.to_string_lossy().into_owned();
                     self.export_status.clear();
                 }
-                None if instant => self.export_status = NO_PICKER_HINT.to_string(),
+                None if instant => self.export_status = no_picker_hint_export(),
                 None => {} // a real cancel — nothing to say
             }
         }

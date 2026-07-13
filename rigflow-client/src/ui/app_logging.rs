@@ -272,6 +272,7 @@ impl RigflowApp {
 
         let mut open = true;
         let mut open_export = false;
+        let mut open_import = false;
         let mut open_filter = false;
         let mut clear_filter = false;
 
@@ -308,6 +309,9 @@ impl RigflowApp {
                     }
                     if ui.button("Export…").clicked() {
                         open_export = true;
+                    }
+                    if ui.button("Import…").clicked() {
+                        open_import = true;
                     }
                     if ui.button("Refresh").clicked() {
                         self.contacts_cache_dirty = true;
@@ -382,6 +386,9 @@ impl RigflowApp {
         }
         if open_export {
             self.open_export(&operator_id);
+        }
+        if open_import {
+            self.open_import();
         }
         if !open && let Ok(mut s) = self.state.lock() {
             s.show_contact_view = false;

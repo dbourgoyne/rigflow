@@ -146,6 +146,19 @@ pub struct RigflowApp {
     /// Job queue to the export worker thread, and its replies.
     pub(crate) export_tx: std::sync::mpsc::Sender<crate::logging::export::ExportJob>,
     pub(crate) export_rx: std::sync::mpsc::Receiver<crate::logging::export::ExportEvent>,
+
+    // ── ADIF import ──────────────────────────────────────────────────────
+    /// Import window open flag (opened from the contact view).
+    pub(crate) show_import: bool,
+    /// The file being imported, and the plan the worker made for it. The plan
+    /// carries the parsed contacts, so committing needs no second parse — the
+    /// operator confirms exactly what they were shown.
+    pub(crate) import_file: Option<std::path::PathBuf>,
+    pub(crate) import_plan: Option<rigflow_log::import::ImportPlan>,
+    /// A plan is being made on the worker (parsing a large file takes a moment).
+    pub(crate) import_planning: bool,
+    /// Result / error line for the import window.
+    pub(crate) import_status: String,
 }
 
 impl RigflowApp {
@@ -227,6 +240,11 @@ impl RigflowApp {
             export_status: String::new(),
             export_tx,
             export_rx,
+            show_import: false,
+            import_file: None,
+            import_plan: None,
+            import_planning: false,
+            import_status: String::new(),
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -757,6 +775,7 @@ impl eframe::App for RigflowApp {
         self.draw_contact_view_window(ctx, &snapshot);
         self.draw_filter_window(ctx);
         self.draw_export_window(ctx, &snapshot);
+        self.draw_import_window(ctx, &snapshot);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
