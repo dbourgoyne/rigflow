@@ -13,6 +13,7 @@
 pub mod adif;
 pub mod capture;
 pub mod dedupe;
+pub mod display;
 pub mod error;
 pub mod export;
 pub mod migrations;

@@ -38,13 +38,13 @@ impl crate::ui::app::RigflowApp {
                             ui.label("From");
                             ui.add(
                                 egui::TextEdit::singleline(&mut d.date_from)
-                                    .hint_text("YYYYMMDD")
+                                    .hint_text("YYYY-MM-DD")
                                     .desired_width(90.0),
                             );
                             ui.label("To");
                             ui.add(
                                 egui::TextEdit::singleline(&mut d.date_to)
-                                    .hint_text("YYYYMMDD")
+                                    .hint_text("YYYY-MM-DD")
                                     .desired_width(90.0),
                             );
                         });

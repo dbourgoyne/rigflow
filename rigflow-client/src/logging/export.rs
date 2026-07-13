@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
+use rigflow_log::display;
 use rigflow_log::export::{
     ContactPage, ExportFilter, ExportOptions, ExportSummary, Exporter, FieldProfile, FilterError,
     GridPrecision, QslStatusFilter, Sort,
@@ -119,10 +120,16 @@ impl QsoFilterDraft {
             }
         }
         if !self.date_from.trim().is_empty() {
-            parts.push(format!("from {}", self.date_from.trim()));
+            parts.push(format!(
+                "from {}",
+                display::date(&display::date_to_adif(&self.date_from))
+            ));
         }
         if !self.date_to.trim().is_empty() {
-            parts.push(format!("to {}", self.date_to.trim()));
+            parts.push(format!(
+                "to {}",
+                display::date(&display::date_to_adif(&self.date_to))
+            ));
         }
         if !self.not_uploaded_to.trim().is_empty() {
             parts.push(format!("not on {}", self.not_uploaded_to.trim()));
@@ -140,8 +147,12 @@ impl QsoFilterDraft {
     /// is ANDed on here, and only there — the view always passes `None`.
     pub fn to_filter(&self, incremental: Option<String>) -> Result<ExportFilter, FilterError> {
         let f = ExportFilter {
-            date_from: opt(&self.date_from),
-            date_to: opt(&self.date_to),
+            // The UI *shows* dates as `2026-07-12`, so an operator will type that
+            // here. Accept it (and `2026/07/12`) and hand the store the
+            // ADIF-native form; anything else falls through to `validate()` for a
+            // proper error rather than being silently mangled.
+            date_from: opt(&self.date_from).map(|s| display::date_to_adif(&s)),
+            date_to: opt(&self.date_to).map(|s| display::date_to_adif(&s)),
             datetime_from: None,
             datetime_to: None,
             since_last_export: incremental,

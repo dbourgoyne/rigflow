@@ -14,6 +14,7 @@ use crate::logging::LogEntryDraft;
 use crate::logging::capture;
 use crate::ui::app::RigflowApp;
 use crate::ui::state::UiState;
+use rigflow_log::display;
 
 impl RigflowApp {
     /// Open the manual entry window, freezing the current radio state into the
@@ -77,7 +78,15 @@ impl RigflowApp {
                 } else {
                     ui.label(format!("{tx_mhz:.4} MHz  ({})", draft.mode));
                 }
-                ui.label(format!("{} {}Z UTC", draft.qso_date, &draft.time_on[..4]));
+                // Seconds shown here (unlike the list): this is the frozen instant
+                // the contact will be logged at, so the operator is checking it.
+                // Formatted via the helpers rather than sliced — `&time_on[..4]`
+                // would panic on any value shorter than 4 chars.
+                ui.label(format!(
+                    "{} {}Z UTC",
+                    display::date(&draft.qso_date),
+                    display::time_hhmmss(&draft.time_on)
+                ));
                 ui.separator();
 
                 egui::Grid::new("log_entry_grid")
@@ -343,14 +352,14 @@ impl RigflowApp {
                         .striped(true)
                         .spacing([12.0, 2.0])
                         .show(ui, |ui| {
-                            for h in ["Date", "Time", "Call", "Band", "Mode", "Confirm"] {
+                            for h in ["Date", "Time (UTC)", "Call", "Band", "Mode", "Confirm"] {
                                 ui.strong(h);
                             }
                             ui.end_row();
                             for row in &self.contacts_cache {
                                 let q = &row.qso;
-                                ui.label(&q.qso_date);
-                                ui.label(q.time_on.get(..4).unwrap_or(&q.time_on));
+                                ui.label(display::date(&q.qso_date));
+                                ui.label(display::time_hhmm(&q.time_on));
                                 ui.label(&q.call);
                                 ui.label(&q.band);
                                 ui.label(&q.mode);
@@ -428,7 +437,9 @@ impl RigflowApp {
                             );
                             ui.label(format!(
                                 "last {} · {} {}",
-                                last.qso_date, last.band, last.mode
+                                display::date(&last.qso_date),
+                                last.band,
+                                last.mode
                             ));
                         }
                         // The index says worked, the rows haven't landed yet.
@@ -451,14 +462,14 @@ impl RigflowApp {
                                 .striped(true)
                                 .spacing([10.0, 2.0])
                                 .show(ui, |ui| {
-                                    for h in ["Date", "Time", "Band", "Mode"] {
+                                    for h in ["Date", "Time (UTC)", "Band", "Mode"] {
                                         ui.strong(h);
                                     }
                                     ui.end_row();
                                     for row in &page.rows {
                                         let q = &row.qso;
-                                        ui.label(&q.qso_date);
-                                        ui.label(q.time_on.get(..4).unwrap_or(&q.time_on));
+                                        ui.label(display::date(&q.qso_date));
+                                        ui.label(display::time_hhmm(&q.time_on));
                                         ui.label(&q.band);
                                         ui.label(&q.mode);
                                         ui.end_row();
