@@ -6,6 +6,7 @@
 //! window, contact-view window, Station panel) live under `ui/`.
 
 pub mod capture;
+pub mod export;
 pub mod lifecycle;
 pub mod wsjtx_listener;
 

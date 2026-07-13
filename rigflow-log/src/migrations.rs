@@ -21,6 +21,9 @@ pub fn migrate(conn: &Connection) -> Result<(), LogError> {
             0 => {
                 tx.execute_batch(schema::V1_DDL)?;
             }
+            1 => {
+                tx.execute_batch(schema::V2_DDL)?;
+            }
             other => {
                 return Err(LogError::UnknownSchemaVersion(other));
             }

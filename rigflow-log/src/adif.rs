@@ -54,7 +54,7 @@ impl std::fmt::Display for AdifError {
 impl std::error::Error for AdifError {}
 
 /// The ADIF fields modeled as `Qso` columns; every other field goes to `extra`.
-const COLUMN_FIELDS: &[&str] = &[
+pub(crate) const COLUMN_FIELDS: &[&str] = &[
     "CALL",
     "QSO_DATE",
     "TIME_ON",
@@ -157,12 +157,43 @@ pub fn adif_header() -> String {
     "<ADIF_VER:5>3.1.6 <PROGRAMID:7>rigflow <EOH>\n".to_string()
 }
 
+/// This program's ADIF `PROGRAMID`.
+pub const PROGRAM_ID: &str = "rigflow";
+
+/// Serialize one ADIF field as `<NAME:LEN>value`. `LEN` is the **byte** length,
+/// which is what makes `*_INTL` (UTF-8) values round-trip: a multi-byte value
+/// declares its byte count, not its character count.
+fn write_field(name: &str, value: &str) -> String {
+    format!("<{}:{}>{}", name, value.len(), value)
+}
+
+/// A fresh header for an exported file: `ADIF_VER`, `PROGRAMID`,
+/// `PROGRAMVERSION`, `CREATED_TIMESTAMP`, then `<EOH>`.
+///
+/// Distinct from [`adif_header`], which stamps the append-only journal. An
+/// export is a new document with its own creation time; the journal's header was
+/// written once, whenever the journal happened to be started.
+///
+/// `created_timestamp` is ADIF-native `YYYYMMDD HHMMSS` (UTC).
+pub fn export_header(adif_version: &str, program_version: &str, created_timestamp: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&write_field("ADIF_VER", adif_version));
+    out.push(' ');
+    out.push_str(&write_field("PROGRAMID", PROGRAM_ID));
+    out.push(' ');
+    out.push_str(&write_field("PROGRAMVERSION", program_version));
+    out.push(' ');
+    out.push_str(&write_field("CREATED_TIMESTAMP", created_timestamp));
+    out.push_str(" <EOH>\n");
+    out
+}
+
 /// Serialize one record as `<NAME:LEN>value…<EOR>`. Fields are emitted in
 /// sorted (deterministic) order so the writer is stable across round-trips.
 pub fn write_record(record: &AdifRecord) -> String {
     let mut out = String::new();
     for (name, value) in record {
-        out.push_str(&format!("<{}:{}>{}", name, value.len(), value));
+        out.push_str(&write_field(name, value));
         out.push(' ');
     }
     out.push_str("<EOR>\n");

@@ -24,3 +24,4 @@ tokio-tungstenite = "0.24"
 rigflow-protocol = { path = "../rigflow-protocol" }
 rigflow-core = { path = "../rigflow-core" }
 rigflow-log = { path = "../rigflow-log" }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }

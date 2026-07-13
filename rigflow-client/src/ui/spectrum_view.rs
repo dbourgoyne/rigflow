@@ -68,7 +68,7 @@ pub fn draw_spectrum_plot(
     painter.rect_stroke(
         plot_rect,
         0.0,
-        Stroke::new(1.0, Color32::from_gray(110)),
+        Stroke::new(1.0_f32, Color32::from_gray(110)),
         egui::StrokeKind::Inside,
     );
 
@@ -146,7 +146,7 @@ fn draw_grid_and_y_axis(
                 Pos2::new(plot_rect.left(), y),
                 Pos2::new(plot_rect.right(), y),
             ],
-            Stroke::new(1.0, grid_color),
+            Stroke::new(1.0_f32, grid_color),
         );
 
         let db = egui::lerp(db_min..=db_max, t);
@@ -198,7 +198,7 @@ fn draw_x_axis(
                 Pos2::new(x, plot_rect.top()),
                 Pos2::new(x, plot_rect.bottom()),
             ],
-            Stroke::new(1.0, grid_color),
+            Stroke::new(1.0_f32, grid_color),
         );
 
         let freq_hz = egui::lerp(left_hz..=right_hz, t);
@@ -265,7 +265,7 @@ fn draw_trace(
 
     painter.add(egui::Shape::line(
         points,
-        Stroke::new(1.5, Color32::LIGHT_GREEN),
+        Stroke::new(1.5_f32, Color32::LIGHT_GREEN),
     ));
 }
 
@@ -344,7 +344,7 @@ fn draw_frequency_markers(
                 Pos2::new(target_x, plot_rect.top()),
                 Pos2::new(target_x, plot_rect.bottom()),
             ],
-            Stroke::new(1.5, Color32::from_rgb(255, 220, 80)),
+            Stroke::new(1.5_f32, Color32::from_rgb(255, 220, 80)),
         );
 
         let label = format!("T: {} MHz", format_mhz(state.target_freq_hz));
@@ -440,7 +440,7 @@ fn draw_passband_overlay(
             Pos2::new(x0, plot_rect.top()),
             Pos2::new(x0, plot_rect.bottom()),
         ],
-        Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
+        Stroke::new(1.0_f32, Color32::from_rgb(120, 160, 255)),
     );
 
     painter.line_segment(
@@ -448,7 +448,7 @@ fn draw_passband_overlay(
             Pos2::new(x1, plot_rect.top()),
             Pos2::new(x1, plot_rect.bottom()),
         ],
-        Stroke::new(1.0, Color32::from_rgb(120, 160, 255)),
+        Stroke::new(1.0_f32, Color32::from_rgb(120, 160, 255)),
     );
 }
 
@@ -774,7 +774,7 @@ fn draw_bookmark_overlays<'a>(
         painter.rect_stroke(
             rect,
             4.0,
-            Stroke::new(1.0, border_color),
+            Stroke::new(1.0_f32, border_color),
             egui::StrokeKind::Inside,
         );
 
@@ -896,7 +896,7 @@ fn draw_tooltip_bubble(
     painter.rect_stroke(
         bubble_rect,
         6.0,
-        Stroke::new(1.0, border_color),
+        Stroke::new(1.0_f32, border_color),
         egui::StrokeKind::Inside,
     );
 

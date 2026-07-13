@@ -258,6 +258,7 @@ impl RigflowApp {
         }
 
         let mut open = true;
+        let mut open_export = false;
         egui::Window::new("Contacts")
             .open(&mut open)
             .default_width(560.0)
@@ -271,6 +272,9 @@ impl RigflowApp {
                     ui.label(format!("{} contacts", self.contacts_cache.len()));
                     if ui.button("Refresh").clicked() {
                         self.contacts_cache_dirty = true;
+                    }
+                    if ui.button("Export…").clicked() {
+                        open_export = true;
                     }
                 });
                 ui.separator();
@@ -300,6 +304,9 @@ impl RigflowApp {
                         });
                 });
             });
+        if open_export {
+            self.open_export(&snapshot.operator_id);
+        }
         if !open {
             if let Ok(mut s) = self.state.lock() {
                 s.show_contact_view = false;

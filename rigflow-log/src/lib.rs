@@ -14,6 +14,7 @@ pub mod adif;
 pub mod capture;
 pub mod dedupe;
 pub mod error;
+pub mod export;
 pub mod migrations;
 pub mod model;
 pub mod normalize;
@@ -23,6 +24,7 @@ pub mod wsjtx;
 
 pub use capture::{CapturedRadioState, Receiver};
 pub use error::LogError;
+pub use export::{ExportFilter, ExportOptions, ExportSummary, Exporter, FieldProfile};
 pub use model::{Qso, Station};
 pub use store::LogStore;
 

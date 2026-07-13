@@ -101,6 +101,26 @@ pub struct RigflowApp {
     pub(crate) contacts_cache_dirty: bool,
     /// Receiver for decoded WSJT-X `LoggedADIF` events from the UDP-2237 thread.
     pub(crate) wsjtx_rx: std::sync::mpsc::Receiver<crate::logging::wsjtx_listener::LogEvent>,
+
+    // ── ADIF export ──────────────────────────────────────────────────────
+    // All of this lives here rather than in `UiState`: only the export window
+    // touches it, and `UiState` is cloned every frame by `snapshot_state()`.
+    /// Export window open flag (opened from the contact view).
+    pub(crate) show_export: bool,
+    pub(crate) export_draft: crate::logging::export::ExportDraft,
+    /// Previous draft, to notice an edit and re-arm the count debounce.
+    pub(crate) export_draft_last: Option<crate::logging::export::ExportDraft>,
+    /// When the debounced dry-run count should fire.
+    pub(crate) export_count_due: Option<std::time::Instant>,
+    /// Latest dry-run match count (`None` = counting, or a filter error).
+    pub(crate) export_count: Option<usize>,
+    /// A write is in flight on the worker.
+    pub(crate) export_busy: bool,
+    /// Last export result / filter error, shown in the window.
+    pub(crate) export_status: String,
+    /// Job queue to the export worker thread, and its replies.
+    pub(crate) export_tx: std::sync::mpsc::Sender<crate::logging::export::ExportJob>,
+    pub(crate) export_rx: std::sync::mpsc::Receiver<crate::logging::export::ExportEvent>,
 }
 
 impl RigflowApp {
@@ -117,6 +137,10 @@ impl RigflowApp {
         // Spawn the WSJT-X UDP listener (non-fatal bind); it forwards decoded
         // LoggedADIF events we drain each frame.
         let wsjtx_rx = crate::logging::wsjtx_listener::spawn_wsjtx_listener(Arc::clone(&state));
+
+        // The export worker: read-only DB access on its own thread, so a large
+        // export streams to disk without stalling the frame loop.
+        let (export_tx, export_rx) = crate::logging::export::spawn_export_worker();
 
         // Create the virtual digital-audio endpoints once, at startup.
         let digital_audio = crate::digital_audio::DigitalAudio::start();
@@ -159,6 +183,15 @@ impl RigflowApp {
             contacts_cache: Vec::new(),
             contacts_cache_dirty: true,
             wsjtx_rx,
+            show_export: false,
+            export_draft: crate::logging::export::ExportDraft::default(),
+            export_draft_last: None,
+            export_count_due: None,
+            export_count: None,
+            export_busy: false,
+            export_status: String::new(),
+            export_tx,
+            export_rx,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -666,6 +699,9 @@ impl eframe::App for RigflowApp {
 
         // Ingest any WSJT-X FT8 contacts that arrived since the last frame.
         self.drain_wsjtx_events(ctx);
+        // Collect export counts/results from the worker (and advance the
+        // incremental bookmark when an incremental export has landed).
+        self.drain_export_events(ctx);
 
         self.ensure_mic();
         self.auto_relock_controls();
@@ -684,6 +720,7 @@ impl eframe::App for RigflowApp {
         self.draw_wsjtx_setup_window(ctx);
         self.draw_log_entry_window(ctx, &snapshot);
         self.draw_contact_view_window(ctx, &snapshot);
+        self.draw_export_window(ctx, &snapshot);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and

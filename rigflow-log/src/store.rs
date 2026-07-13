@@ -240,6 +240,57 @@ impl LogStore {
         Ok(wb)
     }
 
+    /// Count the QSOs an export filter would match, without writing a file.
+    ///
+    /// Convenience for a caller that already holds the store (and for tests).
+    /// The client's dialog counts through [`crate::export::Exporter`] on a
+    /// worker thread instead, so a full scan can't stutter the UI.
+    pub fn count_matching(&self, filter: &crate::export::ExportFilter) -> Result<usize, LogError> {
+        crate::export::writer::count_with(&self.conn, filter)
+    }
+
+    /// The current position of a named incremental-export bookmark.
+    pub fn export_bookmark(&self, profile: &str) -> Result<Option<i64>, LogError> {
+        crate::export::writer::read_bookmark(&self.conn, profile)
+    }
+
+    /// Advance a named incremental-export bookmark to `last_qso_id`.
+    ///
+    /// **This is the only way the bookmark moves, and it is not reachable from
+    /// the export writer** — that runs on a read-only connection. Call it only
+    /// after an incremental (`since_last_export`), non-dry-run export has
+    /// actually written its file. An ad-hoc filtered export must never land
+    /// here: moving the bookmark on a one-off "export my 20m QSOs" would skip
+    /// every unexported QSO outside that filter on the next incremental run.
+    ///
+    /// Monotonic by construction: a bookmark never moves backwards, so a
+    /// re-export of an older slice can't rewind the operator's position.
+    pub fn advance_export_bookmark(
+        &mut self,
+        profile: &str,
+        last_qso_id: i64,
+    ) -> Result<(), LogError> {
+        let now = Utc::now().to_rfc3339();
+        let created_at: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT created_at FROM qso WHERE id = ?1",
+                [last_qso_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        self.conn.execute(
+            "INSERT INTO export_state (profile, last_qso_id, last_created_at, last_run_at) \
+             VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(profile) DO UPDATE SET \
+               last_qso_id     = max(last_qso_id, excluded.last_qso_id), \
+               last_created_at = excluded.last_created_at, \
+               last_run_at     = excluded.last_run_at",
+            params![profile, last_qso_id, created_at, now],
+        )?;
+        Ok(())
+    }
+
     /// Append one ADIF record to the journal, creating it (with header) on first
     /// write. `O_APPEND` + `fsync`; safe because this store is single-owner.
     fn append_journal(&self, q: &Qso) -> Result<(), LogError> {
@@ -300,7 +351,16 @@ fn upsert_station(tx: &Transaction<'_>, s: &Station) -> Result<i64, LogError> {
     }
 }
 
-fn row_to_logged_qso(r: &rusqlite::Row<'_>) -> rusqlite::Result<Result<LoggedQso, LogError>> {
+/// The `SELECT` list [`row_to_logged_qso`] expects, in order. Shared by every
+/// query that hydrates a [`LoggedQso`] (contact view, dedupe, export) so a
+/// column added here can't silently shift an index in one caller and not
+/// another.
+pub(crate) const QSO_COLUMNS: &str = "id,call,qso_date,time_on,band,mode,submode,freq_hz,\
+     freq_rx_hz,band_rx,rst_sent,rst_rcvd,gridsquare,dxcc,extra";
+
+pub(crate) fn row_to_logged_qso(
+    r: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Result<LoggedQso, LogError>> {
     let extra_json: String = r.get(14)?;
     let extra: BTreeMap<String, String> = match serde_json::from_str(&extra_json) {
         Ok(m) => m,

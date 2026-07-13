@@ -1,13 +1,15 @@
-//! SQLite schema (v1) and PRAGMA setup.
+//! SQLite schema and PRAGMA setup.
 //!
 //! The schema is deliberately forward-looking: `qso_service` and `sync_state`
 //! are created now but stay empty until a later phase adds online-service
 //! confirmation sync. The `extra` JSON column round-trips arbitrary ADIF
 //! fields, and `idx_qso_match` is the join key future confirmation matching
 //! will use, so it is created correctly now.
+//!
+//! v2 adds `export_state`: the incremental-export bookmarks.
 
 /// Current schema version stamped into `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// DDL that brings a fresh database to v1.
 pub const V1_DDL: &str = r#"
@@ -59,6 +61,29 @@ CREATE TABLE sync_state (
     service      TEXT PRIMARY KEY,
     last_marker  TEXT,
     last_run_at  TEXT
+);
+"#;
+
+/// DDL that brings a v1 database to v2.
+///
+/// `export_state` holds one **incremental-export bookmark** per named profile,
+/// so independent incremental streams (a Wavelog feed, a per-service feed) never
+/// collide. `last_qso_id` is the `qso.id` (= rowid) of the newest QSO the last
+/// incremental run exported: incremental export is about *export progress*, not
+/// contact time, so it filters on insertion order, never on `qso_date`.
+///
+/// This is deliberately separate from `sync_state`, which belongs to
+/// online-service confirmation sync — a different clock with different owners.
+///
+/// **Only the `since_last_export` path writes this table**, and only after a
+/// successful non-dry-run write. An ad-hoc filtered export must never move an
+/// operator's incremental position.
+pub const V2_DDL: &str = r#"
+CREATE TABLE export_state (
+    profile         TEXT PRIMARY KEY,
+    last_qso_id     INTEGER NOT NULL,
+    last_created_at TEXT,
+    last_run_at     TEXT NOT NULL
 );
 "#;
 

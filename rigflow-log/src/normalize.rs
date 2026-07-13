@@ -47,6 +47,19 @@ pub fn band_for_freq_hz(freq_hz: u64) -> Option<&'static str> {
         .map(|(_, _, band)| *band)
 }
 
+/// Every ADIF `BAND` string we recognize, low→high. The band enumeration is
+/// closed, so export can reject an unknown band outright rather than silently
+/// matching nothing.
+pub fn known_bands() -> impl Iterator<Item = &'static str> {
+    BANDS.iter().map(|(_, _, b)| *b)
+}
+
+/// Whether `band` is a recognized ADIF `BAND` (case-insensitive).
+pub fn is_known_band(band: &str) -> bool {
+    let b = band.trim().to_ascii_lowercase();
+    known_bands().any(|k| k.eq_ignore_ascii_case(&b))
+}
+
 /// Known submode → canonical parent `MODE`. When a submode value shows up in
 /// the `MODE` field (a common non-compliance), we split it back into
 /// `(parent_mode, Some(submode))`.
@@ -61,7 +74,6 @@ const SUBMODE_PARENT: &[(&str, &str)] = &[
     ("JT65A", "JT65"),
     ("JT65B", "JT65"),
     ("JT65C", "JT65"),
-    ("OLIVIA", "OLIVIA"),
 ];
 
 /// Aliases for the `MODE` field itself (not submodes): things operators or
@@ -109,6 +121,107 @@ pub fn normalize_mode(mode: &str, submode: Option<&str>) -> (String, Option<Stri
     }
 
     (alias_mode(&mode_uc), None)
+}
+
+/// A coarse mode family, for filters that mean "all the digital contacts" rather
+/// than an exact mode list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ModeClass {
+    Phone,
+    Cw,
+    Digital,
+    Image,
+}
+
+impl ModeClass {
+    /// Every class, for UI enumeration.
+    pub const ALL: &'static [ModeClass] = &[
+        ModeClass::Phone,
+        ModeClass::Cw,
+        ModeClass::Digital,
+        ModeClass::Image,
+    ];
+
+    /// Stable lower-case wire/UI name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModeClass::Phone => "phone",
+            ModeClass::Cw => "cw",
+            ModeClass::Digital => "digital",
+            ModeClass::Image => "image",
+        }
+    }
+
+    /// Parse a class name (case-insensitive). `None` if unknown.
+    pub fn parse(s: &str) -> Option<ModeClass> {
+        let s = s.trim().to_ascii_lowercase();
+        ModeClass::ALL.iter().copied().find(|c| c.as_str() == s)
+    }
+}
+
+/// Canonical `MODE` → class. Keyed on the **canonical parent mode** (what the
+/// `mode` column actually stores after [`normalize_mode`]), never on a submode:
+/// FT4 is stored as `MFSK`/`FT4`, so classifying `MFSK` classifies FT4 with it.
+///
+/// This table is the single source of truth for the mode→class mapping. Export's
+/// `mode_classes` filter expands through [`modes_in_class`] rather than
+/// hardcoding a list at the call site, so a mode added to [`MODE_ALIAS`] or
+/// [`SUBMODE_PARENT`] only has to be classified once, here.
+const MODE_CLASS: &[(&str, ModeClass)] = &[
+    // Phone
+    ("SSB", ModeClass::Phone),
+    ("AM", ModeClass::Phone),
+    ("FM", ModeClass::Phone),
+    ("DIGITALVOICE", ModeClass::Phone),
+    // CW
+    ("CW", ModeClass::Cw),
+    // Digital
+    ("FT8", ModeClass::Digital),
+    ("MFSK", ModeClass::Digital), // FT4, JS8
+    ("JT65", ModeClass::Digital),
+    ("JT9", ModeClass::Digital),
+    ("JT4", ModeClass::Digital),
+    ("Q65", ModeClass::Digital),
+    ("FSK441", ModeClass::Digital),
+    ("ISCAT", ModeClass::Digital),
+    ("MSK144", ModeClass::Digital),
+    ("PSK", ModeClass::Digital),
+    ("RTTY", ModeClass::Digital),
+    ("OLIVIA", ModeClass::Digital),
+    ("CONTESTIA", ModeClass::Digital),
+    ("DOMINO", ModeClass::Digital),
+    ("THOR", ModeClass::Digital),
+    ("THRB", ModeClass::Digital),
+    ("MT63", ModeClass::Digital),
+    ("HELL", ModeClass::Digital),
+    ("ARDOP", ModeClass::Digital),
+    ("PACKET", ModeClass::Digital),
+    ("PACTOR", ModeClass::Digital),
+    ("VARA", ModeClass::Digital),
+    ("WINMOR", ModeClass::Digital),
+    // Image
+    ("SSTV", ModeClass::Image),
+    ("ATV", ModeClass::Image),
+    ("FAX", ModeClass::Image),
+];
+
+/// The class of a canonical `MODE`, or `None` for a mode we don't classify (an
+/// unknown mode passed through by [`normalize_mode`]). `None` is "unclassified",
+/// never a guess — an unclassified mode simply doesn't match any class filter.
+pub fn mode_class(mode: &str) -> Option<ModeClass> {
+    let m = mode.trim().to_ascii_uppercase();
+    MODE_CLASS.iter().find(|(k, _)| *k == m).map(|(_, c)| *c)
+}
+
+/// Every canonical `MODE` in a class. Export expands a `mode_classes` filter
+/// into an `IN (...)` over these, so the SQL only ever compares the indexed
+/// `mode` column against exact values.
+pub fn modes_in_class(class: ModeClass) -> Vec<&'static str> {
+    MODE_CLASS
+        .iter()
+        .filter(|(_, c)| *c == class)
+        .map(|(m, _)| *m)
+        .collect()
 }
 
 fn parent_of_submode(sm: &str) -> Option<&'static str> {
@@ -222,5 +335,81 @@ mod tests {
             normalize_mode("contestia", None),
             ("CONTESTIA".into(), None)
         );
+    }
+
+    #[test]
+    fn mode_class_basics() {
+        assert_eq!(mode_class("SSB"), Some(ModeClass::Phone));
+        assert_eq!(mode_class("cw"), Some(ModeClass::Cw));
+        assert_eq!(mode_class("FT8"), Some(ModeClass::Digital));
+        assert_eq!(mode_class("SSTV"), Some(ModeClass::Image));
+    }
+
+    #[test]
+    fn mode_class_follows_normalization() {
+        // The class table is keyed on the CANONICAL mode, so classifying has to
+        // go through normalize_mode first — USB is not in the table, SSB is.
+        let (mode, _) = normalize_mode("USB", None);
+        assert_eq!(mode_class(&mode), Some(ModeClass::Phone));
+
+        // FT4 normalizes to MFSK/FT4; classifying the stored parent gets digital.
+        let (mode, submode) = normalize_mode("FT4", None);
+        assert_eq!(submode.as_deref(), Some("FT4"));
+        assert_eq!(mode_class(&mode), Some(ModeClass::Digital));
+    }
+
+    #[test]
+    fn mode_class_unknown_is_none() {
+        assert_eq!(mode_class("CONTESTIA"), Some(ModeClass::Digital));
+        assert_eq!(mode_class("NOTAMODE"), None);
+    }
+
+    #[test]
+    fn olivia_is_a_mode_not_its_own_submode() {
+        // Regression: OLIVIA used to self-parent in SUBMODE_PARENT, stamping a
+        // bogus <SUBMODE:6>OLIVIA on every Olivia QSO. MODE=OLIVIA is canonical;
+        // real Olivia submodes look like "OLIVIA 8/250".
+        assert_eq!(normalize_mode("OLIVIA", None), ("OLIVIA".into(), None));
+    }
+
+    #[test]
+    fn modes_in_class_expands() {
+        let phone = modes_in_class(ModeClass::Phone);
+        assert!(phone.contains(&"SSB"));
+        assert!(phone.contains(&"AM"));
+        assert!(phone.contains(&"FM"));
+        assert!(!phone.contains(&"CW"));
+
+        // Digital must include MFSK, or FT4/JS8 QSOs silently fall out of a
+        // "digital" export.
+        let digital = modes_in_class(ModeClass::Digital);
+        assert!(digital.contains(&"FT8"));
+        assert!(digital.contains(&"MFSK"));
+        assert!(digital.contains(&"RTTY"));
+
+        assert_eq!(modes_in_class(ModeClass::Cw), vec!["CW"]);
+    }
+
+    #[test]
+    fn mode_class_roundtrips_by_name() {
+        for c in ModeClass::ALL {
+            assert_eq!(ModeClass::parse(c.as_str()), Some(*c));
+        }
+        assert_eq!(ModeClass::parse("PHONE"), Some(ModeClass::Phone));
+        assert_eq!(ModeClass::parse("nope"), None);
+    }
+
+    #[test]
+    fn every_classified_mode_is_canonical() {
+        // A class-table key that isn't its own canonical mode would never match
+        // the stored `mode` column. Guards against adding e.g. "USB" or "FT4".
+        for (m, _) in MODE_CLASS {
+            let (canonical, submode) = normalize_mode(m, None);
+            assert_eq!(
+                (&canonical[..], submode.as_deref()),
+                (*m, None),
+                "MODE_CLASS key {m} is not a canonical MODE"
+            );
+        }
     }
 }

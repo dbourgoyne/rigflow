@@ -1,6 +1,7 @@
 //! Crate error type.
 
 use crate::adif::AdifError;
+use crate::export::FilterError;
 
 #[derive(Debug)]
 pub enum LogError {
@@ -8,6 +9,8 @@ pub enum LogError {
     Io(std::io::Error),
     Adif(AdifError),
     Json(serde_json::Error),
+    /// An export filter was rejected before it reached SQL.
+    Filter(FilterError),
     /// A database reported a `user_version` this build doesn't know how to
     /// migrate (e.g. opened by a newer rigflow).
     UnknownSchemaVersion(i64),
@@ -20,6 +23,7 @@ impl std::fmt::Display for LogError {
             LogError::Io(e) => write!(f, "io error: {e}"),
             LogError::Adif(e) => write!(f, "adif error: {e}"),
             LogError::Json(e) => write!(f, "json error: {e}"),
+            LogError::Filter(e) => write!(f, "export filter: {e}"),
             LogError::UnknownSchemaVersion(v) => {
                 write!(
                     f,
@@ -50,5 +54,10 @@ impl From<AdifError> for LogError {
 impl From<serde_json::Error> for LogError {
     fn from(e: serde_json::Error) -> Self {
         LogError::Json(e)
+    }
+}
+impl From<FilterError> for LogError {
+    fn from(e: FilterError) -> Self {
+        LogError::Filter(e)
     }
 }
