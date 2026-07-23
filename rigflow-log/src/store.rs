@@ -5,7 +5,7 @@
 //! `Connection` is `!Sync`, and `synchronous=FULL` makes every commit fsync, so
 //! exactly one thread (the UI thread in the client) drives it.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -39,6 +39,9 @@ pub struct ImportCommit {
     /// Rows written. Duplicates and unusable records were dropped at plan time,
     /// so this is the length of what was handed in.
     pub imported: usize,
+    /// QSL confirmations recorded against existing QSOs (from a LoTW/eQSL
+    /// report). These marked contacts confirmed; they added no rows.
+    pub confirmed: usize,
     /// Whether the batched ADIF journal append succeeded. `false` means the
     /// contacts are in the DB but missing from the journal (a warning: the
     /// journal is only ever a subset of the DB).
@@ -50,6 +53,10 @@ pub struct ImportCommit {
 pub struct LoggedQso {
     pub id: i64,
     pub qso: Qso,
+    /// Services that have confirmed this QSO (lower-case: `lotw`, `eqsl`, …),
+    /// from the `qso_service` table. Empty unless a query enriched it — only the
+    /// contact-view queries do, since only they show the confirmation column.
+    pub confirmed: Vec<String>,
 }
 
 /// In-memory "worked before?" index, loaded once at open and updated on each
@@ -175,18 +182,26 @@ impl LogStore {
     /// imported. A half-imported log is worse than none, because the operator
     /// cannot tell which half.
     ///
-    /// `qsos` is expected to be [`crate::import::ImportPlan::importable`] — already
-    /// normalized, validated, and deduped. Callers get the `MY_*` snapshot
-    /// semantics of `insert`: the station fills only fields the imported record
-    /// doesn't already carry, so another log's `MY_*` survives.
+    /// `qsos` is expected to be [`crate::import::ImportPlan::importable`] and
+    /// `confirmations` to be [`crate::import::ImportPlan::confirmations`] — both
+    /// already matched, normalized, and deduped at plan time. New contacts and
+    /// QSL confirmations land in the **same transaction**, so a report that both
+    /// adds and confirms is still all-or-nothing.
+    ///
+    /// Callers get the `MY_*` snapshot semantics of `insert`: the station fills
+    /// only fields the imported record doesn't already carry, so another log's
+    /// `MY_*` survives. Confirmations touch only `qso_service`, not the journal —
+    /// they add no QSO the journal doesn't already have.
     pub fn commit_import(
         &mut self,
         qsos: &[Qso],
+        confirmations: &[crate::import::Confirmation],
         station: &Station,
     ) -> Result<ImportCommit, LogError> {
-        if qsos.is_empty() {
+        if qsos.is_empty() && confirmations.is_empty() {
             return Ok(ImportCommit {
                 imported: 0,
+                confirmed: 0,
                 journal_appended: true,
             });
         }
@@ -200,6 +215,9 @@ impl LogStore {
         for q in &staged {
             insert_qso_row(&tx, q, station_id)?;
         }
+        for c in confirmations {
+            record_confirmation(&tx, c)?;
+        }
         tx.commit()?;
 
         let journal_appended = match self.append_journal(&staged) {
@@ -211,6 +229,7 @@ impl LogStore {
         };
         Ok(ImportCommit {
             imported: staged.len(),
+            confirmed: confirmations.len(),
             journal_appended,
         })
     }
@@ -229,6 +248,7 @@ impl LogStore {
         for r in rows {
             out.push(r??);
         }
+        attach_confirmations(&self.conn, &mut out)?;
         Ok(out)
     }
 
@@ -294,12 +314,14 @@ impl LogStore {
         filter: &crate::export::ExportFilter,
         limit: usize,
     ) -> Result<Vec<LoggedQso>, LogError> {
-        crate::export::writer::query_with(
+        let mut rows = crate::export::writer::query_with(
             &self.conn,
             filter,
             limit,
             crate::export::Sort::Reverse, // the view is always newest-first
-        )
+        )?;
+        attach_confirmations(&self.conn, &mut rows)?;
+        Ok(rows)
     }
 
     /// The current position of a named incremental-export bookmark.
@@ -385,6 +407,24 @@ fn with_station_snapshot(qso: &Qso, station: &Station) -> Qso {
     q
 }
 
+/// Record one QSL confirmation inside an open transaction. Upsert keyed on
+/// `(qso_id, service)`, so re-recording the same confirmation just refreshes its
+/// date rather than erroring on the primary key — the same idempotency the plan
+/// preview promises. `uploaded_at` stays null: importing a report tells us the
+/// service confirmed, not that (or when) we uploaded.
+fn record_confirmation(
+    tx: &Transaction<'_>,
+    c: &crate::import::Confirmation,
+) -> Result<(), LogError> {
+    tx.execute(
+        "INSERT INTO qso_service (qso_id, service, confirmed_at, detail) \
+         VALUES (?1, ?2, ?3, NULL) \
+         ON CONFLICT(qso_id, service) DO UPDATE SET confirmed_at = excluded.confirmed_at",
+        params![c.qso_id, c.service, c.confirmed_at],
+    )?;
+    Ok(())
+}
+
 /// Insert one `qso` row inside an open transaction. Shared by the single-contact
 /// and bulk-import paths so the column list can only ever drift in one place.
 fn insert_qso_row(tx: &Transaction<'_>, q: &Qso, station_id: i64) -> Result<i64, LogError> {
@@ -467,6 +507,42 @@ fn upsert_station(tx: &Transaction<'_>, s: &Station) -> Result<i64, LogError> {
 pub(crate) const QSO_COLUMNS: &str = "id,call,qso_date,time_on,band,mode,submode,freq_hz,\
      freq_rx_hz,band_rx,rst_sent,rst_rcvd,gridsquare,dxcc,extra";
 
+/// Fill each row's `confirmed` list from `qso_service`, in one query for the
+/// whole page. The ids are our own row ids, so inlining them in the `IN (…)`
+/// clause is safe (no user text). Shared by the read-write contact queries here
+/// and the read-only [`crate::export::Exporter::page`] the client's view runs
+/// on, so the confirmation column is populated whichever path loads the page.
+pub(crate) fn attach_confirmations(
+    conn: &Connection,
+    rows: &mut [LoggedQso],
+) -> Result<(), LogError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let ids = rows
+        .iter()
+        .map(|r| r.id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT qso_id, service FROM qso_service WHERE qso_id IN ({ids}) AND confirmed_at IS NOT NULL"
+    );
+    let mut by_id: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut stmt = conn.prepare(&sql)?;
+    let mapped = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    for row in mapped {
+        let (id, service) = row?;
+        by_id.entry(id).or_default().push(service);
+    }
+    for r in rows.iter_mut() {
+        if let Some(mut services) = by_id.remove(&r.id) {
+            services.sort();
+            r.confirmed = services;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn row_to_logged_qso(
     r: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<Result<LoggedQso, LogError>> {
@@ -477,6 +553,7 @@ pub(crate) fn row_to_logged_qso(
     };
     Ok(Ok(LoggedQso {
         id: r.get(0)?,
+        confirmed: Vec::new(),
         qso: Qso {
             call: r.get(1)?,
             qso_date: r.get(2)?,

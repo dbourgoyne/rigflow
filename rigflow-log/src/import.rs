@@ -51,6 +51,20 @@ impl std::fmt::Display for ImportProblem {
     }
 }
 
+/// A QSL confirmation to record against an already-logged QSO. Produced by
+/// [`plan`] when a record carries `QSL_RCVD = Y` and matches a contact already
+/// in the log — a LoTW/eQSL report *confirms* existing QSOs, it does not add new
+/// ones. Committed into the `qso_service` table, keyed by `(qso_id, service)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirmation {
+    /// The matched `qso.id` this confirmation attaches to.
+    pub qso_id: i64,
+    /// The confirming service, lower-case: `lotw`, `eqsl`, or generic `qsl`.
+    pub service: String,
+    /// The service's confirmation date if the record carried one (`QSLRDATE`).
+    pub confirmed_at: Option<String>,
+}
+
 /// What an import *would* do. Produced without writing anything.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImportPlan {
@@ -61,6 +75,15 @@ pub struct ImportPlan {
     /// Records skipped because the log (or an earlier record in this same file)
     /// already has them.
     pub duplicates: usize,
+    /// QSL confirmations matched to existing QSOs, ready to record. These do
+    /// **not** insert contacts — they mark ones the log already has as confirmed.
+    pub confirmations: Vec<Confirmation>,
+    /// Confirmation records whose QSO is already marked confirmed for that
+    /// service — skipped, so re-importing a report is idempotent.
+    pub already_confirmed: usize,
+    /// Confirmation records that matched no contact in the log. Surfaced, not
+    /// inserted: a QSL for a QSO we never logged is an anomaly worth showing.
+    pub unmatched_confirmations: usize,
     /// Records that could not be made into a contact.
     pub unusable: Vec<ImportProblem>,
 }
@@ -74,6 +97,20 @@ impl ImportPlan {
             if self.total == 1 { "" } else { "s" },
             self.importable.len()
         );
+        if !self.confirmations.is_empty() {
+            s.push_str(&format!(
+                " · {} confirmation{}",
+                self.confirmations.len(),
+                if self.confirmations.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        if self.already_confirmed > 0 {
+            s.push_str(&format!(" · {} already confirmed", self.already_confirmed));
+        }
         if self.duplicates > 0 {
             s.push_str(&format!(" · {} duplicate", self.duplicates));
             if self.duplicates != 1 {
@@ -81,15 +118,26 @@ impl ImportPlan {
             }
             s.push_str(" (skipped)");
         }
+        if self.unmatched_confirmations > 0 {
+            s.push_str(&format!(
+                " · {} confirmation{} unmatched",
+                self.unmatched_confirmations,
+                if self.unmatched_confirmations == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
         if !self.unusable.is_empty() {
             s.push_str(&format!(" · {} unusable", self.unusable.len()));
         }
         s
     }
 
-    /// Nothing to do — no good records at all.
+    /// Nothing to do — no contacts to add and no confirmations to record.
     pub fn is_empty(&self) -> bool {
-        self.importable.is_empty()
+        self.importable.is_empty() && self.confirmations.is_empty()
     }
 }
 
@@ -179,8 +227,32 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
             continue;
         }
 
+        let existing = db_duplicates(conn, &q, window_secs)?;
+
+        // A record carrying `QSL_RCVD = Y` is a *confirmation* of an existing
+        // QSO (a LoTW/eQSL report), not a new contact. Match it and record the
+        // confirmation; never insert. This is the whole reason a confirmation
+        // report differs from a log import.
+        if let Some((service, confirmed_at)) = confirmation_in(&q) {
+            match existing.first() {
+                Some(m) => {
+                    if service_recorded(conn, m.id, &service)? {
+                        plan.already_confirmed += 1; // idempotent re-import
+                    } else {
+                        plan.confirmations.push(Confirmation {
+                            qso_id: m.id,
+                            service,
+                            confirmed_at,
+                        });
+                    }
+                }
+                None => plan.unmatched_confirmations += 1,
+            }
+            continue;
+        }
+
         // Already in the log?
-        if !db_duplicates(conn, &q, window_secs)?.is_empty() {
+        if !existing.is_empty() {
             plan.duplicates += 1;
             continue;
         }
@@ -203,6 +275,41 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
     }
 
     Ok(plan)
+}
+
+/// If `q` carries QSL confirmation data, the `(service, confirmed_at)` it
+/// implies. Keyed on the ADIF-standard `QSL_RCVD = Y` (the only value that means
+/// *confirmed*; `N`/`R`/`I` do not). The service is inferred from which program's
+/// `APP_*` fields ride along — LoTW and eQSL both stamp their own — falling back
+/// to a generic `qsl`. All fields live in [`Qso::extra`] after `record_to_qso`.
+fn confirmation_in(q: &Qso) -> Option<(String, Option<String>)> {
+    let confirmed = q
+        .extra
+        .get("QSL_RCVD")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y"));
+    if !confirmed {
+        return None;
+    }
+    let service = if q.extra.keys().any(|k| k.starts_with("APP_LOTW")) {
+        "lotw"
+    } else if q.extra.keys().any(|k| k.starts_with("APP_EQSL")) {
+        "eqsl"
+    } else {
+        "qsl"
+    };
+    let confirmed_at = q.extra.get("QSLRDATE").map(|s| s.trim().to_string());
+    Some((service.to_string(), confirmed_at))
+}
+
+/// Whether QSO `qso_id` already has a confirmation recorded for `service`, so a
+/// re-imported report skips it rather than churning the row.
+fn service_recorded(conn: &Connection, qso_id: i64, service: &str) -> Result<bool, LogError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM qso_service WHERE qso_id = ?1 AND service = ?2",
+        rusqlite::params![qso_id, service],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
 }
 
 /// The dedupe natural key: call + band + mode, normalized the way the SQL check

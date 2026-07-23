@@ -101,17 +101,30 @@ impl Qso {
         self.mode = mode;
         self.submode = submode;
 
-        if self.band.trim().is_empty()
-            && let Some(b) = self.freq_hz.and_then(normalize::band_for_freq_hz)
-        {
+        // Band: derive from freq when blank; otherwise canonicalize the case of
+        // a band that's already present. An imported "40M" must become "40m" —
+        // the form we store when deriving from freq — or the case-sensitive
+        // dedupe key treats the same contact as new (see dedupe / import).
+        if self.band.trim().is_empty() {
+            if let Some(b) = self.freq_hz.and_then(normalize::band_for_freq_hz) {
+                self.band = b.to_string();
+            }
+        } else if let Some(b) = normalize::canonical_band(&self.band) {
             self.band = b.to_string();
         }
         // band_rx is derived from freq_rx independently; only meaningful when a
-        // split RX frequency exists.
-        if self.band_rx.is_none()
-            && let Some(b) = self.freq_rx_hz.and_then(normalize::band_for_freq_hz)
-        {
-            self.band_rx = Some(b.to_string());
+        // split RX frequency exists. Same canonicalization when already present.
+        match self.band_rx.as_deref() {
+            None => {
+                if let Some(b) = self.freq_rx_hz.and_then(normalize::band_for_freq_hz) {
+                    self.band_rx = Some(b.to_string());
+                }
+            }
+            Some(b) => {
+                if let Some(c) = normalize::canonical_band(b) {
+                    self.band_rx = Some(c.to_string());
+                }
+            }
         }
     }
 }

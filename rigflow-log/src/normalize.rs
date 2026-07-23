@@ -60,6 +60,16 @@ pub fn is_known_band(band: &str) -> bool {
     known_bands().any(|k| k.eq_ignore_ascii_case(&b))
 }
 
+/// The canonical ADIF `BAND` string for `band`, matched case-insensitively
+/// (e.g. `"40M"` → `"40m"`). `None` if `band` is not a recognized ham band, so
+/// callers leave an unrecognized value untouched rather than mangling it. This
+/// is what lets an imported uppercase `BAND` dedupe against a contact we stored
+/// with a lowercase band derived from frequency.
+pub fn canonical_band(band: &str) -> Option<&'static str> {
+    let b = band.trim();
+    known_bands().find(|k| k.eq_ignore_ascii_case(b))
+}
+
 /// Known submode → canonical parent `MODE`. When a submode value shows up in
 /// the `MODE` field (a common non-compliance), we split it back into
 /// `(parent_mode, Some(submode))`.

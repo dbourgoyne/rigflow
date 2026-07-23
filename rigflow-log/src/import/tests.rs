@@ -74,6 +74,32 @@ fn rec(call: &str, date: &str, time: &str, band: &str, mode: &str) -> String {
     )
 }
 
+/// `rec` plus the QSL fields a LoTW confirmation report carries: `QSL_RCVD=Y`,
+/// a `QSLRDATE`, and an `APP_LoTW_*` field that identifies the service.
+fn lotw_rec(call: &str, date: &str, time: &str, band: &str, mode: &str, qslrdate: &str) -> String {
+    format!(
+        "{}<APP_LoTW_OWNCALL:6>KK7TCY <QSL_RCVD:1>Y <QSLRDATE:8>{} ",
+        rec(call, date, time, band, mode),
+        qslrdate,
+    )
+}
+
+/// A W7WRO/40m/FT8 contact already in the log, matching `lotw_rec` above. Its
+/// band is derived from frequency (canonical lowercase "40m").
+fn insert_worked(store: &mut LogStore) {
+    let mut q = crate::Qso {
+        call: "W7WRO".into(),
+        qso_date: "20260712".into(),
+        time_on: "235600".into(),
+        band: String::new(),
+        mode: "FT8".into(),
+        freq_hz: Some(7_076_000),
+        ..Default::default()
+    };
+    q.normalize();
+    store.insert(&q, &station()).unwrap();
+}
+
 fn plan_of(dir: &TmpDir, text: &str) -> ImportPlan {
     let store = LogStore::open(dir.db(), dir.adi()).unwrap();
     let p = plan(store.conn(), text, DEFAULT_WINDOW_SECS).unwrap();
@@ -189,6 +215,110 @@ fn plan_skips_contacts_already_in_the_log() {
 }
 
 #[test]
+fn plan_dedupes_an_uppercase_band_against_a_derived_lowercase_band() {
+    // A contact stored with a frequency-derived band ("40m", lowercase) must
+    // still dedupe against the same QSO re-imported from a program (LoTW,
+    // WSJT-X, N1MM…) that writes BAND uppercase ("40M"). Regression: normalize()
+    // once left a present band's case untouched, so the case-sensitive dedupe
+    // key inserted the confirmation report's QSOs as fresh duplicates.
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    let mut existing = crate::Qso {
+        call: "W7WRO".into(),
+        qso_date: "20260712".into(),
+        time_on: "235600".into(),
+        band: String::new(), // derived from freq → canonical lowercase "40m"
+        mode: "FT8".into(),
+        freq_hz: Some(7_076_000),
+        ..Default::default()
+    };
+    existing.normalize();
+    assert_eq!(existing.band, "40m");
+    store.insert(&existing, &station()).unwrap();
+    drop(store);
+
+    // Same QSO as it comes back in a LoTW report: BAND uppercase.
+    let doc = adif_doc(&[&rec("W7WRO", "20260712", "235600", "40M", "FT8")]);
+    let plan = plan_of(&dir, &doc);
+    assert_eq!(plan.duplicates, 1, "uppercase BAND must match stored 40m");
+    assert_eq!(plan.importable.len(), 0);
+}
+
+#[test]
+fn plan_treats_a_qsl_report_as_confirmations_not_new_contacts() {
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store);
+    drop(store);
+
+    // The same QSO as it comes back from LoTW: uppercase BAND, QSL_RCVD=Y.
+    let doc = adif_doc(&[&lotw_rec(
+        "W7WRO", "20260712", "235600", "40M", "FT8", "20260723",
+    )]);
+    let plan = plan_of(&dir, &doc);
+    assert_eq!(
+        plan.importable.len(),
+        0,
+        "a confirmation is not a new contact"
+    );
+    assert_eq!(plan.duplicates, 0, "nor a plain duplicate");
+    assert_eq!(plan.confirmations.len(), 1);
+    let c = &plan.confirmations[0];
+    assert_eq!(c.service, "lotw", "service inferred from APP_LoTW_* fields");
+    assert_eq!(c.confirmed_at.as_deref(), Some("20260723"));
+}
+
+#[test]
+fn committing_a_report_marks_the_contact_confirmed_and_is_idempotent() {
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store);
+
+    let doc = adif_doc(&[&lotw_rec(
+        "W7WRO", "20260712", "235600", "40M", "FT8", "20260723",
+    )]);
+    let plan = plan(store.conn(), &doc, DEFAULT_WINDOW_SECS).unwrap();
+    let outcome = store
+        .commit_import(&plan.importable, &plan.confirmations, &station())
+        .unwrap();
+    assert_eq!(outcome.imported, 0, "no new rows");
+    assert_eq!(outcome.confirmed, 1);
+
+    // The contact view now shows the confirmation.
+    let rows = store.query_contacts(10).unwrap();
+    assert_eq!(rows.len(), 1, "still one contact, not two");
+    assert_eq!(rows[0].confirmed, vec!["lotw".to_string()]);
+
+    // Re-importing the same report records nothing new — idempotent preview.
+    let plan2 = super::plan(store.conn(), &doc, DEFAULT_WINDOW_SECS).unwrap();
+    assert_eq!(plan2.confirmations.len(), 0);
+    assert_eq!(plan2.already_confirmed, 1);
+    drop(store);
+
+    // The client's contact view loads through the read-only Exporter, not the
+    // store — the confirmation column must be populated there too.
+    let ex = Exporter::open(dir.db()).unwrap();
+    let page = ex
+        .page(&ExportFilter::default(), 10, crate::export::Sort::Reverse)
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.rows[0].confirmed, vec!["lotw".to_string()]);
+}
+
+#[test]
+fn an_unmatched_confirmation_is_surfaced_not_inserted() {
+    // A QSL for a QSO we never logged: counted, never turned into a phantom row.
+    let dir = TmpDir::new();
+    let doc = adif_doc(&[&lotw_rec(
+        "W7WRO", "20260712", "235600", "40M", "FT8", "20260723",
+    )]);
+    let plan = plan_of(&dir, &doc);
+    assert_eq!(plan.unmatched_confirmations, 1);
+    assert_eq!(plan.confirmations.len(), 0);
+    assert_eq!(plan.importable.len(), 0);
+}
+
+#[test]
 fn plan_catches_duplicates_within_the_file_itself() {
     // Another program's export can carry its own internal duplicates, and the DB
     // check cannot see rows we are about to add in the same batch.
@@ -271,7 +401,9 @@ fn commit_writes_the_plan_and_the_journal() {
     let plan = plan_of(&dir, &doc);
 
     let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
-    let outcome = store.commit_import(&plan.importable, &station()).unwrap();
+    let outcome = store
+        .commit_import(&plan.importable, &[], &station())
+        .unwrap();
     assert_eq!(outcome.imported, 2);
     assert!(outcome.journal_appended);
 
@@ -297,7 +429,9 @@ fn import_is_idempotent_reimporting_the_same_file_adds_nothing() {
 
     let plan1 = plan_of(&dir, &doc);
     let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
-    store.commit_import(&plan1.importable, &station()).unwrap();
+    store
+        .commit_import(&plan1.importable, &[], &station())
+        .unwrap();
     drop(store);
 
     let plan2 = plan_of(&dir, &doc);
@@ -306,7 +440,9 @@ fn import_is_idempotent_reimporting_the_same_file_adds_nothing() {
     assert!(plan2.importable.is_empty());
 
     let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
-    let outcome = store.commit_import(&plan2.importable, &station()).unwrap();
+    let outcome = store
+        .commit_import(&plan2.importable, &[], &station())
+        .unwrap();
     assert_eq!(outcome.imported, 0);
     assert_eq!(store.query_contacts(100).unwrap().len(), 2, "still 2");
 }
@@ -327,7 +463,9 @@ fn an_imported_records_own_my_fields_survive_the_station_snapshot() {
     let plan = plan_of(&dir, &doc);
 
     let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
-    store.commit_import(&plan.importable, &station()).unwrap();
+    store
+        .commit_import(&plan.importable, &[], &station())
+        .unwrap();
 
     let rows = store.query_contacts(100).unwrap();
     let by_call = |c: &str| {
@@ -394,7 +532,7 @@ fn commit_is_atomic_a_failing_row_imports_nothing() {
         q("K5ZD", "160000"),
     ];
 
-    let result = store.commit_import(&batch, &station());
+    let result = store.commit_import(&batch, &[], &station());
     assert!(result.is_err(), "the aborting row must fail the commit");
 
     let rows = store.query_contacts(100).unwrap();
@@ -476,7 +614,7 @@ fn export_then_import_into_a_clean_log_round_trips() {
 
     let mut dst_store = LogStore::open(dst.db(), dst.adi()).unwrap();
     dst_store
-        .commit_import(&plan.importable, &station())
+        .commit_import(&plan.importable, &[], &station())
         .unwrap();
 
     let rows = dst_store.query_contacts(100).unwrap();
@@ -528,7 +666,9 @@ fn a_large_import_is_one_transaction_not_a_loop_over_insert() {
     assert_eq!(plan.importable.len(), 20_000);
 
     let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
-    let outcome = store.commit_import(&plan.importable, &station()).unwrap();
+    let outcome = store
+        .commit_import(&plan.importable, &[], &station())
+        .unwrap();
     assert_eq!(outcome.imported, 20_000);
 
     let elapsed = started.elapsed();

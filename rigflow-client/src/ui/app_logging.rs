@@ -367,9 +367,7 @@ impl RigflowApp {
                                 ui.label(&q.call);
                                 ui.label(&q.band);
                                 ui.label(&q.mode);
-                                // Per-service confirmation badge slots — empty in
-                                // phase 1 (populated once service sync lands).
-                                ui.label("—");
+                                confirm_badge(ui, &row.confirmed);
                                 ui.end_row();
                             }
                         });
@@ -495,5 +493,32 @@ impl RigflowApp {
             self.call_lookup.clear();
             self.call_lookup_hits = None;
         }
+    }
+}
+
+/// The contact view's "Confirm" cell: the service names that have confirmed the
+/// QSO (LoTW, eQSL, …) in green, or a plain "—" when none have. Emphasis is by
+/// colour only — no leading glyph. A checkmark (U+2713) is not in egui's default
+/// font and renders as a tofu box, so the green text alone carries "confirmed".
+fn confirm_badge(ui: &mut egui::Ui, confirmed: &[String]) {
+    if confirmed.is_empty() {
+        ui.label("—");
+        return;
+    }
+    let text = confirmed
+        .iter()
+        .map(|s| service_label(s))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    ui.colored_label(egui::Color32::from_rgb(0x4c, 0xaf, 0x50), text);
+}
+
+/// Display name for a `qso_service` code.
+fn service_label(s: &str) -> &str {
+    match s {
+        "lotw" => "LoTW",
+        "eqsl" => "eQSL",
+        "qsl" => "QSL",
+        other => other,
     }
 }

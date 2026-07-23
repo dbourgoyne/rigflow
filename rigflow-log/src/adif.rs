@@ -108,6 +108,10 @@ pub fn parse_adif(text: &str) -> Result<Vec<AdifRecord>, AdifError> {
                     records.push(std::mem::take(&mut current));
                 }
             }
+            // LoTW report files terminate with a lengthless `<APP_LoTW_EOF>`
+            // marker. It's a documented end-of-file control tag, not a data
+            // field, so stop parsing here rather than treating it as corruption.
+            ("APP_LOTW_EOF", _) => break,
             (_, None) => return Err(AdifError::MissingLength(name)),
             (_, Some(len_str)) => {
                 let len: usize = len_str
@@ -343,6 +347,28 @@ mod tests {
             parse_adif("<CALL>W1AW<EOR>").unwrap_err(),
             AdifError::MissingLength(_)
         ));
+    }
+
+    #[test]
+    fn parse_lotw_report_with_eof_marker() {
+        // LoTW report: preamble text, lowercase <eoh>, values whose declared
+        // length stops before a trailing `// …` comment, and a lengthless
+        // <APP_LoTW_EOF> terminator that must not error.
+        let text = "ARRL Logbook of the World Status Report\n\
+                    Generated at 2026-07-23 20:48:28\n\
+                    <PROGRAMID:4>LoTW\n<APP_LoTW_NUMREC:1>1\n<eoh>\n\n\
+                    <STATION_CALLSIGN:6>KK7TCY\n<CALL:5>W7WRO\n<BAND:3>40M\n\
+                    <FREQ:7>7.07600\n<MODE:3>FT8\n<QSO_DATE:8>20260712\n\
+                    <APP_LoTW_RXQSO:19>2026-07-23 20:45:06 // QSO record inserted/modified at LoTW\n\
+                    <TIME_ON:6>235600\n<QSL_RCVD:1>Y\n<eor>\n\n<APP_LoTW_EOF>\n";
+        let recs = parse_adif(text).unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0]["CALL"], "W7WRO");
+        assert_eq!(recs[0]["QSL_RCVD"], "Y");
+        // Declared length (19) clips the trailing `// …` comment off the value.
+        assert_eq!(recs[0]["APP_LOTW_RXQSO"], "2026-07-23 20:45:06");
+        // The lengthless EOF marker is not captured as a field.
+        assert!(!recs[0].contains_key("APP_LOTW_EOF"));
     }
 
     #[test]

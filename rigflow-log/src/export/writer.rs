@@ -99,7 +99,10 @@ impl Exporter {
         sort: super::filter::Sort,
     ) -> Result<ContactPage, LogError> {
         let total = count_with(&self.conn, filter)?;
-        let rows = query_with(&self.conn, filter, limit, sort)?;
+        let mut rows = query_with(&self.conn, filter, limit, sort)?;
+        // The contact view runs on this read-only path, so its confirmation
+        // column has to be filled here as well as on the read-write store.
+        crate::store::attach_confirmations(&self.conn, &mut rows)?;
         Ok(ContactPage { rows, total })
     }
 

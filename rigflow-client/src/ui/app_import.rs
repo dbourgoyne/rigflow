@@ -70,7 +70,7 @@ impl RigflowApp {
             return;
         };
 
-        match store.commit_import(&plan.importable, &station) {
+        match store.commit_import(&plan.importable, &plan.confirmations, &station) {
             Ok(outcome) => {
                 // The worked-before index and the contact list both describe a log
                 // that just changed underneath them.
@@ -82,8 +82,21 @@ impl RigflowApp {
                     outcome.imported,
                     if outcome.imported == 1 { "" } else { "s" }
                 );
+                if outcome.confirmed > 0 {
+                    msg.push_str(&format!(
+                        " · {} confirmation{} recorded",
+                        outcome.confirmed,
+                        if outcome.confirmed == 1 { "" } else { "s" }
+                    ));
+                }
                 if plan.duplicates > 0 {
                     msg.push_str(&format!(" · {} duplicate(s) skipped", plan.duplicates));
+                }
+                if plan.unmatched_confirmations > 0 {
+                    msg.push_str(&format!(
+                        " · {} confirmation(s) matched nothing",
+                        plan.unmatched_confirmations
+                    ));
                 }
                 if !plan.unusable.is_empty() {
                     msg.push_str(&format!(" · {} unusable", plan.unusable.len()));
@@ -155,6 +168,14 @@ impl RigflowApp {
                     // ── the preview: what this file would do to the log ──
                     ui.label(egui::RichText::new(plan.summary()).strong());
 
+                    if !plan.confirmations.is_empty() || plan.unmatched_confirmations > 0 {
+                        ui.label(note_text(
+                            "Confirmations are QSL reports (e.g. from LoTW). They mark \
+                             contacts your log already has as confirmed — no new contacts \
+                             are added. Ones that match nothing in your log are skipped.",
+                        ));
+                    }
+
                     if plan.duplicates > 0 {
                         ui.label(note_text(
                             "Duplicates are contacts your log already has (same call, band \
@@ -182,14 +203,7 @@ impl RigflowApp {
                     ui.horizontal(|ui| {
                         let can = !plan.is_empty();
                         if ui
-                            .add_enabled(
-                                can,
-                                egui::Button::new(format!(
-                                    "Import {} contact{}",
-                                    plan.importable.len(),
-                                    if plan.importable.len() == 1 { "" } else { "s" }
-                                )),
-                            )
+                            .add_enabled(can, egui::Button::new(import_button_label(plan)))
                             .on_disabled_hover_text("Nothing in this file is new to your log.")
                             .clicked()
                         {
@@ -238,5 +252,20 @@ impl RigflowApp {
         if !open {
             self.show_import = false;
         }
+    }
+}
+
+/// The commit button's label, tuned to what the plan actually does: adding
+/// contacts, recording confirmations, or both. A LoTW report is all
+/// confirmations and no contacts, so "Import 0 contacts" would read as a bug.
+fn import_button_label(plan: &rigflow_log::import::ImportPlan) -> String {
+    let n = plan.importable.len();
+    let m = plan.confirmations.len();
+    let contacts = |n: usize| format!("{n} contact{}", if n == 1 { "" } else { "s" });
+    let confs = |m: usize| format!("{m} confirmation{}", if m == 1 { "" } else { "s" });
+    match (n, m) {
+        (0, m) => format!("Record {}", confs(m)),
+        (n, 0) => format!("Import {}", contacts(n)),
+        (n, m) => format!("Import {} & record {}", contacts(n), confs(m)),
     }
 }
