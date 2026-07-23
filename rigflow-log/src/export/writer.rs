@@ -31,6 +31,44 @@ use crate::{adif, store};
 /// This build's `PROGRAMVERSION`.
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Trailing SELECT column that packs a QSO's confirmations into one string:
+/// `service␟date` entries joined by `␞`, from `qso_service`. Control chars
+/// (unit/record separators, 0x1f/0x1e) can't occur in a service name or an ADIF
+/// date, so the split in [`inject_confirmations`] is unambiguous. Empty (`NULL`)
+/// when the QSO has no confirmations.
+const CONFIRMATIONS_AGG: &str = "(SELECT group_concat(service || char(31) || \
+     coalesce(confirmed_at,''), char(30)) \
+     FROM qso_service s WHERE s.qso_id = qso.id AND s.confirmed_at IS NOT NULL)";
+
+/// Column index of [`CONFIRMATIONS_AGG`] in the export SELECT: it follows the
+/// fixed `QSO_COLUMNS` (15 columns, indices 0–14), so it is 15.
+const CONFIRMATIONS_COL: usize = 15;
+
+/// Stamp each `qso_service` confirmation onto an export record as the ADIF field
+/// its service uses: `LOTW_QSL_RCVD`/`LOTW_QSLRDATE`, `EQSL_QSL_RCVD`/
+/// `EQSL_QSLRDATE`, or the generic `QSL_RCVD`/`QSLRDATE`. `packed` is the
+/// [`CONFIRMATIONS_AGG`] value. Mirrors what import's confirmation detection
+/// reads, so an export of ours round-trips back to the same `qso_service` rows.
+fn inject_confirmations(record: &mut adif::AdifRecord, packed: Option<&str>) {
+    let Some(packed) = packed.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    for entry in packed.split('\u{1e}') {
+        let (service, date) = entry.split_once('\u{1f}').unwrap_or((entry, ""));
+        let (rcvd, rdate) = match service {
+            "qsl" => ("QSL_RCVD".to_string(), "QSLRDATE".to_string()),
+            s => {
+                let s = s.to_ascii_uppercase();
+                (format!("{s}_QSL_RCVD"), format!("{s}_QSLRDATE"))
+            }
+        };
+        record.insert(rcvd, "Y".to_string());
+        if !date.is_empty() {
+            record.insert(rdate, date.to_string());
+        }
+    }
+}
+
 /// What an export did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportSummary {
@@ -226,9 +264,13 @@ pub(crate) fn export_with(
 
     let bookmark = resolve_bookmark(conn, filter)?;
     let q = query::build(filter, bookmark);
+    // Confirmations ride along as a trailing aggregate column (index after the
+    // fixed QSO_COLUMNS), so a single streaming pass carries them — no per-row
+    // query against `qso_service`.
     let sql = format!(
-        "SELECT {} FROM qso WHERE {} {}",
+        "SELECT {}, {} FROM qso WHERE {} {}",
         store::QSO_COLUMNS,
+        CONFIRMATIONS_AGG,
         q.where_sql,
         query::order_by(opts.sort),
     );
@@ -246,6 +288,7 @@ pub(crate) fn export_with(
     let mut count = 0usize;
     let mut max_qso_id: Option<i64> = None;
     while let Some(row) = rows.next()? {
+        let confs: Option<String> = row.get(CONFIRMATIONS_COL)?;
         let lq = store::row_to_logged_qso(row)??;
 
         // The shared record-writer — the same one the journal appends through.
@@ -253,6 +296,9 @@ pub(crate) fn export_with(
         // wins are applied in there, once, for both callers.
         let mut record = adif::qso_to_record(&lq.qso);
         opts.project(&mut record);
+        // AFTER project: confirmation state is authoritative export data and must
+        // survive even a narrow field profile (Core, Full-without-extra).
+        inject_confirmations(&mut record, confs.as_deref());
         w.write_all(adif::write_record(&record).as_bytes())?;
 
         count += 1;

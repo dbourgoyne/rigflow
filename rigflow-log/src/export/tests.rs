@@ -133,6 +133,83 @@ fn read_calls(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// Insert one QSO, record confirmations for it, and export with `opts`; return
+/// the parsed records of the written file.
+fn export_with_confirmations(
+    dir: &TmpDir,
+    confs: &[(&str, &str)],
+    opts_profile: FieldProfile,
+) -> Vec<adif::AdifRecord> {
+    let mut s = LogStore::open(dir.db(), dir.adi()).unwrap();
+    let out = s.insert(&qso("W1AW"), &station()).unwrap();
+    let confirmations: Vec<_> = confs
+        .iter()
+        .map(|(svc, date)| crate::import::Confirmation {
+            qso_id: out.id,
+            service: (*svc).into(),
+            confirmed_at: Some((*date).into()),
+        })
+        .collect();
+    s.commit_import(&[], &confirmations, &station()).unwrap();
+    drop(s);
+
+    let opts = ExportOptions {
+        output_path: dir.out(),
+        field_profile: opts_profile,
+        ..Default::default()
+    };
+    Exporter::open(dir.db())
+        .unwrap()
+        .export(&ExportFilter::default(), &opts)
+        .unwrap();
+    adif::parse_adif(&std::fs::read_to_string(dir.out()).unwrap()).unwrap()
+}
+
+#[test]
+fn export_stamps_a_lotw_confirmation_as_service_qsl_fields() {
+    let dir = TmpDir::new();
+    let recs = export_with_confirmations(&dir, &[("lotw", "20260723")], FieldProfile::Full);
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0].get("LOTW_QSL_RCVD").map(String::as_str), Some("Y"));
+    assert_eq!(
+        recs[0].get("LOTW_QSLRDATE").map(String::as_str),
+        Some("20260723")
+    );
+    // The generic (paper card) QSL_RCVD is a *different* thing and wasn't set.
+    assert!(!recs[0].contains_key("QSL_RCVD"));
+}
+
+#[test]
+fn export_carries_confirmations_even_under_the_core_profile() {
+    // Confirmation state is authoritative export data; a narrow field profile
+    // (which drops most extras) must not silently strip it.
+    let dir = TmpDir::new();
+    let recs = export_with_confirmations(&dir, &[("lotw", "20260723")], FieldProfile::Core);
+    assert_eq!(recs[0].get("LOTW_QSL_RCVD").map(String::as_str), Some("Y"));
+}
+
+#[test]
+fn export_stamps_every_confirming_service() {
+    // Both LoTW and eQSL confirmed the same QSO: both must survive the
+    // group_concat packing and reappear as their own fields.
+    let dir = TmpDir::new();
+    let recs = export_with_confirmations(
+        &dir,
+        &[("lotw", "20260723"), ("eqsl", "20260724")],
+        FieldProfile::Full,
+    );
+    assert_eq!(recs[0].get("LOTW_QSL_RCVD").map(String::as_str), Some("Y"));
+    assert_eq!(recs[0].get("EQSL_QSL_RCVD").map(String::as_str), Some("Y"));
+    assert_eq!(
+        recs[0].get("LOTW_QSLRDATE").map(String::as_str),
+        Some("20260723")
+    );
+    assert_eq!(
+        recs[0].get("EQSL_QSLRDATE").map(String::as_str),
+        Some("20260724")
+    );
+}
+
 fn count(dir: &TmpDir, filter: &ExportFilter) -> usize {
     Exporter::open(dir.db()).unwrap().count(filter).unwrap()
 }

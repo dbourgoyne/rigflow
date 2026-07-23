@@ -306,6 +306,34 @@ fn committing_a_report_marks_the_contact_confirmed_and_is_idempotent() {
 }
 
 #[test]
+fn import_recognizes_per_service_qsl_fields_the_round_trip() {
+    // What our own export writes for a LoTW confirmation is `LOTW_QSL_RCVD:Y`
+    // (+ date), NOT the APP_LoTW form a LoTW report uses. Re-importing that must
+    // recognize it as a lotw confirmation, so an export→import round-trips.
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store); // W7WRO 40m FT8
+    drop(store);
+
+    let doc = adif_doc(&[&format!(
+        "{}<LOTW_QSL_RCVD:1>Y <LOTW_QSLRDATE:8>20260723 ",
+        rec("W7WRO", "20260712", "235600", "40M", "FT8"),
+    )]);
+    let plan = plan_of(&dir, &doc);
+    assert_eq!(plan.confirmations.len(), 1);
+    assert_eq!(plan.confirmations[0].service, "lotw");
+    assert_eq!(
+        plan.confirmations[0].confirmed_at.as_deref(),
+        Some("20260723")
+    );
+    assert_eq!(
+        plan.importable.len(),
+        0,
+        "a confirmation is not a new contact"
+    );
+}
+
+#[test]
 fn an_unmatched_confirmation_is_surfaced_not_inserted() {
     // A QSL for a QSO we never logged: counted, never turned into a phantom row.
     let dir = TmpDir::new();

@@ -229,24 +229,28 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
 
         let existing = db_duplicates(conn, &q, window_secs)?;
 
-        // A record carrying `QSL_RCVD = Y` is a *confirmation* of an existing
-        // QSO (a LoTW/eQSL report), not a new contact. Match it and record the
-        // confirmation; never insert. This is the whole reason a confirmation
-        // report differs from a log import.
-        if let Some((service, confirmed_at)) = confirmation_in(&q) {
+        // A record carrying a `QSL_RCVD = Y` (or `LOTW_QSL_RCVD` / `EQSL_QSL_RCVD`)
+        // is a *confirmation* of an existing QSO — a LoTW/eQSL report, or an
+        // export of ours round-tripping — not a new contact. Match it and record
+        // each service's confirmation; never insert. One record can confirm more
+        // than one service (LoTW *and* eQSL), so this is a list.
+        let confs = confirmations_in(&q);
+        if !confs.is_empty() {
             match existing.first() {
                 Some(m) => {
-                    if service_recorded(conn, m.id, &service)? {
-                        plan.already_confirmed += 1; // idempotent re-import
-                    } else {
-                        plan.confirmations.push(Confirmation {
-                            qso_id: m.id,
-                            service,
-                            confirmed_at,
-                        });
+                    for (service, confirmed_at) in confs {
+                        if service_recorded(conn, m.id, &service)? {
+                            plan.already_confirmed += 1; // idempotent re-import
+                        } else {
+                            plan.confirmations.push(Confirmation {
+                                qso_id: m.id,
+                                service,
+                                confirmed_at,
+                            });
+                        }
                     }
                 }
-                None => plan.unmatched_confirmations += 1,
+                None => plan.unmatched_confirmations += confs.len(),
             }
             continue;
         }
@@ -277,28 +281,51 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
     Ok(plan)
 }
 
-/// If `q` carries QSL confirmation data, the `(service, confirmed_at)` it
-/// implies. Keyed on the ADIF-standard `QSL_RCVD = Y` (the only value that means
-/// *confirmed*; `N`/`R`/`I` do not). The service is inferred from which program's
-/// `APP_*` fields ride along — LoTW and eQSL both stamp their own — falling back
-/// to a generic `qsl`. All fields live in [`Qso::extra`] after `record_to_qso`.
-fn confirmation_in(q: &Qso) -> Option<(String, Option<String>)> {
-    let confirmed = q
-        .extra
-        .get("QSL_RCVD")
-        .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y"));
-    if !confirmed {
-        return None;
-    }
-    let service = if q.extra.keys().any(|k| k.starts_with("APP_LOTW")) {
-        "lotw"
-    } else if q.extra.keys().any(|k| k.starts_with("APP_EQSL")) {
-        "eqsl"
-    } else {
-        "qsl"
+/// Every QSL confirmation `q` carries, as `(service, confirmed_at)` pairs. A
+/// single record can confirm more than one service (LoTW *and* eQSL), so this is
+/// a list. Recognizes, in priority order per service:
+///
+/// - `LOTW_QSL_RCVD = Y` → `lotw` (date from `LOTW_QSLRDATE`). This is what our
+///   own export writes, and what most loggers use, so it round-trips.
+/// - `EQSL_QSL_RCVD = Y` → `eqsl` (date from `EQSL_QSLRDATE`).
+/// - `QSL_RCVD = Y` → the generic/paper card, unless the record carries a LoTW or
+///   eQSL `APP_*` marker (a LoTW report stamps `APP_LoTW_*` alongside a bare
+///   `QSL_RCVD`), in which case it is attributed to that service. Date from
+///   `QSLRDATE`. Skipped if that service was already captured above, so a file
+///   with both `LOTW_QSL_RCVD` and a LoTW-stamped `QSL_RCVD` isn't double-counted.
+///
+/// `Y` is the only value that means *confirmed*; `N`/`R`/`I` do not. All fields
+/// live in [`Qso::extra`] after [`adif::record_to_qso`].
+fn confirmations_in(q: &Qso) -> Vec<(String, Option<String>)> {
+    let is_y = |k: &str| {
+        q.extra
+            .get(k)
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y"))
     };
-    let confirmed_at = q.extra.get("QSLRDATE").map(|s| s.trim().to_string());
-    Some((service.to_string(), confirmed_at))
+    let date = |k: &str| q.extra.get(k).map(|s| s.trim().to_string());
+
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    if is_y("LOTW_QSL_RCVD") {
+        out.push(("lotw".into(), date("LOTW_QSLRDATE")));
+    }
+    if is_y("EQSL_QSL_RCVD") {
+        out.push(("eqsl".into(), date("EQSL_QSLRDATE")));
+    }
+    if is_y("QSL_RCVD") {
+        // Attribute a bare QSL_RCVD to the service its APP_* marker names (LoTW
+        // reports do this), else the generic paper card.
+        let service = if q.extra.keys().any(|k| k.starts_with("APP_LOTW")) {
+            "lotw"
+        } else if q.extra.keys().any(|k| k.starts_with("APP_EQSL")) {
+            "eqsl"
+        } else {
+            "qsl"
+        };
+        if !out.iter().any(|(s, _)| s == service) {
+            out.push((service.to_string(), date("QSLRDATE")));
+        }
+    }
+    out
 }
 
 /// Whether QSO `qso_id` already has a confirmation recorded for `service`, so a
