@@ -234,6 +234,60 @@ impl LogStore {
         })
     }
 
+    /// Delete the contact with row id `id`. Returns whether a row was removed.
+    ///
+    /// **DB-only.** The DB is the mutable source of truth; `qso_service` rows
+    /// cascade (`ON DELETE CASCADE`). The `.adi` journal is **append-only and is
+    /// deliberately left untouched** — it is a historical capture log of what was
+    /// logged, not a mirror of current state, and rewriting it would destroy both
+    /// that property and its crash-safety. Nothing reads the journal back
+    /// (`LogStore::open` loads from SQLite), so the divergence is by design: a
+    /// deleted contact stays in the journal as history. Recover current state via
+    /// an export of the DB, not the journal.
+    pub fn delete_qso(&mut self, id: i64) -> Result<bool, LogError> {
+        let n = self.conn.execute("DELETE FROM qso WHERE id = ?1", [id])?;
+        Ok(n > 0)
+    }
+
+    /// Overwrite the contact with row id `id` with the fields of `qso`.
+    ///
+    /// **DB-only**, for the same reason as [`LogStore::delete_qso`]: the
+    /// append-only journal keeps the originally-logged record; the edit lives in
+    /// the DB. Edits the modeled columns and `extra`; `station_id` and
+    /// `created_at` are left as they were (an edit does not re-provenance or
+    /// re-date the contact). The passed QSO is normalized first, so an edited
+    /// band/mode is canonical.
+    pub fn update_qso(&mut self, id: i64, qso: &Qso) -> Result<(), LogError> {
+        let mut q = qso.clone();
+        q.normalize();
+        let now = Utc::now().to_rfc3339();
+        let extra_json = serde_json::to_string(&q.extra)?;
+        self.conn.execute(
+            "UPDATE qso SET call=?1,qso_date=?2,time_on=?3,band=?4,mode=?5,submode=?6,\
+             freq_hz=?7,freq_rx_hz=?8,band_rx=?9,rst_sent=?10,rst_rcvd=?11,gridsquare=?12,\
+             dxcc=?13,extra=?14,updated_at=?15 WHERE id=?16",
+            params![
+                q.call,
+                q.qso_date,
+                q.time_on,
+                q.band,
+                q.mode,
+                q.submode,
+                q.freq_hz.map(|v| v as i64),
+                q.freq_rx_hz.map(|v| v as i64),
+                q.band_rx,
+                q.rst_sent,
+                q.rst_rcvd,
+                q.gridsquare,
+                q.dxcc,
+                extra_json,
+                now,
+                id,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Most-recent contacts first (by UTC date/time, then id). `limit` caps the
     /// result. Structured so a later phase can add a filter clause without
     /// touching callers.
@@ -723,6 +777,105 @@ mod tests {
         assert_eq!(text.matches("<EOH>").count(), 1, "exactly one header");
         assert_eq!(text.matches("<EOR>").count(), 2, "one EOR per QSO");
         assert!(text.contains("W1AW") && text.contains("K5ZD"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_removes_the_row_but_leaves_the_append_only_journal() {
+        let dir = std::env::temp_dir().join(format!("rigflow-del-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("rigflow_log.db");
+        let adi = dir.join("rigflow_log.adi");
+        std::fs::remove_file(&db).ok();
+        std::fs::remove_file(&adi).ok();
+
+        let mut s = LogStore::open(&db, &adi).unwrap();
+        let a = s.insert(&qso("W1AW", "20m", "142300"), &station()).unwrap();
+        s.insert(&qso("K5ZD", "20m", "143000"), &station()).unwrap();
+
+        assert!(s.delete_qso(a.id).unwrap(), "existing row is deleted");
+        assert!(!s.delete_qso(a.id).unwrap(), "already gone → false");
+
+        // The DB — the source of truth — reflects the deletion.
+        let rows = s.query_contacts(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].qso.call, "K5ZD");
+
+        // The journal is append-only and untouched: it still holds BOTH records,
+        // the deleted one included. It is history, not a mirror of current state.
+        let text = std::fs::read_to_string(&adi).unwrap();
+        assert_eq!(text.matches("<EOH>").count(), 1);
+        assert_eq!(
+            text.matches("<EOR>").count(),
+            2,
+            "both records still logged"
+        );
+        assert!(text.contains("W1AW") && text.contains("K5ZD"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn delete_cascades_its_confirmations() {
+        // Deleting a QSO must drop its qso_service rows (ON DELETE CASCADE), so a
+        // confirmation can't outlive the contact it confirmed.
+        let mut s = LogStore::open_in_memory("/nonexistent/ignored.adi").unwrap();
+        let out = s.insert(&qso("W1AW", "20m", "142300"), &station()).unwrap();
+        s.commit_import(
+            &[],
+            &[crate::import::Confirmation {
+                qso_id: out.id,
+                service: "lotw".into(),
+                confirmed_at: Some("20260723".into()),
+            }],
+            &station(),
+        )
+        .unwrap();
+        let count = |s: &LogStore| -> i64 {
+            s.conn()
+                .query_row("SELECT COUNT(*) FROM qso_service", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count(&s), 1);
+        s.delete_qso(out.id).unwrap(); // DB-only; journal is not touched
+        assert_eq!(count(&s), 0, "confirmation cascaded away with the QSO");
+    }
+
+    #[test]
+    fn update_changes_the_db_but_not_the_append_only_journal() {
+        let dir = std::env::temp_dir().join(format!("rigflow-upd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("rigflow_log.db");
+        let adi = dir.join("rigflow_log.adi");
+        std::fs::remove_file(&db).ok();
+        std::fs::remove_file(&adi).ok();
+
+        let mut s = LogStore::open(&db, &adi).unwrap();
+        let out = s.insert(&qso("W1AW", "20m", "142300"), &station()).unwrap();
+
+        let mut edited = s.query_contacts(1).unwrap().remove(0).qso;
+        edited.call = "W1AX".into();
+        edited.rst_rcvd = Some("57".into());
+        s.update_qso(out.id, &edited).unwrap();
+
+        // The DB reflects the edit in place, not as a new row.
+        let rows = s.query_contacts(10).unwrap();
+        assert_eq!(rows.len(), 1, "an edit is in place, not an insert");
+        assert_eq!(rows[0].qso.call, "W1AX");
+        assert_eq!(rows[0].qso.rst_rcvd.as_deref(), Some("57"));
+        // The snapshotted MY_* fields the edit didn't touch survive.
+        assert_eq!(
+            rows[0].qso.extra.get("MY_GRIDSQUARE"),
+            Some(&"EM12".to_string())
+        );
+
+        // The append-only journal still holds the ORIGINAL record, untouched.
+        let text = std::fs::read_to_string(&adi).unwrap();
+        assert_eq!(text.matches("<EOR>").count(), 1);
+        assert!(text.contains("W1AW"), "journal keeps what was logged");
+        assert!(
+            !text.contains("W1AX"),
+            "the edit is not written to the journal"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

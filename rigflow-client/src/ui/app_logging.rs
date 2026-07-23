@@ -13,8 +13,97 @@ use eframe::egui;
 use crate::logging::LogEntryDraft;
 use crate::logging::capture;
 use crate::ui::app::RigflowApp;
+use crate::ui::panels::note_text;
 use crate::ui::state::UiState;
 use rigflow_log::display;
+
+/// The editable state of one contact open in the edit window. Holds the original
+/// [`rigflow_log::Qso`] so `extra` (the MY_* snapshot, imported fields, QSL data)
+/// and any column the form doesn't expose survive the edit untouched.
+pub(crate) struct ContactEdit {
+    pub id: i64,
+    original: rigflow_log::Qso,
+    call: String,
+    qso_date: String,
+    time_on: String,
+    mode: String,
+    freq_mhz: String,
+    rst_sent: String,
+    rst_rcvd: String,
+    gridsquare: String,
+    /// Last validation / save error, shown under the form. Empty = none.
+    error: String,
+}
+
+impl ContactEdit {
+    fn from_logged(row: &rigflow_log::store::LoggedQso) -> Self {
+        let q = &row.qso;
+        ContactEdit {
+            id: row.id,
+            original: q.clone(),
+            call: q.call.clone(),
+            qso_date: q.qso_date.clone(),
+            time_on: q.time_on.clone(),
+            mode: q.mode.clone(),
+            freq_mhz: q
+                .freq_hz
+                .map(rigflow_log::adif::hz_to_mhz_string)
+                .unwrap_or_default(),
+            rst_sent: q.rst_sent.clone().unwrap_or_default(),
+            rst_rcvd: q.rst_rcvd.clone().unwrap_or_default(),
+            gridsquare: q.gridsquare.clone().unwrap_or_default(),
+            error: String::new(),
+        }
+    }
+
+    /// Build the edited QSO from the form, preserving the original's `extra` and
+    /// unedited columns. `Err` is a message to show; don't save. Frequency drives
+    /// band: a parseable MHz value updates the TX freq and lets `normalize`
+    /// re-derive the band; a blank value keeps whatever was there.
+    fn to_qso(&self) -> Result<rigflow_log::Qso, String> {
+        let opt = |s: &str| {
+            let t = s.trim();
+            (!t.is_empty()).then(|| t.to_string())
+        };
+        let call = self.call.trim().to_ascii_uppercase();
+        if call.is_empty() {
+            return Err("Call is required.".into());
+        }
+        let date = self.qso_date.trim().to_string();
+        if date.len() != 8 || !date.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("Date must be 8 digits, YYYYMMDD.".into());
+        }
+        let time = self.time_on.trim().to_string();
+        if !matches!(time.len(), 4 | 6) || !time.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("Time must be HHMM or HHMMSS.".into());
+        }
+        if self.mode.trim().is_empty() {
+            return Err("Mode is required.".into());
+        }
+
+        let mut q = self.original.clone();
+        q.call = call;
+        q.qso_date = date;
+        q.time_on = time;
+        q.mode = self.mode.trim().to_ascii_uppercase();
+        q.rst_sent = opt(&self.rst_sent);
+        q.rst_rcvd = opt(&self.rst_rcvd);
+        q.gridsquare = opt(&self.gridsquare);
+
+        let f = self.freq_mhz.trim();
+        if !f.is_empty() {
+            match rigflow_log::adif::mhz_string_to_hz(f) {
+                Some(hz) => {
+                    q.freq_hz = Some(hz);
+                    q.band = String::new(); // re-derived from freq by normalize()
+                }
+                None => return Err("Frequency must be in MHz, e.g. 14.074.".into()),
+            }
+        }
+        q.normalize();
+        Ok(q)
+    }
+}
 
 impl RigflowApp {
     /// Open the manual entry window, freezing the current radio state into the
@@ -275,6 +364,10 @@ impl RigflowApp {
         let mut open_import = false;
         let mut open_filter = false;
         let mut clear_filter = false;
+        // Row actions, applied after the window closure so the immutable borrow of
+        // `contacts_cache` inside the grid doesn't collide with the &mut self they need.
+        let mut open_edit: Option<ContactEdit> = None;
+        let mut req_delete: Option<(i64, String)> = None;
 
         egui::Window::new("Contacts")
             .open(&mut open)
@@ -352,11 +445,11 @@ impl RigflowApp {
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     egui::Grid::new("contacts_table")
-                        .num_columns(6)
+                        .num_columns(7)
                         .striped(true)
                         .spacing([12.0, 2.0])
                         .show(ui, |ui| {
-                            for h in ["Date", "Time (UTC)", "Call", "Band", "Mode", "Confirm"] {
+                            for h in ["Date", "Time (UTC)", "Call", "Band", "Mode", "Confirm", ""] {
                                 ui.strong(h);
                             }
                             ui.end_row();
@@ -368,6 +461,17 @@ impl RigflowApp {
                                 ui.label(&q.band);
                                 ui.label(&q.mode);
                                 confirm_badge(ui, &row.confirmed);
+                                ui.horizontal(|ui| {
+                                    if ui.button("Edit").clicked() {
+                                        open_edit = Some(ContactEdit::from_logged(row));
+                                    }
+                                    if ui.button("Delete").clicked() {
+                                        req_delete = Some((
+                                            row.id,
+                                            format!("{} · {} · {}", q.call, q.band, q.mode),
+                                        ));
+                                    }
+                                });
                                 ui.end_row();
                             }
                         });
@@ -387,6 +491,12 @@ impl RigflowApp {
         }
         if open_import {
             self.open_import();
+        }
+        if let Some(edit) = open_edit {
+            self.edit_contact = Some(edit);
+        }
+        if let Some(del) = req_delete {
+            self.delete_contact = Some(del);
         }
         if !open && let Ok(mut s) = self.state.lock() {
             s.show_contact_view = false;
@@ -492,6 +602,137 @@ impl RigflowApp {
         if dismiss {
             self.call_lookup.clear();
             self.call_lookup_hits = None;
+        }
+    }
+
+    /// The edit-contact window, opened by "Edit" in the contact view. Edits the
+    /// modeled columns; `extra` and untouched fields ride along via the original
+    /// QSO held in [`ContactEdit`]. Save routes through `LogStore::update_qso`
+    /// (DB-only; the append-only journal is untouched), then refreshes the view.
+    pub(crate) fn draw_edit_contact_window(&mut self, ctx: &egui::Context) {
+        let Some(mut edit) = self.edit_contact.take() else {
+            return;
+        };
+        let mut open = true;
+        let mut save = false;
+        let mut cancel = false;
+
+        egui::Window::new("Edit Contact")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(320.0)
+            .show(ctx, |ui| {
+                egui::Grid::new("edit_contact_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        for (label, field) in [
+                            ("Call", &mut edit.call),
+                            ("Date (YYYYMMDD)", &mut edit.qso_date),
+                            ("Time (HHMMSS)", &mut edit.time_on),
+                            ("Mode", &mut edit.mode),
+                            ("Freq (MHz)", &mut edit.freq_mhz),
+                            ("RST sent", &mut edit.rst_sent),
+                            ("RST rcvd", &mut edit.rst_rcvd),
+                            ("Grid", &mut edit.gridsquare),
+                        ] {
+                            ui.label(label);
+                            ui.text_edit_singleline(field);
+                            ui.end_row();
+                        }
+                    });
+
+                if !edit.error.is_empty() {
+                    ui.colored_label(egui::Color32::from_rgb(0xff, 0x6b, 0x6b), &edit.error);
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button("Save").clicked() {
+                        save = true;
+                    }
+                });
+            });
+
+        // Closed via X or Cancel: drop the edit (already taken), window stays shut.
+        if cancel || !open {
+            return;
+        }
+        if save {
+            match edit.to_qso() {
+                Ok(q) => {
+                    if let Some(store) = self.log.as_mut() {
+                        match store.update_qso(edit.id, &q) {
+                            Ok(()) => {
+                                self.worked_before = store.load_worked_before().unwrap_or_default();
+                                self.contacts_cache_dirty = true;
+                                self.set_log_status(format!("updated {}", q.call));
+                                return; // success → window closes
+                            }
+                            Err(e) => edit.error = format!("update failed: {e}"),
+                        }
+                    } else {
+                        edit.error = "no operator selected".into();
+                    }
+                }
+                Err(msg) => edit.error = msg,
+            }
+        }
+        // Still editing (or a save error to show): keep the window open next frame.
+        self.edit_contact = Some(edit);
+    }
+
+    /// The delete-confirmation dialog. Deleting is irreversible and drops the
+    /// contact's confirmations too (ON DELETE CASCADE), so it always confirms
+    /// first. Routes through `LogStore::delete_qso` (DB-only; the append-only
+    /// journal keeps the original record as history).
+    pub(crate) fn draw_delete_contact_confirm(&mut self, ctx: &egui::Context) {
+        let Some((id, label)) = self.delete_contact.clone() else {
+            return;
+        };
+        let mut open = true;
+        let mut confirm = false;
+        let mut cancel = false;
+
+        egui::Window::new("Delete Contact")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!("Delete this contact?\n\n{label}"));
+                ui.label(note_text(
+                    "This removes it from the log, along with any confirmations, and cannot \
+                     be undone. The append-only ADIF journal keeps the original record.",
+                ));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button("Delete").clicked() {
+                        confirm = true;
+                    }
+                });
+            });
+
+        if confirm {
+            if let Some(store) = self.log.as_mut() {
+                match store.delete_qso(id) {
+                    Ok(_) => {
+                        self.worked_before = store.load_worked_before().unwrap_or_default();
+                        self.contacts_cache_dirty = true;
+                        self.set_log_status(format!("deleted {label}"));
+                    }
+                    Err(e) => self.set_log_status(format!("delete failed: {e}")),
+                }
+            }
+            self.delete_contact = None;
+        } else if cancel || !open {
+            self.delete_contact = None;
         }
     }
 }

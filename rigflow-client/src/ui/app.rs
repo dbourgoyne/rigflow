@@ -159,6 +159,15 @@ pub struct RigflowApp {
     pub(crate) import_planning: bool,
     /// Result / error line for the import window.
     pub(crate) import_status: String,
+
+    // ── contact edit / delete ────────────────────────────────────────────
+    /// The contact open in the edit window: its row id, the original QSO (so
+    /// `extra` and untouched fields survive the round-trip), and editable copies
+    /// of the fields the operator can change. `None` = edit window closed.
+    pub(crate) edit_contact: Option<crate::ui::app_logging::ContactEdit>,
+    /// A contact awaiting delete confirmation: (row id, human label). `None` =
+    /// no pending delete.
+    pub(crate) delete_contact: Option<(i64, String)>,
 }
 
 impl RigflowApp {
@@ -245,6 +254,8 @@ impl RigflowApp {
             import_plan: None,
             import_planning: false,
             import_status: String::new(),
+            edit_contact: None,
+            delete_contact: None,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -776,6 +787,8 @@ impl eframe::App for RigflowApp {
         self.draw_filter_window(ctx);
         self.draw_export_window(ctx, &snapshot);
         self.draw_import_window(ctx, &snapshot);
+        self.draw_edit_contact_window(ctx);
+        self.draw_delete_contact_confirm(ctx);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
