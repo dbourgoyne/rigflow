@@ -32,30 +32,33 @@ pub fn download(user: &str, password: &str) -> Result<String, String> {
         .into_string()
         .map_err(|e| format!("reading the eQSL response: {e}"))?;
 
-    if let Some(rel) = find_adif_link(&page) {
-        let url = format!("{BASE}{rel}");
+    if let Some(href) = find_adif_link(&page) {
         return a
-            .get(&url)
+            .get(&resolve(&href))
             .call()
             .map_err(redact)?
             .into_string()
             .map_err(|e| format!("downloading the eQSL ADIF: {e}"));
     }
-    // eQSL says so in prose when the inbox is empty.
+    // A successful build with no cards, or an empty inbox: not an error.
     let low = page.to_ascii_lowercase();
-    if low.contains("no ") && low.contains("adif") {
+    if low.contains("has been built") || (low.contains("no ") && low.contains("adif")) {
         return Ok(String::new());
     }
     Err(error_hint(&page))
 }
 
 /// Upload a batch of QSOs to eQSL. Best-effort count parse; the reply is prose.
+///
+/// Credentials use eQSL's own field names `EQSL_USER` / `EQSL_PSWD` (not
+/// `UserName`/`Password` — that's the download endpoint), with the batch in
+/// `ADIFData`.
 pub fn upload(user: &str, password: &str, adif: &str) -> Result<UploadReport, String> {
     let body = agent()
         .post(&format!("{BASE}/qslcard/importADIF.cfm"))
         .send_form(&[
-            ("UserName", user),
-            ("Password", password),
+            ("EQSL_USER", user),
+            ("EQSL_PSWD", password),
             ("ADIFData", adif),
         ])
         .map_err(redact)?
@@ -64,14 +67,37 @@ pub fn upload(user: &str, password: &str, adif: &str) -> Result<UploadReport, St
     parse_upload(&body)
 }
 
-/// Pull the generated ADIF path out of the DownloadInBox HTML. eQSL links it as
-/// `…downloadedfiles/NAME.adi`; return it rooted at `/qslcard/`.
+/// The `href` of the built ADIF from the DownloadInBox HTML — read from the page
+/// rather than reconstructed, because eQSL moved `DownloadedFiles` out of the
+/// `qslcard/` folder in 2019, so a hard-coded path 404s. Returns the raw href
+/// (absolute URL, `/`-rooted, or relative); [`resolve`] turns it into a URL.
 fn find_adif_link(html: &str) -> Option<String> {
-    const KEY: &str = "downloadedfiles/";
-    let start = html.find(KEY)?;
-    let tail = &html[start..];
-    let end = tail.find(".adi")? + 4;
-    Some(format!("/qslcard/{}", &tail[..end]))
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(".adi") {
+        let end = from + rel + 4;
+        // Walk back to the quote that opened this href value.
+        if let Some(q) = html[..end].rfind(['"', '\'']) {
+            let href = &html[q + 1..end];
+            if !href.is_empty() && !href.contains('<') && !href.contains('>') {
+                return Some(href.to_string());
+            }
+        }
+        from = end;
+    }
+    None
+}
+
+/// Turn a page href into an absolute URL against eQSL's host.
+fn resolve(href: &str) -> String {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        href.to_string()
+    } else if let Some(rooted) = href.strip_prefix('/') {
+        format!("{BASE}/{rooted}")
+    } else {
+        // Relative to /qslcard/ (where DownloadInBox.cfm lives), so "../x" climbs out.
+        format!("{BASE}/qslcard/{href}")
+    }
 }
 
 /// Best-effort read of the eQSL import reply. eQSL reports like "Result: N out
@@ -133,13 +159,33 @@ mod tests {
 
     #[test]
     fn finds_the_adif_link() {
-        let html =
-            r#"<html><a href="/qslcard/downloadedfiles/AB1CD_inbox.adi">Download</a></html>"#;
+        // The real href reads straight from the page (case-insensitive tag).
+        let html = r#"Your ADIF log file has been built.
+            <A HREF="/downloadedfiles/AB1CD_inbox.adi">ADI</A>
+            <a href="/downloadedfiles/AB1CD_inbox.txt">TXT</a>"#;
         assert_eq!(
             find_adif_link(html).as_deref(),
-            Some("/qslcard/downloadedfiles/AB1CD_inbox.adi")
+            Some("/downloadedfiles/AB1CD_inbox.adi")
         );
         assert_eq!(find_adif_link("<html>no link</html>"), None);
+    }
+
+    #[test]
+    fn resolves_hrefs_against_the_host() {
+        // The post-2019 relocated path lives above qslcard/, so a /-rooted href
+        // must NOT get a qslcard prefix (that was the 404 bug).
+        assert_eq!(
+            resolve("/downloadedfiles/x.adi"),
+            "https://www.eqsl.cc/downloadedfiles/x.adi"
+        );
+        assert_eq!(
+            resolve("https://www.eqsl.cc/downloadedfiles/x.adi"),
+            "https://www.eqsl.cc/downloadedfiles/x.adi"
+        );
+        assert_eq!(
+            resolve("../downloadedfiles/x.adi"),
+            "https://www.eqsl.cc/qslcard/../downloadedfiles/x.adi"
+        );
     }
 
     #[test]
