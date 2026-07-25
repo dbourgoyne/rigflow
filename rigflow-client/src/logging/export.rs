@@ -32,6 +32,8 @@ use rigflow_log::export::{
 use rigflow_log::import::ImportPlan;
 use rigflow_log::normalize::{self, ModeClass};
 
+use crate::logging::services::{Direction, Service};
+
 /// How long the UI waits after the last edit before re-querying.
 pub const QUERY_DEBOUNCE: Duration = Duration::from_millis(250);
 
@@ -357,10 +359,13 @@ pub enum ExportJob {
     /// normalize, validate, dedupe. Read-only, so it runs here rather than on the
     /// UI thread; a big file is slow to parse and the operator keeps logging.
     PlanImport { db_path: PathBuf, file: PathBuf },
-    /// Download the LoTW confirmation report over HTTPS and plan applying it. The
-    /// network I/O and the read-only plan both run here, off the UI thread; the
-    /// UI commits the returned plan and advances the sync marker.
-    LotwSync {
+    /// Sync with an online QSL service — download (fetch + plan) or upload (gather
+    /// + push). The network I/O and the read-only DB work both run here, off the
+    /// UI thread; the UI applies the result (commit + marker, or mark-uploaded).
+    /// `password` carries the API key for a key-authed service (QRZ).
+    ServiceSync {
+        service: Service,
+        direction: Direction,
         db_path: PathBuf,
         login: String,
         password: String,
@@ -390,13 +395,27 @@ pub enum ExportEvent {
         file: PathBuf,
         result: Result<Box<ImportPlan>, String>,
     },
-    /// A LoTW download, planned. The UI auto-commits it (confirmations only touch
-    /// `qso_service`, never insert contacts) and, on success, saves `marker` as
-    /// the next incremental position.
-    LotwSynced {
-        result: Result<Box<ImportPlan>, String>,
-        /// `APP_LoTW_LASTQSL` from the report header, if present.
+    /// A service sync finished. The UI applies it: a download auto-commits and
+    /// advances the marker; an upload marks the pushed QSOs uploaded. The
+    /// [`SyncOutcome`] carries whether it was a download or upload.
+    ServiceSynced {
+        service: Service,
+        result: Result<SyncOutcome, String>,
+    },
+}
+
+/// What a completed [`ExportJob::ServiceSync`] produced.
+pub enum SyncOutcome {
+    /// A download: the planned confirmations to auto-commit, and the next marker.
+    Downloaded {
+        plan: Box<ImportPlan>,
         marker: Option<String>,
+    },
+    /// An upload: the QSO ids that were pushed (to stamp `uploaded_at`) and the
+    /// service's report.
+    Uploaded {
+        ids: Vec<i64>,
+        report: crate::logging::services::UploadReport,
     },
 }
 
@@ -428,7 +447,7 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
                         // Never coalesced: each is an explicit operator action.
                         w @ (ExportJob::Write { .. }
                         | ExportJob::PlanImport { .. }
-                        | ExportJob::LotwSync { .. }) => {
+                        | ExportJob::ServiceSync { .. }) => {
                             if evt_tx.send(run(w)).is_err() {
                                 return; // app gone
                             }
@@ -507,30 +526,73 @@ fn run(job: ExportJob) -> ExportEvent {
                 .map(Box::new);
             ExportEvent::ImportPlanned { file, result }
         }
-        ExportJob::LotwSync {
+        ExportJob::ServiceSync {
+            service,
+            direction,
             db_path,
             login,
             password,
             since,
         } => {
-            let outcome = crate::logging::lotw::fetch_report(&login, &password, since.as_deref())
-                .and_then(|adif| {
-                    let marker = crate::logging::lotw::extract_lastqsl(&adif);
-                    let plan = Exporter::open(&db_path)
-                        .and_then(|ex| ex.plan_import(&adif, DEFAULT_WINDOW_SECS))
-                        .map_err(|e| e.to_string())?;
-                    Ok((Box::new(plan), marker))
-                });
-            match outcome {
-                Ok((plan, marker)) => ExportEvent::LotwSynced {
-                    result: Ok(plan),
-                    marker,
-                },
-                Err(e) => ExportEvent::LotwSynced {
-                    result: Err(e),
-                    marker: None,
-                },
-            }
+            let result = match direction {
+                Direction::Download => {
+                    run_download(&db_path, service, &login, &password, since.as_deref())
+                }
+                Direction::Upload => run_upload(&db_path, service, &login, &password),
+            };
+            ExportEvent::ServiceSynced { service, result }
         }
     }
+}
+
+/// Download a service's ADIF and plan applying it (read-only). The UI commits.
+fn run_download(
+    db_path: &std::path::Path,
+    service: Service,
+    login: &str,
+    password: &str,
+    since: Option<&str>,
+) -> Result<SyncOutcome, String> {
+    let (adif, marker) = crate::logging::services::download(service, login, password, since)?;
+    let plan = Exporter::open(db_path)
+        .and_then(|ex| ex.plan_import(&adif, DEFAULT_WINDOW_SECS))
+        .map_err(|e| e.to_string())?;
+    Ok(SyncOutcome::Downloaded {
+        plan: Box::new(plan),
+        marker,
+    })
+}
+
+/// Gather every QSO not yet uploaded to `service`, build an ADIF batch, and push
+/// it. Returns the pushed ids so the UI can stamp `uploaded_at`.
+fn run_upload(
+    db_path: &std::path::Path,
+    service: Service,
+    login: &str,
+    password: &str,
+) -> Result<SyncOutcome, String> {
+    let ex = Exporter::open(db_path).map_err(|e| e.to_string())?;
+    let filter = ExportFilter {
+        not_uploaded_to: Some(vec![service.key().to_string()]),
+        ..Default::default()
+    };
+    let rows = ex.all_matching(&filter).map_err(|e| e.to_string())?;
+    if rows.is_empty() {
+        return Ok(SyncOutcome::Uploaded {
+            ids: Vec::new(),
+            report: crate::logging::services::UploadReport {
+                message: "nothing new to upload".into(),
+                ..Default::default()
+            },
+        });
+    }
+    let mut adif = rigflow_log::adif::adif_header();
+    for lq in &rows {
+        adif.push_str(&rigflow_log::adif::write_record(
+            &rigflow_log::adif::qso_to_record(&lq.qso),
+        ));
+    }
+    let report = crate::logging::services::upload(service, login, password, &adif)?;
+    let ids = rows.iter().map(|r| r.id).collect();
+    Ok(SyncOutcome::Uploaded { ids, report })
 }

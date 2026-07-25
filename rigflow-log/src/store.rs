@@ -454,6 +454,28 @@ impl LogStore {
         Ok(())
     }
 
+    /// Mark each QSO in `qso_ids` as uploaded to `service` now. Upserts the
+    /// `qso_service` row (setting `uploaded_at`), so it composes with a
+    /// confirmation already recorded for the same `(qso_id, service)`. One
+    /// transaction for the whole batch. After this, the `not_uploaded_to` export
+    /// filter excludes these QSOs for that service.
+    pub fn mark_uploaded(&mut self, qso_ids: &[i64], service: &str) -> Result<(), LogError> {
+        if qso_ids.is_empty() {
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.transaction()?;
+        for &id in qso_ids {
+            tx.execute(
+                "INSERT INTO qso_service (qso_id, service, uploaded_at) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(qso_id, service) DO UPDATE SET uploaded_at = excluded.uploaded_at",
+                params![id, service, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// When `service` last ran a download sync (RFC3339), or `None` if never.
     pub fn sync_last_run(&self, service: &str) -> Result<Option<String>, LogError> {
         Ok(self
@@ -950,6 +972,45 @@ mod tests {
         );
         // Services are independent.
         assert_eq!(s.sync_marker("eqsl").unwrap(), None);
+    }
+
+    #[test]
+    fn mark_uploaded_records_and_composes_with_a_confirmation() {
+        let mut s = LogStore::open_in_memory("/nonexistent/ignored.adi").unwrap();
+        let a = s.insert(&qso("W1AW", "20m", "142300"), &station()).unwrap();
+        let b = s.insert(&qso("K5ZD", "20m", "143000"), &station()).unwrap();
+
+        // A confirmation already exists for A on eqsl.
+        s.commit_import(
+            &[],
+            &[crate::import::Confirmation {
+                qso_id: a.id,
+                service: "eqsl".into(),
+                confirmed_at: Some("20260723".into()),
+            }],
+            &station(),
+        )
+        .unwrap();
+
+        s.mark_uploaded(&[a.id, b.id], "eqsl").unwrap();
+
+        // A's row now carries BOTH confirmed_at and uploaded_at; B's just uploaded.
+        let row = |id: i64, col: &str| -> Option<String> {
+            s.conn()
+                .query_row(
+                    &format!("SELECT {col} FROM qso_service WHERE qso_id=?1 AND service='eqsl'"),
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(row(a.id, "confirmed_at").as_deref(), Some("20260723"));
+        assert!(row(a.id, "uploaded_at").is_some());
+        assert!(row(b.id, "uploaded_at").is_some());
+        assert!(row(b.id, "confirmed_at").is_none());
+
+        // Empty id list is a no-op, not an error.
+        s.mark_uploaded(&[], "eqsl").unwrap();
     }
 
     #[test]

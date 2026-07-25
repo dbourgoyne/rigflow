@@ -174,22 +174,24 @@ pub struct RigflowApp {
     /// A bulk delete of `selected_contacts` is awaiting confirmation.
     pub(crate) delete_selection_pending: bool,
 
-    // ── online sync (LoTW confirmation download) ─────────────────────────
+    // ── online sync (LoTW / eQSL / QRZ) ──────────────────────────────────
     /// Sync window open flag (opened from the contact view).
     pub(crate) show_sync: bool,
-    /// LoTW login + password fields. Loaded from the credential store when the
-    /// window opens; the password is only re-saved when the operator edits it.
+    /// The service the sync window is currently showing.
+    pub(crate) sync_service: crate::logging::services::Service,
+    /// Login + password (or API key, in `sync_password`) for the current service.
+    /// Loaded from the credential store; the password is re-saved when a sync runs.
     pub(crate) sync_login: String,
     pub(crate) sync_password: String,
     /// Where the loaded credential came from (keyring vs file), for a UI note.
     pub(crate) sync_backend: Option<crate::logging::credentials::Backend>,
-    /// A download is in flight on the worker.
+    /// A sync is in flight on the worker.
     pub(crate) sync_busy: bool,
     /// Result / error line for the sync window.
     pub(crate) sync_status: String,
-    /// Operator whose credentials are currently loaded into the fields, so the
-    /// window loads once per operator rather than every frame.
-    pub(crate) sync_loaded_for: Option<String>,
+    /// (operator, service) whose credentials are loaded into the fields, so the
+    /// window loads once per operator+service rather than every frame.
+    pub(crate) sync_loaded_for: Option<(String, crate::logging::services::Service)>,
 }
 
 impl RigflowApp {
@@ -281,6 +283,7 @@ impl RigflowApp {
             selected_contacts: std::collections::BTreeSet::new(),
             delete_selection_pending: false,
             show_sync: false,
+            sync_service: crate::logging::services::Service::Lotw,
             sync_login: String::new(),
             sync_password: String::new(),
             sync_backend: None,

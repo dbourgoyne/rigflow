@@ -7,9 +7,12 @@
 
 pub mod capture;
 pub mod credentials;
+pub mod eqsl;
 pub mod export;
 pub mod lifecycle;
 pub mod lotw;
+pub mod qrz;
+pub mod services;
 pub mod wsjtx_listener;
 
 /// Editable draft behind the manual log-entry window. The frozen-at-open

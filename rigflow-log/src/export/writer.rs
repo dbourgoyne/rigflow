@@ -144,6 +144,16 @@ impl Exporter {
         Ok(ContactPage { rows, total })
     }
 
+    /// Every QSO matching `filter`, uncapped and oldest-first — for building an
+    /// upload batch on the worker thread (e.g. everything `not_uploaded_to` a
+    /// service). Read-only, like the rest of `Exporter`.
+    pub fn all_matching(
+        &self,
+        filter: &ExportFilter,
+    ) -> Result<Vec<crate::store::LoggedQso>, LogError> {
+        query_all_with(&self.conn, filter)
+    }
+
     /// Work out what importing an ADIF document *would* do, without writing.
     ///
     /// Lives on `Exporter` because it needs exactly what `Exporter` has: a
@@ -238,6 +248,32 @@ pub(crate) fn query_with(
 
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(store::row_to_logged_qso(row)??);
+    }
+    Ok(out)
+}
+
+/// Every matching QSO, uncapped — for building an upload batch (all the QSOs not
+/// yet sent to a service). Oldest first, so an upload sends contacts in the order
+/// they were made. Unlike [`query_with`] this has no `LIMIT`: an upload must
+/// cover the whole set, not a page of it.
+pub(crate) fn query_all_with(
+    conn: &Connection,
+    filter: &ExportFilter,
+) -> Result<Vec<crate::store::LoggedQso>, LogError> {
+    filter.validate()?;
+    let bookmark = resolve_bookmark(conn, filter)?;
+    let q = query::build(filter, bookmark);
+    let sql = format!(
+        "SELECT {} FROM qso WHERE {} {}",
+        store::QSO_COLUMNS,
+        q.where_sql,
+        query::order_by(super::filter::Sort::Chronological),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(q.params.iter()))?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         out.push(store::row_to_logged_qso(row)??);

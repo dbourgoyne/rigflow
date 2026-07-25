@@ -413,7 +413,7 @@ impl RigflowApp {
                     if ui.button("Import…").clicked() {
                         open_import = true;
                     }
-                    if ui.button("LoTW…").clicked() {
+                    if ui.button("Sync…").clicked() {
                         open_sync = true;
                     }
                     if ui.button("Refresh").clicked() {

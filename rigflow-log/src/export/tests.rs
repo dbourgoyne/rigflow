@@ -210,6 +210,29 @@ fn export_stamps_every_confirming_service() {
     );
 }
 
+#[test]
+fn all_matching_gathers_the_not_uploaded_set() {
+    // The upload path asks for "everything not yet sent to this service".
+    let dir = TmpDir::new();
+    let mut s = LogStore::open(dir.db(), dir.adi()).unwrap();
+    let a = s.insert(&qso("W1AW"), &station()).unwrap();
+    s.insert(&qso("K5ZD"), &station()).unwrap();
+    s.mark_uploaded(&[a.id], "eqsl").unwrap(); // W1AW already on eQSL
+    drop(s);
+
+    let ex = Exporter::open(dir.db()).unwrap();
+    let f = ExportFilter {
+        not_uploaded_to: Some(vec!["eqsl".into()]),
+        ..Default::default()
+    };
+    let rows = ex.all_matching(&f).unwrap();
+    assert_eq!(rows.len(), 1, "only the un-uploaded one");
+    assert_eq!(rows[0].qso.call, "K5ZD");
+
+    // Uncapped: with no filter it returns every QSO.
+    assert_eq!(ex.all_matching(&ExportFilter::default()).unwrap().len(), 2);
+}
+
 fn count(dir: &TmpDir, filter: &ExportFilter) -> usize {
     Exporter::open(dir.db()).unwrap().count(filter).unwrap()
 }
