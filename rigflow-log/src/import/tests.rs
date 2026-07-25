@@ -334,6 +334,93 @@ fn import_recognizes_per_service_qsl_fields_the_round_trip() {
 }
 
 #[test]
+fn import_recognizes_an_eqsl_inbox_confirmation() {
+    // eQSL inbox records mark a confirmation with EQSL_AG (and sometimes
+    // EQSL_QSL_RCVD/EQSL_QSLRDATE), and carry QSL_SENT=Y (not QSL_RCVD). All must
+    // be recognized as an eqsl confirmation, and confirmed_at must be non-null so
+    // the badge shows — falling back to the QSO date when eQSL gives no QSL date.
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store); // W7WRO 40m FT8, 20260712
+    drop(store);
+
+    // No EQSL_QSL_RCVD / no date — only EQSL_AG + APP_EQSL_AG, plus QSL_SENT=Y.
+    let doc = adif_doc(&[&format!(
+        "{}<QSL_SENT:1>Y <EQSL_AG:1>Y <APP_EQSL_AG:1>Y ",
+        rec("W7WRO", "20260712", "235600", "40M", "FT8"),
+    )]);
+    let plan = plan_of(&dir, &doc);
+    assert_eq!(plan.confirmations.len(), 1);
+    assert_eq!(plan.confirmations[0].service, "eqsl");
+    assert_eq!(
+        plan.confirmations[0].confirmed_at.as_deref(),
+        Some("20260712"),
+        "falls back to the QSO date when eQSL supplies none"
+    );
+    assert_eq!(plan.importable.len(), 0);
+}
+
+#[test]
+fn eqsl_confirmation_uses_its_date_when_present() {
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store);
+    drop(store);
+
+    let doc = adif_doc(&[&format!(
+        "{}<QSL_SENT:1>Y <EQSL_AG:1>Y <EQSL_QSL_RCVD:1>Y <EQSL_QSLRDATE:8>20260720 ",
+        rec("W7WRO", "20260712", "235600", "40M", "FT8"),
+    )]);
+    let plan = plan_of(&dir, &doc);
+    assert_eq!(plan.confirmations.len(), 1);
+    assert_eq!(plan.confirmations[0].service, "eqsl");
+    assert_eq!(
+        plan.confirmations[0].confirmed_at.as_deref(),
+        Some("20260720")
+    );
+}
+
+#[test]
+fn a_downloaded_eqsl_confirmation_shows_a_badge_and_updates_an_upload_row() {
+    // The end-to-end shape of the on-air bug: an eQSL confirmation must reach the
+    // contact view's badge, even for a QSO already marked *uploaded* to eqsl.
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    let mut q = crate::Qso {
+        call: "W7WRO".into(),
+        qso_date: "20260712".into(),
+        time_on: "235600".into(),
+        band: String::new(),
+        mode: "FT8".into(),
+        freq_hz: Some(7_076_000),
+        ..Default::default()
+    };
+    q.normalize(); // the live path normalizes before insert (derives band "40m")
+    let a = store.insert(&q, &station()).unwrap();
+    // We already uploaded this QSO to eqsl (row exists, confirmed_at NULL).
+    store.mark_uploaded(&[a.id], "eqsl").unwrap();
+
+    let doc = adif_doc(&[&format!(
+        "{}<QSL_SENT:1>Y <EQSL_AG:1>Y ",
+        rec("W7WRO", "20260712", "235600", "40M", "FT8"),
+    )]);
+    let plan = super::plan(store.conn(), &doc, DEFAULT_WINDOW_SECS).unwrap();
+    // Not "already confirmed" — the existing row is upload-only.
+    assert_eq!(plan.confirmations.len(), 1);
+    assert_eq!(plan.already_confirmed, 0);
+
+    store
+        .commit_import(&plan.importable, &plan.confirmations, &station())
+        .unwrap();
+    let rows = store.query_contacts(10).unwrap();
+    assert_eq!(
+        rows[0].confirmed,
+        vec!["eqsl".to_string()],
+        "badge now shows eqsl"
+    );
+}
+
+#[test]
 fn an_unmatched_confirmation_is_surfaced_not_inserted() {
     // A QSL for a QSO we never logged: counted, never turned into a phantom row.
     let dir = TmpDir::new();

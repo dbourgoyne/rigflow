@@ -283,16 +283,23 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
 
 /// Every QSL confirmation `q` carries, as `(service, confirmed_at)` pairs. A
 /// single record can confirm more than one service (LoTW *and* eQSL), so this is
-/// a list. Recognizes, in priority order per service:
+/// a list. Recognizes, per service:
 ///
-/// - `LOTW_QSL_RCVD = Y` → `lotw` (date from `LOTW_QSLRDATE`). This is what our
-///   own export writes, and what most loggers use, so it round-trips.
-/// - `EQSL_QSL_RCVD = Y` → `eqsl` (date from `EQSL_QSLRDATE`).
-/// - `QSL_RCVD = Y` → the generic/paper card, unless the record carries a LoTW or
-///   eQSL `APP_*` marker (a LoTW report stamps `APP_LoTW_*` alongside a bare
-///   `QSL_RCVD`), in which case it is attributed to that service. Date from
-///   `QSLRDATE`. Skipped if that service was already captured above, so a file
-///   with both `LOTW_QSL_RCVD` and a LoTW-stamped `QSL_RCVD` isn't double-counted.
+/// - **LoTW** — `LOTW_QSL_RCVD = Y` (date from `LOTW_QSLRDATE`); what our own
+///   export writes and what most loggers use, so it round-trips.
+/// - **eQSL** — an eQSL *inbox* record IS a received confirmation. eQSL marks it
+///   with `EQSL_QSL_RCVD = Y` + `EQSL_QSLRDATE` only when it stored a date;
+///   otherwise the only sign is `EQSL_AG` (present ⟺ confirmed) or an `APP_EQSL_*`
+///   tag. Any of those means confirmed by eQSL. Note eQSL records carry
+///   `QSL_SENT = Y`, not `QSL_RCVD`, so the bare-`QSL_RCVD` rule below never
+///   catches them.
+/// - **generic** — a bare `QSL_RCVD = Y` is the paper card, unless a LoTW/eQSL
+///   `APP_*` marker attributes it to that service (a LoTW report stamps
+///   `APP_LoTW_*` beside `QSL_RCVD`). Skipped if that service was already found.
+///
+/// `confirmed_at` falls back to the QSO's own date when the record carries no QSL
+/// date, so a detected confirmation always gets a **non-null** `confirmed_at` —
+/// the signal the contact-view badge shows (a null date would be invisible).
 ///
 /// `Y` is the only value that means *confirmed*; `N`/`R`/`I` do not. All fields
 /// live in [`Qso::extra`] after [`adif::record_to_qso`].
@@ -302,37 +309,49 @@ fn confirmations_in(q: &Qso) -> Vec<(String, Option<String>)> {
             .get(k)
             .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y"))
     };
-    let date = |k: &str| q.extra.get(k).map(|s| s.trim().to_string());
+    let has = |k: &str| q.extra.contains_key(k);
+    let has_app = |prefix: &str| q.extra.keys().any(|k| k.starts_with(prefix));
+    // A stored date, else the QSO's own date, so `confirmed_at` is never null for
+    // a real confirmation.
+    let dated = |k: &str| {
+        q.extra
+            .get(k)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(q.qso_date.trim().to_string()).filter(|s| !s.is_empty()))
+    };
 
     let mut out: Vec<(String, Option<String>)> = Vec::new();
     if is_y("LOTW_QSL_RCVD") {
-        out.push(("lotw".into(), date("LOTW_QSLRDATE")));
+        out.push(("lotw".into(), dated("LOTW_QSLRDATE")));
     }
-    if is_y("EQSL_QSL_RCVD") {
-        out.push(("eqsl".into(), date("EQSL_QSLRDATE")));
+    if is_y("EQSL_QSL_RCVD") || has("EQSL_AG") || has_app("APP_EQSL") {
+        out.push(("eqsl".into(), dated("EQSL_QSLRDATE")));
     }
     if is_y("QSL_RCVD") {
-        // Attribute a bare QSL_RCVD to the service its APP_* marker names (LoTW
-        // reports do this), else the generic paper card.
-        let service = if q.extra.keys().any(|k| k.starts_with("APP_LOTW")) {
+        let service = if has_app("APP_LOTW") {
             "lotw"
-        } else if q.extra.keys().any(|k| k.starts_with("APP_EQSL")) {
+        } else if has_app("APP_EQSL") {
             "eqsl"
         } else {
             "qsl"
         };
         if !out.iter().any(|(s, _)| s == service) {
-            out.push((service.to_string(), date("QSLRDATE")));
+            out.push((service.to_string(), dated("QSLRDATE")));
         }
     }
     out
 }
 
-/// Whether QSO `qso_id` already has a confirmation recorded for `service`, so a
-/// re-imported report skips it rather than churning the row.
+/// Whether QSO `qso_id` is already *confirmed* by `service`, so a re-imported
+/// report skips it. Keyed on `confirmed_at` being set, NOT mere row existence: a
+/// row can exist from an upload (`uploaded_at` set, `confirmed_at` null), and a
+/// later confirmation download must still fill in `confirmed_at` rather than be
+/// skipped as "already confirmed".
 fn service_recorded(conn: &Connection, qso_id: i64, service: &str) -> Result<bool, LogError> {
     let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM qso_service WHERE qso_id = ?1 AND service = ?2",
+        "SELECT COUNT(*) FROM qso_service \
+         WHERE qso_id = ?1 AND service = ?2 AND confirmed_at IS NOT NULL",
         rusqlite::params![qso_id, service],
         |r| r.get(0),
     )?;
