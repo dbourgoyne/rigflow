@@ -369,6 +369,12 @@ impl RigflowApp {
         // `contacts_cache` inside the grid doesn't collide with the &mut self they need.
         let mut open_edit: Option<ContactEdit> = None;
         let mut req_delete: Option<(i64, String)> = None;
+        let mut export_selection = false;
+        let mut delete_selection = false;
+        let mut clear_selection = false;
+        // The checkbox state, taken out so the grid can mutate it while holding an
+        // immutable borrow of `contacts_cache`; written back after the closure.
+        let mut selection = std::mem::take(&mut self.selected_contacts);
 
         egui::Window::new("Contacts")
             .open(&mut open)
@@ -445,20 +451,66 @@ impl RigflowApp {
                     });
                 }
 
+                // ── selection action bar ──
+                // Only present when something is checked, so the common case (no
+                // selection) is uncluttered.
+                if !selection.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{} selected", selection.len())).strong(),
+                        );
+                        if ui.button("Export selected…").clicked() {
+                            export_selection = true;
+                        }
+                        if ui.button("Delete selected").clicked() {
+                            delete_selection = true;
+                        }
+                        if ui.button("Clear").clicked() {
+                            clear_selection = true;
+                        }
+                    });
+                }
+
                 ui.separator();
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     egui::Grid::new("contacts_table")
-                        .num_columns(7)
+                        .num_columns(8)
                         .striped(true)
                         .spacing([12.0, 2.0])
                         .show(ui, |ui| {
+                            // Header: a select-all-shown checkbox, then the columns.
+                            let all_shown: Vec<i64> =
+                                self.contacts_cache.iter().map(|r| r.id).collect();
+                            let mut all = !all_shown.is_empty()
+                                && all_shown.iter().all(|id| selection.contains(id));
+                            if ui
+                                .checkbox(&mut all, "")
+                                .on_hover_text("Select all shown")
+                                .changed()
+                            {
+                                if all {
+                                    selection.extend(all_shown.iter().copied());
+                                } else {
+                                    for id in &all_shown {
+                                        selection.remove(id);
+                                    }
+                                }
+                            }
                             for h in ["Date", "Time (UTC)", "Call", "Band", "Mode", "Confirm", ""] {
                                 ui.strong(h);
                             }
                             ui.end_row();
                             for row in &self.contacts_cache {
                                 let q = &row.qso;
+                                let mut checked = selection.contains(&row.id);
+                                if ui.checkbox(&mut checked, "").changed() {
+                                    if checked {
+                                        selection.insert(row.id);
+                                    } else {
+                                        selection.remove(&row.id);
+                                    }
+                                }
                                 ui.label(display::date(&q.qso_date));
                                 ui.label(display::time_hhmm(&q.time_on));
                                 ui.label(&q.call);
@@ -482,6 +534,9 @@ impl RigflowApp {
                 });
             });
 
+        // Selection is owned by `self` again.
+        self.selected_contacts = selection;
+
         self.draw_call_lookup_popup(ctx);
 
         if clear_filter {
@@ -504,6 +559,22 @@ impl RigflowApp {
         }
         if let Some(del) = req_delete {
             self.delete_contact = Some(del);
+        }
+        if clear_selection {
+            self.selected_contacts.clear();
+        }
+        if export_selection && !self.selected_contacts.is_empty() {
+            // A selection replaces the shared filter with an ids-only one, so the
+            // view (and the export it drives) show exactly the checked rows — the
+            // documented "clears the other filters when exporting a selection".
+            self.qso_filter = crate::logging::export::QsoFilterDraft {
+                qso_ids: Some(self.selected_contacts.iter().copied().collect()),
+                ..Default::default()
+            };
+            self.open_export(&operator_id);
+        }
+        if delete_selection && !self.selected_contacts.is_empty() {
+            self.delete_selection_pending = true;
         }
         if !open && let Ok(mut s) = self.state.lock() {
             s.show_contact_view = false;
@@ -740,6 +811,76 @@ impl RigflowApp {
             self.delete_contact = None;
         } else if cancel || !open {
             self.delete_contact = None;
+        }
+    }
+
+    /// The bulk-delete confirmation for a contact-view multi-selection. Deletes
+    /// each checked row through `LogStore::delete_qso` (DB-only). A per-row
+    /// failure is counted, not fatal — the rest still go.
+    pub(crate) fn draw_delete_selection_confirm(&mut self, ctx: &egui::Context) {
+        if !self.delete_selection_pending {
+            return;
+        }
+        let n = self.selected_contacts.len();
+        if n == 0 {
+            self.delete_selection_pending = false;
+            return;
+        }
+        let mut open = true;
+        let mut confirm = false;
+        let mut cancel = false;
+
+        egui::Window::new("Delete Contacts")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "Delete {n} selected contact{}?",
+                    if n == 1 { "" } else { "s" }
+                ));
+                ui.label(note_text(
+                    "This removes them from the log, along with any confirmations, and cannot \
+                     be undone. The append-only ADIF journal keeps the original records.",
+                ));
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button(format!("Delete {n}")).clicked() {
+                        confirm = true;
+                    }
+                });
+            });
+
+        if confirm {
+            if let Some(store) = self.log.as_mut() {
+                let ids: Vec<i64> = self.selected_contacts.iter().copied().collect();
+                let mut deleted = 0usize;
+                let mut failed = 0usize;
+                for id in ids {
+                    match store.delete_qso(id) {
+                        Ok(true) => deleted += 1,
+                        Ok(false) => {}
+                        Err(_) => failed += 1,
+                    }
+                }
+                self.worked_before = store.load_worked_before().unwrap_or_default();
+                self.contacts_cache_dirty = true;
+                let mut msg = format!(
+                    "deleted {deleted} contact{}",
+                    if deleted == 1 { "" } else { "s" }
+                );
+                if failed > 0 {
+                    msg.push_str(&format!(" · {failed} failed"));
+                }
+                self.set_log_status(msg);
+            }
+            self.selected_contacts.clear();
+            self.delete_selection_pending = false;
+        } else if cancel || !open {
+            self.delete_selection_pending = false;
         }
     }
 }

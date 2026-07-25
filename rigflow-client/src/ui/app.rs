@@ -168,6 +168,11 @@ pub struct RigflowApp {
     /// A contact awaiting delete confirmation: (row id, human label). `None` =
     /// no pending delete.
     pub(crate) delete_contact: Option<(i64, String)>,
+    /// Multi-select in the contact view: the checked row ids. Drives the
+    /// selection action bar (export / bulk delete).
+    pub(crate) selected_contacts: std::collections::BTreeSet<i64>,
+    /// A bulk delete of `selected_contacts` is awaiting confirmation.
+    pub(crate) delete_selection_pending: bool,
 
     // ── online sync (LoTW confirmation download) ─────────────────────────
     /// Sync window open flag (opened from the contact view).
@@ -273,6 +278,8 @@ impl RigflowApp {
             import_status: String::new(),
             edit_contact: None,
             delete_contact: None,
+            selected_contacts: std::collections::BTreeSet::new(),
+            delete_selection_pending: false,
             show_sync: false,
             sync_login: String::new(),
             sync_password: String::new(),
@@ -813,6 +820,7 @@ impl eframe::App for RigflowApp {
         self.draw_import_window(ctx, &snapshot);
         self.draw_edit_contact_window(ctx);
         self.draw_delete_contact_confirm(ctx);
+        self.draw_delete_selection_confirm(ctx);
         self.draw_sync_window(ctx, &snapshot.operator_id);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the

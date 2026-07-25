@@ -80,6 +80,11 @@ pub struct QsoFilterDraft {
     pub confirmed_by: String,
     /// Only contacts whose QSL has come back (`QSL_RCVD` = Y).
     pub qsl_rcvd_yes: bool,
+    /// An explicit row selection from the contact view (`None` = no selection).
+    /// ANDs with the rest; the view sets it on an otherwise-clear draft so a
+    /// selection stands alone. Not surfaced in the Filter window — it's driven by
+    /// the checkboxes, not typed.
+    pub qso_ids: Option<Vec<i64>>,
 }
 
 impl QsoFilterDraft {
@@ -142,6 +147,13 @@ impl QsoFilterDraft {
         if self.qsl_rcvd_yes {
             parts.push("QSL received".into());
         }
+        if let Some(ids) = &self.qso_ids {
+            parts.push(format!(
+                "{} selected contact{}",
+                ids.len(),
+                if ids.len() == 1 { "" } else { "s" }
+            ));
+        }
         parts.join(" · ")
     }
 
@@ -197,10 +209,10 @@ impl QsoFilterDraft {
 
             contest_ids: opt(&self.contest_id).map(|s| vec![s]),
 
-            // Multi-select in the contact view is deferred; the filter API
-            // supports an explicit id list already, there is just no UI to build
-            // one yet.
-            qso_ids: None,
+            // A contact-view multi-selection. ANDs with any other constraint —
+            // "these rows, further narrowed" — though the UI sets a selection on
+            // an otherwise-clear draft, so in practice it stands alone.
+            qso_ids: self.qso_ids.clone(),
         };
         f.validate()?;
         Ok(f)
