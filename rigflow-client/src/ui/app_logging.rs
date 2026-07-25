@@ -362,6 +362,7 @@ impl RigflowApp {
         let mut open = true;
         let mut open_export = false;
         let mut open_import = false;
+        let mut open_sync = false;
         let mut open_filter = false;
         let mut clear_filter = false;
         // Row actions, applied after the window closure so the immutable borrow of
@@ -405,6 +406,9 @@ impl RigflowApp {
                     }
                     if ui.button("Import…").clicked() {
                         open_import = true;
+                    }
+                    if ui.button("LoTW…").clicked() {
+                        open_sync = true;
                     }
                     if ui.button("Refresh").clicked() {
                         self.contacts_cache_dirty = true;
@@ -491,6 +495,9 @@ impl RigflowApp {
         }
         if open_import {
             self.open_import();
+        }
+        if open_sync {
+            self.open_sync(&operator_id);
         }
         if let Some(edit) = open_edit {
             self.edit_contact = Some(edit);

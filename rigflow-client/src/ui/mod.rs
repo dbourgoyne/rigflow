@@ -22,5 +22,6 @@ mod app_filter;
 mod app_import;
 mod app_logging;
 mod app_swr_sweep;
+mod app_sync;
 mod app_wsjtx_setup;
 mod panels;

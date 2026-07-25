@@ -314,6 +314,16 @@ impl crate::ui::app::RigflowApp {
                         }
                     }
                 }
+
+                ExportEvent::LotwSynced { result, marker } => match result {
+                    // Auto-commit: a sync applies its confirmations without a
+                    // per-run confirmation step (they only touch qso_service).
+                    Ok(plan) => self.apply_lotw_sync(*plan, marker),
+                    Err(e) => {
+                        self.sync_busy = false;
+                        self.sync_status = format!("LoTW sync failed: {e}");
+                    }
+                },
             }
         }
         if got {

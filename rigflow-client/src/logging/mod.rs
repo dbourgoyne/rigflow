@@ -6,8 +6,10 @@
 //! window, contact-view window, Station panel) live under `ui/`.
 
 pub mod capture;
+pub mod credentials;
 pub mod export;
 pub mod lifecycle;
+pub mod lotw;
 pub mod wsjtx_listener;
 
 /// Editable draft behind the manual log-entry window. The frozen-at-open

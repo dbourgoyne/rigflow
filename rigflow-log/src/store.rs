@@ -420,6 +420,53 @@ impl LogStore {
         Ok(())
     }
 
+    /// The last download marker recorded for an online `service` (e.g. `lotw`),
+    /// or `None` if it has never synced. For LoTW this is the `APP_LoTW_LASTQSL`
+    /// timestamp of the newest confirmation seen last run; the next download
+    /// passes it as `qso_qslsince` so only newer confirmations come back.
+    pub fn sync_marker(&self, service: &str) -> Result<Option<String>, LogError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT last_marker FROM sync_state WHERE service = ?1",
+                [service],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// Record a download marker for `service`, stamping the run time. Upsert on
+    /// the service key. Unlike the export bookmark this is not forced monotonic:
+    /// the server (LoTW) is authoritative for its own "last QSL" timestamp, and a
+    /// re-sync that returns an equal or slightly older marker is harmless because
+    /// applying the report is idempotent (already-recorded confirmations skip).
+    pub fn set_sync_marker(&mut self, service: &str, marker: Option<&str>) -> Result<(), LogError> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "INSERT INTO sync_state (service, last_marker, last_run_at) \
+             VALUES (?1, ?2, ?3) \
+             ON CONFLICT(service) DO UPDATE SET \
+               last_marker = excluded.last_marker, \
+               last_run_at = excluded.last_run_at",
+            params![service, marker, now],
+        )?;
+        Ok(())
+    }
+
+    /// When `service` last ran a download sync (RFC3339), or `None` if never.
+    pub fn sync_last_run(&self, service: &str) -> Result<Option<String>, LogError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT last_run_at FROM sync_state WHERE service = ?1",
+                [service],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     /// Append records to the journal, creating it (with header) on first write.
     /// `O_APPEND` + a single `fsync` for the whole batch; safe because this store
     /// is single-owner.
@@ -877,6 +924,32 @@ mod tests {
             "the edit is not written to the journal"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sync_marker_round_trips_and_upserts() {
+        let mut s = LogStore::open_in_memory("/nonexistent/ignored.adi").unwrap();
+        // Never synced.
+        assert_eq!(s.sync_marker("lotw").unwrap(), None);
+        assert_eq!(s.sync_last_run("lotw").unwrap(), None);
+
+        s.set_sync_marker("lotw", Some("2026-07-23 20:45:06"))
+            .unwrap();
+        assert_eq!(
+            s.sync_marker("lotw").unwrap().as_deref(),
+            Some("2026-07-23 20:45:06")
+        );
+        assert!(s.sync_last_run("lotw").unwrap().is_some());
+
+        // Upsert on the service key: a second run replaces the marker.
+        s.set_sync_marker("lotw", Some("2026-07-24 09:00:00"))
+            .unwrap();
+        assert_eq!(
+            s.sync_marker("lotw").unwrap().as_deref(),
+            Some("2026-07-24 09:00:00")
+        );
+        // Services are independent.
+        assert_eq!(s.sync_marker("eqsl").unwrap(), None);
     }
 
     #[test]

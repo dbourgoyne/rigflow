@@ -345,6 +345,15 @@ pub enum ExportJob {
     /// normalize, validate, dedupe. Read-only, so it runs here rather than on the
     /// UI thread; a big file is slow to parse and the operator keeps logging.
     PlanImport { db_path: PathBuf, file: PathBuf },
+    /// Download the LoTW confirmation report over HTTPS and plan applying it. The
+    /// network I/O and the read-only plan both run here, off the UI thread; the
+    /// UI commits the returned plan and advances the sync marker.
+    LotwSync {
+        db_path: PathBuf,
+        login: String,
+        password: String,
+        since: Option<String>,
+    },
 }
 
 /// What the worker reports back.
@@ -368,6 +377,14 @@ pub enum ExportEvent {
     ImportPlanned {
         file: PathBuf,
         result: Result<Box<ImportPlan>, String>,
+    },
+    /// A LoTW download, planned. The UI auto-commits it (confirmations only touch
+    /// `qso_service`, never insert contacts) and, on success, saves `marker` as
+    /// the next incremental position.
+    LotwSynced {
+        result: Result<Box<ImportPlan>, String>,
+        /// `APP_LoTW_LASTQSL` from the report header, if present.
+        marker: Option<String>,
     },
 }
 
@@ -397,7 +414,9 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
                         l @ ExportJob::CallLookup { .. } => latest_lookup = Some(l),
                         c @ ExportJob::Count { .. } => latest_count = Some(c),
                         // Never coalesced: each is an explicit operator action.
-                        w @ (ExportJob::Write { .. } | ExportJob::PlanImport { .. }) => {
+                        w @ (ExportJob::Write { .. }
+                        | ExportJob::PlanImport { .. }
+                        | ExportJob::LotwSync { .. }) => {
                             if evt_tx.send(run(w)).is_err() {
                                 return; // app gone
                             }
@@ -475,6 +494,31 @@ fn run(job: ExportJob) -> ExportEvent {
                 })
                 .map(Box::new);
             ExportEvent::ImportPlanned { file, result }
+        }
+        ExportJob::LotwSync {
+            db_path,
+            login,
+            password,
+            since,
+        } => {
+            let outcome = crate::logging::lotw::fetch_report(&login, &password, since.as_deref())
+                .and_then(|adif| {
+                    let marker = crate::logging::lotw::extract_lastqsl(&adif);
+                    let plan = Exporter::open(&db_path)
+                        .and_then(|ex| ex.plan_import(&adif, DEFAULT_WINDOW_SECS))
+                        .map_err(|e| e.to_string())?;
+                    Ok((Box::new(plan), marker))
+                });
+            match outcome {
+                Ok((plan, marker)) => ExportEvent::LotwSynced {
+                    result: Ok(plan),
+                    marker,
+                },
+                Err(e) => ExportEvent::LotwSynced {
+                    result: Err(e),
+                    marker: None,
+                },
+            }
         }
     }
 }

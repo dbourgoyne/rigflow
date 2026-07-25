@@ -168,6 +168,23 @@ pub struct RigflowApp {
     /// A contact awaiting delete confirmation: (row id, human label). `None` =
     /// no pending delete.
     pub(crate) delete_contact: Option<(i64, String)>,
+
+    // ── online sync (LoTW confirmation download) ─────────────────────────
+    /// Sync window open flag (opened from the contact view).
+    pub(crate) show_sync: bool,
+    /// LoTW login + password fields. Loaded from the credential store when the
+    /// window opens; the password is only re-saved when the operator edits it.
+    pub(crate) sync_login: String,
+    pub(crate) sync_password: String,
+    /// Where the loaded credential came from (keyring vs file), for a UI note.
+    pub(crate) sync_backend: Option<crate::logging::credentials::Backend>,
+    /// A download is in flight on the worker.
+    pub(crate) sync_busy: bool,
+    /// Result / error line for the sync window.
+    pub(crate) sync_status: String,
+    /// Operator whose credentials are currently loaded into the fields, so the
+    /// window loads once per operator rather than every frame.
+    pub(crate) sync_loaded_for: Option<String>,
 }
 
 impl RigflowApp {
@@ -256,6 +273,13 @@ impl RigflowApp {
             import_status: String::new(),
             edit_contact: None,
             delete_contact: None,
+            show_sync: false,
+            sync_login: String::new(),
+            sync_password: String::new(),
+            sync_backend: None,
+            sync_busy: false,
+            sync_status: String::new(),
+            sync_loaded_for: None,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -789,6 +813,7 @@ impl eframe::App for RigflowApp {
         self.draw_import_window(ctx, &snapshot);
         self.draw_edit_contact_window(ctx);
         self.draw_delete_contact_confirm(ctx);
+        self.draw_sync_window(ctx, &snapshot.operator_id);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
