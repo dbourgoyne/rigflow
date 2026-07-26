@@ -20,7 +20,7 @@
 //! junk rows would be hostile. They are counted and named in the plan so the
 //! operator can see exactly what was left behind.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::Connection;
 
@@ -75,13 +75,15 @@ pub struct ImportPlan {
     /// Records skipped because the log (or an earlier record in this same file)
     /// already has them.
     pub duplicates: usize,
-    /// QSL confirmations matched to existing QSOs, ready to record. These do
-    /// **not** insert contacts — they mark ones the log already has as confirmed.
+    /// QSL confirmations matched to existing QSOs, ready to record — one per
+    /// distinct (QSO, service). These do **not** insert contacts; they mark ones
+    /// the log already has as confirmed.
     pub confirmations: Vec<Confirmation>,
-    /// Confirmation records whose QSO is already marked confirmed for that
-    /// service — skipped, so re-importing a report is idempotent.
+    /// Distinct QSOs already marked confirmed for a service — skipped, so
+    /// re-importing a report is idempotent. Counted per QSO, not per fetched
+    /// record (a service may hold several confirmed records for one contact).
     pub already_confirmed: usize,
-    /// Confirmation records that matched no contact in the log. Surfaced, not
+    /// Distinct confirmed QSOs that matched no contact in the log. Surfaced, not
     /// inserted: a QSL for a QSO we never logged is an anomaly worth showing.
     pub unmatched_confirmations: usize,
     /// Records that could not be made into a contact.
@@ -240,6 +242,14 @@ fn plan_inner(
     // to compare timestamps against.
     let mut seen: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
 
+    // Confirmations are counted per distinct QSO, not per fetched record: a
+    // service (QRZ especially) can hold near-duplicate confirmed records that all
+    // match one logged contact, and the operator sees one badge, so the tally
+    // must agree. Matched confirmations dedupe by (qso_id, service); unmatched
+    // ones — no qso_id — by (call, band, mode, service).
+    let mut seen_confirmed: HashSet<(i64, String)> = HashSet::new();
+    let mut seen_unmatched: HashSet<(String, String, String, String)> = HashSet::new();
+
     for (i, rec) in records.iter().enumerate() {
         let mut q = adif::record_to_qso(rec);
         q.normalize();
@@ -265,6 +275,11 @@ fn plan_inner(
             match existing.first() {
                 Some(m) => {
                     for (service, confirmed_at) in confs {
+                        // One tally per (QSO, service), however many fetch records
+                        // matched it.
+                        if !seen_confirmed.insert((m.id, service.clone())) {
+                            continue;
+                        }
                         if service_recorded(conn, m.id, &service)? {
                             plan.already_confirmed += 1; // idempotent re-import
                         } else {
@@ -276,7 +291,19 @@ fn plan_inner(
                         }
                     }
                 }
-                None => plan.unmatched_confirmations += confs.len(),
+                None => {
+                    for (service, _) in confs {
+                        let key = (
+                            q.call.trim().to_ascii_uppercase(),
+                            q.band.clone(),
+                            q.mode.clone(),
+                            service,
+                        );
+                        if seen_unmatched.insert(key) {
+                            plan.unmatched_confirmations += 1;
+                        }
+                    }
+                }
             }
             continue;
         }

@@ -421,6 +421,50 @@ fn a_downloaded_eqsl_confirmation_shows_a_badge_and_updates_an_upload_row() {
 }
 
 #[test]
+fn duplicate_confirmed_records_for_one_qso_count_once() {
+    // QRZ can hold near-duplicate confirmed records (e.g. the same QSO uploaded
+    // by both rigflow and WSJT-X, seconds apart) that both match one logged
+    // contact within the window. The operator sees one badge, so the tally must
+    // count the QSO once — not once per fetched record.
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store); // one W7WRO 40m FT8 at 235600
+    drop(store);
+
+    // Two confirmed QRZ records for that one QSO, 20 seconds apart.
+    let doc = adif_doc(&[
+        &format!(
+            "{}<APP_QRZLOG_STATUS:1>C ",
+            rec("W7WRO", "20260712", "235600", "40M", "FT8")
+        ),
+        &format!(
+            "{}<APP_QRZLOG_STATUS:1>C ",
+            rec("W7WRO", "20260712", "235620", "40M", "FT8")
+        ),
+    ]);
+
+    // First run: one new confirmation, not two.
+    let store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    let dl = super::plan_download(store.conn(), &doc, DEFAULT_WINDOW_SECS).unwrap();
+    assert_eq!(dl.confirmations.len(), 1, "one distinct QSO confirmed");
+    drop(store);
+
+    // Apply it, then re-run: "already confirmed" is 1, not 2.
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    store
+        .commit_import(&dl.importable, &dl.confirmations, &station())
+        .unwrap();
+    let again = super::plan_download(store.conn(), &doc, DEFAULT_WINDOW_SECS).unwrap();
+    assert_eq!(again.confirmations.len(), 0);
+    assert_eq!(
+        again.already_confirmed, 1,
+        "counts the QSO once, not per record"
+    );
+    // And the contact carries a single badge.
+    assert_eq!(store.query_contacts(10).unwrap()[0].confirmed, vec!["qrz"]);
+}
+
+#[test]
 fn a_qrz_download_confirms_c_records_and_ignores_the_rest() {
     // QRZ FETCH returns the whole logbook: confirmed QSOs carry APP_QRZLOG_STATUS=C,
     // the rest =N. A download must confirm the C ones against the log and ignore

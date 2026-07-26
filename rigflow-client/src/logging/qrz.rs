@@ -21,22 +21,98 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// FETCH the whole logbook as ADIF (empty string if the logbook is empty). The
-/// caller decides which records are confirmations from their per-record
-/// `APP_QRZLOG_STATUS` (a `STATUS:CONFIRMED` OPTION does not reliably filter, and
-/// QRZ's default FETCH already returns ADIF).
+/// Records requested per FETCH page. QRZ caps a single fetch, so we page.
+const PAGE: usize = 250;
+/// Backstop on the page loop, in case the cursor ever fails to advance.
+const MAX_PAGES: usize = 400;
+
+/// FETCH the **confirmed** QSOs as ADIF (empty string if there are none).
+///
+/// Only `STATUS:CONFIRMED` — the confirmed set is a small fraction of a logbook,
+/// so we never pull the whole thing. Confirmed records come back in ascending
+/// `APP_QRZLOG_LOGID` order, so we page with `AFTERLOGID` (the largest logid of
+/// the previous page) until a page comes back empty. **This is intra-fetch paging,
+/// not a cross-sync cursor**: a confirmation lands on an arbitrarily old record,
+/// so each sync re-pulls the full confirmed set and relies on the import being
+/// idempotent. Which records are confirmations is still decided per-record by the
+/// importer (`APP_QRZLOG_STATUS = C`).
 pub fn fetch(api_key: &str) -> Result<String, String> {
-    let body = agent()
-        .post(API)
-        .send_form(&[("KEY", api_key), ("ACTION", "FETCH")])
-        .map_err(redact)?
-        .into_string()
-        .map_err(|e| format!("reading the QRZ response: {e}"))?;
-    let (f, adif) = parse_reply(&body);
-    match f.get("RESULT").map(String::as_str) {
-        Some("OK") | Some("PARTIAL") => Ok(adif.unwrap_or_default()),
-        _ => Err(error_hint(&f)),
+    let a = agent();
+    let mut out = String::new();
+    let mut after: u64 = 0;
+
+    for _ in 0..MAX_PAGES {
+        let option = format!("STATUS:CONFIRMED,MAX:{PAGE},AFTERLOGID:{after}");
+        // GET is QRZ's preferred method for FETCH; ureq url-encodes each query
+        // value (like curl's --data-urlencode). redact() keeps the key — now in
+        // the URL — out of any error string.
+        let body = a
+            .get(API)
+            .query("KEY", api_key)
+            .query("ACTION", "FETCH")
+            .query("OPTION", &option)
+            .call()
+            .map_err(redact)?
+            .into_string()
+            .map_err(|e| format!("reading the QRZ response: {e}"))?;
+        let (f, adif) = parse_reply(&body);
+        match f.get("RESULT").map(String::as_str) {
+            Some("OK") | Some("PARTIAL") => {}
+            // A failure on the very first page is a real error (bad key, bad
+            // option); later it just means we've paged past the last record.
+            _ if out.is_empty() => return Err(error_hint(&f)),
+            _ => break,
+        }
+        let Some(adif) = adif.filter(|s| !s.trim().is_empty()) else {
+            break;
+        };
+        let (count, max_logid) = page_stats(&adif);
+        if count == 0 {
+            break;
+        }
+        out.push_str(&adif);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        // Stop when the cursor can't advance (last page, or a stuck cursor).
+        if max_logid <= after {
+            break;
+        }
+        after = max_logid;
     }
+    Ok(out)
+}
+
+/// Records in one ADIF page (`<eor>` count) and the largest `APP_QRZLOG_LOGID` in
+/// it — the `AFTERLOGID` cursor for the next page. `0` when a page carries no
+/// logid, which stops paging (its `<=` cursor check trips).
+fn page_stats(adif: &str) -> (usize, u64) {
+    let lower = adif.to_ascii_lowercase();
+    let count = lower.matches("<eor>").count();
+    const KEY: &str = "<app_qrzlog_logid:";
+    let mut max_logid = 0u64;
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(KEY) {
+        let start = from + i + KEY.len();
+        let Some(gt) = lower[start..].find('>') else {
+            break;
+        };
+        let len: usize = lower[start..start + gt]
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        let vstart = start + gt + 1;
+        if let Some(v) = lower.get(vstart..vstart + len)
+            && let Ok(id) = v.trim().parse::<u64>()
+        {
+            max_logid = max_logid.max(id);
+        }
+        from = vstart + len.max(1);
+    }
+    (count, max_logid)
 }
 
 /// Split a QRZ reply into its metadata fields and (if present) its ADIF payload.
@@ -224,6 +300,17 @@ mod tests {
         let (f, adif) = parse_reply("RESULT=FAIL&REASON=Bad+key");
         assert_eq!(f.get("RESULT").unwrap(), "FAIL");
         assert_eq!(adif, None);
+    }
+
+    #[test]
+    fn page_stats_counts_records_and_finds_the_max_logid() {
+        // Decoded ADIF (what parse_reply hands us), two records, ascending logid.
+        let adif = "<call:4>W1AW<app_qrzlog_logid:3>100<eor>\n\
+                    <call:4>K5ZD<app_qrzlog_logid:10>1482539906<eor>\n";
+        assert_eq!(page_stats(adif), (2, 1_482_539_906));
+        // A record with no logid → count 1, cursor 0 (which stops paging).
+        assert_eq!(page_stats("<call:4>W1AW<eor>"), (1, 0));
+        assert_eq!(page_stats(""), (0, 0));
     }
 
     #[test]
