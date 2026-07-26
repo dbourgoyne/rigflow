@@ -169,6 +169,17 @@ impl Exporter {
         crate::import::plan(&self.conn, text, window_secs)
     }
 
+    /// Like [`plan_import`](Self::plan_import), but for a confirmation download
+    /// (LoTW/eQSL/QRZ): applies the confirmations records carry and ignores
+    /// records that carry none, so a full-logbook fetch never adds new contacts.
+    pub fn plan_download(
+        &self,
+        text: &str,
+        window_secs: i64,
+    ) -> Result<crate::import::ImportPlan, LogError> {
+        crate::import::plan_download(&self.conn, text, window_secs)
+    }
+
     /// Test-only handle, used to prove SQLite itself refuses a write here.
     #[cfg(test)]
     pub(crate) fn conn_for_test(&self) -> &Connection {

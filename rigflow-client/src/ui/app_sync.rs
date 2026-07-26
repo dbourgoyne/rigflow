@@ -84,6 +84,9 @@ impl RigflowApp {
             None
         };
 
+        // Force applies only to an upload; a download always uses its marker.
+        let force = direction == Direction::Upload && self.sync_force_upload;
+
         self.sync_busy = true;
         self.sync_status = format!(
             "{} {}…",
@@ -100,6 +103,7 @@ impl RigflowApp {
             login: cred.login,
             password: cred.password,
             since,
+            force,
         });
     }
 
@@ -309,6 +313,16 @@ impl RigflowApp {
                         ui.spinner();
                     }
                 });
+                if service.can_upload() {
+                    ui.checkbox(
+                        &mut self.sync_force_upload,
+                        "Re-upload QSOs already marked uploaded",
+                    )
+                    .on_hover_text(
+                        "Ignore the upload history and send everything; the service skips real \
+                         duplicates. Use this to recover if the log was wrongly marked uploaded.",
+                    );
+                }
                 if !service.can_upload() {
                     ui.label(note_text(
                         "Uploading to LoTW needs TQSL and your certificate, so it's done with \

@@ -907,6 +907,7 @@ fn service_label(s: &str) -> &str {
     match s {
         "lotw" => "LoTW",
         "eqsl" => "eQSL",
+        "qrz" => "QRZ",
         "qsl" => "QSL",
         other => other,
     }

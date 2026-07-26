@@ -370,6 +370,9 @@ pub enum ExportJob {
         login: String,
         password: String,
         since: Option<String>,
+        /// Upload only: re-send QSOs already marked uploaded (ignore the
+        /// `not_uploaded_to` filter). The service dedups any real duplicates.
+        force: bool,
     },
 }
 
@@ -533,12 +536,13 @@ fn run(job: ExportJob) -> ExportEvent {
             login,
             password,
             since,
+            force,
         } => {
             let result = match direction {
                 Direction::Download => {
                     run_download(&db_path, service, &login, &password, since.as_deref())
                 }
-                Direction::Upload => run_upload(&db_path, service, &login, &password),
+                Direction::Upload => run_upload(&db_path, service, &login, &password, force),
             };
             ExportEvent::ServiceSynced { service, result }
         }
@@ -554,8 +558,11 @@ fn run_download(
     since: Option<&str>,
 ) -> Result<SyncOutcome, String> {
     let (adif, marker) = crate::logging::services::download(service, login, password, since)?;
+    // A service download is definitionally "these QSOs are confirmed by this
+    // service", so plan it as that service's confirmations — needed for QRZ,
+    // whose FETCH carries no per-record confirmation field.
     let plan = Exporter::open(db_path)
-        .and_then(|ex| ex.plan_import(&adif, DEFAULT_WINDOW_SECS))
+        .and_then(|ex| ex.plan_download(&adif, DEFAULT_WINDOW_SECS))
         .map_err(|e| e.to_string())?;
     Ok(SyncOutcome::Downloaded {
         plan: Box::new(plan),
@@ -563,18 +570,27 @@ fn run_download(
     })
 }
 
-/// Gather every QSO not yet uploaded to `service`, build an ADIF batch, and push
-/// it. Returns the pushed ids so the UI can stamp `uploaded_at`.
+/// Gather QSOs to upload to `service` — everything not yet uploaded, or (when
+/// `force`) the whole log — build the ADIF, and push it. Returns the pushed ids
+/// so the UI can stamp `uploaded_at`.
 fn run_upload(
     db_path: &std::path::Path,
     service: Service,
     login: &str,
     password: &str,
+    force: bool,
 ) -> Result<SyncOutcome, String> {
     let ex = Exporter::open(db_path).map_err(|e| e.to_string())?;
-    let filter = ExportFilter {
-        not_uploaded_to: Some(vec![service.key().to_string()]),
-        ..Default::default()
+    let filter = if force {
+        // Everything: the service dedups any real duplicates. Recovers from a log
+        // wrongly marked uploaded (e.g. by an upload that reported success but
+        // didn't actually land).
+        ExportFilter::default()
+    } else {
+        ExportFilter {
+            not_uploaded_to: Some(vec![service.key().to_string()]),
+            ..Default::default()
+        }
     };
     let rows = ex.all_matching(&filter).map_err(|e| e.to_string())?;
     if rows.is_empty() {
@@ -586,13 +602,17 @@ fn run_upload(
             },
         });
     }
-    let mut adif = rigflow_log::adif::adif_header();
-    for lq in &rows {
-        adif.push_str(&rigflow_log::adif::write_record(
-            &rigflow_log::adif::qso_to_record(&lq.qso),
-        ));
-    }
-    let report = crate::logging::services::upload(service, login, password, &adif)?;
-    let ids = rows.iter().map(|r| r.id).collect();
+    // One ADIF record per QSO, paired with its id. Each service assembles these
+    // as its API wants (eQSL one batch, QRZ one INSERT per record).
+    let records: Vec<(i64, String)> = rows
+        .iter()
+        .map(|lq| {
+            (
+                lq.id,
+                rigflow_log::adif::write_record(&rigflow_log::adif::qso_to_record(&lq.qso)),
+            )
+        })
+        .collect();
+    let (ids, report) = crate::logging::services::upload(service, login, password, &records)?;
     Ok(SyncOutcome::Uploaded { ids, report })
 }

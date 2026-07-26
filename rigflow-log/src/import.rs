@@ -199,6 +199,32 @@ fn db_duplicates(conn: &Connection, q: &Qso, window_secs: i64) -> Result<Vec<Log
 /// not an ADIF file, and guessing at it would be worse than refusing. Per-record
 /// problems are *not* fatal; they land in [`ImportPlan::unusable`].
 pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPlan, LogError> {
+    plan_inner(conn, text, window_secs, false)
+}
+
+/// Plan applying a **confirmation download** (LoTW/eQSL/QRZ): apply the QSL
+/// confirmations each record carries, and **ignore records that carry none**.
+///
+/// This differs from [`plan`] in the last part: a download like QRZ's FETCH
+/// returns your *entire* logbook, most of it unconfirmed. A file import would add
+/// those unconfirmed strangers as new contacts; a confirmation download must
+/// only ever update confirmation state, never insert. Which records are
+/// confirmations is decided per-record by [`confirmations_in`] (e.g. QRZ's
+/// `APP_QRZLOG_STATUS = C`).
+pub fn plan_download(
+    conn: &Connection,
+    text: &str,
+    window_secs: i64,
+) -> Result<ImportPlan, LogError> {
+    plan_inner(conn, text, window_secs, true)
+}
+
+fn plan_inner(
+    conn: &Connection,
+    text: &str,
+    window_secs: i64,
+    confirmations_only: bool,
+) -> Result<ImportPlan, LogError> {
     let records = adif::parse_adif(text)?;
 
     let mut plan = ImportPlan {
@@ -229,11 +255,11 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
 
         let existing = db_duplicates(conn, &q, window_secs)?;
 
-        // A record carrying a `QSL_RCVD = Y` (or `LOTW_QSL_RCVD` / `EQSL_QSL_RCVD`)
-        // is a *confirmation* of an existing QSO — a LoTW/eQSL report, or an
-        // export of ours round-tripping — not a new contact. Match it and record
-        // each service's confirmation; never insert. One record can confirm more
-        // than one service (LoTW *and* eQSL), so this is a list.
+        // A record carrying a `QSL_RCVD = Y` (or `LOTW_QSL_RCVD` / `EQSL_QSL_RCVD`
+        // / `APP_QRZLOG_STATUS = C` …) is a *confirmation* of an existing QSO — a
+        // service report, or an export of ours round-tripping — not a new contact.
+        // Match it and record each service's confirmation; never insert. One
+        // record can confirm more than one service, so this is a list.
         let confs = confirmations_in(&q);
         if !confs.is_empty() {
             match existing.first() {
@@ -252,6 +278,13 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
                 }
                 None => plan.unmatched_confirmations += confs.len(),
             }
+            continue;
+        }
+
+        // A confirmation download only ever updates confirmation state. A record
+        // that confirms nothing (e.g. an unconfirmed QSO in QRZ's full FETCH) is
+        // ignored — never added as a new contact the way a file import would.
+        if confirmations_only {
             continue;
         }
 
@@ -293,6 +326,9 @@ pub fn plan(conn: &Connection, text: &str, window_secs: i64) -> Result<ImportPla
 ///   tag. Any of those means confirmed by eQSL. Note eQSL records carry
 ///   `QSL_SENT = Y`, not `QSL_RCVD`, so the bare-`QSL_RCVD` rule below never
 ///   catches them.
+/// - **QRZ** — `APP_QRZLOG_STATUS = C` (date from `APP_QRZLOG_QSLDATE`). QRZ's
+///   FETCH puts this on each record; its `qsl_rcvd`/`lotw_qsl_rcvd`/`eqsl_qsl_rcvd`
+///   are all `N`, so this is the only QRZ signal.
 /// - **generic** — a bare `QSL_RCVD = Y` is the paper card, unless a LoTW/eQSL
 ///   `APP_*` marker attributes it to that service (a LoTW report stamps
 ///   `APP_LoTW_*` beside `QSL_RCVD`). Skipped if that service was already found.
@@ -327,6 +363,15 @@ fn confirmations_in(q: &Qso) -> Vec<(String, Option<String>)> {
     }
     if is_y("EQSL_QSL_RCVD") || has("EQSL_AG") || has_app("APP_EQSL") {
         out.push(("eqsl".into(), dated("EQSL_QSLRDATE")));
+    }
+    // QRZ marks its own confirmation with APP_QRZLOG_STATUS = C (Confirmed);
+    // date in APP_QRZLOG_QSLDATE. Y/N are its other statuses (not confirmed), and
+    // QRZ records carry qsl_rcvd=N etc., so nothing else here would catch it.
+    if q.extra
+        .get("APP_QRZLOG_STATUS")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("C"))
+    {
+        out.push(("qrz".into(), dated("APP_QRZLOG_QSLDATE")));
     }
     if is_y("QSL_RCVD") {
         let service = if has_app("APP_LOTW") {

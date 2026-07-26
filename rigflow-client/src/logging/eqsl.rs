@@ -48,23 +48,35 @@ pub fn download(user: &str, password: &str) -> Result<String, String> {
     Err(error_hint(&page))
 }
 
-/// Upload a batch of QSOs to eQSL. Best-effort count parse; the reply is prose.
+/// Upload QSOs to eQSL as one batch (eQSL takes a whole ADIF at once, unlike
+/// QRZ). Returns the ids sent — eQSL doesn't report per-record outcomes, so on a
+/// non-error reply they are all treated as landed — plus a best-effort tally.
 ///
 /// Credentials use eQSL's own field names `EQSL_USER` / `EQSL_PSWD` (not
-/// `UserName`/`Password` — that's the download endpoint), with the batch in
-/// `ADIFData`.
-pub fn upload(user: &str, password: &str, adif: &str) -> Result<UploadReport, String> {
+/// `UserName`/`Password` — that's the download endpoint), with the batch (header
+/// + records) in `ADIFData`.
+pub fn upload(
+    user: &str,
+    password: &str,
+    records: &[(i64, String)],
+) -> Result<(Vec<i64>, UploadReport), String> {
+    let mut adif = rigflow_log::adif::adif_header();
+    for (_, rec) in records {
+        adif.push_str(rec);
+    }
     let body = agent()
         .post(&format!("{BASE}/qslcard/importADIF.cfm"))
         .send_form(&[
             ("EQSL_USER", user),
             ("EQSL_PSWD", password),
-            ("ADIFData", adif),
+            ("ADIFData", &adif),
         ])
         .map_err(redact)?
         .into_string()
         .map_err(|e| format!("reading the eQSL response: {e}"))?;
-    parse_upload(&body)
+    let report = parse_upload(&body)?;
+    let ids = records.iter().map(|(id, _)| *id).collect();
+    Ok((ids, report))
 }
 
 /// The `href` of the built ADIF from the DownloadInBox HTML — read from the page

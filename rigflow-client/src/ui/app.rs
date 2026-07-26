@@ -185,6 +185,8 @@ pub struct RigflowApp {
     pub(crate) sync_password: String,
     /// Where the loaded credential came from (keyring vs file), for a UI note.
     pub(crate) sync_backend: Option<crate::logging::credentials::Backend>,
+    /// Re-upload QSOs already marked uploaded (ignore the not-uploaded filter).
+    pub(crate) sync_force_upload: bool,
     /// A sync is in flight on the worker.
     pub(crate) sync_busy: bool,
     /// Result / error line for the sync window.
@@ -287,6 +289,7 @@ impl RigflowApp {
             sync_login: String::new(),
             sync_password: String::new(),
             sync_backend: None,
+            sync_force_upload: false,
             sync_busy: false,
             sync_status: String::new(),
             sync_loaded_for: None,

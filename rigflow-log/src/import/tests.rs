@@ -421,6 +421,42 @@ fn a_downloaded_eqsl_confirmation_shows_a_badge_and_updates_an_upload_row() {
 }
 
 #[test]
+fn a_qrz_download_confirms_c_records_and_ignores_the_rest() {
+    // QRZ FETCH returns the whole logbook: confirmed QSOs carry APP_QRZLOG_STATUS=C,
+    // the rest =N. A download must confirm the C ones against the log and ignore
+    // the N ones entirely — never add them as new contacts.
+    let dir = TmpDir::new();
+    let mut store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    insert_worked(&mut store); // W7WRO 40m FT8, 20260712
+    drop(store);
+
+    let doc = adif_doc(&[
+        // Confirmed on QRZ, matches the logged QSO → a qrz confirmation.
+        &format!(
+            "{}<APP_QRZLOG_STATUS:1>C <APP_QRZLOG_QSLDATE:8>20260720 <QSL_RCVD:1>N ",
+            rec("W7WRO", "20260712", "235600", "40M", "FT8"),
+        ),
+        // Not confirmed, and not even in our log → must be ignored, not imported.
+        &format!(
+            "{}<APP_QRZLOG_STATUS:1>N ",
+            rec("N7XS", "20240520", "023000", "2m", "FM"),
+        ),
+    ]);
+
+    let store = LogStore::open(dir.db(), dir.adi()).unwrap();
+    let dl = super::plan_download(store.conn(), &doc, DEFAULT_WINDOW_SECS).unwrap();
+    assert_eq!(dl.confirmations.len(), 1);
+    assert_eq!(dl.confirmations[0].service, "qrz");
+    assert_eq!(
+        dl.confirmations[0].confirmed_at.as_deref(),
+        Some("20260720")
+    );
+    // The unconfirmed stranger is ignored: no import, no duplicate count.
+    assert_eq!(dl.importable.len(), 0);
+    assert_eq!(dl.duplicates, 0);
+}
+
+#[test]
 fn an_unmatched_confirmation_is_surfaced_not_inserted() {
     // A QSL for a QSO we never logged: counted, never turned into a phantom row.
     let dir = TmpDir::new();

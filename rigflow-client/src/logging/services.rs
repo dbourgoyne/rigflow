@@ -112,18 +112,21 @@ pub fn download(
     }
 }
 
-/// Upload an ADIF batch to a service. `password` carries the API key for QRZ.
+/// Upload QSOs to a service. `records` is `(qso_id, single-record ADIF)`; each
+/// service assembles them as its API wants (eQSL one batch, QRZ one call per
+/// record). Returns the ids that actually landed — so only those get stamped
+/// `uploaded_at` — plus a tally. `password` carries the API key for QRZ.
 pub fn upload(
     service: Service,
     login: &str,
     password: &str,
-    adif: &str,
-) -> Result<UploadReport, String> {
+    records: &[(i64, String)],
+) -> Result<(Vec<i64>, UploadReport), String> {
     match service {
         Service::Lotw => {
             Err("LoTW upload needs TQSL and a certificate — not supported here.".into())
         }
-        Service::Eqsl => eqsl::upload(login, password, adif),
-        Service::Qrz => qrz::insert(password, adif),
+        Service::Eqsl => eqsl::upload(login, password, records),
+        Service::Qrz => qrz::insert(password, records),
     }
 }
