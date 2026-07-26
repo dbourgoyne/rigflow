@@ -59,6 +59,16 @@ pub fn voice_keyer_clips_dir(config_dir: &Path, operator_id: &str) -> PathBuf {
     operator_data_dir(config_dir, operator_id).join("voice_keyer_clips")
 }
 
+/// This operator's contact-log SQLite database (the source of truth).
+pub fn qso_log_db_path(config_dir: &Path, operator_id: &str) -> PathBuf {
+    operator_data_dir(config_dir, operator_id).join("rigflow_log.db")
+}
+
+/// This operator's append-only ADIF journal (recovery + interop).
+pub fn qso_log_journal_path(config_dir: &Path, operator_id: &str) -> PathBuf {
+    operator_data_dir(config_dir, operator_id).join("rigflow_log.adi")
+}
+
 /// Normalize operator IDs for persistence.
 ///
 /// Current behavior:

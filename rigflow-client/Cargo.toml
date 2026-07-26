@@ -23,3 +23,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 tokio-tungstenite = "0.24"
 rigflow-protocol = { path = "../rigflow-protocol" }
 rigflow-core = { path = "../rigflow-core" }
+rigflow-log = { path = "../rigflow-log" }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+# LoTW confirmation download (blocking HTTPS on the export worker thread).
+ureq = "2"
+# Credential storage: OS keyring (macOS Keychain / Linux Secret Service via
+# pure-Rust zbus), with a file fallback handled in logging/credentials.rs.
+keyring = { version = "3", default-features = false, features = [
+    "apple-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }

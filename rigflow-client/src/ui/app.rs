@@ -87,6 +87,113 @@ pub struct RigflowApp {
     /// Operator whose voice-keyer clip list is currently cached, so the list is
     /// refreshed (and the per-operator data dirs ensured) on an operator switch.
     pub(crate) clips_listed_for: Option<String>,
+
+    // ── Contact logging ──────────────────────────────────────────────────
+    /// The current operator's contact-log store (single-owner). `None` until an
+    /// operator is set. Reopened on operator switch by `sync_log_state`.
+    pub(crate) log: Option<rigflow_log::LogStore>,
+    /// Operator whose log store is currently open (drives reopen-on-switch).
+    pub(crate) log_open_for: Option<String>,
+    /// In-memory "worked before?" index for the open operator's log.
+    pub(crate) worked_before: rigflow_log::store::WorkedBefore,
+    /// Cached recent contacts for the contact-view window; refreshed when dirty.
+    pub(crate) contacts_cache: Vec<rigflow_log::store::LoggedQso>,
+    pub(crate) contacts_cache_dirty: bool,
+    /// Total contacts matching the active filter, ignoring the row cap — so the
+    /// view can say "showing 500 of 1,483" instead of silently truncating.
+    pub(crate) contacts_total: usize,
+    /// Receiver for decoded WSJT-X `LoggedADIF` events from the UDP-2237 thread.
+    pub(crate) wsjtx_rx: std::sync::mpsc::Receiver<crate::logging::wsjtx_listener::LogEvent>,
+
+    // ── Contact filter / export ──────────────────────────────────────────
+    // All of this lives here rather than in `UiState`: only the logging windows
+    // touch it, and `UiState` is cloned every frame by `snapshot_state()`.
+    //
+    // `qso_filter` is the SHARED filter: it drives both the contact-view list and
+    // the export, so what the operator sees is what they get written.
+    pub(crate) qso_filter: crate::logging::export::QsoFilterDraft,
+    /// Previous filter, to notice an edit and re-arm the query debounce.
+    pub(crate) qso_filter_last: Option<crate::logging::export::QsoFilterDraft>,
+    /// Filter window open flag.
+    pub(crate) show_filter: bool,
+    /// When the debounced contact-view re-query should fire.
+    pub(crate) contacts_query_due: Option<std::time::Instant>,
+    /// Monotonic query id; a reply carrying an older one is stale and dropped.
+    pub(crate) contacts_query_seq: u64,
+    /// Filter error, shown in place of the match count.
+    pub(crate) filter_error: String,
+
+    /// Quick "have I worked this station?" lookup (contact-view toolbar).
+    pub(crate) call_lookup: String,
+    /// Rows + total for the lookup popup (`None` = no popup / still querying).
+    pub(crate) call_lookup_hits: Option<rigflow_log::export::ContactPage>,
+    pub(crate) call_lookup_seq: u64,
+    pub(crate) call_lookup_due: Option<std::time::Instant>,
+
+    /// Export window open flag (opened from the contact view).
+    pub(crate) show_export: bool,
+    pub(crate) export_draft: crate::logging::export::ExportDraft,
+    /// Previous export draft, to re-arm the incremental count when it changes.
+    pub(crate) export_draft_last: Option<crate::logging::export::ExportDraft>,
+    /// How many contacts the *export* would write. Differs from
+    /// `contacts_total` only when the export is incremental, and the window shows
+    /// both numbers so the difference is never a surprise.
+    pub(crate) export_count: Option<usize>,
+    /// A write is in flight on the worker.
+    pub(crate) export_busy: bool,
+    /// Last export result / error, shown in the window.
+    pub(crate) export_status: String,
+    /// Job queue to the export worker thread, and its replies.
+    pub(crate) export_tx: std::sync::mpsc::Sender<crate::logging::export::ExportJob>,
+    pub(crate) export_rx: std::sync::mpsc::Receiver<crate::logging::export::ExportEvent>,
+
+    // ── ADIF import ──────────────────────────────────────────────────────
+    /// Import window open flag (opened from the contact view).
+    pub(crate) show_import: bool,
+    /// The file being imported, and the plan the worker made for it. The plan
+    /// carries the parsed contacts, so committing needs no second parse — the
+    /// operator confirms exactly what they were shown.
+    pub(crate) import_file: Option<std::path::PathBuf>,
+    pub(crate) import_plan: Option<rigflow_log::import::ImportPlan>,
+    /// A plan is being made on the worker (parsing a large file takes a moment).
+    pub(crate) import_planning: bool,
+    /// Result / error line for the import window.
+    pub(crate) import_status: String,
+
+    // ── contact edit / delete ────────────────────────────────────────────
+    /// The contact open in the edit window: its row id, the original QSO (so
+    /// `extra` and untouched fields survive the round-trip), and editable copies
+    /// of the fields the operator can change. `None` = edit window closed.
+    pub(crate) edit_contact: Option<crate::ui::app_logging::ContactEdit>,
+    /// A contact awaiting delete confirmation: (row id, human label). `None` =
+    /// no pending delete.
+    pub(crate) delete_contact: Option<(i64, String)>,
+    /// Multi-select in the contact view: the checked row ids. Drives the
+    /// selection action bar (export / bulk delete).
+    pub(crate) selected_contacts: std::collections::BTreeSet<i64>,
+    /// A bulk delete of `selected_contacts` is awaiting confirmation.
+    pub(crate) delete_selection_pending: bool,
+
+    // ── online sync (LoTW / eQSL / QRZ) ──────────────────────────────────
+    /// Sync window open flag (opened from the contact view).
+    pub(crate) show_sync: bool,
+    /// The service the sync window is currently showing.
+    pub(crate) sync_service: crate::logging::services::Service,
+    /// Login + password (or API key, in `sync_password`) for the current service.
+    /// Loaded from the credential store; the password is re-saved when a sync runs.
+    pub(crate) sync_login: String,
+    pub(crate) sync_password: String,
+    /// Where the loaded credential came from (keyring vs file), for a UI note.
+    pub(crate) sync_backend: Option<crate::logging::credentials::Backend>,
+    /// Re-upload QSOs already marked uploaded (ignore the not-uploaded filter).
+    pub(crate) sync_force_upload: bool,
+    /// A sync is in flight on the worker.
+    pub(crate) sync_busy: bool,
+    /// Result / error line for the sync window.
+    pub(crate) sync_status: String,
+    /// (operator, service) whose credentials are loaded into the fields, so the
+    /// window loads once per operator+service rather than every frame.
+    pub(crate) sync_loaded_for: Option<(String, crate::logging::services::Service)>,
 }
 
 impl RigflowApp {
@@ -100,6 +207,14 @@ impl RigflowApp {
         spectrum_db_b: Arc<Mutex<Vec<f32>>>,
         persistence_store: PersistenceStore,
     ) -> Self {
+        // Spawn the WSJT-X UDP listener (non-fatal bind); it forwards decoded
+        // LoggedADIF events we drain each frame.
+        let wsjtx_rx = crate::logging::wsjtx_listener::spawn_wsjtx_listener(Arc::clone(&state));
+
+        // The export worker: read-only DB access on its own thread, so a large
+        // export streams to disk without stalling the frame loop.
+        let (export_tx, export_rx) = crate::logging::export::spawn_export_worker();
+
         // Create the virtual digital-audio endpoints once, at startup.
         let digital_audio = crate::digital_audio::DigitalAudio::start();
         let digital_output_available = digital_audio.output_available();
@@ -135,6 +250,49 @@ impl RigflowApp {
             rx_recorder: None,
             clip_recorder: None,
             clips_listed_for: None,
+            log: None,
+            log_open_for: None,
+            worked_before: rigflow_log::store::WorkedBefore::default(),
+            contacts_cache: Vec::new(),
+            contacts_cache_dirty: true,
+            contacts_total: 0,
+            wsjtx_rx,
+            qso_filter: crate::logging::export::QsoFilterDraft::default(),
+            qso_filter_last: None,
+            show_filter: false,
+            contacts_query_due: None,
+            contacts_query_seq: 0,
+            filter_error: String::new(),
+            call_lookup: String::new(),
+            call_lookup_hits: None,
+            call_lookup_seq: 0,
+            call_lookup_due: None,
+            show_export: false,
+            export_draft: crate::logging::export::ExportDraft::default(),
+            export_draft_last: None,
+            export_count: None,
+            export_busy: false,
+            export_status: String::new(),
+            export_tx,
+            export_rx,
+            show_import: false,
+            import_file: None,
+            import_plan: None,
+            import_planning: false,
+            import_status: String::new(),
+            edit_contact: None,
+            delete_contact: None,
+            selected_contacts: std::collections::BTreeSet::new(),
+            delete_selection_pending: false,
+            show_sync: false,
+            sync_service: crate::logging::services::Service::Lotw,
+            sync_login: String::new(),
+            sync_password: String::new(),
+            sync_backend: None,
+            sync_force_upload: false,
+            sync_busy: false,
+            sync_status: String::new(),
+            sync_loaded_for: None,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -453,13 +611,27 @@ impl RigflowApp {
         // callsign/frequency never triggers them).  `X` = TX-focus swap,
         // `=` = copy VFO A onto VFO B.
         if !ctx.wants_keyboard_input() {
-            let (swap_tx, copy_ab, bookmark) = ctx.input(|i| {
+            let (swap_tx, copy_ab, bookmark, open_log, toggle_view) = ctx.input(|i| {
                 (
                     i.key_pressed(egui::Key::X),
                     i.key_pressed(egui::Key::Equals),
                     i.key_pressed(egui::Key::B),
+                    i.key_pressed(egui::Key::L),
+                    i.key_pressed(egui::Key::V),
                 )
             });
+            // Logging hotkeys don't require an acquired radio: `V` toggles the
+            // contact view; `L` opens the entry window (freezing whatever radio
+            // state is current).
+            if toggle_view {
+                if let Ok(mut s) = self.state.lock() {
+                    s.show_contact_view = !s.show_contact_view;
+                }
+            }
+            if open_log {
+                let snapshot = self.snapshot_state();
+                self.open_log_entry(&snapshot);
+            }
             if swap_tx || copy_ab || bookmark {
                 let snapshot = self.snapshot_state();
                 if snapshot.radio_acquired {
@@ -626,6 +798,12 @@ impl eframe::App for RigflowApp {
         let snapshot = self.snapshot_state();
         let config_mode = !snapshot.server_connected;
 
+        // Ingest any WSJT-X FT8 contacts that arrived since the last frame.
+        self.drain_wsjtx_events(ctx);
+        // Collect export counts/results from the worker (and advance the
+        // incremental bookmark when an incremental export has landed).
+        self.drain_export_events(ctx);
+
         self.ensure_mic();
         self.auto_relock_controls();
         self.handle_keyboard_shortcuts(ctx);
@@ -641,12 +819,38 @@ impl eframe::App for RigflowApp {
         self.draw_delete_operator_dialog(ctx);
         self.draw_swr_sweep_window(ctx);
         self.draw_wsjtx_setup_window(ctx);
+        self.draw_log_entry_window(ctx, &snapshot);
+        self.draw_contact_view_window(ctx, &snapshot);
+        self.draw_filter_window(ctx);
+        self.draw_export_window(ctx, &snapshot);
+        self.draw_import_window(ctx, &snapshot);
+        self.draw_edit_contact_window(ctx);
+        self.draw_delete_contact_confirm(ctx);
+        self.draw_delete_selection_confirm(ctx);
+        self.draw_sync_window(ctx, &snapshot.operator_id);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
         // mirror live recorder status into UiState for the panels.
         self.sync_audio_recording_state(&snapshot);
         self.process_audio_requests(&snapshot);
+
+        // Contact logging: open/reopen the per-operator log store on an operator
+        // switch (mirrors the audio-recording sync above).
+        self.sync_log_state(&snapshot);
+
+        // Persist the global station profile when the Station panel flagged a
+        // committed edit (it only has `&self`, so it defers the save to here).
+        let save_station = {
+            let mut s = self.state.lock().unwrap();
+            std::mem::take(&mut s.pending_save_station_profile)
+        };
+        if save_station {
+            let profile = self.state.lock().unwrap().station_profile.clone();
+            if let Err(e) = self.persistence_store.save_station_profile(&profile) {
+                self.set_log_status(format!("station save failed: {e}"));
+            }
+        }
 
         // Persist per-radio settings: diff the live per-radio state against the
         // saved bucket and save ~600 ms after it stops changing.  Debounced so a

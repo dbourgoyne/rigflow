@@ -90,7 +90,7 @@ impl RigflowApp {
                             plot_ui.line(Line::new(PlotPoints::from(points.clone())).name("SWR"));
                             plot_ui.points(
                                 Points::new(PlotPoints::from(points.clone()))
-                                    .radius(3.0)
+                                    .radius(3.0_f32)
                                     .name("SWR"),
                             );
                         }

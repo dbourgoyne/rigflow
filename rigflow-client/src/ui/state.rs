@@ -310,6 +310,9 @@ pub struct UiState {
     // OPERATOR / PERSISTENCE (logical state, even if not yet persisted)
     // =====================================================================
     pub operator_id: String,
+    /// The current operator's personal name (ADIF `MY_NAME`), persisted per
+    /// operator; edited in the Operator panel.
+    pub operator_name: String,
     pub known_operator_ids: Vec<String>,
 
     pub show_add_operator_dialog: bool,
@@ -320,6 +323,27 @@ pub struct UiState {
     pub pending_delete_operator_id: Option<String>,
 
     pub persistence_status: String,
+
+    // =====================================================================
+    // CONTACT LOGGING
+    // =====================================================================
+    /// Global station location (grid, etc.), shared across operators; mirrored
+    /// from `app_state.json`. Callsign is per-operator (`operator_id`).
+    pub station_profile: crate::persistence::models::StationProfileFile,
+    /// Set by the Station panel (which has only `&self`) to request a save.
+    pub pending_save_station_profile: bool,
+    /// Manual log-entry window (`L`) open flag + its draft.
+    pub show_log_entry: bool,
+    pub log_entry_draft: crate::logging::LogEntryDraft,
+    /// True on the frame the entry window opens, so the callsign field grabs
+    /// focus once (egui drops the first keystrokes without an explicit focus).
+    pub log_entry_focus_pending: bool,
+    /// Contact-view window (`V`) open flag.
+    pub show_contact_view: bool,
+    /// Status/last-action line for the logging UI.
+    pub log_status: String,
+    /// WSJT-X UDP listener status (bind result / errors), surfaced for the user.
+    pub wsjtx_listen_status: String,
 
     // =====================================================================
     // PER-DEMOD OPERATOR PREFERENCES
@@ -734,6 +758,7 @@ impl Default for UiState {
             // OPERATOR / PERSISTENCE
             // =================================================================
             operator_id: String::new(),
+            operator_name: String::new(),
             known_operator_ids: Vec::new(),
 
             show_add_operator_dialog: false,
@@ -744,6 +769,18 @@ impl Default for UiState {
             pending_delete_operator_id: None,
 
             persistence_status: String::new(),
+
+            // =================================================================
+            // CONTACT LOGGING
+            // =================================================================
+            station_profile: crate::persistence::models::StationProfileFile::default(),
+            pending_save_station_profile: false,
+            show_log_entry: false,
+            log_entry_draft: crate::logging::LogEntryDraft::default(),
+            log_entry_focus_pending: false,
+            show_contact_view: false,
+            log_status: String::new(),
+            wsjtx_listen_status: String::new(),
 
             // =================================================================
             // BOOKMARKS

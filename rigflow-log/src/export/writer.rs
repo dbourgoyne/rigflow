@@ -1,0 +1,363 @@
+//! The streaming ADIF export writer, the dry-run counter, and the
+//! incremental-bookmark reader.
+//!
+//! **Export derives from SQLite. It never replays `rigflow_log.adi`.** The
+//! journal is an append-only event tape: it still holds superseded (corrected)
+//! records and records for since-deleted QSOs, ordered by log time rather than
+//! contact time. The database is the materialized current state — corrections
+//! applied, deletions gone, one row per QSO. The journal is replayed in exactly
+//! one situation, and it is not this one: rebuilding a lost or corrupt `.db`.
+//!
+//! **Export is read-only, and [`Exporter`] makes that structural** rather than a
+//! promise: it opens its own connection with `SQLITE_OPEN_READ_ONLY`, so SQLite
+//! itself refuses any write. It therefore *cannot* touch `updated_at`, cannot
+//! write `qso_service`, and — see [`crate::export`] — cannot advance the
+//! incremental bookmark. It also means export can run on a worker thread while
+//! the app's read-write `LogStore` keeps logging on the UI thread; WAL gives
+//! concurrent readers for free.
+
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
+
+use chrono::Utc;
+use rusqlite::{Connection, OpenFlags, params_from_iter};
+
+use super::filter::{ExportFilter, ExportOptions};
+use super::query;
+use crate::error::LogError;
+use crate::{adif, store};
+
+/// This build's `PROGRAMVERSION`.
+pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Trailing SELECT column that packs a QSO's confirmations into one string:
+/// `service␟date` entries joined by `␞`, from `qso_service`. Control chars
+/// (unit/record separators, 0x1f/0x1e) can't occur in a service name or an ADIF
+/// date, so the split in [`inject_confirmations`] is unambiguous. Empty (`NULL`)
+/// when the QSO has no confirmations.
+const CONFIRMATIONS_AGG: &str = "(SELECT group_concat(service || char(31) || \
+     coalesce(confirmed_at,''), char(30)) \
+     FROM qso_service s WHERE s.qso_id = qso.id AND s.confirmed_at IS NOT NULL)";
+
+/// Column index of [`CONFIRMATIONS_AGG`] in the export SELECT: it follows the
+/// fixed `QSO_COLUMNS` (15 columns, indices 0–14), so it is 15.
+const CONFIRMATIONS_COL: usize = 15;
+
+/// Stamp each `qso_service` confirmation onto an export record as the ADIF field
+/// its service uses: `LOTW_QSL_RCVD`/`LOTW_QSLRDATE`, `EQSL_QSL_RCVD`/
+/// `EQSL_QSLRDATE`, or the generic `QSL_RCVD`/`QSLRDATE`. `packed` is the
+/// [`CONFIRMATIONS_AGG`] value. Mirrors what import's confirmation detection
+/// reads, so an export of ours round-trips back to the same `qso_service` rows.
+fn inject_confirmations(record: &mut adif::AdifRecord, packed: Option<&str>) {
+    let Some(packed) = packed.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    for entry in packed.split('\u{1e}') {
+        let (service, date) = entry.split_once('\u{1f}').unwrap_or((entry, ""));
+        let (rcvd, rdate) = match service {
+            "qsl" => ("QSL_RCVD".to_string(), "QSLRDATE".to_string()),
+            s => {
+                let s = s.to_ascii_uppercase();
+                (format!("{s}_QSL_RCVD"), format!("{s}_QSLRDATE"))
+            }
+        };
+        record.insert(rcvd, "Y".to_string());
+        if !date.is_empty() {
+            record.insert(rdate, date.to_string());
+        }
+    }
+}
+
+/// What an export did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportSummary {
+    /// Records written (0 is a success, not an error — see [`export_with`]).
+    pub count: usize,
+    pub path: PathBuf,
+    /// The filter that produced it, for the UI to show back and for a log line.
+    pub filter: ExportFilter,
+    /// ADIF `CREATED_TIMESTAMP` stamped in the header (`YYYYMMDD HHMMSS`, UTC).
+    pub created_timestamp: String,
+    /// Highest `qso.id` written. This is what an incremental bookmark advances
+    /// to — but *this* type only reports it; advancing is the caller's job on a
+    /// write connection. `None` when nothing matched.
+    pub max_qso_id: Option<i64>,
+}
+
+/// A read-only view of a log database, for counting and exporting.
+///
+/// Owns its own `SQLITE_OPEN_READ_ONLY` connection, so it is safe to hand to a
+/// worker thread even while the app's `LogStore` is inserting on another.
+pub struct Exporter {
+    conn: Connection,
+}
+
+impl Exporter {
+    /// Open `db_path` read-only. Fails if the database doesn't exist — an export
+    /// of a log that was never created is a caller bug, not an empty export.
+    pub fn open(db_path: impl AsRef<Path>) -> Result<Self, LogError> {
+        let conn = Connection::open_with_flags(
+            db_path.as_ref(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        Ok(Exporter { conn })
+    }
+
+    /// Dry run: how many QSOs match, without writing anything. This is what the
+    /// dialog's live "1,483 QSOs match" count calls.
+    pub fn count(&self, filter: &ExportFilter) -> Result<usize, LogError> {
+        count_with(&self.conn, filter)
+    }
+
+    /// Stream the matching QSOs to `opts.output_path`.
+    pub fn export(
+        &self,
+        filter: &ExportFilter,
+        opts: &ExportOptions,
+    ) -> Result<ExportSummary, LogError> {
+        export_with(&self.conn, filter, opts)
+    }
+
+    /// The current position of a named incremental bookmark, if it has one.
+    pub fn bookmark(&self, profile: &str) -> Result<Option<i64>, LogError> {
+        read_bookmark(&self.conn, profile)
+    }
+
+    /// A page of matching contacts for the contact view, plus the total match
+    /// count so the view can say "showing 500 of 1,483".
+    ///
+    /// Counting and paging run against the same filter in one call, so the two
+    /// numbers are always consistent with each other (and with what an export of
+    /// the same filter would write).
+    pub fn page(
+        &self,
+        filter: &ExportFilter,
+        limit: usize,
+        sort: super::filter::Sort,
+    ) -> Result<ContactPage, LogError> {
+        let total = count_with(&self.conn, filter)?;
+        let mut rows = query_with(&self.conn, filter, limit, sort)?;
+        // The contact view runs on this read-only path, so its confirmation
+        // column has to be filled here as well as on the read-write store.
+        crate::store::attach_confirmations(&self.conn, &mut rows)?;
+        Ok(ContactPage { rows, total })
+    }
+
+    /// Every QSO matching `filter`, uncapped and oldest-first — for building an
+    /// upload batch on the worker thread (e.g. everything `not_uploaded_to` a
+    /// service). Read-only, like the rest of `Exporter`.
+    pub fn all_matching(
+        &self,
+        filter: &ExportFilter,
+    ) -> Result<Vec<crate::store::LoggedQso>, LogError> {
+        query_all_with(&self.conn, filter)
+    }
+
+    /// Work out what importing an ADIF document *would* do, without writing.
+    ///
+    /// Lives on `Exporter` because it needs exactly what `Exporter` has: a
+    /// **read-only** connection. Planning an import must not be able to touch the
+    /// log — the operator hasn't agreed to anything yet — and running it here
+    /// makes that structural rather than a promise. The commit is a separate call
+    /// on the read-write [`crate::LogStore`].
+    pub fn plan_import(
+        &self,
+        text: &str,
+        window_secs: i64,
+    ) -> Result<crate::import::ImportPlan, LogError> {
+        crate::import::plan(&self.conn, text, window_secs)
+    }
+
+    /// Like [`plan_import`](Self::plan_import), but for a confirmation download
+    /// (LoTW/eQSL/QRZ): applies the confirmations records carry and ignores
+    /// records that carry none, so a full-logbook fetch never adds new contacts.
+    pub fn plan_download(
+        &self,
+        text: &str,
+        window_secs: i64,
+    ) -> Result<crate::import::ImportPlan, LogError> {
+        crate::import::plan_download(&self.conn, text, window_secs)
+    }
+
+    /// Test-only handle, used to prove SQLite itself refuses a write here.
+    #[cfg(test)]
+    pub(crate) fn conn_for_test(&self) -> &Connection {
+        &self.conn
+    }
+}
+
+/// Read a named bookmark's `last_qso_id`. `None` = no such profile yet, which
+/// means a first incremental export covers the whole log.
+pub(crate) fn read_bookmark(conn: &Connection, profile: &str) -> Result<Option<i64>, LogError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT last_qso_id FROM export_state WHERE profile = ?1",
+            [profile],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Resolve the bookmark a filter needs (if it is an incremental export).
+fn resolve_bookmark(conn: &Connection, filter: &ExportFilter) -> Result<Option<i64>, LogError> {
+    match filter.incremental_profile() {
+        Some(profile) => read_bookmark(conn, profile),
+        None => Ok(None),
+    }
+}
+
+/// Count matching QSOs. Same filter → same `WHERE` as [`export_with`], because
+/// both go through [`query::build`]; a count that disagreed with the subsequent
+/// export would be worse than no count at all.
+pub(crate) fn count_with(conn: &Connection, filter: &ExportFilter) -> Result<usize, LogError> {
+    filter.validate()?;
+    let bookmark = resolve_bookmark(conn, filter)?;
+    let q = query::build(filter, bookmark);
+    let sql = format!("SELECT COUNT(*) FROM qso WHERE {}", q.where_sql);
+    let n: i64 = conn.query_row(&sql, params_from_iter(q.params.iter()), |r| r.get(0))?;
+    Ok(n as usize)
+}
+
+/// One page of matching QSOs, plus how many matched in total.
+///
+/// The contact view shows `rows` (capped by its limit) but reports `total`, so
+/// "showing 500 of 1,483 matching" is honest about the cap. Without `total` the
+/// view would silently imply it was showing everything the export will write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContactPage {
+    pub rows: Vec<crate::store::LoggedQso>,
+    /// Total matches, ignoring `limit`. This is the number the export writes.
+    pub total: usize,
+}
+
+/// Read a page of matching QSOs.
+///
+/// Goes through [`query::build`] — the same WHERE clause [`export_with`] and
+/// [`count_with`] use — so what the contact view lists, what the count promises,
+/// and what the export writes cannot drift apart. That single-builder property
+/// is the whole point of filtering the view and the export with one type.
+pub(crate) fn query_with(
+    conn: &Connection,
+    filter: &ExportFilter,
+    limit: usize,
+    sort: super::filter::Sort,
+) -> Result<Vec<crate::store::LoggedQso>, LogError> {
+    filter.validate()?;
+    let bookmark = resolve_bookmark(conn, filter)?;
+    let q = query::build(filter, bookmark);
+    let sql = format!(
+        "SELECT {} FROM qso WHERE {} {} LIMIT ?",
+        store::QSO_COLUMNS,
+        q.where_sql,
+        query::order_by(sort),
+    );
+
+    let mut params = q.params;
+    params.push(rusqlite::types::Value::Integer(limit as i64));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(store::row_to_logged_qso(row)??);
+    }
+    Ok(out)
+}
+
+/// Every matching QSO, uncapped — for building an upload batch (all the QSOs not
+/// yet sent to a service). Oldest first, so an upload sends contacts in the order
+/// they were made. Unlike [`query_with`] this has no `LIMIT`: an upload must
+/// cover the whole set, not a page of it.
+pub(crate) fn query_all_with(
+    conn: &Connection,
+    filter: &ExportFilter,
+) -> Result<Vec<crate::store::LoggedQso>, LogError> {
+    filter.validate()?;
+    let bookmark = resolve_bookmark(conn, filter)?;
+    let q = query::build(filter, bookmark);
+    let sql = format!(
+        "SELECT {} FROM qso WHERE {} {}",
+        store::QSO_COLUMNS,
+        q.where_sql,
+        query::order_by(super::filter::Sort::Chronological),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(q.params.iter()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        out.push(store::row_to_logged_qso(row)??);
+    }
+    Ok(out)
+}
+
+/// Write the matching QSOs to `opts.output_path` as ADIF.
+///
+/// Streams: one record is in memory at a time, so a 200k-QSO export costs a
+/// buffer, not a heap of records.
+///
+/// An empty match set writes a **valid, importable ADIF file with a header and
+/// zero records** and returns `count: 0`. That is not an error: "no QSOs matched
+/// your filter" is a legitimate answer, and a caller that wants to treat it as
+/// noteworthy can check `count`.
+pub(crate) fn export_with(
+    conn: &Connection,
+    filter: &ExportFilter,
+    opts: &ExportOptions,
+) -> Result<ExportSummary, LogError> {
+    filter.validate()?;
+    opts.validate()?;
+
+    let bookmark = resolve_bookmark(conn, filter)?;
+    let q = query::build(filter, bookmark);
+    // Confirmations ride along as a trailing aggregate column (index after the
+    // fixed QSO_COLUMNS), so a single streaming pass carries them — no per-row
+    // query against `qso_service`.
+    let sql = format!(
+        "SELECT {}, {} FROM qso WHERE {} {}",
+        store::QSO_COLUMNS,
+        CONFIRMATIONS_AGG,
+        q.where_sql,
+        query::order_by(opts.sort),
+    );
+
+    let created_timestamp = Utc::now().format("%Y%m%d %H%M%S").to_string();
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(params_from_iter(q.params.iter()))?;
+
+    let mut w = BufWriter::new(File::create(&opts.output_path)?);
+    w.write_all(
+        adif::export_header(&opts.adif_version, PROGRAM_VERSION, &created_timestamp).as_bytes(),
+    )?;
+
+    let mut count = 0usize;
+    let mut max_qso_id: Option<i64> = None;
+    while let Some(row) = rows.next()? {
+        let confs: Option<String> = row.get(CONFIRMATIONS_COL)?;
+        let lq = store::row_to_logged_qso(row)??;
+
+        // The shared record-writer — the same one the journal appends through.
+        // Split fields (FREQ_RX/BAND_RX only when present) and modeled-column-
+        // wins are applied in there, once, for both callers.
+        let mut record = adif::qso_to_record(&lq.qso);
+        opts.project(&mut record);
+        // AFTER project: confirmation state is authoritative export data and must
+        // survive even a narrow field profile (Core, Full-without-extra).
+        inject_confirmations(&mut record, confs.as_deref());
+        w.write_all(adif::write_record(&record).as_bytes())?;
+
+        count += 1;
+        max_qso_id = Some(max_qso_id.map_or(lq.id, |m: i64| m.max(lq.id)));
+    }
+    w.flush()?;
+
+    Ok(ExportSummary {
+        count,
+        path: opts.output_path.clone(),
+        filter: filter.clone(),
+        created_timestamp,
+        max_qso_id,
+    })
+}
