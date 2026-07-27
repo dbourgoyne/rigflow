@@ -6,6 +6,7 @@
 use eframe::egui::{self, Color32};
 use rigflow_core::radio::ham_band::band_from_frequency;
 
+use crate::ControlCommand;
 use crate::cluster::DxSpot;
 use crate::cluster::client::DxClusterStatus;
 use crate::cluster::config;
@@ -77,6 +78,48 @@ impl RigflowApp {
             .filter(|s| cfg.show(s, current_band))
             .cloned()
             .collect()
+    }
+
+    /// Total spots currently held in the shared book (pre-filter), for the
+    /// panel's diagnostics line.
+    pub(crate) fn total_spots(&self) -> usize {
+        self.dx_cluster.spots.lock().map(|s| s.len()).unwrap_or(0)
+    }
+
+    /// Tune to a clicked spot from the list. Unlike a spectrum marker click
+    /// (which stays inside the current window), a list spot can be anywhere on
+    /// the band, so this **recenters the LO** on it — same effect as recalling a
+    /// bookmark. Gated by the dial lock and the RF-range check.
+    pub(crate) fn tune_to_cluster_spot(&mut self, freq_hz: u64) {
+        let f = freq_hz as f32;
+        let rejection = {
+            let state = self.state.lock().unwrap();
+            if state.dial_locked {
+                Some("dial locked: unlock to tune to a spot".to_string())
+            } else {
+                crate::ui::freq_limits::bookmark_rejection_message(f, &state).map(|m| m.to_string())
+            }
+        };
+        if let Some(msg) = rejection {
+            if let Ok(mut s) = self.state.lock() {
+                s.bookmark_status = msg;
+            }
+            return;
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.center_freq_hz = f;
+            state.target_freq_hz = f;
+        }
+        let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+            rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+                center_freq_hz: freq_hz,
+            },
+        ));
+        let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+            rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
+                target_freq_hz: freq_hz,
+            },
+        ));
     }
 
     /// Open the DX-cluster config window for this operator.

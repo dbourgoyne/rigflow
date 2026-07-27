@@ -60,13 +60,21 @@ pub const MAX_SPOTS: usize = 4000;
 /// Parse one cluster line into a [`DxSpot`], or `None` if it isn't a spot line
 /// (or is malformed). `received_at` is injected so the parser stays pure and the
 /// tests are deterministic.
+///
+/// Two on-wire formats are handled: **live** spots (`DX de <spotter>: <freq>
+/// <call> …`) and the **`sh/dx` backfill** format sent on connect (`<freq>
+/// <call> <date> <time> … <spotter>` — freq-first, spotter in angle brackets).
+/// Everything else the node sends (WWV/WCY bulletins, chat, prompts) is dropped.
 pub fn parse_spot_line(line: &str, received_at: Instant) -> Option<DxSpot> {
-    // Anchor: the line must begin with "DX de" (case-insensitive). Everything
-    // else the node sends — WWV/WCY bulletins, chat, announcements, prompts — is
-    // silently ignored.
     let line = line.trim();
-    let rest = strip_prefix_ci(line, "DX de")?.trim_start();
+    if let Some(rest) = strip_prefix_ci(line, "DX de") {
+        return parse_dx_de(rest.trim_start(), received_at);
+    }
+    parse_show_dx_line(line, received_at)
+}
 
+/// Live spot: the text after the `DX de` prefix — `<spotter>: <freq> <call> …`.
+fn parse_dx_de(rest: &str, received_at: Instant) -> Option<DxSpot> {
     // Spotter runs up to the first ':' (its own colon; comments rarely lead with
     // one, and the freq/call never contain ':'). Fall back to the first token if
     // a node omits the colon.
@@ -89,14 +97,12 @@ pub fn parse_spot_line(line: &str, received_at: Instant) -> Option<DxSpot> {
         return None; // need at least freq + call
     }
 
-    // Frequency (kHz → Hz).
     let khz: f64 = tokens[0].parse().ok()?;
     if !(khz.is_finite() && khz > 0.0) {
         return None;
     }
     let freq_hz = (khz * 1000.0).round() as u64;
 
-    // DX call.
     let dx_call = tokens[1].to_ascii_uppercase();
     if dx_call.is_empty() {
         return None;
@@ -117,6 +123,67 @@ pub fn parse_spot_line(line: &str, received_at: Instant) -> Option<DxSpot> {
         dx_call,
         freq_hz,
         spotter: spotter.to_string(),
+        mode_hint: mode_hint_from(&comment),
+        comment,
+        time_utc,
+        band: band_from_frequency(freq_hz),
+        received_at,
+    })
+}
+
+/// `sh/dx` backfill: `<freq> <call> <date> <time> <comment> <spotter>` — freq
+/// first, the spotter in `<…>` at the end. Requires a plausible call and either
+/// a bracketed spotter or a `NNNNZ` time, so headers/chatter are rejected.
+fn parse_show_dx_line(line: &str, received_at: Instant) -> Option<DxSpot> {
+    // Spotter is in angle brackets at the end; strip it and keep the body.
+    let (spotter, body) = match (line.rfind('<'), line.rfind('>')) {
+        (Some(lt), Some(gt)) if gt > lt + 1 => {
+            (Some(line[lt + 1..gt].trim().to_string()), &line[..lt])
+        }
+        _ => (None, line),
+    };
+
+    let tokens: Vec<&str> = body.split_whitespace().collect();
+    if tokens.len() < 2 {
+        return None;
+    }
+
+    let khz: f64 = tokens[0].parse().ok()?;
+    if !(khz.is_finite() && khz > 0.0) {
+        return None;
+    }
+    let freq_hz = (khz * 1000.0).round() as u64;
+
+    let dx_call = tokens[1].to_ascii_uppercase();
+    if !looks_like_call(&dx_call) {
+        return None;
+    }
+
+    let time_utc = tokens
+        .iter()
+        .find(|t| is_time_token(t))
+        .map(|t| t.to_ascii_uppercase())
+        .unwrap_or_default();
+
+    // Guard against arbitrary "<a> … <b>" chatter that happens to start with a
+    // number: demand a spotter or a time.
+    if spotter.is_none() && time_utc.is_empty() {
+        return None;
+    }
+
+    // Comment is the middle, minus the date and time tokens.
+    let comment = tokens
+        .iter()
+        .skip(2)
+        .filter(|t| !is_time_token(t) && !is_date_token(t))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    Some(DxSpot {
+        dx_call,
+        freq_hz,
+        spotter: spotter.unwrap_or_default(),
         mode_hint: mode_hint_from(&comment),
         comment,
         time_utc,
@@ -171,6 +238,21 @@ fn is_time_token(tok: &str) -> bool {
         return false;
     }
     bytes[..n - 1].iter().all(|b| b.is_ascii_digit())
+}
+
+/// A date token in `sh/dx` output, e.g. `19-Jul-2026` — two dashes and a month
+/// abbreviation. Used to keep the date out of the parsed comment.
+fn is_date_token(tok: &str) -> bool {
+    tok.matches('-').count() == 2 && tok.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// A plausible callsign: ≥3 chars, alphanumeric + `/`, with at least one digit
+/// and one letter. Guards the freq-first `sh/dx` parse against header rows.
+fn looks_like_call(s: &str) -> bool {
+    s.len() >= 3
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '/')
+        && s.chars().any(|c| c.is_ascii_digit())
+        && s.chars().any(|c| c.is_ascii_alphabetic())
 }
 
 /// Best-effort mode from a comment: first recognised digital/CW/phone keyword.
@@ -248,6 +330,38 @@ mod tests {
         assert_eq!(s.freq_hz, 144_200_000);
         assert_eq!(s.band, None); // 2m not in the HF band table
         assert_eq!(s.mode_hint.as_deref(), Some("SSB"));
+    }
+
+    #[test]
+    fn parses_show_dx_backfill_line() {
+        // sh/dx format: freq-first, date + time, spotter in <…>.
+        let s = parse_spot_line(
+            "  14025.0  JA1XYZ       19-Jul-2026 1432Z  CW                   <W3LPL>",
+            t0(),
+        )
+        .expect("should parse");
+        assert_eq!(s.freq_hz, 14_025_000);
+        assert_eq!(s.dx_call, "JA1XYZ");
+        assert_eq!(s.spotter, "W3LPL");
+        assert_eq!(s.time_utc, "1432Z");
+        assert_eq!(s.band, Some(HamBand::B20));
+        assert_eq!(s.mode_hint.as_deref(), Some("CW"));
+        assert_eq!(s.comment, "CW"); // date + time excluded
+    }
+
+    #[test]
+    fn show_dx_rejects_headers_and_chatter() {
+        for junk in [
+            "Date       Time  Freq   DX        Info",
+            "50 years on the air",
+            "Spots for the last hour:",
+            "14074.0 is a busy frequency", // token[1] not a call
+        ] {
+            assert!(
+                parse_spot_line(junk, t0()).is_none(),
+                "should have dropped: {junk:?}"
+            );
+        }
     }
 
     #[test]
