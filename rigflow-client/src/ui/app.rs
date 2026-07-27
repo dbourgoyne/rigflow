@@ -194,6 +194,38 @@ pub struct RigflowApp {
     /// (operator, service) whose credentials are loaded into the fields, so the
     /// window loads once per operator+service rather than every frame.
     pub(crate) sync_loaded_for: Option<(String, crate::logging::services::Service)>,
+
+    // ── callbook config (QRZ XML / HamQTH / Callook) ─────────────────────
+    /// Callbook settings window open flag.
+    pub(crate) show_callbook: bool,
+    /// Per-operator provider enable + priority order (persisted `callbook.json`).
+    pub(crate) callbook_config: crate::logging::callbook::CallbookConfig,
+    /// Credential input fields for the two auth'd providers (Callook needs none).
+    pub(crate) callbook_qrz: crate::logging::credentials::Credential,
+    pub(crate) callbook_hamqth: crate::logging::credentials::Credential,
+    /// Where each provider's saved credential lives (keyring vs file), for a note.
+    pub(crate) callbook_qrz_backend: Option<crate::logging::credentials::Backend>,
+    pub(crate) callbook_hamqth_backend: Option<crate::logging::credentials::Backend>,
+    /// Operator whose callbook config + creds are loaded into the fields.
+    pub(crate) callbook_loaded_for: Option<String>,
+    /// Result / error line for the callbook settings window.
+    pub(crate) callbook_status: String,
+
+    // ── callbook lookup, driving the log-entry (`L`) window ───────────────
+    /// The (uppercased) call the current results are for; invalidated on change.
+    pub(crate) cb_call: String,
+    /// Instant offline prefix result and the async online result for `cb_call`.
+    pub(crate) cb_prefix: Option<crate::logging::callbook::CallbookResult>,
+    pub(crate) cb_online: Option<crate::logging::callbook::CallbookResult>,
+    /// Whether the operator hand-edited the Name / Grid fields (Typed wins).
+    pub(crate) cb_name_edited: bool,
+    pub(crate) cb_grid_edited: bool,
+    /// When the debounced online lookup should fire (`None` = nothing pending).
+    pub(crate) cb_due: Option<std::time::Instant>,
+    /// Sequence for the in-flight lookup, to drop stale replies.
+    pub(crate) cb_seq: u64,
+    /// An online lookup is in flight (drives the "looking up…" indicator).
+    pub(crate) cb_busy: bool,
 }
 
 impl RigflowApp {
@@ -293,6 +325,22 @@ impl RigflowApp {
             sync_busy: false,
             sync_status: String::new(),
             sync_loaded_for: None,
+            show_callbook: false,
+            callbook_config: crate::logging::callbook::CallbookConfig::default(),
+            callbook_qrz: crate::logging::credentials::Credential::default(),
+            callbook_hamqth: crate::logging::credentials::Credential::default(),
+            callbook_qrz_backend: None,
+            callbook_hamqth_backend: None,
+            callbook_loaded_for: None,
+            callbook_status: String::new(),
+            cb_call: String::new(),
+            cb_prefix: None,
+            cb_online: None,
+            cb_name_edited: false,
+            cb_grid_edited: false,
+            cb_due: None,
+            cb_seq: 0,
+            cb_busy: false,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -828,6 +876,7 @@ impl eframe::App for RigflowApp {
         self.draw_delete_contact_confirm(ctx);
         self.draw_delete_selection_confirm(ctx);
         self.draw_sync_window(ctx, &snapshot.operator_id);
+        self.draw_callbook_window(ctx, &snapshot.operator_id);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and

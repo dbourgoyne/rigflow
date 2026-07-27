@@ -151,6 +151,10 @@ impl RigflowApp {
         let focus_pending = snapshot.log_entry_focus_pending;
         let mut focus_consumed = false;
 
+        // Callbook: instant prefix fill + debounced online lookup, merged into the
+        // draft's Name/Grid (Typed > Online > Prefix). Runs before the fields render.
+        self.callbook_step(&mut draft, &snapshot.operator_id, ctx);
+
         egui::Window::new("Log Contact")
             .collapsible(false)
             .resizable(false)
@@ -205,10 +209,14 @@ impl RigflowApp {
                             ui.end_row();
                         }
                         ui.label("Name");
-                        ui.text_edit_singleline(&mut draft.name);
+                        if ui.text_edit_singleline(&mut draft.name).changed() {
+                            self.cb_name_edited = true; // Typed wins over callbook
+                        }
                         ui.end_row();
                         ui.label("Grid");
-                        ui.text_edit_singleline(&mut draft.gridsquare);
+                        if ui.text_edit_singleline(&mut draft.gridsquare).changed() {
+                            self.cb_grid_edited = true;
+                        }
                         ui.end_row();
                         ui.label("Comment");
                         ui.text_edit_singleline(&mut draft.comment);
@@ -217,6 +225,10 @@ impl RigflowApp {
 
                 // Live "worked before?" hints from the in-memory index.
                 self.show_worked_before_hints(ui, &draft);
+                // Callbook status: "looking up…" / "via callbook · United States (291)".
+                if let Some(note) = self.callbook_note() {
+                    ui.label(note_text(note));
+                }
 
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -320,7 +332,7 @@ impl RigflowApp {
             (!t.is_empty()).then(|| t.to_string())
         };
 
-        let qso = rigflow_log::Qso {
+        let mut qso = rigflow_log::Qso {
             call: draft.call.trim().to_ascii_uppercase(),
             qso_date: draft.qso_date.clone(),
             time_on: draft.time_on.clone(),
@@ -336,6 +348,10 @@ impl RigflowApp {
             dxcc: None,
             extra,
         };
+
+        // Fold in the callbook result (dxcc column + QTH/STATE/… extras the form
+        // doesn't show). NAME/COMMENT already set above win via or_insert.
+        self.callbook_apply_to_qso(&mut qso);
 
         self.log_contact(qso);
 
@@ -363,6 +379,7 @@ impl RigflowApp {
         let mut open_export = false;
         let mut open_import = false;
         let mut open_sync = false;
+        let mut open_callbook = false;
         let mut open_filter = false;
         let mut clear_filter = false;
         // Row actions, applied after the window closure so the immutable borrow of
@@ -415,6 +432,9 @@ impl RigflowApp {
                     }
                     if ui.button("Sync…").clicked() {
                         open_sync = true;
+                    }
+                    if ui.button("Callbook…").clicked() {
+                        open_callbook = true;
                     }
                     if ui.button("Refresh").clicked() {
                         self.contacts_cache_dirty = true;
@@ -553,6 +573,9 @@ impl RigflowApp {
         }
         if open_sync {
             self.open_sync(&operator_id);
+        }
+        if open_callbook {
+            self.open_callbook(&operator_id);
         }
         if let Some(edit) = open_edit {
             self.edit_contact = Some(edit);

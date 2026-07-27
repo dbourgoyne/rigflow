@@ -318,6 +318,14 @@ impl crate::ui::app::RigflowApp {
                 ExportEvent::ServiceSynced { service, result } => {
                     self.apply_service_sync(service, result)
                 }
+
+                ExportEvent::CallbookResolved { seq, call, result } => {
+                    // Drop a reply for a call the operator has already typed past.
+                    if seq == self.cb_seq && call == self.cb_call {
+                        self.cb_online = result.map(|b| *b);
+                        self.cb_busy = false;
+                    }
+                }
             }
         }
         if got {

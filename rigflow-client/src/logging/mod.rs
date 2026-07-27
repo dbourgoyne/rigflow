@@ -5,6 +5,7 @@
 //! per-operator `LogStore` and the insert/query paths. The egui surfaces (entry
 //! window, contact-view window, Station panel) live under `ui/`.
 
+pub mod callbook;
 pub mod capture;
 pub mod credentials;
 pub mod eqsl;

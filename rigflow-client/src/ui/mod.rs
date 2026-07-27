@@ -15,6 +15,7 @@ pub mod waterfall;
 
 mod app_actions;
 mod app_audio;
+mod app_callbook;
 mod app_center;
 mod app_dialogs;
 mod app_export;

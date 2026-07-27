@@ -32,6 +32,7 @@ use rigflow_log::export::{
 use rigflow_log::import::ImportPlan;
 use rigflow_log::normalize::{self, ModeClass};
 
+use crate::logging::callbook::{CallbookClient, CallbookCreds, CallbookResult, Provider};
 use crate::logging::services::{Direction, Service};
 
 /// How long the UI waits after the last edit before re-querying.
@@ -374,6 +375,14 @@ pub enum ExportJob {
         /// `not_uploaded_to` filter). The service dedups any real duplicates.
         force: bool,
     },
+    /// Look a callsign up in the online callbook(s), off the UI thread. Coalesced
+    /// like `CallLookup` — while the operator types, only the newest matters.
+    CallbookLookup {
+        order: Vec<Provider>,
+        creds: Box<CallbookCreds>,
+        call: String,
+        seq: u64,
+    },
 }
 
 /// What the worker reports back.
@@ -405,6 +414,13 @@ pub enum ExportEvent {
         service: Service,
         result: Result<SyncOutcome, String>,
     },
+    /// A callbook lookup finished (`seq`/`call` echoed for stale-drop). `None` =
+    /// no provider had the call.
+    CallbookResolved {
+        seq: u64,
+        call: String,
+        result: Option<Box<CallbookResult>>,
+    },
 }
 
 /// What a completed [`ExportJob::ServiceSync`] produced.
@@ -435,10 +451,13 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
     std::thread::Builder::new()
         .name("export".into())
         .spawn(move || {
+            // Persists across jobs so QRZ/HamQTH sessions are cached + reused.
+            let mut callbook = CallbookClient::new();
             while let Ok(job) = job_rx.recv() {
                 let mut latest_query: Option<ExportJob> = None;
                 let mut latest_lookup: Option<ExportJob> = None;
                 let mut latest_count: Option<ExportJob> = None;
+                let mut latest_callbook: Option<ExportJob> = None;
                 let mut jobs = vec![job];
                 jobs.extend(job_rx.try_iter());
 
@@ -447,6 +466,7 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
                         q @ ExportJob::Query { .. } => latest_query = Some(q),
                         l @ ExportJob::CallLookup { .. } => latest_lookup = Some(l),
                         c @ ExportJob::Count { .. } => latest_count = Some(c),
+                        cb @ ExportJob::CallbookLookup { .. } => latest_callbook = Some(cb),
                         // Never coalesced: each is an explicit operator action.
                         w @ (ExportJob::Write { .. }
                         | ExportJob::PlanImport { .. }
@@ -462,6 +482,21 @@ pub fn spawn_export_worker() -> (Sender<ExportJob>, Receiver<ExportEvent>) {
                     .flatten()
                 {
                     if evt_tx.send(run(job)).is_err() {
+                        return;
+                    }
+                }
+                if let Some(ExportJob::CallbookLookup {
+                    order,
+                    creds,
+                    call,
+                    seq,
+                }) = latest_callbook
+                {
+                    let result = callbook.lookup(&order, &creds, &call).map(Box::new);
+                    if evt_tx
+                        .send(ExportEvent::CallbookResolved { seq, call, result })
+                        .is_err()
+                    {
                         return;
                     }
                 }
@@ -545,6 +580,10 @@ fn run(job: ExportJob) -> ExportEvent {
                 Direction::Upload => run_upload(&db_path, service, &login, &password, force),
             };
             ExportEvent::ServiceSynced { service, result }
+        }
+        // Handled in the worker loop (needs the persistent CallbookClient), never here.
+        ExportJob::CallbookLookup { .. } => {
+            unreachable!("CallbookLookup is handled in the worker loop, not run()")
         }
     }
 }
