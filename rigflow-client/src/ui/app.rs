@@ -104,6 +104,17 @@ pub struct RigflowApp {
     pub(crate) contacts_total: usize,
     /// Receiver for decoded WSJT-X `LoggedADIF` events from the UDP-2237 thread.
     pub(crate) wsjtx_rx: std::sync::mpsc::Receiver<crate::logging::wsjtx_listener::LogEvent>,
+    /// DX-cluster telnet thread handle: send connect/disconnect, read the shared
+    /// spot book (rendered on the waterfall/spectrum).
+    pub(crate) dx_cluster: crate::cluster::client::DxClusterHandle,
+    /// Per-operator cluster config (node, login call, display filter). Loaded
+    /// lazily by `load_cluster_config`; not in `UiState` (cloned every frame).
+    pub(crate) dx_cluster_config: crate::cluster::config::DxClusterConfig,
+    pub(crate) dx_cluster_loaded_for: Option<String>,
+    /// Guards the per-operator connect/disconnect apply in `sync_cluster_state`.
+    pub(crate) dx_cluster_synced_for: Option<String>,
+    /// Whether the DX-cluster config window is open.
+    pub(crate) show_cluster: bool,
 
     // ── Contact filter / export ──────────────────────────────────────────
     // All of this lives here rather than in `UiState`: only the logging windows
@@ -243,6 +254,10 @@ impl RigflowApp {
         // LoggedADIF events we drain each frame.
         let wsjtx_rx = crate::logging::wsjtx_listener::spawn_wsjtx_listener(Arc::clone(&state));
 
+        // The DX-cluster telnet thread: idles until a Connect command (Phase 3
+        // config drives it). Spots land in its shared book for the renderer.
+        let dx_cluster = crate::cluster::client::spawn_dx_cluster(Arc::clone(&state));
+
         // The export worker: read-only DB access on its own thread, so a large
         // export streams to disk without stalling the frame loop.
         let (export_tx, export_rx) = crate::logging::export::spawn_export_worker();
@@ -289,6 +304,11 @@ impl RigflowApp {
             contacts_cache_dirty: true,
             contacts_total: 0,
             wsjtx_rx,
+            dx_cluster,
+            dx_cluster_config: crate::cluster::config::DxClusterConfig::default(),
+            dx_cluster_loaded_for: None,
+            dx_cluster_synced_for: None,
+            show_cluster: false,
             qso_filter: crate::logging::export::QsoFilterDraft::default(),
             qso_filter_last: None,
             show_filter: false,
@@ -877,6 +897,7 @@ impl eframe::App for RigflowApp {
         self.draw_delete_selection_confirm(ctx);
         self.draw_sync_window(ctx, &snapshot.operator_id);
         self.draw_callbook_window(ctx, &snapshot.operator_id);
+        self.draw_cluster_window(ctx, &snapshot.operator_id);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
@@ -887,6 +908,10 @@ impl eframe::App for RigflowApp {
         // Contact logging: open/reopen the per-operator log store on an operator
         // switch (mirrors the audio-recording sync above).
         self.sync_log_state(&snapshot);
+
+        // DX cluster: on an operator switch, load that operator's config and
+        // auto-connect if they've enabled it (disconnect otherwise).
+        self.sync_cluster_state(&snapshot.operator_id);
 
         // Persist the global station profile when the Station panel flagged a
         // committed edit (it only has `&self`, so it defers the save to here).

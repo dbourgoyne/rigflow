@@ -157,6 +157,7 @@ pub(crate) fn lock_button(ui: &mut egui::Ui, locked: &mut bool, size: f32) -> bo
 }
 
 mod bookmarks;
+mod cluster;
 mod latency;
 mod operator;
 mod problems;
@@ -259,6 +260,8 @@ impl RigflowApp {
                         self.draw_latency_panel(ui, snapshot);
                         ui.separator();
                         self.draw_bookmarks_panel(ui);
+                        ui.separator();
+                        self.draw_cluster_panel(ui, snapshot);
                         ui.separator();
                     });
                 // Feed the scroll offset to the wheel-dwell logic so controls

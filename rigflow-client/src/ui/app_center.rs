@@ -36,6 +36,10 @@ impl RigflowApp {
     pub(crate) fn draw_center_panel(&mut self, ctx: &egui::Context, snapshot: &UiState) {
         // Advance any in-flight flick-momentum pan before drawing this frame.
         self.advance_pan_momentum(ctx, snapshot);
+        // DX-cluster spots to overlay on VFO A's spectrum + waterfall, filtered
+        // to the current band/mode (empty when the feature is off). Computed once
+        // per frame off the shared spot book.
+        let spots = self.visible_spots();
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::Frame::NONE
                 .fill(egui::Color32::BLACK)
@@ -109,6 +113,7 @@ impl RigflowApp {
                                 spectrum_db_min,
                                 spectrum_db_max,
                                 &state_snapshot,
+                                &spots,
                             );
 
                             // Bookmark clicks take precedence; all other mouse
@@ -153,6 +158,7 @@ impl RigflowApp {
                                     db_min,
                                     db_max,
                                     b_view,
+                                    &[], // spots are a VFO-A operating aid only
                                 );
                                 // Full VFO B tuning — click / drag / wheel / recenter,
                                 // identical to VFO A but on VFO B's centre/target.
@@ -246,6 +252,22 @@ impl RigflowApp {
                                             }
                                         },
                                     );
+
+                                    // Spot markers over the waterfall image, same
+                                    // behaviour as the spectrum: click tunes to
+                                    // the spot's exact frequency.
+                                    let painter = ui.painter_at(rect);
+                                    if let Some(hz) = crate::ui::spectrum_view::draw_spot_overlay(
+                                        &painter,
+                                        rect,
+                                        spectrum_len,
+                                        &state_snapshot,
+                                        &spots,
+                                        response.hover_pos(),
+                                        response.clicked(),
+                                    ) {
+                                        mouse.tune_to_hz = Some(hz as f32);
+                                    }
                                 });
 
                                 self.apply_view_interaction(&mouse, snapshot, TuneVfo::A);
