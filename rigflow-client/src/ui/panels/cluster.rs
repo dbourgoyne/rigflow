@@ -47,9 +47,17 @@ impl RigflowApp {
                 // Sort by frequency so the list reads like a band map.
                 spots.sort_by_key(|s| s.freq_hz);
                 let now = Instant::now();
+                // Inset the list so its scrollbar sits clear of the left panel's
+                // own scrollbar at the pane edge (otherwise the two merge and the
+                // list looks like it doesn't scroll).
+                let list_width = (ui.available_width() - 18.0).max(120.0);
                 egui::ScrollArea::vertical()
                     .max_height(220.0)
+                    .max_width(list_width)
                     .auto_shrink([false, true])
+                    // Always show the scrollbar so it's obvious the list scrolls
+                    // (the default floating bar only appears on hover).
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
                     .show(ui, |ui| {
                         for spot in &spots {
                             let mhz = spot.freq_hz as f64 / 1_000_000.0;
