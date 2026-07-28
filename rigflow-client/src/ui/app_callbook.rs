@@ -171,6 +171,18 @@ impl RigflowApp {
         // Name the actual source: "via QRZ" / "via HamQTH" / "via Callook" once an
         // online provider answers, else "via prefix" for the offline baseline.
         let mut s = format!("via {}", eff.source.label());
+        // Human-readable location, since grid squares are opaque: "City, ST".
+        // Only online providers carry city/state; the offline prefix baseline
+        // resolves country + zones only, so this is empty until a lookup lands.
+        let loc: Vec<&str> = [eff.qth.as_deref(), eff.state.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !loc.is_empty() {
+            s.push_str(&format!(" · {}", loc.join(", ")));
+        }
         if let Some(c) = &eff.country {
             let d = eff.dxcc.map(|d| format!(" · DXCC {d}")).unwrap_or_default();
             s.push_str(&format!(" · {c}{d}"));
