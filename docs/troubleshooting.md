@@ -119,6 +119,43 @@ platform, with a live status for each piece.
 
 ---
 
+## Logging, callbook & DX cluster
+
+**A contact has the wrong `MY_CNTY` / `MY_ITU_ZONE` / grid (or tqsl rejects it).**
+- Your station details are **snapshotted into each contact when you log it**, so fixing the Station
+  panel only affects *future* contacts. Correct an already-logged contact in the **Contacts view**
+  (edit the fields), or bulk-fix in the database.
+- **tqsl** wants US counties as `STATE,County` (e.g. `MD,Carroll`), not a bare county name — set it
+  that way in the Station panel.
+
+**Callbook isn't filling name / grid.**
+- Open the **Callbook** window and confirm the provider is **enabled** and its credentials are
+  entered. **QRZ** needs an **XML Logbook Data** subscription and uses your **qrz.com login** — not
+  the QRZ Logbook API key used for QSO sync. **Callook** only knows **US** callsigns.
+- With no provider (or offline), only the **offline prefix baseline** fills in — that's country +
+  DXCC/zones, not name/city. The "via …" note tells you which source answered.
+
+**Import made duplicates instead of marking contacts confirmed.**
+- Use **Import** (plan → preview → commit); it matches on call/band/mode/date and applies
+  confirmations rather than adding rows. A LoTW `lotwreport.adi` marks matching contacts confirmed.
+
+**Export "Browse…" does nothing.**
+- The file picker needs a desktop **file-chooser portal** (`xdg-desktop-portal` with a backend). If
+  your session has none, type the output path into the field by hand instead.
+
+**Service/callbook credentials aren't remembered.**
+- On Linux they're stored in the desktop **secret service** (GNOME Keyring / KWallet). With none
+  running, Rigflow falls back to an **encrypted file** — that's expected, not an error.
+
+**DX cluster says "connected" but I see no spots.**
+- Check the **"N received · M shown"** line. **0 received** on a busy band → wrong host/port, or your
+  callsign was rejected at login; try another node. **Received but 0 shown** → the display filter is
+  hiding them: turn off **current band only** or clear the **mode** filter in Configure.
+- Markers only draw for spots **inside the visible span**; use the **spot list** to see the whole band
+  and click a row to tune.
+
+---
+
 ## Settings & display
 
 **My settings won't change / fields are greyed out.**

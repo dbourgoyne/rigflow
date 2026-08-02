@@ -5,6 +5,7 @@
 //! per-operator `LogStore` and the insert/query paths. The egui surfaces (entry
 //! window, contact-view window, Station panel) live under `ui/`.
 
+pub mod callbook;
 pub mod capture;
 pub mod credentials;
 pub mod eqsl;
@@ -15,10 +16,11 @@ pub mod qrz;
 pub mod services;
 pub mod wsjtx_listener;
 
-/// Editable draft behind the manual log-entry window. The frozen-at-open
-/// capture (date/time/freq/mode/split) sits alongside the operator-typed fields
-/// so the logged time and frequency reflect when the entry opened, not when the
-/// operator finally hits save. Not persisted.
+/// Editable draft behind the manual log-entry window. The frozen-at-open capture
+/// (freq/mode/split) sits alongside the operator-typed fields. `TIME_ON` is NOT
+/// frozen here — it's stamped when the operator commits the QSO (see
+/// `commit_log_entry`), so a prep-ahead entry gets the completion time, not the
+/// window-open time. Not persisted.
 #[derive(Debug, Clone, Default)]
 pub struct LogEntryDraft {
     // Operator-entered fields.
@@ -35,8 +37,6 @@ pub struct LogEntryDraft {
     pub freq_rx_hz_str: String,
 
     // Frozen at open.
-    pub qso_date: String,
-    pub time_on: String,
     pub tx_freq_hz: u64,
     pub split_active: bool,
     pub derived_freq_rx_hz: Option<u64>,

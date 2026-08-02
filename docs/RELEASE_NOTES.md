@@ -2,6 +2,54 @@
 
 ---
 
+## v1.0.0 — Contact logging, callbook lookup, and DX cluster
+
+The 1.0 release turns Rigflow into a complete operating position: alongside receive, transmit, and
+digital, you can now log contacts, look callsigns up, and see cluster spots on the waterfall.
+
+> These headline features live in the **client** (a local log, callbook lookups, and the cluster
+> connection), so they work against an existing v0.1.5 server — but installing the matching **1.0**
+> client + server pair is recommended.
+
+**Contact logging**
+
+- **Built-in logbook.** Press **`L`** to log a contact — frequency and mode are captured
+  automatically, and the time is stamped **when you press Log** (so you can open the window early in a
+  pileup). **Worked-before hints** flag new calls, new bands, and dupes as you type.
+- **WSJT-X / FT8 auto-logging.** QSOs logged in WSJT-X are ingested into the active operator's log
+  automatically, duplicates skipped.
+- **Contacts view.** Filter, edit any field (including date/time), delete, and multi-select; the view
+  filter is **shared with export**, so what you see is what you send.
+- **ADIF import/export.** Plan → preview → commit import (skips dupes, imports confirmations);
+  streaming export with an incremental "since last export" mode. A local SQLite log plus an
+  append-only ADIF journal.
+- **Online sync.** Upload to and download confirmations from **LoTW**, **eQSL**, and **QRZ Logbook**;
+  confirmation badges in the Contacts view. Credentials are kept in the OS **secure keyring** (with an
+  encrypted-file fallback) and never written to logs or ADIF.
+- **Station profile.** A Station panel for your callsign, grid, and state/county/zones — written as
+  the `MY_*` fields on every contact.
+
+**Callbook lookup**
+
+- As you type a callsign, auto-fills **name, QTH, grid, state/county, country, and DXCC/zones**.
+- Providers, tried in priority order: **QRZ XML** (qrz.com login + XML subscription), **HamQTH**
+  (free), and **Callook** (US, no account), over an always-on **offline prefix baseline** (DXCC +
+  zones, no network). Your typed values always win.
+
+**DX cluster**
+
+- Connect to a DX-cluster node and see live spots **on the spectrum/waterfall** and in a scrollable,
+  click-to-tune **band map**. Built-in node list (VE7CC / NC7J / W3LPL / HRD) or a custom host.
+- Filter by current band and mode; spots age out; auto-reconnect on drop.
+
+**Quality of life**
+
+- Callbook location shown in plain language (`via QRZ · Chicago, IL · United States`) instead of just
+  a grid square.
+- Full user documentation for logging, callbook, and DX cluster in the Operator guide.
+
+---
+
 ## v0.1.5 — Dual-watch, split / RIT-XIT, band memory, and safety locks
 
 > **⚠ Upgrade the client and server together.** This release extends the client↔server protocol

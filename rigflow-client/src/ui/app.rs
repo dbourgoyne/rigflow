@@ -104,6 +104,17 @@ pub struct RigflowApp {
     pub(crate) contacts_total: usize,
     /// Receiver for decoded WSJT-X `LoggedADIF` events from the UDP-2237 thread.
     pub(crate) wsjtx_rx: std::sync::mpsc::Receiver<crate::logging::wsjtx_listener::LogEvent>,
+    /// DX-cluster telnet thread handle: send connect/disconnect, read the shared
+    /// spot book (rendered on the waterfall/spectrum).
+    pub(crate) dx_cluster: crate::cluster::client::DxClusterHandle,
+    /// Per-operator cluster config (node, login call, display filter). Loaded
+    /// lazily by `load_cluster_config`; not in `UiState` (cloned every frame).
+    pub(crate) dx_cluster_config: crate::cluster::config::DxClusterConfig,
+    pub(crate) dx_cluster_loaded_for: Option<String>,
+    /// Guards the per-operator connect/disconnect apply in `sync_cluster_state`.
+    pub(crate) dx_cluster_synced_for: Option<String>,
+    /// Whether the DX-cluster config window is open.
+    pub(crate) show_cluster: bool,
 
     // ── Contact filter / export ──────────────────────────────────────────
     // All of this lives here rather than in `UiState`: only the logging windows
@@ -194,6 +205,38 @@ pub struct RigflowApp {
     /// (operator, service) whose credentials are loaded into the fields, so the
     /// window loads once per operator+service rather than every frame.
     pub(crate) sync_loaded_for: Option<(String, crate::logging::services::Service)>,
+
+    // ── callbook config (QRZ XML / HamQTH / Callook) ─────────────────────
+    /// Callbook settings window open flag.
+    pub(crate) show_callbook: bool,
+    /// Per-operator provider enable + priority order (persisted `callbook.json`).
+    pub(crate) callbook_config: crate::logging::callbook::CallbookConfig,
+    /// Credential input fields for the two auth'd providers (Callook needs none).
+    pub(crate) callbook_qrz: crate::logging::credentials::Credential,
+    pub(crate) callbook_hamqth: crate::logging::credentials::Credential,
+    /// Where each provider's saved credential lives (keyring vs file), for a note.
+    pub(crate) callbook_qrz_backend: Option<crate::logging::credentials::Backend>,
+    pub(crate) callbook_hamqth_backend: Option<crate::logging::credentials::Backend>,
+    /// Operator whose callbook config + creds are loaded into the fields.
+    pub(crate) callbook_loaded_for: Option<String>,
+    /// Result / error line for the callbook settings window.
+    pub(crate) callbook_status: String,
+
+    // ── callbook lookup, driving the log-entry (`L`) window ───────────────
+    /// The (uppercased) call the current results are for; invalidated on change.
+    pub(crate) cb_call: String,
+    /// Instant offline prefix result and the async online result for `cb_call`.
+    pub(crate) cb_prefix: Option<crate::logging::callbook::CallbookResult>,
+    pub(crate) cb_online: Option<crate::logging::callbook::CallbookResult>,
+    /// Whether the operator hand-edited the Name / Grid fields (Typed wins).
+    pub(crate) cb_name_edited: bool,
+    pub(crate) cb_grid_edited: bool,
+    /// When the debounced online lookup should fire (`None` = nothing pending).
+    pub(crate) cb_due: Option<std::time::Instant>,
+    /// Sequence for the in-flight lookup, to drop stale replies.
+    pub(crate) cb_seq: u64,
+    /// An online lookup is in flight (drives the "looking up…" indicator).
+    pub(crate) cb_busy: bool,
 }
 
 impl RigflowApp {
@@ -210,6 +253,10 @@ impl RigflowApp {
         // Spawn the WSJT-X UDP listener (non-fatal bind); it forwards decoded
         // LoggedADIF events we drain each frame.
         let wsjtx_rx = crate::logging::wsjtx_listener::spawn_wsjtx_listener(Arc::clone(&state));
+
+        // The DX-cluster telnet thread: idles until a Connect command (Phase 3
+        // config drives it). Spots land in its shared book for the renderer.
+        let dx_cluster = crate::cluster::client::spawn_dx_cluster(Arc::clone(&state));
 
         // The export worker: read-only DB access on its own thread, so a large
         // export streams to disk without stalling the frame loop.
@@ -257,6 +304,11 @@ impl RigflowApp {
             contacts_cache_dirty: true,
             contacts_total: 0,
             wsjtx_rx,
+            dx_cluster,
+            dx_cluster_config: crate::cluster::config::DxClusterConfig::default(),
+            dx_cluster_loaded_for: None,
+            dx_cluster_synced_for: None,
+            show_cluster: false,
             qso_filter: crate::logging::export::QsoFilterDraft::default(),
             qso_filter_last: None,
             show_filter: false,
@@ -293,6 +345,22 @@ impl RigflowApp {
             sync_busy: false,
             sync_status: String::new(),
             sync_loaded_for: None,
+            show_callbook: false,
+            callbook_config: crate::logging::callbook::CallbookConfig::default(),
+            callbook_qrz: crate::logging::credentials::Credential::default(),
+            callbook_hamqth: crate::logging::credentials::Credential::default(),
+            callbook_qrz_backend: None,
+            callbook_hamqth_backend: None,
+            callbook_loaded_for: None,
+            callbook_status: String::new(),
+            cb_call: String::new(),
+            cb_prefix: None,
+            cb_online: None,
+            cb_name_edited: false,
+            cb_grid_edited: false,
+            cb_due: None,
+            cb_seq: 0,
+            cb_busy: false,
         };
 
         // Enumerate input devices once for the dropdown (one-time; cheap enough
@@ -828,6 +896,8 @@ impl eframe::App for RigflowApp {
         self.draw_delete_contact_confirm(ctx);
         self.draw_delete_selection_confirm(ctx);
         self.draw_sync_window(ctx, &snapshot.operator_id);
+        self.draw_callbook_window(ctx, &snapshot.operator_id);
+        self.draw_cluster_window(ctx, &snapshot.operator_id);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
@@ -838,6 +908,10 @@ impl eframe::App for RigflowApp {
         // Contact logging: open/reopen the per-operator log store on an operator
         // switch (mirrors the audio-recording sync above).
         self.sync_log_state(&snapshot);
+
+        // DX cluster: on an operator switch, load that operator's config and
+        // auto-connect if they've enabled it (disconnect otherwise).
+        self.sync_cluster_state(&snapshot.operator_id);
 
         // Persist the global station profile when the Station panel flagged a
         // committed edit (it only has `&self`, so it defers the save to here).

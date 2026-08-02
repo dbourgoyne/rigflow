@@ -110,7 +110,6 @@ impl RigflowApp {
     /// draft. Called from the `L` hotkey.
     pub(crate) fn open_log_entry(&mut self, snapshot: &UiState) {
         let captured = capture::capture_radio_state(snapshot);
-        let (qso_date, time_on) = rigflow_log::now_utc_adif();
         let derived_rx = captured.derive_freq_rx();
         let mode = capture::effective_tx_mode(snapshot);
 
@@ -123,8 +122,6 @@ impl RigflowApp {
             gridsquare: String::new(),
             mode: captured.tx_mode.clone(),
             freq_rx_hz_str: derived_rx.map(|h| h.to_string()).unwrap_or_default(),
-            qso_date,
-            time_on,
             tx_freq_hz: captured.tx_freq_hz,
             split_active: captured.split_active,
             derived_freq_rx_hz: derived_rx,
@@ -151,31 +148,32 @@ impl RigflowApp {
         let focus_pending = snapshot.log_entry_focus_pending;
         let mut focus_consumed = false;
 
+        // Callbook: instant prefix fill + debounced online lookup, merged into the
+        // draft's Name/Grid (Typed > Online > Prefix). Runs before the fields render.
+        self.callbook_step(&mut draft, &snapshot.operator_id, ctx);
+
         egui::Window::new("Log Contact")
             .collapsible(false)
             .resizable(false)
             .default_width(320.0)
             .show(ctx, |ui| {
-                // Frozen capture — read-only.
+                // Frequency + mode captured at open (you're sitting on the
+                // station), shown read-only. The timestamp is deliberately NOT
+                // shown: it's stamped when you press Log, not now, so a frozen
+                // open-time would only distract. Adjust after the fact in Contacts.
                 let tx_mhz = draft.tx_freq_hz as f64 / 1_000_000.0;
                 if draft.split_active {
                     let rx_txt = draft
                         .derived_freq_rx_hz
                         .map(|h| format!("{:.4}", h as f64 / 1_000_000.0))
                         .unwrap_or_else(|| "—".to_string());
-                    ui.label(format!("{tx_mhz:.4} ↑ / {rx_txt} ↓ MHz  ({})", draft.mode));
+                    ui.label(format!(
+                        "TX {tx_mhz:.4} / RX {rx_txt} MHz  ({})",
+                        draft.mode
+                    ));
                 } else {
                     ui.label(format!("{tx_mhz:.4} MHz  ({})", draft.mode));
                 }
-                // Seconds shown here (unlike the list): this is the frozen instant
-                // the contact will be logged at, so the operator is checking it.
-                // Formatted via the helpers rather than sliced — `&time_on[..4]`
-                // would panic on any value shorter than 4 chars.
-                ui.label(format!(
-                    "{} {}Z UTC",
-                    display::date(&draft.qso_date),
-                    display::time_hhmmss(&draft.time_on)
-                ));
                 ui.separator();
 
                 egui::Grid::new("log_entry_grid")
@@ -205,10 +203,14 @@ impl RigflowApp {
                             ui.end_row();
                         }
                         ui.label("Name");
-                        ui.text_edit_singleline(&mut draft.name);
+                        if ui.text_edit_singleline(&mut draft.name).changed() {
+                            self.cb_name_edited = true; // Typed wins over callbook
+                        }
                         ui.end_row();
                         ui.label("Grid");
-                        ui.text_edit_singleline(&mut draft.gridsquare);
+                        if ui.text_edit_singleline(&mut draft.gridsquare).changed() {
+                            self.cb_grid_edited = true;
+                        }
                         ui.end_row();
                         ui.label("Comment");
                         ui.text_edit_singleline(&mut draft.comment);
@@ -217,6 +219,10 @@ impl RigflowApp {
 
                 // Live "worked before?" hints from the in-memory index.
                 self.show_worked_before_hints(ui, &draft);
+                // Callbook status: "looking up…" / "via callbook · United States (291)".
+                if let Some(note) = self.callbook_note() {
+                    ui.label(note_text(note));
+                }
 
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -298,6 +304,13 @@ impl RigflowApp {
             return;
         }
 
+        // TIME_ON is stamped now, when the operator commits the QSO — not when the
+        // entry window opened. In search-and-pounce you open the window and prep
+        // the call well before you actually get through, so open-time would be too
+        // early. (Frequency/mode stay as captured at open — you're sitting on the
+        // station.) Back-dating for a late log is done in the Contacts view.
+        let (qso_date, time_on) = rigflow_log::now_utc_adif();
+
         let mut extra = BTreeMap::new();
         for (k, v) in [
             ("NAME", draft.name.trim()),
@@ -320,10 +333,10 @@ impl RigflowApp {
             (!t.is_empty()).then(|| t.to_string())
         };
 
-        let qso = rigflow_log::Qso {
+        let mut qso = rigflow_log::Qso {
             call: draft.call.trim().to_ascii_uppercase(),
-            qso_date: draft.qso_date.clone(),
-            time_on: draft.time_on.clone(),
+            qso_date,
+            time_on,
             band: String::new(), // derived from freq_hz by normalize()
             mode: draft.mode.clone(),
             submode: None,
@@ -336,6 +349,10 @@ impl RigflowApp {
             dxcc: None,
             extra,
         };
+
+        // Fold in the callbook result (dxcc column + QTH/STATE/… extras the form
+        // doesn't show). NAME/COMMENT already set above win via or_insert.
+        self.callbook_apply_to_qso(&mut qso);
 
         self.log_contact(qso);
 
@@ -363,6 +380,7 @@ impl RigflowApp {
         let mut open_export = false;
         let mut open_import = false;
         let mut open_sync = false;
+        let mut open_callbook = false;
         let mut open_filter = false;
         let mut clear_filter = false;
         // Row actions, applied after the window closure so the immutable borrow of
@@ -415,6 +433,9 @@ impl RigflowApp {
                     }
                     if ui.button("Sync…").clicked() {
                         open_sync = true;
+                    }
+                    if ui.button("Callbook…").clicked() {
+                        open_callbook = true;
                     }
                     if ui.button("Refresh").clicked() {
                         self.contacts_cache_dirty = true;
@@ -553,6 +574,9 @@ impl RigflowApp {
         }
         if open_sync {
             self.open_sync(&operator_id);
+        }
+        if open_callbook {
+            self.open_callbook(&operator_id);
         }
         if let Some(edit) = open_edit {
             self.edit_contact = Some(edit);

@@ -3707,7 +3707,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-client"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "cpal",
  "eframe",
@@ -3732,7 +3732,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-core"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3740,7 +3740,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-log"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -3750,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-probe"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "clap",
  "env_logger",
@@ -3768,7 +3768,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-protocol"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "rigflow-core",
  "serde",
@@ -3777,7 +3777,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-server"
-version = "0.1.5"
+version = "1.0.0"
 dependencies = [
  "axum",
  "env_logger",

@@ -28,7 +28,7 @@ impl RigflowApp {
     }
 
     /// The per-operator directory that backs the credential file fallback.
-    fn operator_dir(&self, operator_id: &str) -> std::path::PathBuf {
+    pub(crate) fn operator_dir(&self, operator_id: &str) -> std::path::PathBuf {
         self.persistence_store
             .qso_log_db_path(operator_id)
             .parent()

@@ -56,6 +56,19 @@ impl RigflowApp {
         let mut qso = qso;
         qso.normalize();
 
+        // Offline prefix baseline: give any QSO that arrives without a DXCC entity
+        // (notably WSJT-X captures) its entity + CQ/ITU zones before the journal
+        // write. Instant, network-free, fill-absent — the manual `L` path already
+        // set these via the callbook merge, so this is a no-op there.
+        if qso.dxcc.is_none()
+            && let Some(p) = crate::logging::callbook::prefix::resolve(&qso.call)
+        {
+            qso.dxcc = p.dxcc;
+            for (k, v) in p.extra_fields() {
+                qso.extra.entry(k.to_string()).or_insert(v);
+            }
+        }
+
         let (op, name, profile) = {
             let s = self.state.lock().unwrap();
             (

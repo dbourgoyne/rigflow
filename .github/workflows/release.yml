@@ -55,13 +55,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Linux: client links ALSA, server links libusb. macOS uses CoreAudio
-      # (built in) and the client needs no extra libraries.
+      # Linux: client links ALSA + D-Bus (keyring credential storage), server
+      # links libusb. macOS uses CoreAudio + the Keychain (both built in) and the
+      # client needs no extra libraries.
       - name: Install system libraries (Linux)
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev libdbus-1-dev
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable

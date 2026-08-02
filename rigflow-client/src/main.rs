@@ -110,6 +110,7 @@ mod alsa_quiet;
 mod audio_metrics;
 mod audio_recorder;
 mod client_runtime;
+mod cluster;
 mod cw_decode;
 mod cw_text;
 mod digital_audio;

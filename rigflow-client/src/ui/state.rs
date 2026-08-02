@@ -344,6 +344,10 @@ pub struct UiState {
     pub log_status: String,
     /// WSJT-X UDP listener status (bind result / errors), surfaced for the user.
     pub wsjtx_listen_status: String,
+    /// DX-cluster connection state, surfaced for the status line. The spots
+    /// themselves live in a separate `Arc<Mutex<Vec<DxSpot>>>` (not here — this
+    /// struct is cloned every frame).
+    pub dx_cluster_status: crate::cluster::client::DxClusterStatus,
 
     // =====================================================================
     // PER-DEMOD OPERATOR PREFERENCES
@@ -781,6 +785,7 @@ impl Default for UiState {
             show_contact_view: false,
             log_status: String::new(),
             wsjtx_listen_status: String::new(),
+            dx_cluster_status: crate::cluster::client::DxClusterStatus::default(),
 
             // =================================================================
             // BOOKMARKS

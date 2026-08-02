@@ -20,10 +20,13 @@ display for that radio and operator.
 
 ## Screen layout
 
-- **Left panel** — all controls, grouped into collapsible sections (Radio Operator, Server, Radios,
-  **Radio Control**, **Source Control**, Waterfall, Bookmarks).
+- **Left panel** — all controls, grouped into collapsible sections (Radio Operator, Station, Server,
+  Radios, **Radio Control**, **Source Control**, Waterfall, Bookmarks, **DX Cluster**).
 - **Center** — a status bar (frequency, mode, S-meter, dBm, TX/RX, SWR) above the **spectrum** and
   **waterfall**.
+- **Logbook windows** open on demand rather than living in the left panel: **`L`** opens the
+  log-entry window and **`V`** toggles the **Contacts** view, whose toolbar holds import, export,
+  online sync, and the callbook settings.
 
 Advanced and diagnostic controls are hidden by default. Tick **"Show advanced & diagnostics
 controls"** at the bottom of Radio Control (and Source Control) to reveal them.
@@ -85,6 +88,30 @@ adaptive or manual normalization (top/range in dB).
 
 ---
 
+## Dual-watch, split & RIT/XIT (Hermes Lite 2)
+
+On hardware that supports it, Rigflow can run **two receivers at once** and transmit **split**. These
+controls appear in the **VFO** section (and inline on the status bar); they're hidden on receive-only
+sources.
+
+- **Dual-watch — two receivers.** Enable a second receiver (**VFO B**) alongside VFO A. The center
+  pane splits into stacked spectrum + waterfall panes, and you hear **A in the left ear, B in the
+  right**. Each VFO has its own frequency, mode, and full receive processing (filter, pitch, squelch,
+  NR2, noise blanker, auto-notch, AGC, deemphasis). An **Active VFO: A | B** selector points the
+  Receive controls at the receiver you're adjusting; both volumes stay visible so you can mix the two
+  live.
+- **Split.** Transmit on the selected TX VFO while listening on the other — the classic DX-split
+  setup. The transmitting VFO is marked **▶TX** on the status bar.
+- **RIT / XIT.** A per-VFO **RIT** offset nudges your *receive* frequency without moving your transmit
+  frequency (chasing a drifting station); **XIT** offsets your *transmit* frequency the same way.
+- **Hotkeys:** **`X`** swaps TX focus between A and B, **`=`** copies the active VFO to the other
+  (A=B), and **`B`** bookmarks the current frequency.
+
+Each VFO keeps its own tuning **Snap** step (see above), and the per-band memory restores frequency +
+mode as you move around.
+
+---
+
 ## Transmitting — SSB (voice)
 
 1. Set the mode to **USB** or **LSB**.
@@ -94,6 +121,14 @@ adaptive or manual normalization (top/range in dB).
 
 Optional **TX processing** (under **Advanced**): a soft **limiter** (peak protection) and a **speech
 compressor** (more average talk power). Leave the limiter on; add compression to taste.
+
+### Voice keyer
+
+To save your voice on a long CQ or a pileup, record a clip once and let Rigflow send it. In the
+**Transmit** section you can **record** a short message from your microphone, **preview** it (played
+locally, off-air), **delete** it, and **transmit** it — Rigflow keys the radio and plays the clip
+through the normal SSB transmit path. Clips are stored **per operator**, so each operator keeps their
+own CQ. It's ordinary voice transmit under the hood, so the same focus/PTT safety rules below apply.
 
 > The Space bar (SSB and CW) only keys when no text field has focus (so it doesn't fight typing), and
 > transmit **stops if the client window loses focus** — switching to another window always drops you
@@ -182,6 +217,130 @@ tuning. This applies to both the virtual-audio (rigctld) and TCI paths.
 
 ---
 
+## Logging contacts
+
+Rigflow has a built-in contact log (an electronic logbook). Contacts are stored per operator in a
+local database, and everything exports to standard **ADIF** for LoTW, eQSL, QRZ, or any other logger.
+
+### Set your station first
+
+Before logging, fill in the **Station** panel: your **callsign**, **grid**, and (for US awards)
+**state / county / CQ & ITU zones**. These become the `MY_*` fields written into every contact you
+log, so awards and confirmations match correctly. The callsign and operator name are per operator;
+the physical location (grid/state/county/zones) is shared across operators on the same rig.
+
+> The station snapshot is copied into each contact **at the moment you log it** — so if you correct
+> your station details later, only *future* contacts pick up the change. See
+> **[Troubleshooting](troubleshooting.md)** to fix already-logged contacts.
+
+### Logging a contact
+
+1. Press **`L`** to open the log-entry window. It captures the current **frequency and mode**; the
+   **time is stamped when you press Log**, not when the window opens — so you can pop it open early in
+   a pileup, prep the call, and the logged time still reflects when you actually made the contact.
+2. Type the **callsign** and fill the exchange (**RST sent/received**, **name**, **grid**, comment).
+   With a callbook configured (below), **name and grid auto-fill** as you type the call.
+3. **Worked-before hints** tell you at a glance whether the callsign is new, new on this band, or a
+   dupe.
+4. Press **Log** (Enter) to save.
+
+**WSJT-X / FT8 contacts log themselves** — when WSJT-X logs a QSO, Rigflow ingests it automatically
+into the active operator's log (skipping duplicates), so digital contacts need no manual entry.
+
+### The Contacts view
+
+Press **`V`** to open the **Contacts** view and browse your log. You can **filter** (by band, mode, date, callsign,
+and more), see **confirmation badges** (which contacts LoTW / eQSL / QRZ have confirmed), **edit** any
+field of a contact (including date/time — the place to correct a late or mis-stamped entry),
+**delete** contacts, and **select multiple** rows for a bulk action. The filter you set here is
+**shared with export** — what you see is exactly what gets written.
+
+### Import & export (ADIF)
+
+From the **Contacts** view's toolbar (**Import… / Export…**):
+
+- **Export** writes ADIF for the current filter. It's a *plan → write* flow, streams large logs to
+  disk without stalling the UI, and can do an **incremental** "since last export" so you only send new
+  contacts to an external logger. (The file picker needs a desktop **file-chooser portal**; see
+  Troubleshooting if **Browse…** does nothing.)
+- **Import** reads an ADIF file with a **plan → preview → commit** flow: it shows what will be added
+  before changing anything, skips near-duplicates, and imports **confirmations** — e.g. a LoTW
+  `lotwreport.adi` marks your matching contacts confirmed rather than creating duplicates.
+
+The log is kept in a local SQLite database (the source of truth) plus an **append-only ADIF journal**
+that captures every contact as it's made. Export from the database for a current-state ADIF; the
+journal is a historical capture record and is never rewritten.
+
+### Online sync (LoTW / eQSL / QRZ)
+
+From the **Contacts** view's toolbar (**Sync…**) you can sync directly with the online services:
+
+- **LoTW** — download confirmations (marks matching contacts confirmed).
+- **eQSL** — upload contacts and download confirmations.
+- **QRZ Logbook** — upload contacts and download confirmations.
+
+Enter each service's credentials once; they're stored in your operating system's **secure keyring**
+(with an encrypted-file fallback if no keyring is available) and never written to logs or the ADIF.
+Confirmed contacts show a coloured badge in the Contacts view.
+
+> **US county format:** LoTW/tqsl expects `MY_CNTY` as `STATE,County` (e.g. `MD,Carroll`), not a bare
+> county name. Set your county that way in the Station panel.
+
+---
+
+## Callbook lookup
+
+As you type a callsign in the log-entry window, Rigflow can look it up online and **auto-fill the
+name, grid, QTH (city), state/county, country, and DXCC/zones**. The "via …" note under the fields
+shows where the data came from and a human-readable location, e.g. `via QRZ · Chicago, IL · United
+States · DXCC 291`.
+
+**Providers**, tried in your priority order (first match wins):
+
+| Provider | Account | Notes |
+|---|---|---|
+| **QRZ XML** | qrz.com login + **XML Logbook Data** subscription | Full data. This is your qrz.com login, **not** the QRZ Logbook API key used for QSO sync. |
+| **HamQTH** | free account | Username + password. |
+| **Callook** | none | US callsigns only, no login. |
+
+Underneath all of them is an always-on **offline prefix baseline** that fills the **DXCC entity and
+CQ/ITU zones** from the callsign prefix with no network — so even without an account (or offline), a
+contact still gets its country and zones, and WSJT-X captures get a DXCC.
+
+**Configure** in the **Callbook** window (Contacts view → **Callbook…**): enable each provider, set the
+priority order, and enter credentials — stored in the same secure keyring as the sync services.
+**Anything you type always wins** over the callbook, and an online result overrides the offline
+baseline field-by-field, so a lookup never clobbers your own edits.
+
+---
+
+## DX Cluster
+
+Connect to a **DX-cluster** node to see where stations are being spotted — overlaid live on your
+spectrum/waterfall and in a scrollable spot list — and click a spot to tune straight to it.
+
+**Set it up** in the **DX Cluster** panel → **Configure…**: tick **Enabled**, pick a node from the
+built-in list (**VE7CC** by default, plus NC7J / W3LPL / HRD) or enter a **custom host/port**, and
+confirm your **callsign** (public nodes log in with just your call — no password). **Save & apply** to
+connect; the panel shows the connection status.
+
+**Working spots:**
+
+- The **spot list (band map)** is the main view — every spot that passes your filter, sorted by
+  frequency, each row **click-to-tune** (it recenters on the spot). This shows band-wide activity that
+  the narrow waterfall span can't.
+- **Markers** appear on the spectrum and waterfall for spots inside the currently displayed span —
+  callsign + a fade-with-age tick, click to tune.
+- A **"N received · M shown"** line tells you how many spots have arrived versus how many pass your
+  filter.
+
+**Filter** (in Configure) by **current band only** (default) and by **mode**, to cut the firehose down
+to what you're working. Spots age out automatically, and the connection reconnects itself if the node
+drops. Cluster settings are locked while you're connected to a rigflow **server**, like other operator
+settings.
+
+---
+
 ## Bookmarks
 
 Save the current frequency/mode as a **bookmark** (Bookmarks section) and recall it later; you can
@@ -198,6 +357,8 @@ Recordings appear back in the **Radios** list as playable "radios," so you can r
   operators sharing one rig each keep their own setup, and each radio resumes where its operator left
   it (frequency, mode, filters, volume, NR2/AGC, TX processing, waterfall).
 - Library/hardware items (CW macros, mic device, bookmarks, license, server IP) are operator-wide.
+- The **contact log**, **callbook** setup, **DX-cluster** setup, and **voice-keyer** clips are all
+  per operator too; service/callbook **credentials** live in the OS secure keyring (file fallback).
 - Operator settings are **locked while connected** to a server (to avoid surprise changes mid-session).
 
 ## Understanding the control sections

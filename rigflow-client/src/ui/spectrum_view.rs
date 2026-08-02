@@ -1,5 +1,9 @@
+use std::time::Instant;
+
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
 use rigflow_core::dsp::modes::DemodMode;
+
+use crate::cluster::DxSpot;
 
 use crate::ui::{
     bands::visible_radio_bands,
@@ -30,6 +34,7 @@ pub fn draw_spectrum_plot(
     db_min: f32,
     db_max: f32,
     state: &UiState,
+    spots: &[DxSpot],
 ) -> SpectrumInteraction {
     let size = egui::vec2(size.x.max(300.0), size.y.max(180.0));
 
@@ -99,6 +104,18 @@ pub fn draw_spectrum_plot(
         }
     }
 
+    // Incoming DX-cluster spots ride along the top of the plot (disjoint from the
+    // bottom-anchored bookmark strip). A click on a spot tunes to it precisely.
+    let clicked_spot = draw_spot_overlay(
+        &painter,
+        plot_rect,
+        spectrum_len,
+        state,
+        spots,
+        pointer_pos,
+        pointer_clicked,
+    );
+
     // Shared mouse interaction (identical to the waterfall): wheel fine-tune /
     // zoom and click/double-click tuning.  The spectrum maps screen-x →
     // frequency via the currently-visible (zoomed) range across `plot_rect`.
@@ -117,13 +134,114 @@ pub fn draw_spectrum_plot(
     // span) or when a bookmark overlay was clicked; wheel / zoom / center still
     // apply (they don't depend on the click position).
     if visible_range.is_none() || clicked_bookmark_id.is_some() {
+        // Bookmark clicks (and a missing mapping) suppress plain click-tune.
         mouse.tune_to_hz = None;
+    } else if let Some(hz) = clicked_spot {
+        // A spot click tunes precisely to the spot's frequency, overriding the
+        // click-position frequency.
+        mouse.tune_to_hz = Some(hz as f32);
     }
 
     SpectrumInteraction {
         clicked_bookmark_id,
         mouse,
     }
+}
+
+/// Draw incoming DX-cluster spots as ticks + callsign labels along the **top** of
+/// `rect` (the spectrum plot or the waterfall image). Only spots within the
+/// visible span are drawn; markers fade with age. Returns the frequency of a
+/// clicked spot (for the caller to tune to) and draws its own hover tooltip.
+/// Shared by the spectrum and waterfall so both behave identically.
+pub(crate) fn draw_spot_overlay(
+    painter: &egui::Painter,
+    rect: Rect,
+    spectrum_len: usize,
+    state: &UiState,
+    spots: &[DxSpot],
+    pointer_pos: Option<Pos2>,
+    pointer_clicked: bool,
+) -> Option<u64> {
+    if spots.is_empty() {
+        return None;
+    }
+
+    let font_id = FontId::monospace(10.0);
+    let now = Instant::now();
+    let ttl = crate::cluster::DEFAULT_TTL.as_secs_f32().max(1.0);
+
+    let mut clicked_freq: Option<u64> = None;
+    let mut hovered: Option<&DxSpot> = None;
+
+    for (idx, spot) in spots.iter().enumerate() {
+        let Some(x) = freq_to_plot_x_egui(spot.freq_hz as f32, rect, spectrum_len, state) else {
+            continue; // out of the visible span
+        };
+        if !x.is_finite() {
+            continue;
+        }
+
+        // Fade older spots: fresh → bright, near-TTL → dim.
+        let age_frac = (now
+            .saturating_duration_since(spot.received_at)
+            .as_secs_f32()
+            / ttl)
+            .clamp(0.0, 1.0);
+        let alpha = (235.0 - age_frac * 150.0) as u8; // 235 → 85
+        let color = Color32::from_rgba_unmultiplied(120, 205, 255, alpha);
+
+        // Two-row vertical stagger reduces label overlap between near spots.
+        let row = (idx % 2) as f32;
+        let tick_top = rect.top() + 1.0;
+        let tick_bottom = tick_top + 8.0;
+        let label_y = tick_bottom + 1.0 + row * 13.0;
+
+        painter.line_segment(
+            [Pos2::new(x, tick_top), Pos2::new(x, tick_bottom)],
+            Stroke::new(1.5_f32, color),
+        );
+
+        let galley = painter.layout_no_wrap(spot.dx_call.clone(), font_id.clone(), color);
+        let w = galley.size().x;
+        let h = galley.size().y;
+        let lx = (x - w * 0.5).clamp(
+            rect.left() + 2.0,
+            (rect.right() - w - 2.0).max(rect.left() + 2.0),
+        );
+        let label_rect = Rect::from_min_size(Pos2::new(lx, label_y), egui::vec2(w, h));
+        painter.galley(label_rect.min, galley, color);
+
+        if let Some(p) = pointer_pos {
+            let hit = Rect::from_min_max(
+                Pos2::new(label_rect.left() - 2.0, tick_top),
+                Pos2::new(label_rect.right() + 2.0, label_rect.bottom() + 1.0),
+            );
+            if hit.contains(p) {
+                hovered = Some(spot);
+                if pointer_clicked {
+                    clicked_freq = Some(spot.freq_hz);
+                }
+            }
+        }
+    }
+
+    if let (Some(spot), Some(p)) = (hovered, pointer_pos) {
+        let mut lines = vec![
+            spot.dx_call.clone(),
+            format!("{} MHz", format_mhz(spot.freq_hz as f32)),
+            format!("de {}", spot.spotter),
+        ];
+        let comment = spot.comment.trim();
+        if !comment.is_empty() {
+            lines.push(comment.to_string());
+        }
+        if !spot.time_utc.is_empty() {
+            lines.push(spot.time_utc.clone());
+        }
+        draw_tooltip_bubble(painter, rect, &lines, p);
+    }
+
+    clicked_freq
 }
 
 fn draw_grid_and_y_axis(
