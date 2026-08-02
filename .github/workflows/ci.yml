@@ -21,11 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # rigflow-client links ALSA (cpal); rigflow-server links libusb (RTL-SDR driver).
+      # rigflow-client links ALSA (cpal) and D-Bus (keyring credential storage);
+      # rigflow-server links libusb (RTL-SDR driver).
       - name: Install system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+          sudo apt-get install -y libasound2-dev libusb-1.0-0-dev libdbus-1-dev
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
