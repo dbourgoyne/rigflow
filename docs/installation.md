@@ -28,13 +28,15 @@ sudo apt install libusb-1.0-0
 ```
 *(Fedora: `libusb1` · Arch: `libusb`)*
 
-**Client (Linux):** the UI plays audio through ALSA.
+**Client (Linux):** the UI plays audio through ALSA, and stores callbook/logging-service credentials
+in the desktop **secret service** over D-Bus (with an encrypted-file fallback if none is running).
 
 ```bash
-sudo apt install libasound2
+sudo apt install libasound2 libdbus-1-3
 ```
+*(Fedora: `alsa-lib dbus-libs` · Arch: `alsa-lib dbus`)*
 
-**Client (macOS):** audio uses CoreAudio — nothing to install.
+**Client (macOS):** audio uses CoreAudio and credentials go to the login Keychain — nothing to install.
 
 **Digital modes (WSJT-X/FT8):** On **Linux** you can use either the **virtual-audio** method —
 which needs **PipeWire** (or PulseAudio), standard on modern Linux desktops — **or** the **TCI**
@@ -61,11 +63,12 @@ sudo apt install build-essential pkg-config libusb-1.0-0-dev
 ```
 *(Fedora: `gcc pkgconf-pkg-config libusb1-devel` · Arch: `base-devel libusb`)*
 
-**Client (Linux)** — the ALSA **dev** headers:
+**Client (Linux)** — the ALSA and D-Bus **dev** headers:
 
 ```bash
-sudo apt install build-essential pkg-config libasound2-dev
+sudo apt install build-essential pkg-config libasound2-dev libdbus-1-dev
 ```
+*(Fedora: `alsa-lib-devel dbus-devel` · Arch: `alsa-lib dbus`)*
 
 **Client (macOS)** — the Xcode Command Line Tools: `xcode-select --install`.
 

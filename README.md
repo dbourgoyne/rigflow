@@ -19,15 +19,24 @@ operate from your laptop.
 **Receive**
 - Modes: WFM, NFM, AM, USB, LSB, CW (CWU/CWL), and **Data** (USB for FT8/digital)
 - Real-time spectrum + waterfall, click/scroll/keyboard tuning, bookmarks
-- Noise reduction (NR2), AGC, squelch; per-operator settings and presets
+- **Dual-watch** (two receivers at once), **split**, and **RIT/XIT** (Hermes Lite 2)
+- Noise reduction (NR2), AGC, squelch, auto-notch, noise blanker; per-operator settings and presets
 - RX IQ recording and playback
 
 **Transmit** (Hermes Lite 2)
-- **SSB** from your microphone (USB/LSB), with a soft limiter + speech compressor
+- **SSB** from your microphone (USB/LSB), with a soft limiter + speech compressor, plus a **voice keyer**
 - **CW** via straight-key (Space bar), or Text-to-CW with F1–F4 memory macros and sidetone
 - **Digital (FT8 / WSJT-X)** — on **Linux** via virtual audio (PipeWire/Pulse) **or** TCI; on
   **macOS** via TCI only (experimental). An in-app setup window shows the exact settings
 - Built-in two-tone and tune/SWR test aids
+
+**Log & operate**
+- Built-in **contact log** with worked-before hints, a filterable Contacts view, edit/delete, and
+  automatic logging of WSJT-X/FT8 QSOs
+- **ADIF import/export**, plus direct **LoTW / eQSL / QRZ** upload and confirmation sync
+- **Callbook lookup** (QRZ / HamQTH / Callook + an offline prefix baseline) auto-fills name, QTH,
+  grid, and DXCC as you log
+- **DX cluster** — live spots on the waterfall and a click-to-tune band map
 
 **Station**
 - Remote operation over the network; multiple radios, one client
