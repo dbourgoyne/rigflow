@@ -186,9 +186,46 @@ fn dragged_value(
     adjusted_value(drag.start_value, delta, signed)
 }
 
+fn parse_display_prefix(number: &str, spec: &DigitWheelSpec<'_>) -> Option<i64> {
+    let (sign, unsigned) = if let Some(unsigned) = number.strip_prefix('-') {
+        if !spec.signed {
+            return None;
+        }
+        ("-", unsigned)
+    } else if let Some(unsigned) = number.strip_prefix('+') {
+        ("+", unsigned)
+    } else {
+        ("", number)
+    };
+
+    // Without a display separator, bare input retains its documented literal-Hz
+    // meaning. A dotted value matching the widget's leading groups is instead
+    // treated as a possibly incomplete copy of the displayed value.
+    if !unsigned.contains('.') {
+        return None;
+    }
+    let entered_groups: Vec<&str> = unsigned.split('.').collect();
+    if entered_groups.len() > spec.groups.len() {
+        return None;
+    }
+
+    let mut digits = String::with_capacity(spec.digit_count);
+    for (index, width) in spec.groups.iter().copied().enumerate() {
+        let entered = entered_groups.get(index).copied().unwrap_or("");
+        if entered.len() > width || !entered.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        digits.push_str(entered);
+        digits.extend(std::iter::repeat_n('0', width - entered.len()));
+    }
+
+    format!("{sign}{digits}").parse().ok()
+}
+
 /// Parse an editor value. Bare values are Hz (grouping dots/commas are allowed);
-/// an explicit Hz/kHz/MHz suffix enables decimal unit input.
-fn parse_frequency(text: &str, signed: bool) -> Option<i64> {
+/// a left-to-right prefix of the dotted widget display is padded with trailing
+/// zeroes, and an explicit Hz/kHz/MHz suffix enables decimal unit input.
+fn parse_frequency(text: &str, spec: &DigitWheelSpec<'_>) -> Option<i64> {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     let lower = compact.to_ascii_lowercase();
     let (number, multiplier, has_unit) = if let Some(n) = lower.strip_suffix("mhz") {
@@ -208,11 +245,13 @@ fn parse_frequency(text: &str, signed: bool) -> Option<i64> {
             return None;
         }
         hz.round() as i64
+    } else if let Some(parsed) = parse_display_prefix(number, spec) {
+        parsed
     } else {
         number.replace(['.', ',', '_'], "").parse::<i64>().ok()?
     };
 
-    (signed || parsed >= 0).then_some(parsed)
+    (spec.signed || parsed >= 0).then_some(parsed)
 }
 
 fn total_widget_width(
@@ -388,7 +427,7 @@ pub fn draw_digit_wheel_widget(
             state.edit_error = false;
             response.surrender_focus();
         } else if enter || response.lost_focus() {
-            if let Some(parsed) = parse_frequency(&state.draft, spec.signed) {
+            if let Some(parsed) = parse_frequency(&state.draft, spec) {
                 state.editing = false;
                 state.edit_error = false;
                 result = (parsed != value).then_some(parsed);
@@ -576,23 +615,55 @@ pub fn draw_lo_offset_widget(
 mod tests {
     use super::*;
 
+    fn lo_spec() -> DigitWheelSpec<'static> {
+        DigitWheelSpec {
+            label: "LO",
+            digit_count: 10,
+            signed: false,
+            groups: &[1, 3, 3, 3],
+            anchor: DigitWheelAnchor::Left,
+        }
+    }
+
+    fn offset_spec() -> DigitWheelSpec<'static> {
+        DigitWheelSpec {
+            label: "LO Offset",
+            digit_count: 6,
+            signed: true,
+            groups: &[3, 3],
+            anchor: DigitWheelAnchor::Right,
+        }
+    }
+
     #[test]
     fn parses_bare_grouped_hz() {
-        assert_eq!(parse_frequency("14.074.000", false), Some(14_074_000));
-        assert_eq!(parse_frequency("145,500,000", false), Some(145_500_000));
+        let spec = lo_spec();
+        assert_eq!(parse_frequency("14.074.000", &spec), Some(14_074_000));
+        assert_eq!(parse_frequency("145,500,000", &spec), Some(145_500_000));
+        assert_eq!(parse_frequency("98000123", &spec), Some(98_000_123));
+    }
+
+    #[test]
+    fn pads_incomplete_display_groups_with_trailing_zeroes() {
+        let spec = lo_spec();
+        assert_eq!(parse_frequency("0.098.000.", &spec), Some(98_000_000));
+        assert_eq!(parse_frequency("0.098.000", &spec), Some(98_000_000));
+        assert_eq!(parse_frequency("0.098.000.1", &spec), Some(98_000_100));
+        assert_eq!(parse_frequency("0.098.000.12", &spec), Some(98_000_120));
     }
 
     #[test]
     fn parses_explicit_units() {
-        assert_eq!(parse_frequency("14.074 MHz", false), Some(14_074_000));
-        assert_eq!(parse_frequency("14074 kHz", false), Some(14_074_000));
-        assert_eq!(parse_frequency("700 Hz", false), Some(700));
+        let spec = lo_spec();
+        assert_eq!(parse_frequency("14.074 MHz", &spec), Some(14_074_000));
+        assert_eq!(parse_frequency("14074 kHz", &spec), Some(14_074_000));
+        assert_eq!(parse_frequency("700 Hz", &spec), Some(700));
     }
 
     #[test]
     fn signedness_is_enforced() {
-        assert_eq!(parse_frequency("-1500", true), Some(-1_500));
-        assert_eq!(parse_frequency("-1500", false), None);
+        assert_eq!(parse_frequency("-1500", &offset_spec()), Some(-1_500));
+        assert_eq!(parse_frequency("-1500", &lo_spec()), None);
     }
 
     #[test]
@@ -604,20 +675,8 @@ mod tests {
 
     #[test]
     fn editor_value_matches_the_grouped_digit_display() {
-        let lo = DigitWheelSpec {
-            label: "LO",
-            digit_count: 10,
-            signed: false,
-            groups: &[1, 3, 3, 3],
-            anchor: DigitWheelAnchor::Left,
-        };
-        let offset = DigitWheelSpec {
-            label: "LO Offset",
-            digit_count: 6,
-            signed: true,
-            groups: &[3, 3],
-            anchor: DigitWheelAnchor::Right,
-        };
+        let lo = lo_spec();
+        let offset = offset_spec();
 
         assert_eq!(format_editor_value(96_300_000, &lo), "0.096.300.000");
         assert_eq!(format_editor_value(1_500, &offset), "+001.500");
