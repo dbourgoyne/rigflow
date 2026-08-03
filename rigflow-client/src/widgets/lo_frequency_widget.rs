@@ -4,6 +4,8 @@ use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Key, Modifiers, Pos2, Rect, Sense, Vec2,
 };
 
+const DRAG_POINTS_PER_STEP: f32 = 7.0;
+
 /// Controls how the digit widget is anchored relative to the provided origin.
 #[derive(Debug, Clone, Copy)]
 pub enum DigitWheelAnchor {
@@ -31,6 +33,7 @@ struct DigitCell {
 struct DragState {
     digit_index: usize,
     start_value: i64,
+    accumulated_points: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +92,21 @@ fn digit_step(digit_count: usize, digit_index: usize) -> i64 {
 fn adjusted_value(value: i64, delta: i64, signed: bool) -> i64 {
     let next = value.saturating_add(delta);
     if signed { next } else { next.max(0) }
+}
+
+fn dragged_value(
+    drag: &mut DragState,
+    frame_delta_y: f32,
+    digit_count: usize,
+    signed: bool,
+) -> i64 {
+    // `Response::drag_delta` is the movement in this frame, not the total
+    // displacement since the gesture started. Keep the total here so a still
+    // frame does not snap back to `start_value`, and retain sub-step movement.
+    drag.accumulated_points -= frame_delta_y;
+    let increments = (drag.accumulated_points / DRAG_POINTS_PER_STEP).trunc() as i64;
+    let delta = digit_step(digit_count, drag.digit_index).saturating_mul(increments);
+    adjusted_value(drag.start_value, delta, signed)
 }
 
 /// Parse an editor value. Bare values are Hz (grouping dots/commas are allowed);
@@ -220,8 +238,6 @@ pub fn draw_digit_wheel_widget(
     const SEP_W: f32 = 7.0;
     const SIGN_W: f32 = 12.0;
     const LABEL_GAP: f32 = 8.0;
-    const DRAG_POINTS_PER_STEP: f32 = 7.0;
-
     let label_w = match spec.label {
         "LO" => 18.0,
         "LO Offset" => 54.0,
@@ -365,14 +381,17 @@ pub fn draw_digit_wheel_widget(
             state.drag = Some(DragState {
                 digit_index: cell.digit_index,
                 start_value: value,
+                accumulated_points: 0.0,
             });
         }
         if enabled && response.dragged() {
-            if let Some(drag) = state.drag.filter(|d| d.digit_index == cell.digit_index) {
-                let increments = (-response.drag_delta().y / DRAG_POINTS_PER_STEP).trunc() as i64;
-                let delta =
-                    digit_step(spec.digit_count, drag.digit_index).saturating_mul(increments);
-                let next = adjusted_value(drag.start_value, delta, spec.signed);
+            if let Some(drag) = state
+                .drag
+                .as_mut()
+                .filter(|d| d.digit_index == cell.digit_index)
+            {
+                let next =
+                    dragged_value(drag, response.drag_delta().y, spec.digit_count, spec.signed);
                 result = (next != value).then_some(next);
             }
         }
@@ -498,5 +517,24 @@ mod tests {
         assert_eq!(digit_step(10, 0), 1_000_000_000);
         assert_eq!(digit_step(10, 9), 1);
         assert_eq!(digit_step(6, 2), 1_000);
+    }
+
+    #[test]
+    fn drag_accumulates_frame_deltas_without_snapping_back() {
+        let mut drag = DragState {
+            digit_index: 7,
+            start_value: 14_074_000,
+            accumulated_points: 0.0,
+        };
+
+        // Two sub-step upward movements combine into one 100 Hz step.
+        assert_eq!(dragged_value(&mut drag, -3.0, 10, false), 14_074_000);
+        assert_eq!(dragged_value(&mut drag, -4.0, 10, false), 14_074_100);
+
+        // A stationary frame retains the accumulated displacement and value.
+        assert_eq!(dragged_value(&mut drag, 0.0, 10, false), 14_074_100);
+
+        // Moving back to the gesture origin restores the original value.
+        assert_eq!(dragged_value(&mut drag, 7.0, 10, false), 14_074_000);
     }
 }
