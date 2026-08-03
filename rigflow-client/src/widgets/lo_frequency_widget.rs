@@ -105,6 +105,58 @@ fn format_editor_value(value: i64, spec: &DigitWheelSpec<'_>) -> String {
     out
 }
 
+fn editor_character_distance(current: char, next: char) -> Option<f32> {
+    match (current, next) {
+        (c, n) if c.is_ascii_digit() && n.is_ascii_digit() => Some(14.0),
+        (c, '.') if c.is_ascii_digit() => Some(11.0),
+        ('.', n) if n.is_ascii_digit() => Some(10.0),
+        ('+' | '-', n) if n.is_ascii_digit() => Some(13.5),
+        _ => None,
+    }
+}
+
+fn layout_editor_text(
+    ui: &egui::Ui,
+    text: &str,
+    wrap_width: f32,
+    font: &FontId,
+    color: Color32,
+) -> std::sync::Arc<egui::Galley> {
+    let chars: Vec<char> = text.chars().collect();
+    let widths: Vec<f32> = ui.fonts(|fonts| {
+        chars
+            .iter()
+            .map(|character| fonts.glyph_width(font, *character))
+            .collect()
+    });
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+
+    for (index, character) in chars.iter().copied().enumerate() {
+        let format = egui::TextFormat {
+            font_id: font.clone(),
+            color,
+            ..Default::default()
+        };
+        let leading_space = if let Some(previous) = index.checked_sub(1)
+            && let Some(center_distance) = editor_character_distance(chars[previous], character)
+        {
+            // Match the fixed-cell painter by compensating for the actual glyph
+            // advances. This also remains correct if the chosen font's digits
+            // are not tabular.
+            center_distance - (widths[previous] + widths[index]) * 0.5
+        } else {
+            0.0
+        };
+        // Each character is a separate section so its gap can reflect the
+        // fixed digit/separator geometry. `extra_letter_spacing` would have no
+        // effect here because it only separates glyphs within one section.
+        job.append(&character.to_string(), leading_space, format);
+    }
+
+    ui.fonts(|fonts| fonts.layout_job(job))
+}
+
 fn first_nonzero_digit(digits: &[u8]) -> Option<usize> {
     digits.iter().position(|d| *d != b'0')
 }
@@ -305,6 +357,9 @@ pub fn draw_digit_wheel_widget(
             Pos2::new(top_left.x + label_w + LABEL_GAP, top_left.y),
             total_rect.right_bottom(),
         );
+        let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+            layout_editor_text(ui, text, wrap_width, &font, active_color)
+        };
         let response = ui.put(
             edit_rect,
             egui::TextEdit::singleline(&mut state.draft)
@@ -312,6 +367,7 @@ pub fn draw_digit_wheel_widget(
                 .font(font.clone())
                 .text_color(active_color)
                 .margin(egui::Margin::symmetric(2, 2))
+                .layouter(&mut layouter)
                 .desired_width(edit_rect.width()),
         );
         if state.edit_error {
@@ -566,6 +622,15 @@ mod tests {
         assert_eq!(format_editor_value(96_300_000, &lo), "0.096.300.000");
         assert_eq!(format_editor_value(1_500, &offset), "+001.500");
         assert_eq!(format_editor_value(-1_500, &offset), "-001.500");
+    }
+
+    #[test]
+    fn editor_spacing_matches_the_fixed_digit_cells() {
+        assert_eq!(editor_character_distance('1', '2'), Some(14.0));
+        assert_eq!(editor_character_distance('1', '.'), Some(11.0));
+        assert_eq!(editor_character_distance('.', '2'), Some(10.0));
+        assert_eq!(editor_character_distance('+', '2'), Some(13.5));
+        assert_eq!(editor_character_distance('M', 'H'), None);
     }
 
     #[test]
