@@ -118,7 +118,7 @@ fn editor_character_distance(current: char, next: char) -> Option<f32> {
 fn layout_editor_text(
     ui: &egui::Ui,
     text: &str,
-    wrap_width: f32,
+    _wrap_width: f32,
     font: &FontId,
     color: Color32,
 ) -> std::sync::Arc<egui::Galley> {
@@ -130,7 +130,9 @@ fn layout_editor_text(
             .collect()
     });
     let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = wrap_width;
+    // Match TextEdit's built-in single-line layouter: do not wrap at the field
+    // width (or at separators), and let TextEdit horizontally clip/scroll.
+    job.break_on_newline = false;
 
     for (index, character) in chars.iter().copied().enumerate() {
         let format = egui::TextFormat {
