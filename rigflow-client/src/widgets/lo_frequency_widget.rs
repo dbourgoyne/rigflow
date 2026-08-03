@@ -418,6 +418,15 @@ pub fn draw_digit_wheel_widget(
         }
         if state.focus_editor {
             response.request_focus();
+            let mut editor_state =
+                egui::TextEdit::load_state(ui.ctx(), editor_id).unwrap_or_default();
+            editor_state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::default(),
+                    egui::text::CCursor::new(state.draft.chars().count()),
+                )));
+            editor_state.store(ui.ctx(), editor_id);
             state.focus_editor = false;
         }
 
