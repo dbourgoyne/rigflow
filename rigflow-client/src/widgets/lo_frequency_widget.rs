@@ -188,6 +188,14 @@ fn dragged_value(
     adjusted_value(drag.start_value, delta, signed)
 }
 
+fn set_drag_cursor(ctx: &egui::Context, grabbed: bool) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if grabbed {
+        egui::viewport::CursorGrab::Locked
+    } else {
+        egui::viewport::CursorGrab::None
+    }));
+}
+
 fn parse_display_prefix(number: &str, spec: &DigitWheelSpec<'_>) -> Option<i64> {
     let (sign, unsigned) = if let Some(unsigned) = number.strip_prefix('-') {
         if !spec.signed {
@@ -377,7 +385,9 @@ pub fn draw_digit_wheel_widget(
         .unwrap_or_default();
     if !enabled {
         state.editing = false;
-        state.drag = None;
+        if state.drag.take().is_some() {
+            set_drag_cursor(ui.ctx(), false);
+        }
     }
 
     let painter = ui.painter();
@@ -516,20 +526,27 @@ pub fn draw_digit_wheel_widget(
                 start_value: value,
                 accumulated_points: 0.0,
             });
+            set_drag_cursor(ui.ctx(), true);
         }
         if enabled && response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::None);
             if let Some(drag) = state
                 .drag
                 .as_mut()
                 .filter(|d| d.digit_index == cell.digit_index)
             {
-                let next =
-                    dragged_value(drag, response.drag_delta().y, spec.digit_count, spec.signed);
+                let next = dragged_value(
+                    drag,
+                    response.drag_motion().y,
+                    spec.digit_count,
+                    spec.signed,
+                );
                 result = (next != value).then_some(next);
             }
         }
         if response.drag_stopped() {
             state.drag = None;
+            set_drag_cursor(ui.ctx(), false);
         }
         if enabled && response.clicked() {
             state.editing = true;
