@@ -232,6 +232,12 @@ pub struct WorkerRuntimeState {
 /// Commands sent from server/session → worker.
 #[derive(Debug, Clone)]
 pub enum WorkerCommand {
+    /// Set one VFO's centre and target as a single control-state transaction.
+    SetVfoFrequencies {
+        vfo: VfoSelect,
+        center_freq_hz: u64,
+        target_freq_hz: u64,
+    },
     SetTargetFrequency {
         hz: u64,
     },
