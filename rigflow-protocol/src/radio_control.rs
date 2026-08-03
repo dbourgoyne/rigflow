@@ -118,6 +118,17 @@ pub enum ClientRadioMessage {
         target_freq_hz: u64,
     },
 
+    /// Atomically set one VFO's LO/centre and tuned target frequencies.
+    ///
+    /// Use this when the two values describe one tuning operation (for example,
+    /// recentering while preserving an offset). The legacy single-field commands
+    /// remain available for operations that intentionally move only one value.
+    SetVfoFrequencies {
+        vfo: VfoSelect,
+        center_freq_hz: u64,
+        target_freq_hz: u64,
+    },
+
     SetDemodMode {
         mode: DemodMode,
     },
@@ -842,4 +853,56 @@ pub enum RadioAvailability {
 
     /// Error state (requires recovery or restart)
     Faulted,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_vfo_frequencies_round_trip_for_both_vfos() {
+        for vfo in [VfoSelect::A, VfoSelect::B] {
+            let message = ClientRadioMessage::SetVfoFrequencies {
+                vfo,
+                center_freq_hz: 14_000_000,
+                target_freq_hz: 14_074_000,
+            };
+
+            let json = serde_json::to_string(&message).expect("serialize tuning command");
+            let decoded: ClientRadioMessage =
+                serde_json::from_str(&json).expect("deserialize tuning command");
+
+            match decoded {
+                ClientRadioMessage::SetVfoFrequencies {
+                    vfo: decoded_vfo,
+                    center_freq_hz,
+                    target_freq_hz,
+                } => {
+                    assert_eq!(decoded_vfo, vfo);
+                    assert_eq!(center_freq_hz, 14_000_000);
+                    assert_eq!(target_freq_hz, 14_074_000);
+                }
+                _ => panic!("decoded the wrong message variant"),
+            }
+        }
+    }
+
+    #[test]
+    fn atomic_vfo_frequencies_has_stable_wire_shape() {
+        let message = ClientRadioMessage::SetVfoFrequencies {
+            vfo: VfoSelect::B,
+            center_freq_hz: 7_000_000,
+            target_freq_hz: 7_074_000,
+        };
+
+        assert_eq!(
+            serde_json::to_value(message).expect("serialize tuning command"),
+            serde_json::json!({
+                "type": "set_vfo_frequencies",
+                "vfo": "b",
+                "center_freq_hz": 7_000_000,
+                "target_freq_hz": 7_074_000,
+            })
+        );
+    }
 }
