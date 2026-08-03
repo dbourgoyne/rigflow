@@ -505,7 +505,7 @@ pub fn draw_digit_wheel_widget(
                     Sense::hover()
                 },
             )
-            .on_hover_text("Scroll, drag vertically, or use ↑/↓; click to type a value");
+            .on_hover_text("Scroll or drag vertically; press Up/Down; click to type a value");
         if enabled && response.hovered() {
             hovered_digit = Some(cell.digit_index);
             ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
