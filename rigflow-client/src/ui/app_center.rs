@@ -639,25 +639,25 @@ impl RigflowApp {
         );
 
         if let Ok(mut state) = self.state.lock() {
-            vfo.set_center(&mut state, new_center);
-            vfo.set_target(&mut state, new_target);
+            vfo.set_frequencies(&mut state, new_center, new_target);
         }
         // Retune the LO only when it actually panned.
         if (new_center - cur_center).abs() > 0.5 {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                vfo.center_msg(new_center as u64),
+                vfo.frequencies_msg(new_center as u64, new_target as u64),
+            ));
+        } else {
+            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
+                vfo.target_msg(new_target as u64),
             ));
         }
-        let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-            vfo.target_msg(new_target as u64),
-        ));
     }
 
     /// Pan the target frequency by `delta_hz`, applying the same soft-edge LO
     /// pan as [`tune_target_relative`] but with **throttled** control-channel
     /// sends so a 60 fps drag / momentum sweep doesn't flood the server with
     /// retunes.  Local UI state is updated on every call (smooth display);
-    /// `SetTargetFrequency` / `SetCenterFrequency` are sent at most once per
+    /// Tuning commands are sent at most once per
     /// [`PAN_SEND_INTERVAL`] unless `force_send` is set (used for the final,
     /// exact value when a gesture ends, so the server lands on the settled
     /// frequency with the correct band filters).
@@ -708,8 +708,7 @@ impl RigflowApp {
                 Ok(s) => s,
                 Err(_) => return moved,
             };
-            vfo.set_center(&mut state, new_center);
-            vfo.set_target(&mut state, new_target);
+            vfo.set_frequencies(&mut state, new_center, new_target);
 
             let now = Instant::now();
             let allow = force_send || now.duration_since(state.last_pan_send) >= PAN_SEND_INTERVAL;
@@ -730,10 +729,9 @@ impl RigflowApp {
 
         if do_center {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                vfo.center_msg(new_center as u64),
+                vfo.frequencies_msg(new_center as u64, new_target as u64),
             ));
-        }
-        if do_target {
+        } else if do_target {
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
                 vfo.target_msg(new_target as u64),
             ));
@@ -869,11 +867,9 @@ impl RigflowApp {
                     &limits,
                 );
                 if let Ok(mut state) = self.state.lock() {
-                    vfo.set_center(&mut state, new_center);
-                    vfo.set_target(&mut state, new_target);
+                    vfo.set_frequencies(&mut state, new_center, new_target);
                 }
-                send(vfo.center_msg(new_center as u64));
-                send(vfo.target_msg(new_target as u64));
+                send(vfo.frequencies_msg(new_center as u64, new_target as u64));
             } else if let Ok(mut state) = self.state.lock() {
                 state.server_status = "cannot tune: no radio acquired".to_string();
             }
@@ -953,20 +949,16 @@ impl RigflowApp {
             self.tune_target_relative(&state_snapshot, delta, vfo);
         }
 
-        if let Some(new_center_hz) = new_center_freq_hz {
+        if let (Some(new_center_hz), Some(new_target_hz)) = (new_center_freq_hz, new_target_freq_hz)
+        {
+            // Centre and target form one offset-preserving LO operation. Apply
+            // and send them as a pair so neither local readers nor server echoes
+            // can observe a half-updated tuning state during a continuous drag.
             if let Ok(mut state) = self.state.lock() {
-                vfo.set_center(&mut state, new_center_hz);
+                vfo.set_frequencies(&mut state, new_center_hz, new_target_hz);
             }
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                vfo.center_msg(new_center_hz as u64),
-            ));
-        }
-        if let Some(new_target_hz) = new_target_freq_hz {
-            if let Ok(mut state) = self.state.lock() {
-                vfo.set_target(&mut state, new_target_hz);
-            }
-            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                vfo.target_msg(new_target_hz as u64),
+                vfo.frequencies_msg(new_center_hz as u64, new_target_hz as u64),
             ));
         }
 
@@ -1062,6 +1054,10 @@ impl TuneVfo {
             TuneVfo::B => s.vfo_b_target_freq_hz = hz,
         }
     }
+    fn set_frequencies(self, s: &mut UiState, center_hz: f32, target_hz: f32) {
+        self.set_center(s, center_hz);
+        self.set_target(s, target_hz);
+    }
     fn demod_mode(self, s: &UiState) -> rigflow_core::dsp::modes::DemodMode {
         match self {
             TuneVfo::A => s.demod_mode,
@@ -1084,18 +1080,25 @@ impl TuneVfo {
             TuneVfo::B => s.vfo_b_display_zoom,
         }
     }
-    fn center_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
-        use rigflow_protocol::ClientRadioMessage as M;
-        match self {
-            TuneVfo::A => M::SetCenterFrequency { center_freq_hz: hz },
-            TuneVfo::B => M::SetVfoBCenterFrequency { center_freq_hz: hz },
-        }
-    }
     fn target_msg(self, hz: u64) -> rigflow_protocol::ClientRadioMessage {
         use rigflow_protocol::ClientRadioMessage as M;
         match self {
             TuneVfo::A => M::SetTargetFrequency { target_freq_hz: hz },
             TuneVfo::B => M::SetVfoBFrequency { target_freq_hz: hz },
+        }
+    }
+    fn frequencies_msg(
+        self,
+        center_freq_hz: u64,
+        target_freq_hz: u64,
+    ) -> rigflow_protocol::ClientRadioMessage {
+        rigflow_protocol::ClientRadioMessage::SetVfoFrequencies {
+            vfo: match self {
+                TuneVfo::A => rigflow_core::radio::vfo::VfoSelect::A,
+                TuneVfo::B => rigflow_core::radio::vfo::VfoSelect::B,
+            },
+            center_freq_hz,
+            target_freq_hz,
         }
     }
 }
