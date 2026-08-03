@@ -80,6 +80,31 @@ fn format_abs_digits(value: u64, digit_count: usize) -> Vec<u8> {
     s.into_bytes()
 }
 
+fn format_editor_value(value: i64, spec: &DigitWheelSpec<'_>) -> String {
+    let digits = format!("{:0width$}", value.unsigned_abs(), width = spec.digit_count);
+    let grouped_width: usize = spec.groups.iter().sum();
+    debug_assert_eq!(grouped_width, spec.digit_count);
+
+    let mut out = String::with_capacity(digits.len() + spec.groups.len());
+    if spec.signed {
+        out.push(if value < 0 { '-' } else { '+' });
+    }
+
+    // If a caller supplies a value wider than the nominal digit count, retain
+    // the extra leading digits in the first group rather than truncating them.
+    let mut offset = 0;
+    let overflow = digits.len().saturating_sub(grouped_width);
+    for (group_index, group_width) in spec.groups.iter().copied().enumerate() {
+        if group_index != 0 {
+            out.push('.');
+        }
+        let width = group_width + usize::from(group_index == 0) * overflow;
+        out.push_str(&digits[offset..offset + width]);
+        offset += width;
+    }
+    out
+}
+
 fn first_nonzero_digit(digits: &[u8]) -> Option<usize> {
     digits.iter().position(|d| *d != b'0')
 }
@@ -284,7 +309,9 @@ pub fn draw_digit_wheel_widget(
             edit_rect,
             egui::TextEdit::singleline(&mut state.draft)
                 .id(editor_id)
-                .font(font)
+                .font(font.clone())
+                .text_color(active_color)
+                .margin(egui::Margin::symmetric(2, 2))
                 .desired_width(edit_rect.width()),
         );
         if state.edit_error {
@@ -402,7 +429,7 @@ pub fn draw_digit_wheel_widget(
             state.editing = true;
             state.focus_editor = true;
             state.edit_error = false;
-            state.draft = value.to_string();
+            state.draft = format_editor_value(value, spec);
         }
 
         if enabled && response.hovered() {
@@ -517,6 +544,28 @@ mod tests {
         assert_eq!(digit_step(10, 0), 1_000_000_000);
         assert_eq!(digit_step(10, 9), 1);
         assert_eq!(digit_step(6, 2), 1_000);
+    }
+
+    #[test]
+    fn editor_value_matches_the_grouped_digit_display() {
+        let lo = DigitWheelSpec {
+            label: "LO",
+            digit_count: 10,
+            signed: false,
+            groups: &[1, 3, 3, 3],
+            anchor: DigitWheelAnchor::Left,
+        };
+        let offset = DigitWheelSpec {
+            label: "LO Offset",
+            digit_count: 6,
+            signed: true,
+            groups: &[3, 3],
+            anchor: DigitWheelAnchor::Right,
+        };
+
+        assert_eq!(format_editor_value(96_300_000, &lo), "0.096.300.000");
+        assert_eq!(format_editor_value(1_500, &offset), "+001.500");
+        assert_eq!(format_editor_value(-1_500, &offset), "-001.500");
     }
 
     #[test]
