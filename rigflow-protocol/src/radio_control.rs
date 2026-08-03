@@ -121,8 +121,7 @@ pub enum ClientRadioMessage {
     /// Atomically set one VFO's LO/centre and tuned target frequencies.
     ///
     /// Use this when the two values describe one tuning operation (for example,
-    /// recentering while preserving an offset). The legacy single-field commands
-    /// remain available for operations that intentionally move only one value.
+    /// recentering while preserving an offset).
     SetVfoFrequencies {
         vfo: VfoSelect,
         center_freq_hz: u64,
