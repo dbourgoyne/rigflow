@@ -122,6 +122,7 @@ mod net;
 mod persistence;
 mod rigctl_server;
 mod sidetone;
+mod startup_error;
 mod tci_server;
 mod ui;
 mod voice_keyer;
@@ -138,15 +139,10 @@ use tokio::sync::mpsc;
 use crate::client_runtime::start_media_runtime;
 use crate::net::control::ControlCommand;
 use crate::net::websocket::websocket_control_task;
-use crate::persistence::{InitialClientState, StartupError, initialize_client_state};
+use crate::persistence::{InitialClientState, initialize_client_state};
+use crate::startup_error::exit_with_startup_error;
 use crate::ui::app::RigflowApp;
 use crate::ui::state::UiState;
-
-fn exit_with_startup_error(error: &StartupError) -> ! {
-    log::error!("client startup failed: {error}");
-    eprintln!("client startup failed: {error}");
-    std::process::exit(1);
-}
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging for both the UI process and background runtime tasks.
