@@ -6,6 +6,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use atomic_write_file::AtomicWriteFile;
+
 use crate::persistence::models::StationProfileFile;
 use crate::persistence::{
     error::PersistenceError,
@@ -337,16 +339,12 @@ where
 
     fs::create_dir_all(parent)?;
 
-    let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(value)?;
 
-    {
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(json.as_bytes())?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&temp_path, path)?;
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+    file.commit()?;
     Ok(())
 }
 
@@ -452,6 +450,20 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), before);
         assert!(corrupt_backups(&operators_dir(&dir)).is_empty());
         assert!(store.take_recovery_notices().is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_json_write_replaces_an_existing_file() {
+        let dir = unique_tmp_dir();
+        let path = dir.join("settings.json");
+
+        write_json_file_atomic(&path, &serde_json::json!({"generation": 1})).unwrap();
+        write_json_file_atomic(&path, &serde_json::json!({"generation": 2})).unwrap();
+
+        let saved: serde_json::Value = read_json_file(&path).unwrap();
+        assert_eq!(saved, serde_json::json!({"generation": 2}));
 
         let _ = fs::remove_dir_all(&dir);
     }
