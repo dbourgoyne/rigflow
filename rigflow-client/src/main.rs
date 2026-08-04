@@ -138,9 +138,15 @@ use tokio::sync::mpsc;
 use crate::client_runtime::start_media_runtime;
 use crate::net::control::ControlCommand;
 use crate::net::websocket::websocket_control_task;
-use crate::persistence::load_initial_ui_state;
+use crate::persistence::{InitialClientState, StartupError, initialize_client_state};
 use crate::ui::app::RigflowApp;
 use crate::ui::state::UiState;
+
+fn exit_with_startup_error(error: &StartupError) -> ! {
+    log::error!("client startup failed: {error}");
+    eprintln!("client startup failed: {error}");
+    std::process::exit(1);
+}
 
 fn main() -> Result<(), eframe::Error> {
     // Initialize logging for both the UI process and background runtime tasks.
@@ -159,19 +165,15 @@ fn main() -> Result<(), eframe::Error> {
     // Parse the command line up front so `--help` exits before any startup work.
     let window_size = parse_cli_or_exit();
 
-    // Load persisted startup state first, then wrap it in shared UI state.
-    let (initial_ui_state, persistence_store) = match load_initial_ui_state(None) {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("failed to load persistent state: {err}");
-            (
-                UiState::default(),
-                crate::persistence::PersistenceStore::new(
-                    crate::persistence::resolve_config_dir(None)
-                        .unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                ),
-            )
-        }
+    // Persistent startup is all-or-nothing for the running client: either the
+    // complete initial state and its one resolved store are available, or
+    // startup stops before media, networking, and the main UI are created.
+    let InitialClientState {
+        ui_state: initial_ui_state,
+        persistence_store,
+    } = match initialize_client_state(None) {
+        Ok(initial) => initial,
+        Err(error) => exit_with_startup_error(&error),
     };
 
     // Shared UI/application state used by the egui app and background tasks.
