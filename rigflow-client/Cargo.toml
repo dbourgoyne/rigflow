@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+atomic-write-file = "0.3"
 eframe = "0.31"
 egui = "0.31"
 egui_plot = "0.31"

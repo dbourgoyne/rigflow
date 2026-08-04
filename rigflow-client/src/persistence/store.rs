@@ -6,6 +6,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use atomic_write_file::AtomicWriteFile;
+
 use crate::persistence::models::StationProfileFile;
 use crate::persistence::{
     error::PersistenceError,
@@ -109,7 +111,7 @@ impl PersistenceStore {
             return Ok(default);
         }
 
-        match read_json_file::<AppStateFile>(&path) {
+        match read_app_state_file(&path) {
             Ok(state) => Ok(state),
             // Corrupt content: quarantine + reset rather than leaving the user
             // stuck.  Genuine Io/dir errors still propagate.
@@ -175,12 +177,10 @@ impl PersistenceStore {
             Err(err) if err.is_content_corruption() => {
                 self.recover_operator_settings_corrupt(&path, &operator_id, err)
             }
-            // Valid file from a newer build (downgrade): preserve it, use
-            // in-memory defaults, tell the user to upgrade.
-            Err(err) if err.is_version_too_new() => {
-                self.recover_operator_settings_future_version(&operator_id, err)
-            }
-            // Genuine Io / invalid-id errors still propagate.
+            // Valid files from a newer build, along with genuine I/O and
+            // invalid-id errors, propagate. In particular, never turn a newer
+            // file into writable defaults that a later load-modify-save could
+            // use to overwrite the original.
             Err(err) => Err(err),
         }
     }
@@ -248,21 +248,6 @@ impl PersistenceStore {
         Ok(default)
     }
 
-    /// A valid operator file from a *newer* build: leave it on disk untouched,
-    /// run on in-memory defaults, and surface an "upgrade" notice.
-    fn recover_operator_settings_future_version(
-        &self,
-        operator_id: &str,
-        err: PersistenceError,
-    ) -> Result<OperatorSettingsFile, PersistenceError> {
-        self.push_recovery_notice(format!(
-            "config for '{operator_id}' is from a newer Rigflow build and was not \
-             loaded ({err}); using defaults this session — upgrade to use it"
-        ));
-        // Deliberately NOT saved, so the good file is preserved for an upgrade.
-        Ok(OperatorSettingsFile::new(operator_id.to_string()))
-    }
-
     pub fn save_operator_settings(
         &self,
         settings: &OperatorSettingsFile,
@@ -303,13 +288,20 @@ impl PersistenceStore {
     }
 }
 
-fn read_json_file<T>(path: &Path) -> Result<T, PersistenceError>
-where
-    T: serde::de::DeserializeOwned,
-{
+fn read_app_state_file(path: &Path) -> Result<AppStateFile, PersistenceError> {
     let text = fs::read_to_string(path)?;
-    let value = serde_json::from_str::<T>(&text)?;
-    Ok(value)
+    let value: serde_json::Value = serde_json::from_str(&text)?;
+
+    if let Some(version) = value.get("version").and_then(serde_json::Value::as_u64)
+        && version > u64::from(crate::persistence::models::APP_STATE_FILE_VERSION)
+    {
+        return Err(PersistenceError::Migration(format!(
+            "app state version {version} is newer than supported version {}",
+            crate::persistence::models::APP_STATE_FILE_VERSION
+        )));
+    }
+
+    Ok(serde_json::from_value(value)?)
 }
 
 /// Rename a corrupt file aside to `<path>.corrupt-<unix_secs>` so it's preserved
@@ -337,16 +329,12 @@ where
 
     fs::create_dir_all(parent)?;
 
-    let temp_path = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(value)?;
 
-    {
-        let mut file = fs::File::create(&temp_path)?;
-        file.write_all(json.as_bytes())?;
-        file.sync_all()?;
-    }
-
-    fs::rename(&temp_path, path)?;
+    let mut file = AtomicWriteFile::open(path)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
+    file.commit()?;
     Ok(())
 }
 
@@ -423,16 +411,14 @@ mod tests {
         let original = br#"{"version": 9999}"#;
         fs::write(&path, original).unwrap();
 
-        let settings = store.load_operator_settings("W1AW").unwrap();
-        assert_eq!(settings.version, OPERATOR_SETTINGS_FILE_VERSION);
+        let err = store.load_operator_settings("W1AW").unwrap_err();
+        assert!(matches!(err, PersistenceError::Migration(_)));
 
-        // The good file is left byte-for-byte intact; no backup made.
+        // The good file is left byte-for-byte intact; no backup or writable
+        // default settings are produced.
         assert_eq!(fs::read(&path).unwrap(), original);
         assert!(corrupt_backups(&operators_dir(&dir)).is_empty());
-
-        let notices = store.take_recovery_notices();
-        assert_eq!(notices.len(), 1);
-        assert!(notices[0].contains("newer"));
+        assert!(store.take_recovery_notices().is_empty());
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -457,6 +443,21 @@ mod tests {
     }
 
     #[test]
+    fn atomic_json_write_replaces_an_existing_file() {
+        let dir = unique_tmp_dir();
+        let path = dir.join("settings.json");
+
+        write_json_file_atomic(&path, &serde_json::json!({"generation": 1})).unwrap();
+        write_json_file_atomic(&path, &serde_json::json!({"generation": 2})).unwrap();
+
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, serde_json::json!({"generation": 2}));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn corrupt_app_state_is_quarantined_and_reset() {
         let dir = unique_tmp_dir();
         let store = PersistenceStore::new(dir.clone());
@@ -476,20 +477,39 @@ mod tests {
     }
 
     #[test]
+    fn future_version_app_state_is_preserved() {
+        let dir = unique_tmp_dir();
+        let store = PersistenceStore::new(dir.clone());
+        store.ensure_layout().unwrap();
+
+        let path = app_state_path(&dir);
+        let original = br#"{
+            "version": 9999,
+            "future_field": "must survive"
+        }"#;
+        fs::write(&path, original).unwrap();
+
+        let err = store.load_app_state().unwrap_err();
+        assert!(matches!(err, PersistenceError::Migration(_)));
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert!(corrupt_backups(&dir).is_empty());
+        assert!(store.take_recovery_notices().is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn error_classification() {
         let json_err = PersistenceError::from(serde_json::from_str::<i32>("x").unwrap_err());
         assert!(json_err.is_content_corruption());
-        assert!(!json_err.is_version_too_new());
 
         let io_err = PersistenceError::from(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "x",
         ));
         assert!(!io_err.is_content_corruption());
-        assert!(!io_err.is_version_too_new());
 
         let mig = PersistenceError::Migration("too new".to_string());
-        assert!(mig.is_version_too_new());
         assert!(!mig.is_content_corruption());
     }
 

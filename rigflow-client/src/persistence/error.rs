@@ -34,13 +34,6 @@ impl PersistenceError {
     pub fn is_content_corruption(&self) -> bool {
         matches!(self, Self::Json(_))
     }
-
-    /// True when a config file is valid but written by a *newer* build than this
-    /// one (the only `Migration` error today — a downgrade). The file is good
-    /// data, so it is preserved rather than quarantined.
-    pub fn is_version_too_new(&self) -> bool {
-        matches!(self, Self::Migration(_))
-    }
 }
 
 impl std::error::Error for PersistenceError {}
