@@ -27,7 +27,7 @@ impl eframe::App for StartupErrorWindow {
                         ui.heading(
                             RichText::new("Rigflow could not start").color(Color32::LIGHT_RED),
                         );
-                        ui.label("The persistent configuration could not be loaded safely.");
+                        ui.label("The configuration could not be loaded safely.");
                     });
                 });
 
@@ -47,9 +47,8 @@ impl eframe::App for StartupErrorWindow {
 
                 ui.add_space(12.0);
                 ui.label(
-                    "No fallback configuration directory was used. Check the path and its \
-                     permissions, or set RIGFLOW_CONFIG_DIR to a usable directory before trying \
-                     again.",
+                    "Check the path and its permissions, or set RIGFLOW_CONFIG_DIR \
+                    to a usable directory before trying again.",
                 );
                 ui.add_space(16.0);
                 ui.separator();
