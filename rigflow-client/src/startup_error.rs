@@ -35,7 +35,7 @@ impl eframe::App for StartupErrorWindow {
                 Frame::new()
                     .fill(ui.visuals().faint_bg_color)
                     .stroke(Stroke::new(
-                        1.0,
+                        1.0_f32,
                         ui.visuals().widgets.noninteractive.bg_stroke.color,
                     ))
                     .corner_radius(4.0)
