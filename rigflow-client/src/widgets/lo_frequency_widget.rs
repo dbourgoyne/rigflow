@@ -1,4 +1,18 @@
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, Sense, Vec2};
+use std::hash::Hash;
+
+use eframe::egui::{
+    self, Align2, Color32, CursorIcon, FontId, Key, Modifiers, Pos2, Rect, Sense, Vec2,
+};
+
+mod editor;
+
+const DIGIT_W: f32 = 13.0;
+const DIGIT_H: f32 = 24.0;
+const DIGIT_GAP: f32 = 1.0;
+const SEP_W: f32 = 7.0;
+const SIGN_W: f32 = 12.0;
+const LABEL_GAP: f32 = 8.0;
+const DRAG_POINTS_PER_STEP: f32 = 7.0;
 
 /// Controls how the digit widget is anchored relative to the provided origin.
 #[derive(Debug, Clone, Copy)]
@@ -7,41 +21,67 @@ pub enum DigitWheelAnchor {
     Right,
 }
 
-/// Specification for a digit-wheel widget.
-///
-/// This allows the same rendering logic to be reused for:
-/// - LO frequency (unsigned, large number)
-/// - LO offset (signed, smaller number)
+/// Specification for a digit-wheel widget shared by the LO and LO-offset controls.
 #[derive(Debug, Clone)]
 pub struct DigitWheelSpec<'a> {
+    /// Label drawn beside the digits.
     pub label: &'a str,
-
-    /// Total number of digits rendered (zero-padded)
+    /// Total number of zero-padded digits.
     pub digit_count: usize,
-
-    /// Whether the value is signed (+ / -)
+    /// Whether to render and accept a leading sign.
     pub signed: bool,
-
-    /// Digit grouping for visual separators (e.g. MHz formatting)
-    /// Example: &[1,3,3,3] → 1.234.567.890
+    /// Left-to-right group widths, for example `[1, 3, 3, 3]`.
     pub groups: &'a [usize],
-
-    /// Anchor direction (left or right aligned)
+    /// Whether `origin` identifies the left or right edge of the control.
     pub anchor: DigitWheelAnchor,
 }
 
-/// A single digit cell on screen.
+/// One independently interactive digit in the painted value.
 #[derive(Debug, Clone, Copy)]
 struct DigitCell {
     rect: Rect,
-
-    /// Index in the digit string (0 = most significant)
     digit_index: usize,
 }
 
-/// Compute 10^exp as u64.
-///
-/// Used to determine step size for digit increments.
+#[derive(Debug, Clone, Copy)]
+struct DragState {
+    digit_index: usize,
+    start_value: i64,
+    accumulated_points: f32,
+}
+
+#[derive(Debug, Clone)]
+struct DigitWheelState {
+    editing: bool,
+    focus_editor: bool,
+    draft: String,
+    edit_error: bool,
+    drag: Option<DragState>,
+    point_wheel_accumulator: f32,
+    point_wheel_direction: i8,
+    point_wheel_digit: Option<usize>,
+    last_point_wheel_at: f64,
+    last_point_step_at: f64,
+}
+
+impl Default for DigitWheelState {
+    fn default() -> Self {
+        Self {
+            editing: false,
+            focus_editor: false,
+            draft: String::new(),
+            edit_error: false,
+            drag: None,
+            point_wheel_accumulator: 0.0,
+            point_wheel_direction: 0,
+            point_wheel_digit: None,
+            last_point_wheel_at: f64::NEG_INFINITY,
+            last_point_step_at: f64::NEG_INFINITY,
+        }
+    }
+}
+
+/// Compute the per-digit tuning multiplier without floating-point conversion.
 fn pow10_u64(exp: usize) -> u64 {
     let mut v = 1u64;
     for _ in 0..exp {
@@ -50,28 +90,51 @@ fn pow10_u64(exp: usize) -> u64 {
     v
 }
 
-/// Format value into fixed-width zero-padded digit array.
+/// Format a value as the fixed-width ASCII digit array used by the painter.
 fn format_abs_digits(value: u64, digit_count: usize) -> Vec<u8> {
     let s = format!("{value:0width$}", width = digit_count);
     s.into_bytes()
 }
 
-/// Find first non-zero digit (for dimming leading zeros).
+/// Locate the first active digit so leading zeroes can be visually dimmed.
 fn first_nonzero_digit(digits: &[u8]) -> Option<usize> {
     digits.iter().position(|d| *d != b'0')
 }
 
-/// Compute step size for a given digit.
-///
-/// Example:
-/// - digit 0 (MSD) → 10^9
-/// - last digit → 1
+/// Return the decimal place represented by a left-to-right digit index.
 fn digit_step(digit_count: usize, digit_index: usize) -> i64 {
     let place_from_right = digit_count - 1 - digit_index;
     pow10_u64(place_from_right) as i64
 }
 
-/// Compute total widget width (used for anchoring and layout).
+fn adjusted_value(value: i64, delta: i64, signed: bool) -> i64 {
+    let next = value.saturating_add(delta);
+    if signed { next } else { next.max(0) }
+}
+
+fn dragged_value(
+    drag: &mut DragState,
+    frame_delta_y: f32,
+    digit_count: usize,
+    signed: bool,
+) -> i64 {
+    // `Response::drag_delta` is the movement in this frame, not the total
+    // displacement since the gesture started. Keep the total here so a still
+    // frame does not snap back to `start_value`, and retain sub-step movement.
+    drag.accumulated_points -= frame_delta_y;
+    let increments = (drag.accumulated_points / DRAG_POINTS_PER_STEP).trunc() as i64;
+    let delta = digit_step(digit_count, drag.digit_index).saturating_mul(increments);
+    adjusted_value(drag.start_value, delta, signed)
+}
+
+fn set_drag_cursor(ctx: &egui::Context, grabbed: bool) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if grabbed {
+        egui::viewport::CursorGrab::Locked
+    } else {
+        egui::viewport::CursorGrab::None
+    }));
+}
+
 fn total_widget_width(
     label_w: f32,
     label_gap: f32,
@@ -84,208 +147,293 @@ fn total_widget_width(
     let digit_area = digit_w * spec.digit_count as f32
         + digit_gap * (spec.digit_count.saturating_sub(1)) as f32
         + sep_w * spec.groups.len().saturating_sub(1) as f32;
-
     let sign_area = if spec.signed { sign_w + digit_gap } else { 0.0 };
-
     label_w + label_gap + sign_area + digit_area
 }
 
-/// Draw a reusable digit-wheel widget.
+/// Normalize wheel input into one digit step.
 ///
-/// Behavior:
-/// - Each digit is individually scrollable via mouse wheel
-/// - Step size depends on digit position
-/// - Leading zeros are dimmed for readability
-///
-/// Returns:
-/// - `Some(new_value)` if a digit was changed
-/// - `None` if no interaction occurred
+/// A traditional wheel reports line events, whose magnitude is ignored. Windows
+/// precision wheels and touchpads report a stream of point events; those are
+/// accumulated to a small threshold and rate-limited so one gesture cannot tune
+/// once per rendered frame.
+fn wheel_direction(ui: &egui::Ui, state: &mut DigitWheelState, digit_index: usize) -> i64 {
+    const POINTS_PER_STEP: f32 = 32.0;
+    const POINT_STEP_INTERVAL: f64 = 0.075;
+    const GESTURE_GAP: f64 = 0.18;
+
+    let now = ui.input(|i| i.time);
+    let (line_y, point_y) = ui.input(|i| {
+        let mut line_y = 0.0;
+        let mut point_y = 0.0;
+        for event in &i.events {
+            if let egui::Event::MouseWheel { unit, delta, .. } = event {
+                match unit {
+                    egui::MouseWheelUnit::Point => point_y += delta.y,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => line_y += delta.y,
+                }
+            }
+        }
+        (line_y, point_y)
+    });
+
+    if line_y != 0.0 {
+        return line_y.signum() as i64;
+    }
+    if point_y == 0.0 {
+        return 0;
+    }
+
+    let direction = point_y.signum() as i8;
+    if now - state.last_point_wheel_at > GESTURE_GAP
+        || state.point_wheel_direction != direction
+        || state.point_wheel_digit != Some(digit_index)
+    {
+        state.point_wheel_accumulator = 0.0;
+    }
+    state.point_wheel_direction = direction;
+    state.point_wheel_digit = Some(digit_index);
+    state.last_point_wheel_at = now;
+    // Do not queue a long tail of future steps after one large precision-wheel
+    // event. At most one additional threshold is carried into the next event.
+    state.point_wheel_accumulator = (state.point_wheel_accumulator + point_y)
+        .clamp(-POINTS_PER_STEP * 2.0, POINTS_PER_STEP * 2.0);
+
+    if state.point_wheel_accumulator.abs() >= POINTS_PER_STEP
+        && now - state.last_point_step_at >= POINT_STEP_INTERVAL
+    {
+        state.point_wheel_accumulator -= direction as f32 * POINTS_PER_STEP;
+        state.last_point_step_at = now;
+        direction as i64
+    } else {
+        0
+    }
+}
+
+/// Draw a reusable digit wheel with per-digit wheel, drag and arrow adjustment.
+/// Clicking without dragging replaces the digits with a whole-value text editor.
 pub fn draw_digit_wheel_widget(
     ui: &mut egui::Ui,
+    id_salt: impl Hash,
     origin: Pos2,
     spec: &DigitWheelSpec<'_>,
     value: i64,
     enabled: bool,
 ) -> Option<i64> {
-    // --- Styling ----------------------------------------------------------
-
     let font = FontId::proportional(17.0);
     let label_font = FontId::proportional(12.0);
-
     let active_color = Color32::from_rgb(235, 235, 235);
     let inactive_color = Color32::from_rgb(90, 90, 90);
     let hover_bg = Color32::from_rgba_premultiplied(120, 120, 120, 40);
+    let error_color = Color32::from_rgb(240, 90, 90);
     let label_color = Color32::from_rgb(180, 180, 180);
     let sign_color = Color32::from_rgb(210, 210, 210);
 
-    // --- Layout constants -------------------------------------------------
-
-    let digit_w = 13.0;
-    let digit_h = 24.0;
-    let digit_gap = 1.0;
-    let sep_w = 7.0;
-    let sign_w = 12.0;
-    let label_gap = 8.0;
-
-    // Label width is fixed per label for alignment consistency
     let label_w = match spec.label {
         "LO" => 18.0,
         "LO Offset" => 54.0,
         _ => 46.0,
     };
-
-    let widget_w = total_widget_width(label_w, label_gap, digit_w, digit_gap, sep_w, sign_w, spec);
-
-    let widget_h = digit_h;
-
-    // Anchor determines left or right alignment
+    let widget_w = total_widget_width(label_w, LABEL_GAP, DIGIT_W, DIGIT_GAP, SEP_W, SIGN_W, spec);
     let top_left = match spec.anchor {
         DigitWheelAnchor::Left => origin,
         DigitWheelAnchor::Right => Pos2::new(origin.x - widget_w, origin.y),
     };
+    let total_rect = Rect::from_min_size(top_left, Vec2::new(widget_w, DIGIT_H));
+    ui.allocate_rect(total_rect, Sense::hover());
 
-    let total_rect = Rect::from_min_size(top_left, Vec2::new(widget_w, widget_h));
-    let response = ui.allocate_rect(total_rect, Sense::hover());
+    let widget_id = ui.make_persistent_id(("digit_wheel", id_salt));
+    let editor_id = widget_id.with("editor");
+    let mut state = ui
+        .ctx()
+        .data_mut(|d| d.get_temp::<DigitWheelState>(widget_id))
+        .unwrap_or_default();
+    if !enabled {
+        state.editing = false;
+        if state.drag.take().is_some() {
+            set_drag_cursor(ui.ctx(), false);
+        }
+    }
+
     let painter = ui.painter();
-
-    // --- Value → digit conversion ----------------------------------------
-
-    let abs_value = value.unsigned_abs();
-    let digits = format_abs_digits(abs_value, spec.digit_count);
-
-    // Used to dim leading zeros
-    let first_nonzero = first_nonzero_digit(&digits).unwrap_or(spec.digit_count - 1);
-
-    // --- Draw label -------------------------------------------------------
-
     painter.text(
-        Pos2::new(top_left.x, top_left.y + digit_h * 0.5),
+        Pos2::new(top_left.x, top_left.y + DIGIT_H * 0.5),
         Align2::LEFT_CENTER,
         spec.label,
         label_font,
-        label_color,
+        if state.edit_error {
+            error_color
+        } else {
+            label_color
+        },
     );
 
-    let mut x = top_left.x + label_w + label_gap;
+    if state.editing && enabled {
+        let edit_rect = Rect::from_min_max(
+            Pos2::new(top_left.x + label_w + LABEL_GAP, top_left.y),
+            total_rect.right_bottom(),
+        );
+        let result = editor::draw(
+            ui,
+            editor_id,
+            edit_rect,
+            &mut state,
+            spec,
+            value,
+            &font,
+            active_color,
+        );
+        ui.ctx().data_mut(|d| d.insert_temp(widget_id, state));
+        return result;
+    }
 
-    // --- Draw sign (if applicable) ---------------------------------------
-
+    let digits = format_abs_digits(value.unsigned_abs(), spec.digit_count);
+    let first_nonzero = first_nonzero_digit(&digits).unwrap_or(spec.digit_count - 1);
+    let mut x = top_left.x + label_w + LABEL_GAP;
     if spec.signed {
-        let sign_text = if value < 0 { "-" } else { "+" };
-
         painter.text(
-            Pos2::new(x + sign_w * 0.5, top_left.y + digit_h * 0.5),
+            Pos2::new(x + SIGN_W * 0.5, top_left.y + DIGIT_H * 0.5),
             Align2::CENTER_CENTER,
-            sign_text,
+            if value < 0 { "-" } else { "+" },
             font.clone(),
             sign_color,
         );
-
-        x += sign_w + digit_gap;
+        x += SIGN_W + DIGIT_GAP;
     }
-
-    // --- Layout digit cells ----------------------------------------------
 
     let mut digit_cells = Vec::with_capacity(spec.digit_count);
     let mut digit_i = 0;
-
     for (group_idx, group_len) in spec.groups.iter().enumerate() {
         for _ in 0..*group_len {
-            let rect = Rect::from_min_size(Pos2::new(x, top_left.y), Vec2::new(digit_w, digit_h));
-
+            let rect = Rect::from_min_size(Pos2::new(x, top_left.y), Vec2::new(DIGIT_W, DIGIT_H));
             digit_cells.push(DigitCell {
                 rect,
                 digit_index: digit_i,
             });
-
-            x += digit_w;
-
+            x += DIGIT_W;
             if digit_i < spec.digit_count - 1 {
-                x += digit_gap;
+                x += DIGIT_GAP;
             }
-
             digit_i += 1;
         }
-
-        // Draw group separator (".")
         if group_idx < spec.groups.len() - 1 {
             painter.text(
-                Pos2::new(x + sep_w * 0.5, top_left.y + digit_h * 0.52),
+                Pos2::new(x + SEP_W * 0.5, top_left.y + DIGIT_H * 0.52),
                 Align2::CENTER_CENTER,
                 ".",
                 font.clone(),
                 active_color,
             );
-            x += sep_w;
+            x += SEP_W;
         }
     }
 
-    // --- Hover detection --------------------------------------------------
-
-    // When disabled (dial lock), suppress hover + scroll so the digits are inert
-    // but still drawn at full brightness (the frequency stays readable).
-    let hovered_digit = if enabled {
-        response.hover_pos().and_then(|pos| {
-            digit_cells
-                .iter()
-                .find(|c| c.rect.contains(pos))
-                .map(|c| c.digit_index)
-        })
-    } else {
-        None
-    };
-
-    // --- Draw digits ------------------------------------------------------
-
+    let mut result = None;
+    let mut hovered_digit = None;
     for cell in &digit_cells {
-        if hovered_digit == Some(cell.digit_index) {
-            painter.rect_filled(cell.rect, 3.0, hover_bg);
+        let response = ui
+            .interact(
+                cell.rect,
+                widget_id.with(cell.digit_index),
+                if enabled {
+                    Sense::click_and_drag()
+                } else {
+                    Sense::hover()
+                },
+            )
+            .on_hover_text("Scroll or drag vertically; press Up/Down; click to type a value");
+        if enabled && response.hovered() {
+            hovered_digit = Some(cell.digit_index);
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeVertical);
+        }
+        if enabled && response.drag_started() {
+            state.drag = Some(DragState {
+                digit_index: cell.digit_index,
+                start_value: value,
+                accumulated_points: 0.0,
+            });
+            set_drag_cursor(ui.ctx(), true);
+        }
+        if enabled && response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::None);
+            if let Some(drag) = state
+                .drag
+                .as_mut()
+                .filter(|d| d.digit_index == cell.digit_index)
+            {
+                let next = dragged_value(
+                    drag,
+                    response.drag_motion().y,
+                    spec.digit_count,
+                    spec.signed,
+                );
+                result = (next != value).then_some(next);
+            }
+        }
+        if response.drag_stopped() {
+            state.drag = None;
+            set_drag_cursor(ui.ctx(), false);
+        }
+        if enabled && response.clicked() {
+            state.editing = true;
+            state.focus_editor = true;
+            state.edit_error = false;
+            state.draft = editor::format_value(value, spec);
         }
 
-        let d = digits[cell.digit_index] as char;
-
+        if enabled && response.hovered() {
+            painter.rect_filled(cell.rect, 3.0, hover_bg);
+        }
         let color = if cell.digit_index < first_nonzero {
-            inactive_color // leading zeros dimmed
+            inactive_color
         } else {
             active_color
         };
-
         painter.text(
             cell.rect.center(),
             Align2::CENTER_CENTER,
-            d,
+            digits[cell.digit_index] as char,
             font.clone(),
             color,
         );
     }
 
-    // --- Mouse wheel interaction -----------------------------------------
-
     if let Some(idx) = hovered_digit {
-        let scroll_y = ui.ctx().input(|i| i.raw_scroll_delta.y);
-
-        if scroll_y.abs() > 0.0 {
-            let step = digit_step(spec.digit_count, idx);
-
-            // Scroll up = increase, matching spectrum/waterfall fine tuning.
-            let delta = if scroll_y > 0.0 { step } else { -step };
-
-            let next = if spec.signed {
-                value.saturating_add(delta)
-            } else {
-                value.saturating_add(delta).max(0)
-            };
-
-            return Some(next);
+        let wheel_dir = wheel_direction(ui, &mut state, idx);
+        if wheel_dir != 0 {
+            let delta = digit_step(spec.digit_count, idx).saturating_mul(wheel_dir);
+            let next = adjusted_value(value, delta, spec.signed);
+            result = (next != value).then_some(next);
         }
+
+        let (up, down) = ui.input_mut(|i| {
+            (
+                i.count_and_consume_key(Modifiers::NONE, Key::ArrowUp),
+                i.count_and_consume_key(Modifiers::NONE, Key::ArrowDown),
+            )
+        });
+        let key_steps = up as i64 - down as i64;
+        if key_steps != 0 {
+            let delta = digit_step(spec.digit_count, idx).saturating_mul(key_steps);
+            let next = adjusted_value(value, delta, spec.signed);
+            result = (next != value).then_some(next);
+        }
+
+        // Prevent this wheel gesture from leaking to another control in the same UI.
+        ui.ctx().input_mut(|i| {
+            i.raw_scroll_delta = Vec2::ZERO;
+            i.smooth_scroll_delta = Vec2::ZERO;
+        });
     }
 
-    None
+    ui.ctx().data_mut(|d| d.insert_temp(widget_id, state));
+    result
 }
 
-/// LO frequency widget (center frequency).
+/// Draw the unsigned, left-anchored local-oscillator frequency control.
 pub fn draw_lo_widget(
     ui: &mut egui::Ui,
+    id_salt: impl Hash,
     top_left: Pos2,
     center_freq_hz: u64,
     enabled: bool,
@@ -297,14 +445,14 @@ pub fn draw_lo_widget(
         groups: &[1, 3, 3, 3],
         anchor: DigitWheelAnchor::Left,
     };
-
-    draw_digit_wheel_widget(ui, top_left, &spec, center_freq_hz as i64, enabled)
+    draw_digit_wheel_widget(ui, id_salt, top_left, &spec, center_freq_hz as i64, enabled)
         .map(|v| v.max(0) as u64)
 }
 
-/// LO offset widget (relative tuning offset).
+/// Draw the signed, right-anchored local-oscillator offset control.
 pub fn draw_lo_offset_widget(
     ui: &mut egui::Ui,
+    id_salt: impl Hash,
     top_right: Pos2,
     offset_hz: i64,
     enabled: bool,
@@ -316,6 +464,36 @@ pub fn draw_lo_offset_widget(
         groups: &[3, 3],
         anchor: DigitWheelAnchor::Right,
     };
+    draw_digit_wheel_widget(ui, id_salt, top_right, &spec, offset_hz, enabled)
+}
 
-    draw_digit_wheel_widget(ui, top_right, &spec, offset_hz, enabled)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digit_places_match_display_positions() {
+        assert_eq!(digit_step(10, 0), 1_000_000_000);
+        assert_eq!(digit_step(10, 9), 1);
+        assert_eq!(digit_step(6, 2), 1_000);
+    }
+
+    #[test]
+    fn drag_accumulates_frame_deltas_without_snapping_back() {
+        let mut drag = DragState {
+            digit_index: 7,
+            start_value: 14_074_000,
+            accumulated_points: 0.0,
+        };
+
+        // Two sub-step upward movements combine into one 100 Hz step.
+        assert_eq!(dragged_value(&mut drag, -3.0, 10, false), 14_074_000);
+        assert_eq!(dragged_value(&mut drag, -4.0, 10, false), 14_074_100);
+
+        // A stationary frame retains the accumulated displacement and value.
+        assert_eq!(dragged_value(&mut drag, 0.0, 10, false), 14_074_100);
+
+        // Moving back to the gesture origin restores the original value.
+        assert_eq!(dragged_value(&mut drag, 7.0, 10, false), 14_074_000);
+    }
 }
