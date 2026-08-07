@@ -20,9 +20,24 @@ pub fn resolve_config_dir(cli_override: Option<&Path>) -> Result<PathBuf, Persis
         return Ok(PathBuf::from(path));
     }
 
+    if let Some(path) = legacy_config_dir() {
+        return Ok(path);
+    }
+
     dirs::config_dir()
         .map(|path| path.join("rigflow"))
         .ok_or(PersistenceError::NoConfigDirectory)
+}
+
+fn legacy_config_dir() -> Option<PathBuf> {
+    let home = env::var_os("HOME")?;
+    let config_path = PathBuf::from(home).join(".config").join("rigflow");
+
+    if config_path.is_dir() {
+        Some(config_path)
+    } else {
+        None
+    }
 }
 
 pub fn app_state_path(config_dir: &Path) -> PathBuf {
