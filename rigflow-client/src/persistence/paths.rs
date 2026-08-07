@@ -10,7 +10,8 @@ use crate::persistence::error::PersistenceError;
 /// Priority:
 /// 1. explicit CLI override
 /// 2. RIGFLOW_CONFIG_DIR
-/// 3. the platform config directory reported by `dirs`
+/// 3. the legacy hardcoded config dir for backward compatibility
+/// 4. the platform config directory reported by `dirs`
 pub fn resolve_config_dir(cli_override: Option<&Path>) -> Result<PathBuf, PersistenceError> {
     if let Some(path) = cli_override {
         return Ok(path.to_path_buf());
