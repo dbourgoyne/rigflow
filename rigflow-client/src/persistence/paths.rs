@@ -10,8 +10,8 @@ use crate::persistence::error::PersistenceError;
 /// Priority:
 /// 1. explicit CLI override
 /// 2. RIGFLOW_CONFIG_DIR
-/// 3. XDG_CONFIG_HOME/rigflow
-/// 4. ~/.config/rigflow
+/// 3. the legacy hardcoded config dir for backward compatibility
+/// 4. the platform config directory reported by `dirs`
 pub fn resolve_config_dir(cli_override: Option<&Path>) -> Result<PathBuf, PersistenceError> {
     if let Some(path) = cli_override {
         return Ok(path.to_path_buf());
@@ -21,12 +21,24 @@ pub fn resolve_config_dir(cli_override: Option<&Path>) -> Result<PathBuf, Persis
         return Ok(PathBuf::from(path));
     }
 
-    if let Some(xdg_config_home) = env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(xdg_config_home).join("rigflow"));
+    if let Some(path) = legacy_config_dir() {
+        return Ok(path);
     }
 
-    let home = env::var_os("HOME").ok_or(PersistenceError::NoConfigDirectory)?;
-    Ok(PathBuf::from(home).join(".config").join("rigflow"))
+    dirs::config_dir()
+        .map(|path| path.join("rigflow"))
+        .ok_or(PersistenceError::NoConfigDirectory)
+}
+
+fn legacy_config_dir() -> Option<PathBuf> {
+    let home = env::var_os("HOME")?;
+    let config_path = PathBuf::from(home).join(".config").join("rigflow");
+
+    if config_path.is_dir() {
+        Some(config_path)
+    } else {
+        None
+    }
 }
 
 pub fn app_state_path(config_dir: &Path) -> PathBuf {
