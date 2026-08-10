@@ -919,9 +919,10 @@ impl RigflowApp {
         let dial_locked = state_snapshot.dial_locked;
         if let Some(new_center_hz) = crate::widgets::lo_frequency_widget::draw_lo_widget(
             ui,
+            ("lo", matches!(vfo, TuneVfo::B)),
             lo_pos,
             cur_center.max(0.0) as u64,
-            !dial_locked,
+            state_snapshot.radio_acquired && !dial_locked,
         ) {
             let limits = active_freq_limits(&state_snapshot);
             let clamped_center = clamp_center(new_center_hz as f32, &limits);
@@ -940,9 +941,10 @@ impl RigflowApp {
         let lo_offset_hz = (cur_target - cur_center).round() as i64;
         if let Some(new_offset_hz) = crate::widgets::lo_frequency_widget::draw_lo_offset_widget(
             ui,
+            ("lo_offset", matches!(vfo, TuneVfo::B)),
             lo_offset_pos,
             lo_offset_hz,
-            !dial_locked,
+            state_snapshot.radio_acquired && !dial_locked,
         ) {
             // Reuse the soft-edge LO pan (LO follows the target at the edge).
             let delta = (new_offset_hz - lo_offset_hz) as f32;

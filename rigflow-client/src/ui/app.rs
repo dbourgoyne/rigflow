@@ -874,7 +874,6 @@ impl eframe::App for RigflowApp {
 
         self.ensure_mic();
         self.auto_relock_controls();
-        self.handle_keyboard_shortcuts(ctx);
         self.update_ptt_focus_latch(ctx);
         self.handle_cw_keying(ctx, &snapshot);
         self.handle_cw_macros(ctx, &snapshot);
@@ -898,6 +897,11 @@ impl eframe::App for RigflowApp {
         self.draw_sync_window(ctx, &snapshot.operator_id);
         self.draw_callbook_window(ctx, &snapshot.operator_id);
         self.draw_cluster_window(ctx, &snapshot.operator_id);
+
+        // Widgets get first refusal on keyboard events (for example, arrows over
+        // an LO digit). Anything they do not consume falls through to the global
+        // shortcuts after all controls have had a chance to handle the frame.
+        self.handle_keyboard_shortcuts(ctx);
 
         // Per-operator audio recording + voice keyer: ensure dirs / refresh the
         // clip list on an operator switch, run any UI-requested action, and
