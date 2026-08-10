@@ -2,6 +2,25 @@
 
 ---
 
+## Unreleased
+
+Post-1.0 client robustness fixes (merged, not yet tagged):
+
+- **Platform-native config directory.** The client now resolves its config/data directory by OS
+  convention: `~/.config/rigflow` on Linux (honoring `XDG_CONFIG_HOME`), `~/Library/Application
+  Support/rigflow` on macOS, and `%APPDATA%\rigflow` on Windows — which fixes Windows, where the
+  client previously couldn't find a config directory at all. **macOS:** existing installs that
+  already have `~/.config/rigflow` keep using it (no migration), so only fresh macOS installs use
+  the native location; `RIGFLOW_CONFIG_DIR` still overrides.
+- **Safer settings writes.** Config files are written atomically (fixing file replacement on
+  Windows), and a settings file from a *newer* Rigflow build is now preserved and reported rather
+  than silently overwritten with defaults on a downgrade.
+- **Fail-safe startup.** If the configuration genuinely cannot be loaded, the client stops with a
+  clear error window (naming the path) instead of silently starting as if freshly installed;
+  recoverable corrupt files are still quarantined and startup continues with a notice.
+
+---
+
 ## v1.0.0 — Contact logging, callbook lookup, and DX cluster
 
 The 1.0 release turns Rigflow into a complete operating position: alongside receive, transmit, and

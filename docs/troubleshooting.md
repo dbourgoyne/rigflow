@@ -124,7 +124,8 @@ platform, with a live status for each piece.
 **A contact has the wrong `MY_CNTY` / `MY_ITU_ZONE` / grid (or tqsl rejects it).**
 - Your station details are **snapshotted into each contact when you log it**, so fixing the Station
   panel only affects *future* contacts. Correct an already-logged contact in the **Contacts view**
-  (edit the fields), or bulk-fix in the database.
+  (edit the fields), or bulk-fix in the database (`rigflow_log.db` — see
+  [Where your data is stored](operator-guide.md#where-your-data-is-stored) for its per-platform path).
 - **tqsl** wants US counties as `STATE,County` (e.g. `MD,Carroll`), not a bare county name — set it
   that way in the Station panel.
 

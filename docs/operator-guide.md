@@ -361,6 +361,23 @@ Recordings appear back in the **Radios** list as playable "radios," so you can r
   per operator too; service/callbook **credentials** live in the OS secure keyring (file fallback).
 - Operator settings are **locked while connected** to a server (to avoid surprise changes mid-session).
 
+### Where your data is stored
+
+Global settings (`app_state.json`) and each operator's folder (`operators/<ID>/` — settings, the
+**contact log** `rigflow_log.db` plus its append-only `rigflow_log.adi` journal, callbook/cluster
+config, and voice-keyer clips) live in Rigflow's config directory, which follows each platform's
+convention:
+
+| Platform | Location |
+|---|---|
+| **Linux** | `$XDG_CONFIG_HOME/rigflow`, or `~/.config/rigflow` |
+| **macOS** | `~/Library/Application Support/rigflow` *(installs that already have `~/.config/rigflow` keep using it)* |
+| **Windows** | `%APPDATA%\rigflow` (e.g. `C:\Users\<you>\AppData\Roaming\rigflow`) |
+
+Set the **`RIGFLOW_CONFIG_DIR`** environment variable to override the location — handy for backups or
+to point at a specific directory. This is also where to look to **back up your logbook** (copy the
+whole config directory). Credentials are the exception: they go to the OS secure keyring, not here.
+
 ## Understanding the control sections
 
 A consistent rule governs the collapsible sections:
