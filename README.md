@@ -9,6 +9,8 @@ spectrum/waterfall, tuning, and controls. They talk over a small WebSocket contr
 UDP media, so the server can run on a low-power box at the antenna (e.g. a Raspberry Pi) while you
 operate from your laptop.
 
+![The Rigflow client — spectrum and waterfall, tuning, and the operating controls](rigflow.png)
+
 > ⚠️ Rigflow controls transmitters and amplifiers. You are responsible for the legal and safe
 > operation of your station — please read the **[Disclaimer](DISCLAIMER.md)** before transmitting.
 
