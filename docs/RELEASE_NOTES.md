@@ -2,11 +2,25 @@
 
 ---
 
-## Unreleased
+## v1.1.0 — Interactive LO tuning and cross-platform robustness
 
-Post-1.0 client robustness fixes (merged, not yet tagged):
+> **⚠ Upgrade the client and server together.** This release adds a client↔server tuning message
+> (atomic VFO frequency updates), so a new client needs a new server and vice-versa. Install the
+> matching v1.1.0 pair below.
 
-- **Platform-native config directory.** The client now resolves its config/data directory by OS
+**Tuning**
+
+- **Interactive LO controls.** The **LO** and **LO Offset** readouts are now editable. Click either to
+  type a whole value — plain Hz (`14074000`), grouped (`0.014.074.000`), or with a unit
+  (`14.074 MHz`) — or **scroll, drag, or arrow an individual digit** to tune that decimal place.
+  Existing clamping, dial-lock, and radio-acquisition rules still apply.
+- **Glitch-free tuning.** The centre (LO) and target frequencies are now updated as one atomic
+  operation, so continuous drag-tuning, recentring, and bookmark recall no longer momentarily jump
+  the displayed frequency or LO offset.
+
+**Cross-platform & robustness**
+
+- **Platform-native config directory.** The client resolves its config/data directory by OS
   convention: `~/.config/rigflow` on Linux (honoring `XDG_CONFIG_HOME`), `~/Library/Application
   Support/rigflow` on macOS, and `%APPDATA%\rigflow` on Windows — which fixes Windows, where the
   client previously couldn't find a config directory at all. **macOS:** existing installs that
@@ -18,6 +32,8 @@ Post-1.0 client robustness fixes (merged, not yet tagged):
 - **Fail-safe startup.** If the configuration genuinely cannot be loaded, the client stops with a
   clear error window (naming the path) instead of silently starting as if freshly installed;
   recoverable corrupt files are still quarantined and startup continues with a notice.
+
+Thanks to **@JonnieCache** for all of the above.
 
 ---
 

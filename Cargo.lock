@@ -3796,7 +3796,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-client"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "atomic-write-file",
  "cpal",
@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3831,7 +3831,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-log"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -3841,7 +3841,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-probe"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "clap",
  "env_logger",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-protocol"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "rigflow-core",
  "serde",
@@ -3868,7 +3868,7 @@ dependencies = [
 
 [[package]]
 name = "rigflow-server"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "axum",
  "env_logger",
