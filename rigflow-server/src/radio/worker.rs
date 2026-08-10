@@ -179,6 +179,23 @@ struct SharedControlState {
 }
 
 impl SharedControlState {
+    /// Update a VFO's centre and target together while the caller holds the
+    /// control-state lock. Readers can therefore observe only the old pair or
+    /// the new pair, never a centre from one tuning operation and a target from
+    /// another.
+    fn set_vfo_frequencies(&mut self, vfo: VfoSelect, center_freq_hz: u64, target_freq_hz: u64) {
+        match vfo {
+            VfoSelect::A => {
+                self.center_freq_hz = center_freq_hz;
+                self.target_freq_hz = target_freq_hz;
+            }
+            VfoSelect::B => {
+                self.vfo.vfo_b_center_freq_hz = center_freq_hz;
+                self.vfo.vfo_b_target_freq_hz = target_freq_hz;
+            }
+        }
+    }
+
     /// Project VFO A's (flat) receiver settings as a `VfoState`.  VFO A's RIT
     /// lives in `vfo.rit_*`; everything else is the top-level flat fields.
     fn vfo_a_state(&self) -> VfoState {
@@ -1214,6 +1231,15 @@ fn spawn_command_thread(
         while !stop_requested(&stop_flag) {
             match cmd_rx.recv_timeout(Duration::from_millis(20)) {
                 Ok(cmd) => match cmd {
+                    WorkerCommand::SetVfoFrequencies {
+                        vfo,
+                        center_freq_hz,
+                        target_freq_hz,
+                    } => {
+                        if let Ok(mut control_state) = control.lock() {
+                            control_state.set_vfo_frequencies(vfo, center_freq_hz, target_freq_hz);
+                        }
+                    }
                     WorkerCommand::SetTargetFrequency { hz } => {
                         if let Ok(mut control_state) = control.lock() {
                             control_state.target_freq_hz = hz;
@@ -3741,5 +3767,34 @@ mod vfo_b_mirror_tests {
         assert_eq!(cs.vfo.vfo_b_agc_strength, 0.2);
         assert!(cs.vfo.vfo_b_rit_enabled);
         assert_eq!(cs.vfo.vfo_b_rit_offset_hz, -120);
+    }
+
+    #[test]
+    fn atomic_frequency_update_routes_to_vfo_a_only() {
+        let mut cs = vfo_a_control();
+        cs.vfo = distinct_vfo_b();
+        let old_b_center = cs.vfo.vfo_b_center_freq_hz;
+        let old_b_target = cs.vfo.vfo_b_target_freq_hz;
+
+        cs.set_vfo_frequencies(VfoSelect::A, 28_000_000, 28_074_000);
+
+        assert_eq!(cs.center_freq_hz, 28_000_000);
+        assert_eq!(cs.target_freq_hz, 28_074_000);
+        assert_eq!(cs.vfo.vfo_b_center_freq_hz, old_b_center);
+        assert_eq!(cs.vfo.vfo_b_target_freq_hz, old_b_target);
+    }
+
+    #[test]
+    fn atomic_frequency_update_routes_to_vfo_b_only() {
+        let mut cs = vfo_a_control();
+        let old_a_center = cs.center_freq_hz;
+        let old_a_target = cs.target_freq_hz;
+
+        cs.set_vfo_frequencies(VfoSelect::B, 7_000_000, 7_074_000);
+
+        assert_eq!(cs.vfo.vfo_b_center_freq_hz, 7_000_000);
+        assert_eq!(cs.vfo.vfo_b_target_freq_hz, 7_074_000);
+        assert_eq!(cs.center_freq_hz, old_a_center);
+        assert_eq!(cs.target_freq_hz, old_a_target);
     }
 }

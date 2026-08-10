@@ -864,13 +864,9 @@ impl RigflowApp {
             }
 
             let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetCenterFrequency {
+                rigflow_protocol::ClientRadioMessage::SetVfoFrequencies {
+                    vfo: rigflow_core::radio::vfo::VfoSelect::A,
                     center_freq_hz: bookmark.frequency_hz as u64,
-                },
-            ));
-
-            let _ = self.ws_cmd_tx.send(ControlCommand::RadioMessage(
-                rigflow_protocol::ClientRadioMessage::SetTargetFrequency {
                     target_freq_hz: bookmark.frequency_hz as u64,
                 },
             ));

@@ -520,6 +520,25 @@ async fn handle_radio_message(
             }
         }
 
+        ClientRadioMessage::SetVfoFrequencies {
+            vfo,
+            center_freq_hz,
+            target_freq_hz,
+        } => {
+            forward_worker_command(
+                app_state,
+                session,
+                local_tx,
+                WorkerCommand::SetVfoFrequencies {
+                    vfo,
+                    center_freq_hz,
+                    target_freq_hz,
+                },
+                "set_vfo_frequencies_failed",
+            )
+            .await;
+        }
+
         ClientRadioMessage::SetDemodMode { mode } => {
             if let Err(err) = send_worker_command_for_session(
                 app_state,
