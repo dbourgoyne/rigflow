@@ -191,17 +191,31 @@ directory (`--recordings-dir`), so you can try the client without a radio.
 
 ## 5. Networking
 
-When server and client are on different machines, make sure these are reachable from the client to
-the server host:
+When server and client are on different machines, traffic has to flow **in both directions** — this
+is the step most often missed, because opening the server ports alone is not enough.
+
+**On the server host** — must accept inbound from the client:
 
 | Port | Protocol | Purpose |
 |---|---|---|
 | 9000 | TCP | WebSocket control |
 | 9001 | UDP | Client registration |
 
-The server then streams audio and waterfall data **back to the client over UDP**, so the client host
-must accept inbound UDP from the server (home LANs typically do; a restrictive firewall may need a
-rule). Put both machines on the same LAN/subnet for discovery and lowest latency.
+**On the client host** — must accept inbound from the server:
+
+| Port | Protocol | Purpose |
+|---|---|---|
+| 50000 | UDP | Media stream (audio + waterfall) |
+
+The server streams audio and waterfall data back to the client on **UDP 50000**, so a firewall on
+the *client* machine will let you connect and control the radio while leaving you with a flat
+spectrum and no audio — everything looks connected, but no media arrives. Home LANs usually pass
+this; a restrictive firewall needs an explicit rule.
+
+The client's media port is fixed at 50000 and is not configurable. If another process already holds
+it, the client exits at startup rather than picking a different port.
+
+Put both machines on the same LAN/subnet for discovery and lowest latency.
 
 ---
 

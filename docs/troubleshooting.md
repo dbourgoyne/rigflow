@@ -54,6 +54,14 @@ Common problems and fixes, by symptom. For setup steps see the
   (`blacklist dvb_usb_rtl28xxu`) and reboot, and make sure your user can access the USB device
   (install the `rtl-sdr` package's udev rules). See the [Installation guide](installation.md).
 
+**Connected and the controls work, but the spectrum is flat and there's no audio.**
+- The control plane and the media plane are separate. Control (TCP 9000) is clearly working if band
+  changes reach the radio — so what's missing is the media stream, which the server sends to the
+  **client** on **UDP 50000**.
+- Open inbound UDP 50000 on the **client** host. Opening the server's ports is not enough; this is
+  the most commonly missed step when server and client are on different machines. See the
+  [Installation guide](installation.md) §5 for the full both-directions port list.
+
 **A radio releases or the client reconnects on its own.**
 - Rigflow **auto-reconnects** and re-acquires after a network blip — brief drops recover themselves.
 - A radio can be held by **one client at a time**. If someone else acquires it, or a lease expires
@@ -71,8 +79,8 @@ Common problems and fixes, by symptom. For setup steps see the
 
 **Audio is choppy or drops out.**
 - This is a network/jitter symptom. Put the client and server on the **same LAN**, and make sure the
-  client can receive **inbound UDP** from the server (the media stream) — a firewall on the client
-  host can silently drop it.
+  client can receive **inbound UDP on port 50000** from the server (the media stream) — a firewall on
+  the client host can silently drop it.
 
 **CWU and CWL sound the same on receive.**
 - Expected — Rigflow doesn't reject the opposite side of a CW signal yet, so the two modes differ only
