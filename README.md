@@ -82,7 +82,7 @@ In the client: enter the server's IP (defaults to `127.0.0.1` for a single-box s
 day-to-day operation.
 
 The server and client are driven live from the UI; their command-line options are minimal
-(`--help` on either lists them — server: `--recordings-dir`, `--hr50-serial`; client:
+(`--help` on either lists them — server: `--recordings-dir`, `--hr50-serial`, `--hl2-ip`; client:
 `--window-size`).
 
 ## Documentation

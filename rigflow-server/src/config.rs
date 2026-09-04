@@ -1,4 +1,5 @@
 use std::env;
+use std::net::Ipv4Addr;
 
 use rigflow_core::dsp::modes::DemodMode;
 
@@ -44,6 +45,12 @@ pub struct ServerConfig {
 
     pub hl2_sample_rate_hz: u32,
 
+    /// Extra unicast addresses to probe during Hermes Lite 2 discovery, on top
+    /// of the per-interface broadcasts (`--hl2-ip`). For networks where neither
+    /// broadcast reaches the radio — a routed segment, a VLAN, or an AP that
+    /// drops broadcast traffic.
+    pub hl2_hosts: Vec<Ipv4Addr>,
+
     /// Hardrock-50 amplifier serial: `Some("auto")` (the default) auto-detects
     /// (narrow USB-serial ports by VID/PID, probe each with a read-only `HRRX;`,
     /// adopt only one that answers as an HR50, baud auto-scanned); `Some(path)`
@@ -78,6 +85,7 @@ impl Default for ServerConfig {
             rtlsdr_direct_sampling: false,
 
             hl2_sample_rate_hz: 384_000,
+            hl2_hosts: Vec::new(),
 
             hr50_serial: Some("auto".to_string()),
 
@@ -113,6 +121,18 @@ impl ServerConfig {
                     };
                 }
 
+                "--hl2-ip" => {
+                    let value = next_arg(&mut args, "--hl2-ip")?;
+                    for host in value.split(',').map(str::trim).filter(|h| !h.is_empty()) {
+                        let ip: Ipv4Addr = host
+                            .parse()
+                            .map_err(|_| format!("--hl2-ip: '{host}' is not an IPv4 address"))?;
+                        if !cfg.hl2_hosts.contains(&ip) {
+                            cfg.hl2_hosts.push(ip);
+                        }
+                    }
+                }
+
                 "--help" | "-h" => {
                     return Err(Self::usage());
                 }
@@ -144,6 +164,12 @@ Options:
                                              (e.g. /dev/ttyUSB0 or
                                              /dev/ttyUSB0:19200; default baud 19200)
                              none            disable amplifier polling
+  --hl2-ip ADDR[,ADDR]     also probe these IPv4 addresses directly when
+                           discovering a Hermes Lite 2, in addition to the
+                           automatic per-interface broadcasts. Use this when the
+                           radio is reachable but broadcast discovery does not
+                           find it (routed segment, VLAN, or an access point
+                           that drops broadcast traffic).
 "#
         .to_string()
     }

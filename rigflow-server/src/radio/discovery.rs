@@ -1,5 +1,6 @@
 use log::{error, info};
 use std::fs;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use rigflow_core::radio::source_control::{DirectSamplingMode, SourceCapabilities};
@@ -22,7 +23,7 @@ pub fn discover_radios(config: &ServerConfig) -> Vec<RadioDescriptor> {
     radios.extend(discover_rtl_radios());
     radios.extend(discover_wav_radios(Path::new(&config.recordings_dir)));
     radios.push(build_fake_tone_radio());
-    radios.extend(discover_hl2_radios());
+    radios.extend(discover_hl2_radios(&config.hl2_hosts));
 
     radios
 }
@@ -158,8 +159,8 @@ fn build_fake_tone_radio() -> RadioDescriptor {
 // ============================
 //
 
-fn discover_hl2_radios() -> Vec<RadioDescriptor> {
-    hl2_discovery::discover_hl2_devices()
+fn discover_hl2_radios(extra_hosts: &[Ipv4Addr]) -> Vec<RadioDescriptor> {
+    hl2_discovery::discover_hl2_devices(extra_hosts)
         .into_iter()
         .enumerate()
         .map(|(idx, dev)| RadioDescriptor {

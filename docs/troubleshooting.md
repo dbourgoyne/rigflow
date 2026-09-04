@@ -28,6 +28,27 @@ Common problems and fixes, by symptom. For setup steps see the
   Rescan** — it appears immediately. The permanent fix is to give the HL2 a **static IP** on the
   wired subnet. (See the Release Notes "Known Issues" for the full explanation.)
 
+**The Hermes Lite 2 isn't discovered, but other software (SparkSDR, Quisk) finds it.**
+- Confirm first that the server and the HL2 really are on the same subnet, and that you can
+  `ping` the HL2 from the server host.
+- If they are, probe the radio directly by address:
+  ```bash
+  rigflow-server --hl2-ip 192.168.1.50      # your HL2's IP
+  ```
+  Discovery still broadcasts as usual; `--hl2-ip` just adds a direct probe on top. Use it when
+  broadcast can't reach the radio — a routed segment, a VLAN, or an access point that filters
+  broadcast traffic. Several addresses can be given comma-separated.
+- Give the HL2 a **static IP** (or a DHCP reservation) if you rely on `--hl2-ip`, so the address
+  doesn't move.
+
+**Seeing what discovery actually did.**
+- The server takes its log level from the `RUST_LOG` environment variable — there is no CLI flag:
+  ```bash
+  RUST_LOG=debug rigflow-server
+  ```
+  Discovery logs each address it probes (`HL2 discovery: request sent on eth0 (… → …)`) and every
+  device that answers, which tells you whether the request is leaving on the interface you expect.
+
 **The RTL-SDR isn't found.**
 - The Linux TV-tuner driver grabs it by default — blacklist it
   (`blacklist dvb_usb_rtl28xxu`) and reboot, and make sure your user can access the USB device
