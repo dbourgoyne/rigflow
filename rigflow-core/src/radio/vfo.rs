@@ -136,11 +136,14 @@ mod tests {
         assert!(!state.squelch_enabled);
         assert_eq!(state.squelch_threshold_db, -90.0);
         assert!(!state.nr2_enabled);
+        assert_eq!(state.nr2_strength, 0.5);
         assert!(!state.nb_enabled);
+        assert_eq!(state.nb_threshold, 0.5);
         assert!(!state.notch_auto_enabled);
         // AGC defaults on; everything else defaults off — a fresh VFO should be
         // usable immediately without the user having to find and enable AGC first.
         assert!(state.agc_enabled);
+        assert_eq!(state.agc_strength, 0.5);
         assert!(!state.rit_enabled);
         assert_eq!(state.rit_offset_hz, 0);
         assert_eq!(state.volume_percent, 50);
@@ -148,10 +151,13 @@ mod tests {
 
     #[test]
     fn vfo_state_serde_round_trip_preserves_all_fields() {
-        // A plain-derive struct like this has no logic of its own to break, but a
-        // field added/renamed/reordered without updating both ends of the wire
-        // protocol fails silently at runtime, not at compile time. This is the
-        // test that would catch that.
+        // A round trip goes out and back through the same struct, so it agrees
+        // with itself regardless of what the wire keys are actually called — a
+        // rename on both sides simultaneously would still pass this. What it
+        // does catch: a field silently dropped or made lossy by a `#[serde]`
+        // attribute (e.g. `#[serde(skip)]`), where the value that comes back
+        // no longer matches what went in. See `vfo_state_wire_keys_are_stable`
+        // below for the complementary check that pins the actual key names.
         let mut state = VfoState {
             target_freq_hz: 14_074_000,
             center_freq_hz: 14_070_000,
@@ -165,5 +171,31 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let round_tripped: VfoState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, round_tripped);
+    }
+
+    #[test]
+    fn vfo_state_wire_keys_are_stable() {
+        // Deserialize from a fixed literal: these key names cross the WebSocket
+        // boundary, so renaming one is a breaking protocol change. Unlike the
+        // round-trip test above, this fails if a key is renamed on only one
+        // side — and if a new field is ever added without `#[serde(default)]`,
+        // since a literal with no `serde(default)` fallback for it won't parse.
+        let json = r#"{"target_freq_hz":14074000,"center_freq_hz":14070000,
+            "demod_mode":"usb","sideband":"Usb","filter_bandwidth_hz":2700.0,
+            "ssb_pitch_hz":0.0,"cw_pitch_hz":600.0,"deemphasis_mode":"off",
+            "squelch_enabled":false,"squelch_threshold_db":-90.0,
+            "nr2_enabled":false,"nr2_strength":0.5,"nb_enabled":false,
+            "nb_threshold":0.5,"notch_auto_enabled":false,"agc_enabled":true,
+            "agc_strength":0.5,"rit_enabled":false,"rit_offset_hz":0,
+            "volume_percent":50}"#;
+        let parsed: VfoState = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            parsed,
+            VfoState {
+                target_freq_hz: 14_074_000,
+                center_freq_hz: 14_070_000,
+                ..VfoState::default()
+            }
+        );
     }
 }
