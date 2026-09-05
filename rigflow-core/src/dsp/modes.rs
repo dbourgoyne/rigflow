@@ -222,3 +222,182 @@ pub fn default_deemphasis_mode(mode: DemodMode) -> Option<DeemphasisMode> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demod_mode_display_round_trips_through_from_str() {
+        for mode in [
+            DemodMode::Wfm,
+            DemodMode::Nfm,
+            DemodMode::Usb,
+            DemodMode::Lsb,
+            DemodMode::Am,
+            DemodMode::Cwu,
+            DemodMode::Cwl,
+            DemodMode::DgtU,
+        ] {
+            let s = mode.to_string();
+            assert_eq!(
+                DemodMode::from_str(&s),
+                Ok(mode),
+                "round trip failed for {s}"
+            );
+        }
+    }
+
+    #[test]
+    fn demod_mode_from_str_rejects_unknown() {
+        assert!(DemodMode::from_str("bogus").is_err());
+    }
+
+    #[test]
+    fn demod_mode_legacy_cw_alias_maps_to_cwu() {
+        // Legacy persisted/bookmark value "cw" (pre-CWU/CWL split) must keep
+        // resolving to CWU, both via FromStr and via serde's #[serde(alias = "cw")].
+        assert_eq!(DemodMode::from_str("cw"), Ok(DemodMode::Cwu));
+
+        let de: DemodMode = serde_json::from_str("\"cw\"").unwrap();
+        assert_eq!(de, DemodMode::Cwu);
+    }
+
+    #[test]
+    fn sideband_display_round_trips_through_from_str() {
+        for sb in [Sideband::Usb, Sideband::Lsb] {
+            let s = sb.to_string();
+            assert_eq!(Sideband::from_str(&s), Ok(sb));
+        }
+    }
+
+    #[test]
+    fn sideband_from_str_rejects_unknown() {
+        assert!(Sideband::from_str("bogus").is_err());
+    }
+
+    #[test]
+    fn pitch_limits_present_for_ssb_and_cw_only() {
+        assert!(pitch_limits(DemodMode::Usb).is_some());
+        assert!(pitch_limits(DemodMode::Lsb).is_some());
+        assert!(pitch_limits(DemodMode::Cwu).is_some());
+        assert!(pitch_limits(DemodMode::Cwl).is_some());
+        assert!(pitch_limits(DemodMode::Am).is_none());
+        assert!(pitch_limits(DemodMode::Nfm).is_none());
+        assert!(pitch_limits(DemodMode::Wfm).is_none());
+        assert!(pitch_limits(DemodMode::DgtU).is_none());
+    }
+
+    #[test]
+    fn pitch_limits_default_is_within_its_own_range() {
+        for mode in [
+            DemodMode::Usb,
+            DemodMode::Lsb,
+            DemodMode::Cwu,
+            DemodMode::Cwl,
+        ] {
+            let cfg = pitch_limits(mode).unwrap();
+            assert!(
+                cfg.default_hz >= cfg.min_hz && cfg.default_hz <= cfg.max_hz,
+                "default_hz out of range for {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_bandwidth_limits_default_is_within_its_own_range_for_every_mode() {
+        for mode in [
+            DemodMode::Wfm,
+            DemodMode::Nfm,
+            DemodMode::Usb,
+            DemodMode::Lsb,
+            DemodMode::Am,
+            DemodMode::Cwu,
+            DemodMode::Cwl,
+            DemodMode::DgtU,
+        ] {
+            let limits = filter_bandwidth_limits(mode);
+            assert!(
+                limits.default_hz >= limits.min_hz && limits.default_hz <= limits.max_hz,
+                "default_hz out of range for {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn clamp_filter_bandwidth_clamps_to_mode_limits() {
+        let limits = filter_bandwidth_limits(DemodMode::Usb);
+        assert_eq!(
+            clamp_filter_bandwidth(DemodMode::Usb, limits.min_hz - 100.0),
+            limits.min_hz
+        );
+        assert_eq!(
+            clamp_filter_bandwidth(DemodMode::Usb, limits.max_hz + 100.0),
+            limits.max_hz
+        );
+        assert_eq!(
+            clamp_filter_bandwidth(DemodMode::Usb, limits.default_hz),
+            limits.default_hz
+        );
+    }
+
+    #[test]
+    fn deemphasis_tau_seconds_matches_label_semantics() {
+        assert_eq!(DeemphasisMode::Off.tau_seconds(), None);
+        assert_eq!(DeemphasisMode::Tau50us.tau_seconds(), Some(50e-6));
+        assert_eq!(DeemphasisMode::Tau75us.tau_seconds(), Some(75e-6));
+    }
+
+    #[test]
+    fn demod_mode_serde_wire_format_is_stable() {
+        // These strings cross the WebSocket boundary. Changing them is a breaking
+        // protocol change — update deliberately, with a version bump.
+        for (mode, wire) in [
+            (DemodMode::Wfm, "wfm"),
+            (DemodMode::Nfm, "nfm"),
+            (DemodMode::Usb, "usb"),
+            (DemodMode::Lsb, "lsb"),
+            (DemodMode::Am, "am"),
+            (DemodMode::Cwu, "cwu"),
+            (DemodMode::Cwl, "cwl"),
+            (DemodMode::DgtU, "dgt_u"),
+        ] {
+            assert_eq!(serde_json::to_string(&mode).unwrap(), format!("\"{wire}\""));
+        }
+    }
+
+    #[test]
+    fn sideband_serde_is_pascal_case_unlike_demod_mode() {
+        // Deliberately pinned: Sideband has no rename_all, so its wire form is
+        // "Usb"/"Lsb" while Display gives "usb"/"lsb". Inconsistent with DemodMode,
+        // but changing it would break deployed clients. See #42.
+        assert_eq!(serde_json::to_string(&Sideband::Usb).unwrap(), "\"Usb\"");
+        assert_eq!(serde_json::to_string(&Sideband::Lsb).unwrap(), "\"Lsb\"");
+    }
+
+    #[test]
+    fn default_deemphasis_only_set_for_fm_modes() {
+        assert_eq!(
+            default_deemphasis_mode(DemodMode::Wfm),
+            Some(DeemphasisMode::Tau75us)
+        );
+        assert_eq!(
+            default_deemphasis_mode(DemodMode::Nfm),
+            Some(DeemphasisMode::Tau75us)
+        );
+        for mode in [
+            DemodMode::Usb,
+            DemodMode::Lsb,
+            DemodMode::Am,
+            DemodMode::Cwu,
+            DemodMode::Cwl,
+            DemodMode::DgtU,
+        ] {
+            assert_eq!(
+                default_deemphasis_mode(mode),
+                None,
+                "unexpected deemphasis for {mode}"
+            );
+        }
+    }
+}
