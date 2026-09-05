@@ -88,3 +88,82 @@ impl VfoSelect {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vfo_select_default_is_a() {
+        assert_eq!(VfoSelect::default(), VfoSelect::A);
+    }
+
+    #[test]
+    fn vfo_select_other_swaps_a_and_b() {
+        assert_eq!(VfoSelect::A.other(), VfoSelect::B);
+        assert_eq!(VfoSelect::B.other(), VfoSelect::A);
+    }
+
+    #[test]
+    fn vfo_select_other_is_an_involution() {
+        // Applying `other()` twice must return to the start — this is what makes
+        // it safe to call unconditionally (e.g. on every TX/RX toggle) without
+        // tracking parity separately.
+        for select in [VfoSelect::A, VfoSelect::B] {
+            assert_eq!(select.other().other(), select);
+        }
+    }
+
+    #[test]
+    fn vfo_select_serde_wire_format_is_stable() {
+        // Crosses the WebSocket boundary alongside VfoState — pinned the same way
+        // as DemodMode/Sideband in dsp/modes.rs.
+        assert_eq!(serde_json::to_string(&VfoSelect::A).unwrap(), "\"a\"");
+        assert_eq!(serde_json::to_string(&VfoSelect::B).unwrap(), "\"b\"");
+    }
+
+    #[test]
+    fn default_vfo_state_matches_documented_values() {
+        let state = VfoState::default();
+        assert_eq!(state.target_freq_hz, 0);
+        assert_eq!(state.center_freq_hz, 0);
+        assert_eq!(state.demod_mode, DemodMode::Usb);
+        assert_eq!(state.sideband, Sideband::Usb);
+        assert_eq!(state.filter_bandwidth_hz, 2700.0);
+        assert_eq!(state.ssb_pitch_hz, 0.0);
+        assert_eq!(state.cw_pitch_hz, 600.0);
+        assert_eq!(state.deemphasis_mode, DeemphasisMode::Off);
+        assert!(!state.squelch_enabled);
+        assert_eq!(state.squelch_threshold_db, -90.0);
+        assert!(!state.nr2_enabled);
+        assert!(!state.nb_enabled);
+        assert!(!state.notch_auto_enabled);
+        // AGC defaults on; everything else defaults off — a fresh VFO should be
+        // usable immediately without the user having to find and enable AGC first.
+        assert!(state.agc_enabled);
+        assert!(!state.rit_enabled);
+        assert_eq!(state.rit_offset_hz, 0);
+        assert_eq!(state.volume_percent, 50);
+    }
+
+    #[test]
+    fn vfo_state_serde_round_trip_preserves_all_fields() {
+        // A plain-derive struct like this has no logic of its own to break, but a
+        // field added/renamed/reordered without updating both ends of the wire
+        // protocol fails silently at runtime, not at compile time. This is the
+        // test that would catch that.
+        let mut state = VfoState {
+            target_freq_hz: 14_074_000,
+            center_freq_hz: 14_070_000,
+            rit_enabled: true,
+            rit_offset_hz: -150,
+            ..VfoState::default()
+        };
+        state.demod_mode = DemodMode::DgtU;
+        state.sideband = Sideband::Lsb;
+
+        let json = serde_json::to_string(&state).unwrap();
+        let round_tripped: VfoState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, round_tripped);
+    }
+}
