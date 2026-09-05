@@ -349,6 +349,33 @@ mod tests {
     }
 
     #[test]
+    fn demod_mode_serde_wire_format_is_stable() {
+        // These strings cross the WebSocket boundary. Changing them is a breaking
+        // protocol change — update deliberately, with a version bump.
+        for (mode, wire) in [
+            (DemodMode::Wfm, "wfm"),
+            (DemodMode::Nfm, "nfm"),
+            (DemodMode::Usb, "usb"),
+            (DemodMode::Lsb, "lsb"),
+            (DemodMode::Am, "am"),
+            (DemodMode::Cwu, "cwu"),
+            (DemodMode::Cwl, "cwl"),
+            (DemodMode::DgtU, "dgt_u"),
+        ] {
+            assert_eq!(serde_json::to_string(&mode).unwrap(), format!("\"{wire}\""));
+        }
+    }
+
+    #[test]
+    fn sideband_serde_is_pascal_case_unlike_demod_mode() {
+        // Deliberately pinned: Sideband has no rename_all, so its wire form is
+        // "Usb"/"Lsb" while Display gives "usb"/"lsb". Inconsistent with DemodMode,
+        // but changing it would break deployed clients. See #42.
+        assert_eq!(serde_json::to_string(&Sideband::Usb).unwrap(), "\"Usb\"");
+        assert_eq!(serde_json::to_string(&Sideband::Lsb).unwrap(), "\"Lsb\"");
+    }
+
+    #[test]
     fn default_deemphasis_only_set_for_fm_modes() {
         assert_eq!(
             default_deemphasis_mode(DemodMode::Wfm),
