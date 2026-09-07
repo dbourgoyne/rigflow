@@ -8,12 +8,23 @@
 //! ## Tap point & volume
 //!
 //! The tap is the **decoded receive audio in `net::udp::handle_audio_packet`**
-//! — the same mono/48 kHz samples that feed the speaker jitter buffer.  Rigflow
-//! applies receive **Volume server-side** (before the UDP audio stream), so the
-//! client only ever has post-volume audio; therefore the digital output
-//! currently **tracks Rigflow Volume**.  A volume-independent tap would require
-//! a separate pre-volume stream from the server and is deferred.  The speaker
-//! path is untouched — we only read a copy of the samples.
+//! — the same mono/48 kHz samples that feed the speaker jitter buffer.  The
+//! speaker path is untouched: we only read a copy.
+//!
+//! The digital output is **fixed unity — it does NOT track the Volume slider or
+//! mute.**  That is deliberate: an external decoder's input level must not move
+//! when the operator adjusts monitoring level.  It holds because receive Volume
+//! is applied **client-side, in the CPAL output callback, on the speaker path
+//! only** (`client_runtime.rs`), and this tap sits upstream of that callback.
+//! The server streams unity audio and keeps `volume_percent` purely as synced
+//! metadata (`worker.rs`).  `digital_audio.rs` also forces the sink itself to
+//! `100%` and unmuted on create/reuse, backing the same guarantee at the
+//! PipeWire/Pulse layer.  The TCI RX tap alongside this one inherits it too.
+//!
+//! Consequence worth knowing: because nothing downstream can raise this feed,
+//! the level a decoder sees is whatever the DSP pipeline emits for the current
+//! mode.  DATA/`DgtU` skips the receive AGC by design, so it lands well below
+//! the other modes and the operator has no in-app control over it (issue #47).
 //!
 //! ## Playback into the named sink
 //!
