@@ -2,6 +2,31 @@
 
 ---
 
+## v1.1.1 — Hermes Lite 2 discovery on wide subnets
+
+> Client and server can be upgraded independently in this release — the fix is server-side
+> only and the client↔server protocol is unchanged from v1.1.0.
+
+**Fixed**
+
+- **A Hermes Lite 2 could go undiscovered on subnets wider than /24.** If your router hands
+  out a /22 or /16 — some mesh systems do by default — the server found no radio at all,
+  silently, and Rescan didn't help, while other SDR software found the same rig normally.
+  Discovery now probes the broadcast address the radio actually accepts, in addition to the
+  subnet broadcast. Reported in #43.
+- New `--hl2-ip ADDR[,ADDR]` server option probes a Hermes Lite 2 directly by address, for
+  networks where broadcast cannot reach it at all — a routed segment, a VLAN, or an access
+  point that filters broadcast traffic.
+
+**Documentation**
+
+- The client's media port is now documented: the server streams audio and waterfall to the
+  **client** on **UDP 50000**. A firewall on the client machine lets you connect and control
+  the radio while leaving the spectrum flat and silent — the port list in the installation
+  guide now covers both directions, and troubleshooting has an entry for that exact symptom.
+
+---
+
 ## v1.1.0 — Interactive LO tuning and cross-platform robustness
 
 > **⚠ Upgrade the client and server together.** This release adds a client↔server tuning message
