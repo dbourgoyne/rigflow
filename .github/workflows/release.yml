@@ -95,7 +95,7 @@ jobs:
           ls -l dist-out
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: archives-${{ matrix.label }}
           path: dist-out/*.tar.gz
@@ -109,7 +109,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: archives-*
@@ -124,7 +124,7 @@ jobs:
       # Draft release: the maintainer reviews the assets and the (hand-written)
       # notes from docs/RELEASE_NOTES.md, then publishes.
       - name: Create GitHub Release (draft)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           fail_on_unmatched_files: true
