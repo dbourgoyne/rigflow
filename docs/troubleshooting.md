@@ -82,6 +82,18 @@ Common problems and fixes, by symptom. For setup steps see the
   client can receive **inbound UDP on port 50000** from the server (the media stream) — a firewall on
   the client host can silently drop it.
 
+**DATA mode is much quieter than every other mode, and WSJT-X shows a low input level.**
+- Expected, and not a fault. DATA bypasses the receive AGC to keep the path flat and linear for the
+  decoder; every other mode gets an AGC lift that DATA deliberately does not. See
+  [Signal path & expected behavior](signal-path.md).
+- **A low reading is not worth chasing.** Removing AGC scales the signal and the noise by the same
+  amount, so the signal-to-noise ratio is unchanged — and FT8 decoding depends on SNR, not on
+  absolute level. Raising the level cannot win you decodes, and driving it too high can lose them,
+  because clipping destroys the relative signal levels the decoder works from.
+- To **monitor by ear**, raise **Volume** (Radio Control → Audio). That affects the speaker only.
+  The level sent to a digital application is fixed on purpose, so your monitoring level can never
+  change what the decoder receives.
+
 **CWU and CWL sound the same on receive.**
 - Expected — Rigflow doesn't reject the opposite side of a CW signal yet, so the two modes differ only
   in transmit, not receive. Not a bug. See [Signal path & expected behavior](signal-path.md).

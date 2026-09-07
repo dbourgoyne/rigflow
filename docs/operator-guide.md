@@ -172,6 +172,15 @@ There are two transports, and which you use depends on your platform:
 > on). This happens regardless of your SSB-voice settings — you don't need to turn anything off by hand.
 > Set transmit level with **TX drive** so the tone sits in the linear region. (CW is unaffected: it uses
 > a separate enveloped transmit path that never runs the compressor/limiter.)
+>
+> **Expect DATA to sound quieter than other modes, and expect WSJT-X to report a lower input
+> level.** With no AGC lifting it, DATA carries the raw demodulated level, so switching in from SSB
+> or CW is an audible drop. That is the flat path working, not a fault — and it costs the decoder
+> nothing, because removing AGC scales signal and noise together and leaves the signal-to-noise
+> ratio untouched. FT8 decoding is limited by SNR, not by absolute level. Raise **Volume** if you
+> want to monitor the passband by ear; that affects the speaker only, and the level reaching a
+> digital application is deliberately fixed so your monitoring level can never change what the
+> decoder sees.
 
 ### Linux — virtual audio (PipeWire/PulseAudio)
 
