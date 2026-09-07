@@ -904,4 +904,228 @@ mod tests {
             })
         );
     }
+
+    /// Fields with no `#[serde(default...)]` attribute at all — the wire
+    /// payload must include them or decoding fails. Kept in sync by hand:
+    /// if someone adds a new field to `RuntimeSnapshot` without a default,
+    /// it belongs in this list too, and `runtime_snapshot_parses_with_only_required_fields_present`
+    /// below will catch the omission (the stripped-down JSON will be
+    /// missing that field and decoding will fail loudly).
+    const RUNTIME_SNAPSHOT_REQUIRED_FIELDS: &[&str] = &[
+        "type",
+        "radio_id",
+        "center_freq_hz",
+        "target_freq_hz",
+        "input_sample_rate_hz",
+        "audio_sample_rate_hz",
+        "audio_format",
+        "waterfall_bins",
+        "waterfall_frame_rate_hz",
+        "demod_mode",
+        "sideband",
+        "ssb_pitch_hz",
+        "cw_pitch_hz",
+        "filter_bandwidth_hz",
+        "deemphasis_mode",
+        "source_control",
+        "source_status",
+        "tx_tune_result",
+    ];
+
+    fn sample_runtime_snapshot() -> ServerRadioMessage {
+        ServerRadioMessage::RuntimeSnapshot {
+            radio_id: RadioId("test-radio".to_string()),
+            center_freq_hz: 14_000_000,
+            target_freq_hz: 14_074_000,
+            input_sample_rate_hz: 192_000.0,
+            audio_sample_rate_hz: 48_000,
+            audio_format: "s16le".to_string(),
+            waterfall_bins: 2048,
+            waterfall_frame_rate_hz: 20.0,
+            demod_mode: DemodMode::Usb,
+            sideband: Sideband::Usb,
+            ssb_pitch_hz: 0.0,
+            cw_pitch_hz: 600.0,
+            filter_bandwidth_hz: 2400.0,
+            deemphasis_mode: DeemphasisMode::Off,
+            squelch_enabled: false,
+            squelch_threshold_db: default_squelch_threshold_db(),
+            squelch_open: default_squelch_open(),
+            nr2_enabled: false,
+            nr2_strength: default_nr2_strength(),
+            agc_enabled: default_agc_enabled(),
+            agc_strength: default_agc_strength(),
+            signal_dbm: default_signal_dbm(),
+            signal_s_units: 0,
+            volume_percent: default_volume_percent(),
+            source_control: SourceControlState::default(),
+            source_status: SourceStatus::default(),
+            amplifier_status: AmplifierStatus::default(),
+            iq_recording_status: IqRecordingStatus::default(),
+            tx_audio_diag: TxAudioDiag::default(),
+            tx_tune_result: Some(TxTuneResult::default()),
+            swr_sweep_result: None,
+            swr_sweep_progress: None,
+            tx_tone_running: false,
+            vfo_b_target_freq_hz: 0,
+            vfo_b_center_freq_hz: 0,
+            vfo_b_demod_mode: default_demod_mode(),
+            vfo_b_sideband: default_sideband(),
+            vfo_b_filter_bandwidth_hz: default_filter_bandwidth_hz(),
+            vfo_b_ssb_pitch_hz: 0.0,
+            vfo_b_cw_pitch_hz: 0.0,
+            vfo_b_deemphasis_mode: default_deemphasis_mode(),
+            vfo_b_squelch_enabled: false,
+            vfo_b_squelch_threshold_db: default_squelch_threshold_db(),
+            vfo_b_squelch_open: default_squelch_open(),
+            vfo_b_nr2_enabled: false,
+            vfo_b_nr2_strength: default_nr2_strength(),
+            vfo_b_agc_enabled: default_agc_enabled(),
+            vfo_b_agc_strength: default_agc_strength(),
+            vfo_b_rit_enabled: false,
+            vfo_b_rit_offset_hz: 0,
+            rit_enabled: false,
+            rit_offset_hz: 0,
+            xit_enabled: false,
+            xit_offset_hz: 0,
+            split_enabled: false,
+            tx_vfo: VfoSelect::A,
+            dual_watch_enabled: false,
+            vfo_b_signal_dbm: default_signal_dbm(),
+            vfo_b_signal_s_units: 0,
+        }
+    }
+
+    #[test]
+    fn runtime_snapshot_parses_with_only_required_fields_present() {
+        let full = sample_runtime_snapshot();
+        let mut value = serde_json::to_value(&full).expect("serialize full snapshot");
+        let obj = value
+            .as_object_mut()
+            .expect("snapshot serializes to a JSON object");
+        obj.retain(|key, _| RUNTIME_SNAPSHOT_REQUIRED_FIELDS.contains(&key.as_str()));
+        assert_eq!(
+            obj.len(),
+            RUNTIME_SNAPSHOT_REQUIRED_FIELDS.len(),
+            "every required field must be present in the full sample"
+        );
+
+        let decoded: ServerRadioMessage = serde_json::from_value(value)
+            .expect("a payload containing only the required fields should still decode");
+
+        match decoded {
+            ServerRadioMessage::RuntimeSnapshot { radio_id, .. } => {
+                assert_eq!(radio_id, RadioId("test-radio".to_string()));
+            }
+            _ => panic!("decoded the wrong message variant"),
+        }
+    }
+
+    #[test]
+    fn runtime_snapshot_named_defaults_round_trip() {
+        // `#[serde(default = "fn")]` fields (as opposed to bare
+        // `#[serde(default)]`) each carry a specific, non-Default::default()
+        // fallback value (e.g. squelch defaults *open*, AGC defaults *on*).
+        // Strip them from an otherwise-full payload and assert decoding
+        // reproduces exactly the named function's value, not just any value.
+        let full = sample_runtime_snapshot();
+        let mut value = serde_json::to_value(&full).expect("serialize full snapshot");
+        let obj = value
+            .as_object_mut()
+            .expect("snapshot serializes to a JSON object");
+
+        // Strip every field that has a *named* default, leaving the required
+        // fields plus the bare-`#[serde(default)]` fields in place.
+        const NAMED_DEFAULT_FIELDS: &[&str] = &[
+            "squelch_threshold_db",
+            "squelch_open",
+            "nr2_strength",
+            "agc_enabled",
+            "agc_strength",
+            "signal_dbm",
+            "volume_percent",
+            "vfo_b_demod_mode",
+            "vfo_b_sideband",
+            "vfo_b_filter_bandwidth_hz",
+            "vfo_b_deemphasis_mode",
+            "vfo_b_squelch_threshold_db",
+            "vfo_b_squelch_open",
+            "vfo_b_nr2_strength",
+            "vfo_b_agc_enabled",
+            "vfo_b_agc_strength",
+            "vfo_b_signal_dbm",
+        ];
+        for field in NAMED_DEFAULT_FIELDS {
+            obj.remove(*field);
+        }
+
+        let decoded: ServerRadioMessage =
+            serde_json::from_value(value).expect("omitted named-default fields should decode");
+
+        match decoded {
+            ServerRadioMessage::RuntimeSnapshot {
+                squelch_threshold_db,
+                squelch_open,
+                nr2_strength,
+                agc_enabled,
+                agc_strength,
+                signal_dbm,
+                volume_percent,
+                vfo_b_demod_mode,
+                vfo_b_sideband,
+                vfo_b_filter_bandwidth_hz,
+                vfo_b_deemphasis_mode,
+                vfo_b_squelch_threshold_db,
+                vfo_b_squelch_open,
+                vfo_b_nr2_strength,
+                vfo_b_agc_enabled,
+                vfo_b_agc_strength,
+                vfo_b_signal_dbm,
+                ..
+            } => {
+                assert_eq!(squelch_threshold_db, default_squelch_threshold_db());
+                assert_eq!(squelch_open, default_squelch_open());
+                assert_eq!(nr2_strength, default_nr2_strength());
+                assert_eq!(agc_enabled, default_agc_enabled());
+                assert_eq!(agc_strength, default_agc_strength());
+                assert_eq!(signal_dbm, default_signal_dbm());
+                assert_eq!(volume_percent, default_volume_percent());
+                assert_eq!(vfo_b_demod_mode, default_demod_mode());
+                assert_eq!(vfo_b_sideband, default_sideband());
+                assert_eq!(vfo_b_filter_bandwidth_hz, default_filter_bandwidth_hz());
+                assert_eq!(vfo_b_deemphasis_mode, default_deemphasis_mode());
+                assert_eq!(vfo_b_squelch_threshold_db, default_squelch_threshold_db());
+                assert_eq!(vfo_b_squelch_open, default_squelch_open());
+                assert_eq!(vfo_b_nr2_strength, default_nr2_strength());
+                assert_eq!(vfo_b_agc_enabled, default_agc_enabled());
+                assert_eq!(vfo_b_agc_strength, default_agc_strength());
+                assert_eq!(vfo_b_signal_dbm, default_signal_dbm());
+            }
+            _ => panic!("decoded the wrong message variant"),
+        }
+    }
+
+    #[test]
+    fn radio_availability_has_stable_wire_values() {
+        let cases = [
+            (RadioAvailability::Available, "available"),
+            (RadioAvailability::Starting, "starting"),
+            (RadioAvailability::Running, "running"),
+            (RadioAvailability::Stopping, "stopping"),
+            (RadioAvailability::Faulted, "faulted"),
+        ];
+
+        for (value, wire) in cases {
+            assert_eq!(
+                serde_json::to_value(value).expect("serialize availability"),
+                serde_json::json!(wire)
+            );
+            let decoded: RadioAvailability =
+                serde_json::from_value(serde_json::json!(wire)).expect("decode availability");
+            assert_eq!(
+                serde_json::to_value(decoded).expect("re-serialize decoded availability"),
+                serde_json::json!(wire)
+            );
+        }
+    }
 }
