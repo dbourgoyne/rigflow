@@ -1083,13 +1083,23 @@ mod tests {
                 vfo_b_signal_dbm,
                 ..
             } => {
-                assert_eq!(squelch_threshold_db, default_squelch_threshold_db());
-                assert_eq!(squelch_open, default_squelch_open());
-                assert_eq!(nr2_strength, default_nr2_strength());
-                assert_eq!(agc_enabled, default_agc_enabled());
-                assert_eq!(agc_strength, default_agc_strength());
-                assert_eq!(signal_dbm, default_signal_dbm());
-                assert_eq!(volume_percent, default_volume_percent());
+                // Literal values, not the default_*() functions themselves —
+                // a test that computes its own expectation from the same
+                // function under test always agrees, even if that function's
+                // returned value silently changes (verified: flipping
+                // default_agc_enabled() to `false` left this test green
+                // before this fix).
+                assert_eq!(squelch_threshold_db, -90.0);
+                assert!(squelch_open, "squelch defaults open");
+                assert_eq!(nr2_strength, 0.5);
+                assert!(agc_enabled, "AGC defaults on");
+                assert_eq!(agc_strength, 0.5);
+                assert_eq!(signal_dbm, -140.0);
+                assert_eq!(volume_percent, 50);
+                // These four delegate to VfoState::default(), already pinned
+                // by vfo.rs's own default_vfo_state_matches_documented_values
+                // test — the literal lives one layer down, not duplicated
+                // here.
                 assert_eq!(vfo_b_demod_mode, default_demod_mode());
                 assert_eq!(vfo_b_sideband, default_sideband());
                 assert_eq!(vfo_b_filter_bandwidth_hz, default_filter_bandwidth_hz());
