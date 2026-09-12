@@ -905,6 +905,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn source_tx_sequencing_has_stable_wire_shape() {
+        let message = ClientRadioMessage::SetSourceTxSequencing {
+            lead_ms: 5,
+            tail_ms: 20,
+        };
+
+        assert_eq!(
+            serde_json::to_value(message).expect("serialize TX sequencing command"),
+            serde_json::json!({
+                "type": "set_source_tx_sequencing",
+                "lead_ms": 5,
+                "tail_ms": 20,
+            })
+        );
+    }
+
+    #[test]
+    fn two_tone_test_has_stable_wire_shape() {
+        let message = ClientRadioMessage::SetTwoToneTest {
+            enabled: true,
+            tone_a_hz: 700.0,
+            tone_b_hz: 1900.0,
+            level_percent: 50.0,
+        };
+
+        assert_eq!(
+            serde_json::to_value(message).expect("serialize two-tone test command"),
+            serde_json::json!({
+                "type": "set_two_tone_test",
+                "enabled": true,
+                "tone_a_hz": 700.0,
+                "tone_b_hz": 1900.0,
+                "level_percent": 50.0,
+            })
+        );
+    }
+
+    #[test]
+    fn swr_sweep_request_has_stable_wire_shape() {
+        // start_hz/stop_hz are the same type (u64) with no distinguishing
+        // shape between them - a silent field rename or a swap between the
+        // two would still type-check and still decode, just tune the wrong
+        // range. Pinning the exact keys is the only thing that catches that.
+        let message = ClientRadioMessage::RequestSwrSweep {
+            start_hz: 14_000_000,
+            stop_hz: 14_350_000,
+        };
+
+        assert_eq!(
+            serde_json::to_value(message).expect("serialize SWR sweep request"),
+            serde_json::json!({
+                "type": "request_swr_sweep",
+                "start_hz": 14_000_000,
+                "stop_hz": 14_350_000,
+            })
+        );
+    }
+
     /// Fields with no `#[serde(default...)]` attribute at all — the wire
     /// payload must include them or decoding fails. Kept in sync by hand:
     /// if someone adds a new field to `RuntimeSnapshot` without a default,
